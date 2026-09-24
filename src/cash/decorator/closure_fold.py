@@ -17,9 +17,195 @@ from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..purity_analyzer import REPORTED_METHODS
 from ..value_types import IMMUTABLE_VALUE_TYPES
-from .arg_hashing import CODE_VALUE_TYPES
+from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
-from .code_identity import CodeIdentityMixin
+from .code_identity import code_fingerprint, hash_callable_source, is_user_code_object
+
+
+def is_immutable_capture(v: Any, _depth: int = 0) -> bool:
+    """True for values that are immutable and so define a closure's
+    behaviour without drifting between calls. Mutable captures (dict/list/
+    set/objects) are excluded: they are typically side-effect accumulators
+    (e.g. a hit counter) whose value changes every call - folding those into
+    the key would make every call miss."""
+    if _depth > 8:
+        return False
+    if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
+        return True
+    if isinstance(v, (tuple, frozenset)):
+        return all(is_immutable_capture(x, _depth + 1) for x in v)
+    return False
+
+
+def unsafe_uses_of(
+    tree: ast.AST,
+    names: set[str],
+    *,
+    bare_args: bool = True,
+    mutating_methods_only: bool = False,
+    waived: Callable[[ast.AST], bool] | None = None,
+) -> frozenset:
+    """Return the subset of *names* the AST body *may mutate*.
+
+    Disqualifying uses of a name ``n``: method calls on it
+    (``n.append(...)``), passing it as a bare argument (the callee may
+    mutate), subscript/attribute stores or aug-assigns rooted at it, and
+    ``del``. Iteration, subscript reads, and arithmetic stay safe. Shared by
+    the closure-capture and module-global folds.
+
+    Two knobs, and both exist to move a *suspicion* out of the HARD set and
+    into the provisional one, where it is folded and then confirmed at
+    runtime by ``_learn_mutating_captures``.
+
+    ``bare_args=False`` drops the "passed as an argument" rule. That refusal
+    was over-broad and chose the worse failure: `sum(G)`, `len(G)`,
+    `helper(G)` and `model.predict(G)` all put `G` beyond it, so a later
+    `G = ...` never reached the key and the function served a stale value
+    for ever, silently.
+
+    ``mutating_methods_only=True`` narrows the method-call rule to methods
+    that actually write -- ``append``, ``update``, ``sort`` and their
+    relatives, the same table the purity analyzer uses. "Any method, since
+    we cannot prove purity" made the same over-broad choice one level down,
+    and it cost: a lookup table read as
+    ``ALIASES.get(v, v)`` never reached the key, so editing the table
+    published stale labels with nothing to see. `ALIASES[v]`, `v in
+    ALIASES`, `d = ALIASES; d.get(v)` and a bare read all tracked
+    correctly, which is what made it so hard to believe.
+
+    ``waived`` skips uses on a ``# @cash:assume-safe`` line: the effect
+    there was audited as one a hit may lose (see `_waived_use_filter`).
+    """
+    unsafe: set[str] = set()
+    write_methods: frozenset[str] = frozenset()
+    if mutating_methods_only:
+        write_methods = REPORTED_METHODS
+    for node in ast.walk(tree):
+        if waived is not None and isinstance(node, (ast.Call, ast.stmt)) and waived(node):
+            continue
+        if isinstance(node, ast.Call):
+            f = node.func
+            if (
+                isinstance(f, ast.Attribute)
+                and isinstance(f.value, ast.Name)
+                and f.value.id in names
+                and (not mutating_methods_only or f.attr in write_methods)
+            ):
+                unsafe.add(f.value.id)
+            if bare_args:
+                for a in list(node.args) + [kw.value for kw in node.keywords]:
+                    if isinstance(a, ast.Starred):
+                        a = a.value
+                    if isinstance(a, ast.Name) and a.id in names:
+                        unsafe.add(a.id)
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AugAssign):
+                targets = [node.target]
+            else:
+                targets = node.targets
+            for t in targets:
+                root = t
+                while isinstance(root, (ast.Subscript, ast.Attribute, ast.Starred)):
+                    root = root.value
+                if isinstance(root, ast.Name) and root.id in names:
+                    unsafe.add(root.id)
+    return frozenset(unsafe)
+
+
+def waived_use_filter(func: Callable) -> Callable[[ast.AST], bool] | None:
+    """A predicate: is a node of *func*'s dedented source on a waived line?
+
+    Line numbers in that tree count from the ``def``; the waiver is read
+    from the file. ``None`` when the file position is unknown.
+    """
+    try:
+        filename = inspect.getsourcefile(func) or inspect.getfile(func)
+        first = inspect.getsourcelines(func)[1]
+    except SOURCE_RETRIEVAL_ERRORS:
+        return None
+    if not filename:
+        return None
+
+    offset = max(first, 1) - 1
+
+    def waived(node: ast.AST) -> bool:
+        start = getattr(node, "lineno", None)
+        if start is None:
+            return False
+        end = getattr(node, "end_lineno", None) or start
+        return any(line_waived(filename, offset + n) for n in range(start, end + 1))
+
+    return waived
+
+
+def defaults_of(func: Callable) -> tuple[tuple, dict]:
+    """The parameter defaults that decide what *func* computes.
+
+    ``__defaults__`` (positional/keyword params) and ``__kwdefaults__``
+    (keyword-only params) are separate containers; both are collected.
+
+    Wrapped callees are walked too. ``func.__defaults__`` is what the call
+    literally binds, but when *func* is a ``functools.wraps`` wrapper its own
+    defaults are typically empty (a ``*args, **kwargs`` passthrough) while the
+    values that actually decide the result sit on ``__wrapped__`` — which is
+    also what ``inspect.signature`` reports and therefore what
+    ``_normalize_call_args`` binds. Folding every level is the conservative
+    choice: folding a default that turns out not to bind costs at most a
+    one-time miss, whereas missing one that does bind is a silent wrong
+    answer.
+    """
+    pos: list[Any] = []
+    kwd: dict[str, Any] = {}
+    seen: set[int] = set()
+    fn: Any = func
+    depth = 0
+    while fn is not None and id(fn) not in seen and depth < 8:
+        seen.add(id(fn))
+        pos.extend(getattr(fn, "__defaults__", None) or ())
+        # Qualify by depth so a wrapper and its wrappee can't collide on a
+        # shared kwonly name; sort so dict order never leaks into the key.
+        level_kwd = getattr(fn, "__kwdefaults__", None) or {}
+        for name in sorted(level_kwd):
+            kwd[f"{depth}:{name}"] = level_kwd[name]
+        fn = getattr(fn, "__wrapped__", None)
+        depth += 1
+    return tuple(pos), kwd
+
+
+def fingerprint_default(v: Any) -> Any:
+    """Replace a plain function/method default with a digest of its source.
+
+    Restricted to functions, methods and builtins: their behaviour IS their
+    code. An arbitrary callable INSTANCE is left alone so it takes the
+    unhashable path rather than being keyed on its class and silently
+    sharing entries across instances with different state.
+    """
+    if inspect.isfunction(v) or inspect.ismethod(v) or inspect.isbuiltin(v):
+        return f"__cash_callable__:{hash_callable_source(v)}"
+    return v
+
+
+def iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
+    """Yield *code* and every code object nested inside it, recursively.
+
+    A generator expression, comprehension, or ``lambda`` compiles to its
+    OWN code object hung off the enclosing ``co_consts``, so anything it
+    references is invisible in the outer ``co_names`` / instruction stream.
+    Walking the const tree is the same trick the
+    bytecode hash uses (``tracking/function_tracker.py``
+    ``_update_code_object_hash``) for exactly this reason.
+
+    Comprehensions nest, so this recurses. Note that CPython 3.12+ inlines
+    list/set/dict comprehensions into the enclosing scope (PEP 709) — those
+    already land in the outer ``co_names``; generator expressions and
+    lambdas still get their own scope on every version.
+    """
+    yield code
+    for const in code.co_consts or ():
+        if isinstance(const, types.CodeType):
+            yield from iter_code_scopes(const)
 
 
 class ClosureFoldMixin:
@@ -40,21 +226,6 @@ class ClosureFoldMixin:
         if len(cache) < 4096:
             cache[code] = written
         return written
-
-    @staticmethod
-    def _is_immutable_capture(v: Any, _depth: int = 0) -> bool:
-        """True for values that are immutable and so define a closure's
-        behaviour without drifting between calls. Mutable captures (dict/list/
-        set/objects) are excluded: they are typically side-effect accumulators
-        (e.g. a hit counter) whose value changes every call - folding those into
-        the key would make every call miss."""
-        if _depth > 8:
-            return False
-        if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
-            return True
-        if isinstance(v, (tuple, frozenset)):
-            return all(ClosureFoldMixin._is_immutable_capture(x, _depth + 1) for x in v)
-        return False
 
     def _capture_unsafe_uses(self, func: Callable) -> frozenset:
         """Free-variable names whose captured object *may be mutated* by the
@@ -89,16 +260,14 @@ class ClosureFoldMixin:
             # capture outright. "Passed to a call" is provisional: folded, then
             # confirmed by observation, so `sum(data)` does not put `data`
             # beyond the fold, where the closure would serve stale forever.
-            result = ClosureFoldMixin._unsafe_uses_of(
+            result = unsafe_uses_of(
                 tree,
                 freevars,
                 bare_args=False,
                 mutating_methods_only=True,
             )
-            suspected = ClosureFoldMixin._unsafe_uses_of(tree, freevars) - result
-            provisional = ClosureFoldMixin._unsafe_uses_of(
-                tree, suspected, waived=ClosureFoldMixin._waived_use_filter(func)
-            )
+            suspected = unsafe_uses_of(tree, freevars) - result
+            provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
             # Only on waived lines: as for globals (`_read_global_data_names`).
             result = result | (suspected - provisional)
         if len(self._capture_use_cache) < 4096:
@@ -107,109 +276,6 @@ class ClosureFoldMixin:
             # disagree about a code object.
             self._provisional_capture_cache[code] = provisional
         return result
-
-    @staticmethod
-    def _unsafe_uses_of(
-        tree: ast.AST,
-        names: set[str],
-        *,
-        bare_args: bool = True,
-        mutating_methods_only: bool = False,
-        waived: Callable[[ast.AST], bool] | None = None,
-    ) -> frozenset:
-        """Return the subset of *names* the AST body *may mutate*.
-
-        Disqualifying uses of a name ``n``: method calls on it
-        (``n.append(...)``), passing it as a bare argument (the callee may
-        mutate), subscript/attribute stores or aug-assigns rooted at it, and
-        ``del``. Iteration, subscript reads, and arithmetic stay safe. Shared by
-        the closure-capture and module-global folds.
-
-        Two knobs, and both exist to move a *suspicion* out of the HARD set and
-        into the provisional one, where it is folded and then confirmed at
-        runtime by ``_learn_mutating_captures``.
-
-        ``bare_args=False`` drops the "passed as an argument" rule. That refusal
-        was over-broad and chose the worse failure: `sum(G)`, `len(G)`,
-        `helper(G)` and `model.predict(G)` all put `G` beyond it, so a later
-        `G = ...` never reached the key and the function served a stale value
-        for ever, silently.
-
-        ``mutating_methods_only=True`` narrows the method-call rule to methods
-        that actually write -- ``append``, ``update``, ``sort`` and their
-        relatives, the same table the purity analyzer uses. "Any method, since
-        we cannot prove purity" made the same over-broad choice one level down,
-        and it cost: a lookup table read as
-        ``ALIASES.get(v, v)`` never reached the key, so editing the table
-        published stale labels with nothing to see. `ALIASES[v]`, `v in
-        ALIASES`, `d = ALIASES; d.get(v)` and a bare read all tracked
-        correctly, which is what made it so hard to believe.
-
-        ``waived`` skips uses on a ``# @cash:assume-safe`` line: the effect
-        there was audited as one a hit may lose (see `_waived_use_filter`).
-        """
-        unsafe: set[str] = set()
-        write_methods: frozenset[str] = frozenset()
-        if mutating_methods_only:
-            write_methods = REPORTED_METHODS
-        for node in ast.walk(tree):
-            if waived is not None and isinstance(node, (ast.Call, ast.stmt)) and waived(node):
-                continue
-            if isinstance(node, ast.Call):
-                f = node.func
-                if (
-                    isinstance(f, ast.Attribute)
-                    and isinstance(f.value, ast.Name)
-                    and f.value.id in names
-                    and (not mutating_methods_only or f.attr in write_methods)
-                ):
-                    unsafe.add(f.value.id)
-                if bare_args:
-                    for a in list(node.args) + [kw.value for kw in node.keywords]:
-                        if isinstance(a, ast.Starred):
-                            a = a.value
-                        if isinstance(a, ast.Name) and a.id in names:
-                            unsafe.add(a.id)
-            elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
-                if isinstance(node, ast.Assign):
-                    targets = node.targets
-                elif isinstance(node, ast.AugAssign):
-                    targets = [node.target]
-                else:
-                    targets = node.targets
-                for t in targets:
-                    root = t
-                    while isinstance(root, (ast.Subscript, ast.Attribute, ast.Starred)):
-                        root = root.value
-                    if isinstance(root, ast.Name) and root.id in names:
-                        unsafe.add(root.id)
-        return frozenset(unsafe)
-
-    @staticmethod
-    def _waived_use_filter(func: Callable) -> Callable[[ast.AST], bool] | None:
-        """A predicate: is a node of *func*'s dedented source on a waived line?
-
-        Line numbers in that tree count from the ``def``; the waiver is read
-        from the file. ``None`` when the file position is unknown.
-        """
-        try:
-            filename = inspect.getsourcefile(func) or inspect.getfile(func)
-            first = inspect.getsourcelines(func)[1]
-        except SOURCE_RETRIEVAL_ERRORS:
-            return None
-        if not filename:
-            return None
-
-        offset = max(first, 1) - 1
-
-        def waived(node: ast.AST) -> bool:
-            start = getattr(node, "lineno", None)
-            if start is None:
-                return False
-            end = getattr(node, "end_lineno", None) or start
-            return any(line_waived(filename, offset + n) for n in range(start, end + 1))
-
-        return waived
 
     def _fold_closure(self, func: Callable, func_name: str, state_hash: str, _depth: int = 0) -> str:
         """Mix a fingerprint of *func*'s captured free variables into the
@@ -283,7 +349,7 @@ class ClosureFoldMixin:
             # arbitrary callable INSTANCE takes the paths below rather than being
             # keyed on its class and silently sharing entries across instances
             # holding different state.
-            fingerprint = self._fingerprint_default(v)
+            fingerprint = fingerprint_default(v)
             if fingerprint is not v:
                 # Source text alone collides for two lambdas sharing a line
                 # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
@@ -291,7 +357,7 @@ class ClosureFoldMixin:
                 # Measured: both arms returned "AAA". Their code objects differ.
                 inner_code = getattr(v, "__code__", None)
                 if inner_code is not None:
-                    fingerprint = f"{fingerprint}:{self._code_fingerprint(inner_code)}"
+                    fingerprint = f"{fingerprint}:{code_fingerprint(inner_code)}"
                 # Source alone is not enough: a factory-built helper has the
                 # SAME source for every parameter it was built with, so
                 # `outer(2)` and `outer(3)` fingerprint identically and collide
@@ -309,7 +375,7 @@ class ClosureFoldMixin:
                 captures.append((name, fingerprint))
                 continue
 
-            if self._is_immutable_capture(v):
+            if is_immutable_capture(v):
                 captures.append((name, v))
             elif name not in unsafe:
                 # Read-only mutable capture: fold its content hash.
@@ -357,7 +423,7 @@ class ClosureFoldMixin:
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
-            if not (self._is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
+            if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
                 # A container the helper only READS is data like any other:
                 # `lambda: when` with `when` a list, a dict -- or a datetime
                 # before the type list above had it -- gave every value ONE
@@ -392,7 +458,7 @@ class ClosureFoldMixin:
         object, and two closures from one factory share a code object while
         holding different defaults.
         """
-        source = self._hash_callable_source(fn)
+        source = hash_callable_source(fn)
         if isinstance(fn, type):
             # A class's own source says nothing about what it inherits, and
             # this channel is what the key folds: ``Worker(Base)`` calling an
@@ -400,9 +466,9 @@ class ClosureFoldMixin:
             # was rewritten -- 20 where an uncached run gives 500, in one file.
             # An OPAQUE base still contributes nothing, as for a class passed as an argument.
             bases = [
-                self._hash_callable_source(base)
+                hash_callable_source(base)
                 for base in fn.__mro__[1:]
-                if base is not object and not self._is_opaque(base) and self._is_user_code_object(base)
+                if base is not object and not is_opaque(base) and is_user_code_object(base)
             ]
             if bases:
                 source = f"{source}:bases:{','.join(bases)}"
@@ -415,14 +481,14 @@ class ClosureFoldMixin:
         cached = self._helper_defaults_memo.get(memo_key)
         if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
             return cached[3]
-        pos, kwd = self._defaults_of(fn)
+        pos, kwd = defaults_of(fn)
         try:
             digest = self._hash_arg_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
             try:
                 digest = self._hash_arg_payload(
-                    tuple(self._fingerprint_default(v) for v in pos),
-                    {k: self._fingerprint_default(v) for k, v in kwd.items()},
+                    tuple(fingerprint_default(v) for v in pos),
+                    {k: fingerprint_default(v) for k, v in kwd.items()},
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 bad_type = self._first_unhashable_arg_type(pos, kwd)
@@ -442,40 +508,6 @@ class ClosureFoldMixin:
             self._helper_defaults_memo.clear()
         self._helper_defaults_memo[memo_key] = (fn, defaults, kwdefaults, identity)
         return identity
-
-    @staticmethod
-    def _defaults_of(func: Callable) -> tuple[tuple, dict]:
-        """The parameter defaults that decide what *func* computes.
-
-        ``__defaults__`` (positional/keyword params) and ``__kwdefaults__``
-        (keyword-only params) are separate containers; both are collected.
-
-        Wrapped callees are walked too. ``func.__defaults__`` is what the call
-        literally binds, but when *func* is a ``functools.wraps`` wrapper its own
-        defaults are typically empty (a ``*args, **kwargs`` passthrough) while the
-        values that actually decide the result sit on ``__wrapped__`` — which is
-        also what ``inspect.signature`` reports and therefore what
-        ``_normalize_call_args`` binds. Folding every level is the conservative
-        choice: folding a default that turns out not to bind costs at most a
-        one-time miss, whereas missing one that does bind is a silent wrong
-        answer.
-        """
-        pos: list[Any] = []
-        kwd: dict[str, Any] = {}
-        seen: set[int] = set()
-        fn: Any = func
-        depth = 0
-        while fn is not None and id(fn) not in seen and depth < 8:
-            seen.add(id(fn))
-            pos.extend(getattr(fn, "__defaults__", None) or ())
-            # Qualify by depth so a wrapper and its wrappee can't collide on a
-            # shared kwonly name; sort so dict order never leaks into the key.
-            level_kwd = getattr(fn, "__kwdefaults__", None) or {}
-            for name in sorted(level_kwd):
-                kwd[f"{depth}:{name}"] = level_kwd[name]
-            fn = getattr(fn, "__wrapped__", None)
-            depth += 1
-        return tuple(pos), kwd
 
     def _fold_defaults(
         self,
@@ -523,7 +555,7 @@ class ClosureFoldMixin:
                 getattr(func, "__kwdefaults__", None) or {}
             ):
                 return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
-        pos, kwd = self._defaults_of(func)
+        pos, kwd = defaults_of(func)
         try:
             digest = self._hash_arg_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
@@ -542,19 +574,6 @@ class ClosureFoldMixin:
                 return self._defaults_unhashable(func_name, pos, kwd, e)
         return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable)
 
-    @staticmethod
-    def _fingerprint_default(v: Any) -> Any:
-        """Replace a plain function/method default with a digest of its source.
-
-        Restricted to functions, methods and builtins: their behaviour IS their
-        code. An arbitrary callable INSTANCE is left alone so it takes the
-        unhashable path rather than being keyed on its class and silently
-        sharing entries across instances with different state.
-        """
-        if inspect.isfunction(v) or inspect.ismethod(v) or inspect.isbuiltin(v):
-            return f"__cash_callable__:{CodeIdentityMixin._hash_callable_source(v)}"
-        return v
-
     def _fingerprint_callable_default(self, v: Any) -> Any:
         """`_fingerprint_default`, plus what a FUNCTION default carries.
 
@@ -566,7 +585,7 @@ class ClosureFoldMixin:
         """
         if inspect.isfunction(v):
             return f"__cash_callable__:{self._hash_helper_identity(v)}"
-        return self._fingerprint_default(v)
+        return fingerprint_default(v)
 
     def _defaults_unhashable(
         self,
@@ -619,8 +638,8 @@ class ClosureFoldMixin:
         if (
             pinnable
             and getattr(func, "__wrapped__", None) is None
-            and all(self._is_immutable_capture(v) for v in pos)
-            and all(self._is_immutable_capture(v) for v in kwd.values())
+            and all(is_immutable_capture(v) for v in pos)
+            and all(is_immutable_capture(v) for v in kwd.values())
         ):
             try:
                 self._defaults_pins[func] = (
@@ -675,24 +694,3 @@ class ClosureFoldMixin:
             )
             self_hash = f"selfid:{id(owner)}"
         return hashlib.sha256(f"{state_hash}:boundself:{self_hash}".encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
-        """Yield *code* and every code object nested inside it, recursively.
-
-        A generator expression, comprehension, or ``lambda`` compiles to its
-        OWN code object hung off the enclosing ``co_consts``, so anything it
-        references is invisible in the outer ``co_names`` / instruction stream.
-        Walking the const tree is the same trick the
-        bytecode hash uses (``tracking/function_tracker.py``
-        ``_update_code_object_hash``) for exactly this reason.
-
-        Comprehensions nest, so this recurses. Note that CPython 3.12+ inlines
-        list/set/dict comprehensions into the enclosing scope (PEP 709) — those
-        already land in the outer ``co_names``; generator expressions and
-        lambdas still get their own scope on every version.
-        """
-        yield code
-        for const in code.co_consts or ():
-            if isinstance(const, types.CodeType):
-                yield from ClosureFoldMixin._iter_code_scopes(const)

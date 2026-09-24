@@ -33,7 +33,7 @@ Cash warns the first time this happens:
 
 The cost floor decides whether a value is worth *persisting*. It does not decide whether you see the same number twice.
 
-<!-- claim: cash/decorator/rng.py:RngMixin._rng_replay_parts @cb52a36f, cash/decorator/rng.py:RngMixin._replay_rng_state @597e8922 -->
+<!-- claim: cash/decorator/rng.py:RngMixin._rng_replay_parts @cb52a36f, cash/decorator/rng.py:replay_rng_state @597e8922 -->
 **What the caller draws next is not affected.** A hit does not run the body, so
 the stream it advanced would stay where it was and the caller's own next draw
 would repeat what the function drew — with `np.random.seed(0)`, exactly the
@@ -823,7 +823,7 @@ dependency exists only at runtime, `depends_on=` is how you tell it.
 
 ### Third-party code passed as an argument is keyed by name, not implementation
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._is_user_code_object @be90c50a, cash/decorator/code_identity.py:CodeIdentityMixin._is_user_code_module @140c665d -->
+<!-- claim: cash/decorator/code_identity.py:is_user_code_object @be90c50a, cash/decorator/code_identity.py:is_user_code_module @140c665d -->
 A class or function you define is hashed by its code. One from a library is not:
 folding thousands of library methods into every key would churn on every upgrade
 for no correctness gain. Pin your dependencies if a library's behaviour is part

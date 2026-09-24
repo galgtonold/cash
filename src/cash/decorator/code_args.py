@@ -15,58 +15,58 @@ from ..exceptions import CashImpurityWarning
 from ..purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
-from .arg_hashing import plain_census
-from .code_identity import CodeIdentityMixin
+from .arg_hashing import is_opaque, plain_census
+from .code_identity import is_user_code_object
 
 logger = logging.getLogger(__name__)
 
 
+def carrier_name(carrier: Any) -> str:
+    """A stable, address-free name for a code carrier.
+
+    ``__qualname__`` for anything that has one -- a class, a function.
+    Otherwise the carrier's TYPE, deliberately not ``repr()``: a
+    ``functools.partial`` reprs as ``functools.partial(<function f at
+    0x...>, 3)``, and that address is unique per object, so a
+    ``repr()``-derived key would make ``_warned_unhashable_code`` dedup
+    nothing (one warning per partial ever constructed, plus a global set
+    that grows without bound) and would make a folded part label differ
+    between two processes holding equal arguments.
+    """
+    name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    t = type(carrier)
+    return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
+
+
+def is_user_code_carrier(carrier: Any) -> bool:
+    """``_is_user_code_object`` for the ADVISORY rather than for hashing.
+
+    ``_is_user_code_object`` answers "could not confirm reachability ->
+    treat as user code". That is the safe direction when deciding whether
+    to HASH something and the wrong one when deciding whether to WARN about
+    it: an object with no ``__qualname__`` of its own -- a
+    ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
+    every single one was reported as un-hashable user code.
+
+    Judge such an object by what it WRAPS (``.func``, the same attribute
+    ``_class_surface_parts`` already follows for ``singledispatchmethod``
+    and ``cached_property``), else by its TYPE. Measured:
+    ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
+    while ``functools.partial(<a user function>)`` still warns -- and it
+    must, because the wrapped body genuinely is absent from the key.
+    """
+    if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
+        return is_user_code_object(carrier)
+    wrapped = getattr(carrier, "func", None)
+    if wrapped is not None:
+        return is_user_code_object(wrapped)
+    return is_user_code_object(type(carrier))
+
+
 class CodeArgsMixin:
     """The code an argument carries, folded into the state segment."""
-
-    @staticmethod
-    def _carrier_name(carrier: Any) -> str:
-        """A stable, address-free name for a code carrier.
-
-        ``__qualname__`` for anything that has one -- a class, a function.
-        Otherwise the carrier's TYPE, deliberately not ``repr()``: a
-        ``functools.partial`` reprs as ``functools.partial(<function f at
-        0x...>, 3)``, and that address is unique per object, so a
-        ``repr()``-derived key would make ``_warned_unhashable_code`` dedup
-        nothing (one warning per partial ever constructed, plus a global set
-        that grows without bound) and would make a folded part label differ
-        between two processes holding equal arguments.
-        """
-        name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
-        if isinstance(name, str) and name:
-            return name
-        t = type(carrier)
-        return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
-
-    @staticmethod
-    def _is_user_code_carrier(carrier: Any) -> bool:
-        """``_is_user_code_object`` for the ADVISORY rather than for hashing.
-
-        ``_is_user_code_object`` answers "could not confirm reachability ->
-        treat as user code". That is the safe direction when deciding whether
-        to HASH something and the wrong one when deciding whether to WARN about
-        it: an object with no ``__qualname__`` of its own -- a
-        ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
-        every single one was reported as un-hashable user code.
-
-        Judge such an object by what it WRAPS (``.func``, the same attribute
-        ``_class_surface_parts`` already follows for ``singledispatchmethod``
-        and ``cached_property``), else by its TYPE. Measured:
-        ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
-        while ``functools.partial(<a user function>)`` still warns -- and it
-        must, because the wrapped body genuinely is absent from the key.
-        """
-        if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
-            return CodeIdentityMixin._is_user_code_object(carrier)
-        wrapped = getattr(carrier, "func", None)
-        if wrapped is not None:
-            return CodeIdentityMixin._is_user_code_object(wrapped)
-        return CodeIdentityMixin._is_user_code_object(type(carrier))
 
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
         """Say once that code reached through an argument resolves a dependency
@@ -125,7 +125,7 @@ class CodeArgsMixin:
         """
         if _EXPLAINING.get():
             return
-        name = self._carrier_name(carrier)
+        name = carrier_name(carrier)
         inner = getattr(carrier, "func", None) or getattr(carrier, "__wrapped__", None)
         inner_name = (
             getattr(inner, "__qualname__", None) or getattr(inner, "__name__", None) if inner is not None else None
@@ -291,7 +291,7 @@ class CodeArgsMixin:
         key = ("user-class", id(cls))
         verdict = self._attribute_walk_verdicts.get(key)
         if verdict is None or verdict[0] is not cls:
-            verdict = (cls, self._is_user_code_object(cls))
+            verdict = (cls, is_user_code_object(cls))
             if len(self._attribute_walk_verdicts) < 4096:
                 self._attribute_walk_verdicts[key] = verdict
         if not verdict[1]:
@@ -331,7 +331,7 @@ class CodeArgsMixin:
         if id(cls) in _seen:
             return None
         _seen.add(id(cls))
-        return cls if self._is_user_code_object(cls) else None
+        return cls if is_user_code_object(cls) else None
 
     def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
         """Fold user code reached through the arguments into the key.
@@ -362,20 +362,20 @@ class CodeArgsMixin:
                 if id(carrier) in seen_carriers:
                     continue
                 seen_carriers.add(id(carrier))
-                if self._is_opaque(carrier):
+                if is_opaque(carrier):
                     continue
                 digest = self._code_surface_hash(carrier)
                 if digest is not None:
-                    parts.append(f"{self._carrier_name(carrier)}:{digest}")
+                    parts.append(f"{carrier_name(carrier)}:{digest}")
                     # Its CODE is in the key; the globals that code reads
                     # were not. A callback reading a module
                     # constant served the old result after the constant
                     # changed, while the same read one call level deeper,
                     # or in the cached function itself, invalidated.
-                    if self._is_user_code_carrier(carrier):
+                    if is_user_code_carrier(carrier):
                         parts.extend(self._carrier_read_global_parts(carrier, func_name))
                         self._warn_untrackable_in_carrier_once(carrier, func_name, param)
-                elif self._is_user_code_carrier(carrier):
+                elif is_user_code_carrier(carrier):
                     # User code we could not hash: a C-extension type, an
                     # exotic descriptor, a ``functools.partial`` (whose
                     # wrapped function pickles by reference like any

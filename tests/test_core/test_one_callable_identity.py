@@ -17,6 +17,7 @@ import textwrap
 import pytest
 
 from cash import Cash
+from cash.decorator.code_identity import hash_callable_source
 from cash.source_norm import callable_identity
 from cash.tracking.function_tracker import FunctionTracker
 
@@ -54,7 +55,7 @@ def identities():
     tracker = FunctionTracker()
     return {
         "callable_identity": callable_identity,
-        "decorator helper": Cash._hash_callable_source,
+        "decorator helper": hash_callable_source,
         "notebook tracker": tracker.get_function_source_hash,
     }
 
@@ -70,7 +71,7 @@ def test_registration_keys_a_wrapper_as_the_helper_walk_does(tmp_path):
     ns = _load(tmp_path, "shapes_reg")
     c = Cash()
     c.cache(ns["area"])
-    assert c.source_hashes[c.get_func_key(ns["area"])] == Cash._hash_callable_source(ns["area"])
+    assert c.source_hashes[c.get_func_key(ns["area"])] == hash_callable_source(ns["area"])
 
 
 @pytest.mark.parametrize("path", ["callable_identity", "decorator helper", "notebook tracker"])

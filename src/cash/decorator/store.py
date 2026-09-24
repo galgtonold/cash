@@ -22,6 +22,8 @@ from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH
+from .explain import not_persisted_reason
+from .file_deps import snapshot_tracked_deps
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,36 @@ STORE_FAILED_FIX = (
 #: class made per call would otherwise be held here for good.
 UNTAGGABLE_TYPES: set[type] = set()
 UNTAGGABLE_TYPES_MAX = 256
+
+
+def lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
+    """The lineage hash a result carries downstream.
+
+    It is the producer's ``cache_key`` PLUS a fingerprint of the files the
+    producer read. The cache key alone omits file state (files invalidate
+    via a freshness re-stat, not via the key), so without this a downstream
+    function keyed on the lineage hash would return a STALE result after an
+    upstream file changed - the producer recomputes, but its new output
+    carries the same lineage hash as the old one. Folding the file deps in
+    gives a changed file a distinct lineage. No deps -> unchanged key.
+
+    The fingerprint is built from the recorded content ``hash`` plus the
+    size, NOT the mtime. Content is the authoritative freshness
+    signal everywhere else, and mtime is the untrustworthy one: keying
+    lineage on it would hand a touched-but-identical file a new lineage and
+    needlessly recompute every downstream consumer, while a same-size edit
+    under an indistinguishable mtime would reuse the old lineage and serve
+    stale. A snapshot with no ``hash`` falls back to the mtime so the
+    entry still keeps a stable lineage.
+    """
+    if not auto_file_deps:
+        return cache_key
+    fp = hashlib.sha256(
+        repr(sorted((p, d.get("hash") or d.get("mtime"), d.get("size")) for p, d in auto_file_deps.items())).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return f"{cache_key}:fdeps:{fp}"
 
 
 class StoreMixin:
@@ -109,36 +141,6 @@ class StoreMixin:
             )
         return refusal
 
-    @staticmethod
-    def _lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
-        """The lineage hash a result carries downstream.
-
-        It is the producer's ``cache_key`` PLUS a fingerprint of the files the
-        producer read. The cache key alone omits file state (files invalidate
-        via a freshness re-stat, not via the key), so without this a downstream
-        function keyed on the lineage hash would return a STALE result after an
-        upstream file changed - the producer recomputes, but its new output
-        carries the same lineage hash as the old one. Folding the file deps in
-        gives a changed file a distinct lineage. No deps -> unchanged key.
-
-        The fingerprint is built from the recorded content ``hash`` plus the
-        size, NOT the mtime. Content is the authoritative freshness
-        signal everywhere else, and mtime is the untrustworthy one: keying
-        lineage on it would hand a touched-but-identical file a new lineage and
-        needlessly recompute every downstream consumer, while a same-size edit
-        under an indistinguishable mtime would reuse the old lineage and serve
-        stale. A snapshot with no ``hash`` falls back to the mtime so the
-        entry still keeps a stable lineage.
-        """
-        if not auto_file_deps:
-            return cache_key
-        fp = hashlib.sha256(
-            repr(sorted((p, d.get("hash") or d.get("mtime"), d.get("size")) for p, d in auto_file_deps.items())).encode(
-                "utf-8"
-            )
-        ).hexdigest()
-        return f"{cache_key}:fdeps:{fp}"
-
     def _attach_lineage(
         self,
         result: Any,
@@ -168,7 +170,7 @@ class StoreMixin:
             return
         frozen = self._is_frozen(func_name)
         if frozen and type(result) in (list, tuple, dict):
-            self._remember_frozen_container(result, func_name, self._lineage_hash(cache_key, auto_file_deps))
+            self._remember_frozen_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
             return
         if frozen and type(result).__name__ == "ndarray" and (type(result).__module__ or "").startswith("numpy"):
             # An array cannot carry a tag, and read-only is a promise numpy
@@ -185,7 +187,7 @@ class StoreMixin:
             return
         if not frozen and type(result) in UNTAGGABLE_TYPES:
             return
-        lineage = self._lineage_hash(cache_key, auto_file_deps)
+        lineage = lineage_hash(cache_key, auto_file_deps)
         try:
             # Say who wrote it: nothing will move this tag when the value is
             # mutated, so `_hash_arg_payload` must not take it for the content
@@ -342,7 +344,7 @@ class StoreMixin:
             store_errors = meta_dict.get("store_errors")
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
-            not_persisted = self._not_persisted_reason(meta_dict)
+            not_persisted = not_persisted_reason(meta_dict)
             self._remember_outcome(
                 cache_key,
                 {
@@ -482,7 +484,7 @@ class StoreMixin:
             self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
             self._report_observed_effects(func_name, observer)
             self._credit_remembered_reads(func_name, tracker, args, kwargs)
-            auto_file_deps = self._snapshot_tracked_deps(tracker, spec.func.__module__)
+            auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
 
             if chunk_index == 0:
                 # Everything fit in one chunk, so cache_if can still see the

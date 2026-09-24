@@ -139,6 +139,44 @@ def read_seed(value: Any, path: tuple) -> Any:
     return value
 
 
+def rng_marker_key(func_name: str) -> str:
+    """Backend key for the "this function draws" verdict."""
+    return f"cash:rngdraw:{func_name}"
+
+
+def capture_rng_pre_state() -> dict | None:
+    """Snapshot the global RNG streams, or None if unavailable."""
+    try:
+        return capture_rng_state()
+    except (TypeError, AttributeError):  # pragma: no cover
+        return None
+
+
+def replay_rng_state(metadata: Any) -> None:
+    """Put the global RNG where the computed call left it (see
+    :meth:`_rng_replay_parts`), when it is where that call started."""
+    replay = getattr(metadata, "rng_replay", None) or {}
+    post, pre = replay.get("rng_post"), replay.get("rng_pre")
+    if not post or not pre:
+        return
+    try:
+        # Only the streams the body advanced, and only while each is where
+        # that body found it. Every other module is left alone: a process
+        # seeds `random` from the OS at import, so comparing all of them
+        # would refuse every replay.
+        advanced = rng_modules_changed(pre, post)
+        if not advanced:
+            return
+        live = capture_rng_state()
+        if any(m not in live for m in advanced):
+            return
+        if rng_modules_changed({m: pre[m] for m in advanced}, {m: live[m] for m in advanced}):
+            return
+        restore_rng_state({m: post[m] for m in advanced})
+    except Exception:  # noqa: BLE001 - a replay must never break a hit
+        logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
+
+
 class RngMixin:
     """The random-number generators a function draws from, as an input."""
 
@@ -175,11 +213,6 @@ class RngMixin:
             return state_hash
         return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
 
-    @staticmethod
-    def _rng_marker_key(func_name: str) -> str:
-        """Backend key for the "this function draws" verdict."""
-        return f"cash:rngdraw:{func_name}"
-
     def _load_rng_draw_marker(self, func_name: str) -> set[str]:
         """Read the persisted draw verdict, caching the answer for this process.
 
@@ -199,7 +232,7 @@ class RngMixin:
             return cf.rng_modules
         modules: set[str] = set()
         try:
-            stored = self.backend.get(self._rng_marker_key(func_name))
+            stored = self.backend.get(rng_marker_key(func_name))
             # Backends answer with ``(metadata, value)``; unwrap before reading.
             # Treating the pair itself as the payload silently yielded an empty
             # set, so every restart re-learned nothing and the stale value came
@@ -217,7 +250,7 @@ class RngMixin:
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
         """Persist the verdict so the next process applies it on its first call."""
         try:
-            self.backend.set(self._rng_marker_key(func_name), set(modules))
+            self.backend.set(rng_marker_key(func_name), set(modules))
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
@@ -252,14 +285,6 @@ class RngMixin:
         # write there would redraw and break the freeze-from-first-call contract.
         return bool(drew & set(seed_epochs()))
 
-    @staticmethod
-    def _capture_rng_pre_state() -> dict | None:
-        """Snapshot the global RNG streams, or None if unavailable."""
-        try:
-            return capture_rng_state()
-        except (TypeError, AttributeError):  # pragma: no cover
-            return None
-
     def _rng_replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
 
@@ -280,31 +305,6 @@ class RngMixin:
             return {"rng_pre": pre_state, "rng_post": capture_rng_state()}
         except Exception:  # noqa: BLE001 - never break a call over this
             return {}
-
-    @staticmethod
-    def _replay_rng_state(metadata: Any) -> None:
-        """Put the global RNG where the computed call left it (see
-        :meth:`_rng_replay_parts`), when it is where that call started."""
-        replay = getattr(metadata, "rng_replay", None) or {}
-        post, pre = replay.get("rng_post"), replay.get("rng_pre")
-        if not post or not pre:
-            return
-        try:
-            # Only the streams the body advanced, and only while each is where
-            # that body found it. Every other module is left alone: a process
-            # seeds `random` from the OS at import, so comparing all of them
-            # would refuse every replay.
-            advanced = rng_modules_changed(pre, post)
-            if not advanced:
-                return
-            live = capture_rng_state()
-            if any(m not in live for m in advanced):
-                return
-            if rng_modules_changed({m: pre[m] for m in advanced}, {m: live[m] for m in advanced}):
-                return
-            restore_rng_state({m: post[m] for m in advanced})
-        except Exception:  # noqa: BLE001 - a replay must never break a hit
-            logger.debug("[CORE] could not replay the RNG state of a hit", exc_info=True)
 
     def _warn_unseeded_randomness(
         self,

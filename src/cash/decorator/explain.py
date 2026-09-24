@@ -285,6 +285,46 @@ def entry_id_of(cache_key: str) -> str:
     return hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
 
 
+def stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
+    """``{path: what changed}`` for each recorded dependency that moved.
+
+    The same freshness check a lookup makes, so the answer cannot
+    contradict the behaviour it explains.
+    """
+
+    stale: dict[str, str] = {}
+    seen: set[str] = set()
+    for path, recorded in (metadata.auto_file_deps or {}).items():
+        here = dep_path_for_this_process(path, recorded)
+        same = same_file_key(here)
+        if same in seen:
+            continue
+        resolved, is_fresh, why = dep_is_fresh(path, recorded)
+        if not is_fresh:
+            seen.add(same)
+            stale[resolved or here] = STALE_REASON_TEXT.get(why or "", "changed")
+    return stale
+
+
+def not_persisted_reason(stored_meta: dict[str, Any]) -> str | None:
+    """Why a stored value reached only RAM, or ``None`` if it went further.
+
+    Only a tiered backend says where a value landed; anything else reports
+    nothing, and nothing is claimed.
+    """
+    tiers = stored_meta.get("storage")
+    skipped = stored_meta.get("persist_skipped")
+    if not isinstance(tiers, list) or skipped is None or any(t != "RAM" for t in tiers):
+        return None
+    if skipped == "size":
+        return "too big for the persistent tier's size cap"
+    # The notebook's other reasons (the persistence floor, the cost model,
+    # the rate ceiling) cannot apply to a decorated result: `@cash.cache`
+    # persists what it is given, and only a size cap stops it (see
+    # `TieredBackend.set`).
+    return None
+
+
 class ExplainMixin:
     """``f.explain()`` and the reason recorded for each miss."""
 
@@ -457,7 +497,7 @@ class ExplainMixin:
         # changed' after a touch while the actual call hit. A diagnostic that
         # contradicts the behavior it describes is worse than none.
         if metadata.auto_file_deps:
-            stale = self._stale_file_deps(metadata)
+            stale = stale_file_deps(metadata)
             if stale:
                 return CacheExplanation(
                     would_hit=False,
@@ -683,29 +723,8 @@ class ExplainMixin:
             return None
         return describe_state_change(old, new)
 
-    @staticmethod
-    def _stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
-        """``{path: what changed}`` for each recorded dependency that moved.
-
-        The same freshness check a lookup makes, so the answer cannot
-        contradict the behaviour it explains.
-        """
-
-        stale: dict[str, str] = {}
-        seen: set[str] = set()
-        for path, recorded in (metadata.auto_file_deps or {}).items():
-            here = dep_path_for_this_process(path, recorded)
-            same = same_file_key(here)
-            if same in seen:
-                continue
-            resolved, is_fresh, why = dep_is_fresh(path, recorded)
-            if not is_fresh:
-                seen.add(same)
-                stale[resolved or here] = STALE_REASON_TEXT.get(why or "", "changed")
-        return stale
-
     def _describe_stale_files(self, metadata: CacheMetadata) -> str:
-        stale = self._stale_file_deps(metadata)
+        stale = stale_file_deps(metadata)
         if not stale:
             return "a file it read"
         path, why = next(iter(stale.items()))
@@ -721,22 +740,3 @@ class ExplainMixin:
 
     def _note_not_stored(self, cache_key: str, refusal: str) -> None:
         self._remember_outcome(cache_key, {"not_stored": refusal})
-
-    @staticmethod
-    def _not_persisted_reason(stored_meta: dict[str, Any]) -> str | None:
-        """Why a stored value reached only RAM, or ``None`` if it went further.
-
-        Only a tiered backend says where a value landed; anything else reports
-        nothing, and nothing is claimed.
-        """
-        tiers = stored_meta.get("storage")
-        skipped = stored_meta.get("persist_skipped")
-        if not isinstance(tiers, list) or skipped is None or any(t != "RAM" for t in tiers):
-            return None
-        if skipped == "size":
-            return "too big for the persistent tier's size cap"
-        # The notebook's other reasons (the persistence floor, the cost model,
-        # the rate ceiling) cannot apply to a decorated result: `@cash.cache`
-        # persists what it is given, and only a size cap stops it (see
-        # `TieredBackend.set`).
-        return None

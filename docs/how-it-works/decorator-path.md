@@ -28,7 +28,7 @@ four segments:
   </div>
 </div>
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962 -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @a3272962 -->
 The segments are joined with colons, and an unused one is simply empty — a
 function with no `dynamic_depends_on` produces a key with an empty `dynamic`
 segment (`__main__.load:ca32…::0bba…`). Each segment answers a different "did
@@ -101,7 +101,7 @@ gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
 argument type, and runs the function uncached.
 
 ??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin.get_func_key @5014fa8b -->
+    <!-- claim: cash/decorator/code_identity.py:func_key @5014fa8b -->
     Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
     `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
     `dep()` and a helper module's `dep()` produced the *same* key, so a call to

@@ -22,6 +22,43 @@ FROZEN_AUDIT_FIRST = 8
 FROZEN_AUDIT_EVERY = 64
 
 
+#: Frozen list/tuple/dict results held at once. Past it the oldest goes.
+FROZEN_CONTAINERS_MAX = 256
+
+
+#: How many of a container's elements the cheap audit measures.
+FROZEN_SHAPE_SAMPLE = 8
+
+
+def frozen_shape(obj: Any) -> tuple | None:
+    """What *obj* is shaped like, in O(1)-ish work, or ``None``.
+
+    The full audit hashes every byte, so it runs rarely -- the baseline at
+    the 8th use and a comparison every 64th after that. That left the
+    ordinary shape unprotected: produce a result, change it, pass it again.
+    A length, a frame's shape and dtypes, and the lengths of a few elements
+    cost nothing to read on EVERY use, and they move for the changes a
+    caller actually makes (``model["w"].append(...)``). A change they
+    cannot see -- a value overwritten in place, same length -- is still
+    caught by the full audit.
+    """
+    try:
+        shape = getattr(obj, "shape", None)
+        if shape is not None:
+            dtypes = getattr(obj, "dtypes", None)
+            dtype = tuple(str(d) for d in dtypes) if dtypes is not None else str(getattr(obj, "dtype", ""))
+            return ("shaped", tuple(shape), dtype)
+        if isinstance(obj, (str, bytes)):
+            return None
+        values = list(obj.values())[:FROZEN_SHAPE_SAMPLE] if isinstance(obj, dict) else None
+        if values is None and isinstance(obj, (list, tuple)):
+            values = list(obj[:FROZEN_SHAPE_SAMPLE])
+        inner = tuple(len(v) for v in values or () if isinstance(v, Sized))
+        return ("sized", len(obj), inner) if isinstance(obj, Sized) else None
+    except Exception:  # noqa: BLE001 - no cheap signal is not a failure
+        return None
+
+
 class FrozenMixin:
     """Results of ``frozen=True`` functions: keyed by producer, audited for changes."""
 
@@ -59,9 +96,6 @@ class FrozenMixin:
             entry[2] = content_hash
         return content_hash
 
-    #: Frozen list/tuple/dict results held at once. Past it the oldest goes.
-    _FROZEN_CONTAINERS_MAX = 256
-
     def _remember_frozen_container(self, obj: Any, producer: str, lineage: str) -> None:
         """Key a frozen function's list, tuple or dict by its producer's lineage.
 
@@ -85,9 +119,9 @@ class FrozenMixin:
         for key, entry in list(table.items()):
             if sys.getrefcount(entry[0]) <= alone:
                 table.pop(key, None)
-        while len(table) >= self._FROZEN_CONTAINERS_MAX:
+        while len(table) >= FROZEN_CONTAINERS_MAX:
             table.pop(next(iter(table)))
-        table[id(obj)] = [obj, producer, f"frozen:{lineage}", 0, None, self._frozen_shape(obj)]
+        table[id(obj)] = [obj, producer, f"frozen:{lineage}", 0, None, frozen_shape(obj)]
 
     def _frozen_container_hash(self, obj: Any) -> str | None:
         """The lineage a frozen list/tuple/dict is keyed by, or None once it
@@ -97,7 +131,7 @@ class FrozenMixin:
             return None
         entry[3] += 1
         uses = entry[3]
-        shape = self._frozen_shape(obj)
+        shape = frozen_shape(obj)
         if len(entry) > 5 and entry[5] is not None and shape != entry[5]:
             self._frozen_containers.pop(id(obj), None)
             self._warn_frozen_mutated(obj, entry[1])
@@ -168,37 +202,6 @@ class FrozenMixin:
             f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
         )
 
-    #: How many of a container's elements the cheap audit measures.
-    _FROZEN_SHAPE_SAMPLE = 8
-
-    def _frozen_shape(self, obj: Any) -> tuple | None:
-        """What *obj* is shaped like, in O(1)-ish work, or ``None``.
-
-        The full audit hashes every byte, so it runs rarely -- the baseline at
-        the 8th use and a comparison every 64th after that. That left the
-        ordinary shape unprotected: produce a result, change it, pass it again.
-        A length, a frame's shape and dtypes, and the lengths of a few elements
-        cost nothing to read on EVERY use, and they move for the changes a
-        caller actually makes (``model["w"].append(...)``). A change they
-        cannot see -- a value overwritten in place, same length -- is still
-        caught by the full audit.
-        """
-        try:
-            shape = getattr(obj, "shape", None)
-            if shape is not None:
-                dtypes = getattr(obj, "dtypes", None)
-                dtype = tuple(str(d) for d in dtypes) if dtypes is not None else str(getattr(obj, "dtype", ""))
-                return ("shaped", tuple(shape), dtype)
-            if isinstance(obj, (str, bytes)):
-                return None
-            values = list(obj.values())[: self._FROZEN_SHAPE_SAMPLE] if isinstance(obj, dict) else None
-            if values is None and isinstance(obj, (list, tuple)):
-                values = list(obj[: self._FROZEN_SHAPE_SAMPLE])
-            inner = tuple(len(v) for v in values or () if isinstance(v, Sized))
-            return ("sized", len(obj), inner) if isinstance(obj, Sized) else None
-        except Exception:  # noqa: BLE001 - no cheap signal is not a failure
-            return None
-
     def _audit_frozen(self, obj: Any) -> bool:
         """Is a frozen=True result still what it was? False once it is not.
 
@@ -218,13 +221,13 @@ class FrozenMixin:
                 wref = weakref.ref(obj, lambda _r, k=key, m=self._frozen_uses: m.pop(k, None))
             except TypeError:
                 return True
-            entry = [wref, 0, None, self._frozen_shape(obj)]
+            entry = [wref, 0, None, frozen_shape(obj)]
             if len(self._frozen_uses) >= 4096:
                 self._frozen_uses.clear()
             self._frozen_uses[key] = entry
         entry[1] += 1
         uses = entry[1]
-        shape = self._frozen_shape(obj)
+        shape = frozen_shape(obj)
         if entry[3] is not None and shape != entry[3]:
             self._frozen_uses.pop(key, None)
             self._warn_frozen_mutated(obj)

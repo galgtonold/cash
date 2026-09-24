@@ -108,8 +108,8 @@ def test_two_objects_sharing_a_lineage_string_still_track_content():
 def test_memo_is_bounded():
     c = _cash()
     keep = []  # hold references so each df keeps a distinct id (forces growth)
-    for i in range(c._ARG_HASH_MEMO_CAP + 50):
+    for i in range(arg_hashing.ARG_HASH_MEMO_CAP + 50):
         df = _df(range(3), lineage=f"L{i}")
         keep.append(df)
         c._serialize_args("f", (df,), {})
-    assert len(c._arg_hash_memo) <= c._ARG_HASH_MEMO_CAP
+    assert len(c._arg_hash_memo) <= arg_hashing.ARG_HASH_MEMO_CAP

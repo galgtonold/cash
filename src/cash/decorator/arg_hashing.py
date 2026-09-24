@@ -17,7 +17,7 @@ from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
-from ..object_hashing import builtin_hash, builtin_hash_family, stable_key_repr
+from ..object_hashing import builtin_hash, stable_key_repr
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, PLAIN_SEQS
 
 logger = logging.getLogger(__name__)
@@ -138,6 +138,166 @@ def is_cow_pandas(value: Any) -> bool:
         except Exception:  # noqa: BLE001 - unknown pandas: no memo, hash every time
             _COW_PANDAS = False
     return _COW_PANDAS
+
+
+ARG_HASH_MEMO_CAP = 1024
+
+
+FRAME_MEMO_CAP = 256
+
+
+def frame_signature(obj: Any) -> tuple:
+    """What must stay the same for a pandas object's content hash to hold.
+
+    Under copy-on-write, a frame whose data another frame also references
+    cannot be written in place: every write path (``loc``/``iloc``/``at``,
+    column assignment, ``inplace=True`` methods, ``update``, ``insert``,
+    ``pop``) first gives the written frame NEW block arrays, and writes
+    through ``.values`` / ``to_numpy()`` raise (the arrays are read-only).
+    So the identities of the block arrays, the manager and the axes are an
+    exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
+    axis NAMES are compared by value, because ``df.index.name = ...``
+    renames the same Index object and the content hash includes them.
+    """
+    mgr = obj._mgr
+    blocks = tuple(id(block.values) for block in mgr.blocks)
+    if hasattr(obj, "columns"):
+        return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names), id(obj.index), tuple(obj.index.names))
+    return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
+
+
+def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
+    """Whether *obj*'s blocks sit on memory something else may write.
+
+    Copy-on-write is what makes the block identities an exact change
+    signal, and it only governs writes through PANDAS. ``pd.DataFrame(arr,
+    copy=False)`` keeps the caller's ndarray, and ``arr[0, 0] = 100`` goes
+    straight past pandas: same blocks, changed data. The memo answered 10.0
+    where the frame really summed to 109.0. Such a frame is re-hashed on every call.
+
+    *held* is the memo's own shallow copy of *obj*. Its blocks are views
+    whose ``base`` is *obj*'s array, one reference each. Those references
+    are cash's, not an outside writer's, so they are not counted against
+    the baseline; counting them made every memoised frame look borrowed,
+    and it was re-hashed on every call.
+    """
+    try:
+        ours = _held_block_refs(held) if held is not None else {}
+        for block in obj._mgr.blocks:
+            # Counted before this loop binds the array to a name of its
+            # own, exactly as the baseline was measured.
+            refcount = _block_refcount(block)
+            values = block.values
+            base = getattr(values, "base", None)
+            if base is not None or not getattr(getattr(values, "flags", None), "owndata", True):
+                return True
+            # A 1-D block IS the caller's array (`pd.Series(arr,
+            # copy=False)`), with no base and owning its data -- only the
+            # extra reference the caller still holds tells them apart. A
+            # count above the baseline can only make cash re-hash a frame
+            # it could have memoised: slower, never wrong.
+            if refcount > _block_refcount_baseline() + ours.get(id(values), 0):
+                return True
+            del values, base
+    except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
+        return True
+    return False
+
+
+def _held_block_refs(held: Any) -> dict[int, int]:
+    """``{id(array): n}``: the references *held*'s blocks keep to arrays.
+
+    A function of its own so that no loop variable outlives it: one left
+    pointing at an array would itself be a reference over the baseline.
+    """
+    refs: dict[int, int] = {}
+    for block in held._mgr.blocks:
+        values = block.values
+        for ref in (values, getattr(values, "base", None)):
+            if ref is not None:
+                refs[id(ref)] = refs.get(id(ref), 0) + 1
+    return refs
+
+
+def _block_refcount(block: Any) -> int:
+    """``sys.getrefcount`` of *block*'s array, taken the same way for the
+    baseline and for every check."""
+    return sys.getrefcount(block.values)
+
+
+def _block_refcount_baseline() -> int:
+    """What `_block_refcount` reads for an array only its block holds.
+
+    Measured rather than written down: what ``sys.getrefcount`` counts
+    besides the holders varies across Python versions (3.14 counts one
+    fewer), and a baseline one too high lets a caller's array through
+    as the frame's own -- the stale answer this check exists to stop.
+    """
+    global _BLOCK_REFCOUNT_BASELINE
+    baseline = _BLOCK_REFCOUNT_BASELINE
+    if baseline is None:
+        import pandas as pd
+
+        probe = pd.Series([0.0, 1.0, 2.0])
+        baseline = _BLOCK_REFCOUNT_BASELINE = _block_refcount(probe._mgr.blocks[0])
+    return baseline
+
+
+#: See ``_block_refcount_baseline``; anything above it means something
+#: outside can write to the array, see ``frame_borrows_its_data``.
+_BLOCK_REFCOUNT_BASELINE: int | None = None
+
+
+#: Types whose code must not participate in any cache key. Process-wide,
+#: not per-instance: a marker is a property of the type, and a user who
+#: marks it once should not have to repeat it per Cash instance.
+#:
+#: Holds STRONG references deliberately, so a registered class can never
+#: be garbage collected. Considered and rejected a WeakSet: opaque types
+#: are registered by hand, at import time, in the tens at most for any
+#: real user -- not generated in volume -- so the leak this trades away
+#: has no realistic scale to bite at. A WeakSet would also silently
+#: un-register a type the moment nothing else references it, which is
+#: the opposite of "mark it once and forget about it."
+OPAQUE_TYPES: set = set()
+
+
+def mark_opaque(*types_: type) -> None:
+    """Exclude *types_* from code-surface hashing: what ``cash.opaque`` records."""
+    OPAQUE_TYPES.update(types_)
+
+
+def is_opaque(obj: Any) -> bool:
+    """True when *obj* -- a class, or an instance of one -- must not have
+    its code hashed into a cache key.
+
+    The type itself must be in ``_OPAQUE_TYPES`` (``cash.opaque``); a
+    subclass of an opaque class is not covered. It may carry its own
+    freshly-written methods the user actively edits, and inheriting the
+    mark would silently exempt that code from ever invalidating the cache.
+    A subclass that wants the same treatment is marked itself (pinned by
+    ``test_a_subclass_of_an_opaque_class_does_not_inherit_opacity``).
+
+    Never raises. Measured, not assumed: a metaclass that defines
+    ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
+    (Python's data-model default, not just its instances), so
+    ``target in OPAQUE_TYPES`` can raise ``TypeError`` on a real,
+    if unusual, class shape. An opacity check must not be the thing
+    that breaks an otherwise-cacheable call.
+    """
+    try:
+        if isinstance(obj, functools.partial):
+            # A partial is the function it wraps plus arguments, both of
+            # which are keyed now. `cash.opaque(functools.partial)` was the
+            # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
+            # EVERY partial in the process, including ones over code the
+            # user then edited.
+            return False
+        target = obj if isinstance(obj, type) else type(obj)
+        return target in OPAQUE_TYPES
+    except Exception as e:  # noqa: BLE001 - opacity check must never break a call
+        logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
+        return False
 
 
 class ArgHashingMixin:
@@ -282,8 +442,6 @@ class ArgHashingMixin:
                 canon_kwargs[name] = val
         return tuple(canon_args), canon_kwargs
 
-    _ARG_HASH_MEMO_CAP = 1024
-
     def _memo_arg_hash(self, arg: Any, lineage: str, content_hash: str) -> None:
         """Record ``id(arg) -> (weakref, lineage, content_hash)`` for the session,
         bounded so a long session can't grow the memo without limit. When full,
@@ -296,111 +454,9 @@ class ArgHashingMixin:
         except TypeError:
             return
         memo = self._arg_hash_memo
-        if len(memo) >= self._ARG_HASH_MEMO_CAP:
+        if len(memo) >= ARG_HASH_MEMO_CAP:
             memo.clear()
         memo[id(arg)] = (wref, lineage, content_hash)
-
-    _FRAME_MEMO_CAP = 256
-
-    @staticmethod
-    def _frame_signature(obj: Any) -> tuple:
-        """What must stay the same for a pandas object's content hash to hold.
-
-        Under copy-on-write, a frame whose data another frame also references
-        cannot be written in place: every write path (``loc``/``iloc``/``at``,
-        column assignment, ``inplace=True`` methods, ``update``, ``insert``,
-        ``pop``) first gives the written frame NEW block arrays, and writes
-        through ``.values`` / ``to_numpy()`` raise (the arrays are read-only).
-        So the identities of the block arrays, the manager and the axes are an
-        exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
-        axis NAMES are compared by value, because ``df.index.name = ...``
-        renames the same Index object and the content hash includes them.
-        """
-        mgr = obj._mgr
-        blocks = tuple(id(block.values) for block in mgr.blocks)
-        if hasattr(obj, "columns"):
-            return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names), id(obj.index), tuple(obj.index.names))
-        return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
-
-    @staticmethod
-    def _frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
-        """Whether *obj*'s blocks sit on memory something else may write.
-
-        Copy-on-write is what makes the block identities an exact change
-        signal, and it only governs writes through PANDAS. ``pd.DataFrame(arr,
-        copy=False)`` keeps the caller's ndarray, and ``arr[0, 0] = 100`` goes
-        straight past pandas: same blocks, changed data. The memo answered 10.0
-        where the frame really summed to 109.0. Such a frame is re-hashed on every call.
-
-        *held* is the memo's own shallow copy of *obj*. Its blocks are views
-        whose ``base`` is *obj*'s array, one reference each. Those references
-        are cash's, not an outside writer's, so they are not counted against
-        the baseline; counting them made every memoised frame look borrowed,
-        and it was re-hashed on every call.
-        """
-        try:
-            ours = ArgHashingMixin._held_block_refs(held) if held is not None else {}
-            for block in obj._mgr.blocks:
-                # Counted before this loop binds the array to a name of its
-                # own, exactly as the baseline was measured.
-                refcount = ArgHashingMixin._block_refcount(block)
-                values = block.values
-                base = getattr(values, "base", None)
-                if base is not None or not getattr(getattr(values, "flags", None), "owndata", True):
-                    return True
-                # A 1-D block IS the caller's array (`pd.Series(arr,
-                # copy=False)`), with no base and owning its data -- only the
-                # extra reference the caller still holds tells them apart. A
-                # count above the baseline can only make cash re-hash a frame
-                # it could have memoised: slower, never wrong.
-                if refcount > ArgHashingMixin._block_refcount_baseline() + ours.get(id(values), 0):
-                    return True
-                del values, base
-        except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
-            return True
-        return False
-
-    @staticmethod
-    def _held_block_refs(held: Any) -> dict[int, int]:
-        """``{id(array): n}``: the references *held*'s blocks keep to arrays.
-
-        A function of its own so that no loop variable outlives it: one left
-        pointing at an array would itself be a reference over the baseline.
-        """
-        refs: dict[int, int] = {}
-        for block in held._mgr.blocks:
-            values = block.values
-            for ref in (values, getattr(values, "base", None)):
-                if ref is not None:
-                    refs[id(ref)] = refs.get(id(ref), 0) + 1
-        return refs
-
-    @staticmethod
-    def _block_refcount(block: Any) -> int:
-        """``sys.getrefcount`` of *block*'s array, taken the same way for the
-        baseline and for every check."""
-        return sys.getrefcount(block.values)
-
-    @staticmethod
-    def _block_refcount_baseline() -> int:
-        """What `_block_refcount` reads for an array only its block holds.
-
-        Measured rather than written down: what ``sys.getrefcount`` counts
-        besides the holders varies across Python versions (3.14 counts one
-        fewer), and a baseline one too high lets a caller's array through
-        as the frame's own -- the stale answer this check exists to stop.
-        """
-        baseline = ArgHashingMixin._BLOCK_REFCOUNT_BASELINE
-        if baseline is None:
-            import pandas as pd
-
-            probe = pd.Series([0.0, 1.0, 2.0])
-            baseline = ArgHashingMixin._BLOCK_REFCOUNT_BASELINE = ArgHashingMixin._block_refcount(probe._mgr.blocks[0])
-        return baseline
-
-    #: See ``_block_refcount_baseline``; anything above it means something
-    #: outside can write to the array, see ``_frame_borrows_its_data``.
-    _BLOCK_REFCOUNT_BASELINE: int | None = None
 
     def _frame_memo_lookup(self, obj: Any) -> str | None:
         """The content hash recorded for *obj*, if *obj* has not changed since."""
@@ -408,11 +464,11 @@ class ArgHashingMixin:
         if entry is None:
             return None
         wref, held, signature, content_hash = entry
-        if self._frame_borrows_its_data(obj, held):
+        if frame_borrows_its_data(obj, held):
             self._frame_memo.pop(id(obj), None)
             return None
         try:
-            if wref() is obj and self._frame_signature(obj) == signature:
+            if wref() is obj and frame_signature(obj) == signature:
                 return content_hash
         except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
             pass
@@ -430,13 +486,13 @@ class ArgHashingMixin:
         """
         try:
             held = obj.copy(deep=False)
-            signature = self._frame_signature(obj)
+            signature = frame_signature(obj)
             memo = self._frame_memo
             key = id(obj)
             wref = weakref.ref(obj, lambda _ref, key=key, memo=memo: memo.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
-        if len(self._frame_memo) >= self._FRAME_MEMO_CAP:
+        if len(self._frame_memo) >= FRAME_MEMO_CAP:
             self._frame_memo.clear()
         self._frame_memo[key] = (wref, held, signature, content_hash)
 
@@ -633,67 +689,6 @@ class ArgHashingMixin:
             # double-warn.
             logger.debug("Could not serialize arguments for %s: %s", func_name, e)
             return None
-
-    @staticmethod
-    def builtin_hashed_family(type_: type) -> str | None:
-        """Which built-in content hasher claims *type_*, or ``None``.
-
-        Tells a user at ``register_hasher`` time that the hasher they just
-        handed over would never be consulted -- the moment they can still do
-        something about it. See `cash.object_hashing.builtin_hash_family`.
-        """
-        return builtin_hash_family(type_)
-
-    #: Types whose code must not participate in any cache key. Process-wide,
-    #: not per-instance: a marker is a property of the type, and a user who
-    #: marks it once should not have to repeat it per Cash instance.
-    #:
-    #: Holds STRONG references deliberately, so a registered class can never
-    #: be garbage collected. Considered and rejected a WeakSet: opaque types
-    #: are registered by hand, at import time, in the tens at most for any
-    #: real user -- not generated in volume -- so the leak this trades away
-    #: has no realistic scale to bite at. A WeakSet would also silently
-    #: un-register a type the moment nothing else references it, which is
-    #: the opposite of "mark it once and forget about it."
-    _OPAQUE_TYPES: set = set()
-
-    @staticmethod
-    def mark_opaque(*types_: type) -> None:
-        """Exclude *types_* from code-surface hashing: what ``cash.opaque`` records."""
-        ArgHashingMixin._OPAQUE_TYPES.update(types_)
-
-    @staticmethod
-    def _is_opaque(obj: Any) -> bool:
-        """True when *obj* -- a class, or an instance of one -- must not have
-        its code hashed into a cache key.
-
-        The type itself must be in ``_OPAQUE_TYPES`` (``cash.opaque``); a
-        subclass of an opaque class is not covered. It may carry its own
-        freshly-written methods the user actively edits, and inheriting the
-        mark would silently exempt that code from ever invalidating the cache.
-        A subclass that wants the same treatment is marked itself (pinned by
-        ``test_a_subclass_of_an_opaque_class_does_not_inherit_opacity``).
-
-        Never raises. Measured, not assumed: a metaclass that defines
-        ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
-        (Python's data-model default, not just its instances), so
-        ``target in Cash._OPAQUE_TYPES`` can raise ``TypeError`` on a real,
-        if unusual, class shape. An opacity check must not be the thing
-        that breaks an otherwise-cacheable call.
-        """
-        try:
-            if isinstance(obj, functools.partial):
-                # A partial is the function it wraps plus arguments, both of
-                # which are keyed now. `cash.opaque(functools.partial)` was the
-                # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
-                # EVERY partial in the process, including ones over code the
-                # user then edited.
-                return False
-            target = obj if isinstance(obj, type) else type(obj)
-            return target in ArgHashingMixin._OPAQUE_TYPES
-        except Exception as e:  # noqa: BLE001 - opacity check must never break a call
-            logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
-            return False
 
     def _note_arg_cost(self, func_name: str) -> None:
         """Keep the costliest argument to hash seen for *func_name*.

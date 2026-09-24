@@ -49,6 +49,7 @@ class TestOneImportPath:
         write to the class -- so it works on one that refuses new attributes,
         which is the kind of class it is called on from outside."""
         import cash
+        from cash.decorator.arg_hashing import is_opaque
 
         class Frozen(type):
             def __setattr__(cls, name, value):
@@ -58,7 +59,7 @@ class TestOneImportPath:
             pass
 
         assert cash.opaque(Vendor) is Vendor
-        assert cash.Cash._is_opaque(Vendor) is True
+        assert is_opaque(Vendor) is True
         assert "__cash_opaque__" not in vars(Vendor)
 
     def test_tiered_backend_is_exported_at_the_top_level(self):

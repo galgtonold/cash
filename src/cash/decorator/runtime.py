@@ -32,7 +32,9 @@ from .call_state import (
     run_to_completion,
 )
 from .explain import MissKind, MissReason
+from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
+from .rng import capture_rng_pre_state, replay_rng_state
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,16 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
+
+
+def entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
+    """Is the entry older than *ttl* (``ttl=0``: always)? The one TTL rule
+    every cache path shares, `ttl_expired`."""
+    return ttl_expired(metadata.timestamp, ttl)
+
+
+def compute_cache_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
+    return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
 
 class RuntimeMixin:
@@ -184,7 +196,7 @@ class RuntimeMixin:
             PLAIN_CENSUS.memo = previous
         if args_hash is None:
             raise UnhashableArgs
-        cache_key = self._compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
+        cache_key = compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 
     def _try_get_cached(
@@ -214,7 +226,7 @@ class RuntimeMixin:
             return CACHE_MISS
         ttl = self._entry_ttl(ttl, metadata)
         try:
-            if self._entry_expired(metadata, ttl):
+            if entry_expired(metadata, ttl):
                 age = time.time() - (metadata.timestamp or 0)
                 self._note_miss(
                     func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
@@ -234,7 +246,7 @@ class RuntimeMixin:
             # Without this, a dependency that was already cached before the
             # consumer's first run hides its file deps behind a cache hit
             # and the consumer never invalidates when that file changes.
-            self._propagate_file_deps_to_active_tracker(metadata)
+            propagate_file_deps_to_active_tracker(metadata)
             # Re-attach the lineage hash to the restored value. It's a plain
             # attribute that doesn't survive pickling, so a value restored
             # from disk would otherwise lose it - and a downstream cached
@@ -243,7 +255,7 @@ class RuntimeMixin:
             # needlessly. The hash is deterministic from (cache_key,
             # auto_file_deps), both available here.
             self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
-            self._replay_rng_state(metadata)
+            replay_rng_state(metadata)
             self._cached[func_name].last_key = cache_key
             self._log_decorator_call(
                 func_name,
@@ -435,7 +447,7 @@ class RuntimeMixin:
         run.observer.arg_identities = self._argument_identities(func_name, args, kwargs)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
-        run.rng_pre = self._capture_rng_pre_state()
+        run.rng_pre = capture_rng_pre_state()
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
             body_t0 = _perf_counter()
@@ -500,7 +512,7 @@ class RuntimeMixin:
         self._check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
         self._report_observed_effects(func_name, run.observer)
         self._credit_remembered_reads(func_name, run.tracker, args, kwargs)
-        auto_file_deps = self._snapshot_tracked_deps(run.tracker, func.__module__)
+        auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
         execution_time = _perf_counter() - call.call_start
 
         self._warn_shared_result(func, func_name, res, args, kwargs)
@@ -615,12 +627,3 @@ class RuntimeMixin:
                 lock_cm.__exit__(None, None, None)
             except Exception:  # noqa: BLE001 - releasing failed; compute already done
                 logger.debug("lock release failed for %s", spec.name)
-
-    def _compute_cache_key(self, func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
-        return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
-
-    @staticmethod
-    def _entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
-        """Is the entry older than *ttl* (``ttl=0``: always)? The one TTL rule
-        every cache path shares, `ttl_expired`."""
-        return ttl_expired(metadata.timestamp, ttl)

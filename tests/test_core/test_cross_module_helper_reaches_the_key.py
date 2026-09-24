@@ -6,7 +6,7 @@ doc bug, because it tells a reader to add a declaration they do not need, and
 to work around a problem that is not there.
 
 What the analyzer actually stops at is *installed* code (`site-packages`,
-`dist-packages`, the stdlib), which `Cash._is_user_module` decides. Your own
+`dist-packages`, the stdlib), which `is_user_module` decides. Your own
 modules are followed transitively.
 
 This is pinned as a test rather than only corrected in prose because prose is

@@ -23,6 +23,48 @@ from .explain import MissKind, MissReason, entry_id_of, is_sampled_dep
 calls_logger = logging.getLogger("cash.calls")
 
 
+def describe_call(entry: dict[str, Any]) -> str:
+    """One line for the per-call log: what happened, and on a miss, why."""
+    name = entry["func_name"]
+    # The id `cash inspect` lists and `cash clear --entry` takes, so a log
+    # line can be matched to an entry on disk.
+    key = entry.get("cache_key") or ""
+    tag = f"  [{entry_id_of(key)}]" if key else ""
+    if entry["cache_hit"]:
+        saved = entry.get("time_saved") or 0.0
+        lookup = entry.get("execution_time") or 0.0
+        # What the hit cost, when it is not small: the summary said "time
+        # saved" while warm runs were 9x slower than uncached.
+        if lookup >= 0.01 and lookup >= 0.1 * saved:
+            verdict = "; a net loss" if lookup > saved else ""
+            line = f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
+        else:
+            line = f"HIT  {name}{tag}  (saved {saved:.2f}s)"
+        sampled = entry.get("sampled_files")
+        if sampled:
+            # Larger than file_hash_full_max_bytes: the HIT rests on the
+            # timestamps, and "when it does not recompute I need to be sure
+            # it was right not to" had no way to see that.
+            shown = ", ".join(os.path.basename(p) for p in sampled[:3])
+            more = f" and {len(sampled) - 3} more" if len(sampled) > 3 else ""
+            line += f"  -- trusts the timestamps of {shown}{more} (sampled: larger than file_hash_full_max_bytes)"
+        return line
+    missed = entry.get("miss_reason") or MissReason(MissKind.FIRST)
+    if missed.kind is MissKind.RAISED:
+        return f"RAISE {name}  {missed.text}; nothing stored  (ran {entry['execution_time']:.2f}s)"
+    line = f"MISS {name}{tag}  {missed}"
+    # The body's own time: the persistence floor named beside it is judged
+    # on that, and the call's time -- key, analysis, lookup -- made "ran
+    # 0.20s ... under the 0.1s floor" read as a contradiction.
+    ran = entry.get("body_seconds")
+    line += f"  (ran {entry['execution_time'] if ran is None else ran:.2f}s"
+    if entry.get("not_stored"):
+        line += f"; not stored: {entry['not_stored']}"
+    elif entry.get("not_persisted"):
+        line += f"; kept in RAM only -- {entry['not_persisted']} -- so another process will recompute it"
+    return line + ")"
+
+
 class ReportingMixin:
     """Warnings and call records, per cached function."""
 
@@ -98,7 +140,7 @@ class ReportingMixin:
             if file_deps:
                 # Only for the line: a hit pays nothing for it otherwise.
                 entry["sampled_files"] = tuple(path for path, rec in file_deps.items() if is_sampled_dep(rec))
-            calls_logger.info("%s", self._describe_call(entry))
+            calls_logger.info("%s", describe_call(entry))
 
     def _per_call_lines(self) -> bool:
         """Is the one-line-per-call log on? Asked for, not merely permitted: an
@@ -107,48 +149,6 @@ class ReportingMixin:
         return bool(self.verbose or self.debug or getattr(self.config, "verbose", False)) and calls_logger.isEnabledFor(
             logging.INFO
         )
-
-    @staticmethod
-    def _describe_call(entry: dict[str, Any]) -> str:
-        """One line for the per-call log: what happened, and on a miss, why."""
-        name = entry["func_name"]
-        # The id `cash inspect` lists and `cash clear --entry` takes, so a log
-        # line can be matched to an entry on disk.
-        key = entry.get("cache_key") or ""
-        tag = f"  [{entry_id_of(key)}]" if key else ""
-        if entry["cache_hit"]:
-            saved = entry.get("time_saved") or 0.0
-            lookup = entry.get("execution_time") or 0.0
-            # What the hit cost, when it is not small: the summary said "time
-            # saved" while warm runs were 9x slower than uncached.
-            if lookup >= 0.01 and lookup >= 0.1 * saved:
-                verdict = "; a net loss" if lookup > saved else ""
-                line = f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
-            else:
-                line = f"HIT  {name}{tag}  (saved {saved:.2f}s)"
-            sampled = entry.get("sampled_files")
-            if sampled:
-                # Larger than file_hash_full_max_bytes: the HIT rests on the
-                # timestamps, and "when it does not recompute I need to be sure
-                # it was right not to" had no way to see that.
-                shown = ", ".join(os.path.basename(p) for p in sampled[:3])
-                more = f" and {len(sampled) - 3} more" if len(sampled) > 3 else ""
-                line += f"  -- trusts the timestamps of {shown}{more} (sampled: larger than file_hash_full_max_bytes)"
-            return line
-        missed = entry.get("miss_reason") or MissReason(MissKind.FIRST)
-        if missed.kind is MissKind.RAISED:
-            return f"RAISE {name}  {missed.text}; nothing stored  (ran {entry['execution_time']:.2f}s)"
-        line = f"MISS {name}{tag}  {missed}"
-        # The body's own time: the persistence floor named beside it is judged
-        # on that, and the call's time -- key, analysis, lookup -- made "ran
-        # 0.20s ... under the 0.1s floor" read as a contradiction.
-        ran = entry.get("body_seconds")
-        line += f"  (ran {entry['execution_time'] if ran is None else ran:.2f}s"
-        if entry.get("not_stored"):
-            line += f"; not stored: {entry['not_stored']}"
-        elif entry.get("not_persisted"):
-            line += f"; kept in RAM only -- {entry['not_persisted']} -- so another process will recompute it"
-        return line + ")"
 
     def _log_raised(self, func_name: str, exc: BaseException, call_start: float) -> None:
         """Record a call whose body raised: nothing is stored, and it counts.

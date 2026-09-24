@@ -31,6 +31,7 @@ from .data_source import DataSource
 from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,
     ArgHashingMixin,
+    mark_opaque,
 )
 from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, new_stats
 from .decorator.call_state import (
@@ -43,6 +44,8 @@ from .decorator.closure_fold import ClosureFoldMixin
 from .decorator.code_args import CodeArgsMixin
 from .decorator.code_identity import (
     CodeIdentityMixin,
+    func_key,
+    hash_callable_source,
 )
 from .decorator.explain import (
     CacheExplanation,
@@ -77,6 +80,7 @@ from .exceptions import (
     CashCacheIneffectiveWarning,
 )
 from .graph import DependencyGraph
+from .object_hashing import builtin_hash_family
 from .purity_analyzer import (
     PurityReport,
 )
@@ -289,6 +293,29 @@ class Cash(
             'behind `if __name__ == "__main__":`; or define the function in a '
             "module you import."
         )
+
+    @staticmethod
+    def get_func_key(func: Callable) -> str:
+        """Return a module-qualified key for a function (``module.qualname``).
+
+        See `cash.decorator.code_identity.func_key`.
+        """
+        return func_key(func)
+
+    @staticmethod
+    def mark_opaque(*types_: type) -> None:
+        """Exclude *types_* from code-surface hashing: what ``cash.opaque`` records."""
+        mark_opaque(*types_)
+
+    @staticmethod
+    def builtin_hashed_family(type_: type) -> str | None:
+        """Which built-in content hasher claims *type_*, or ``None``.
+
+        Tells a user at ``register_hasher`` time that the hasher they just
+        handed over would never be consulted -- the moment they can still do
+        something about it. See `cash.object_hashing.builtin_hash_family`.
+        """
+        return builtin_hash_family(type_)
 
     def __init__(
         self,
@@ -784,7 +811,7 @@ class Cash(
 
         cf = CachedFunction(
             func,
-            self.get_func_key(func),
+            func_key(func),
             dynamic_depends_on=dynamic_depends_on,
             ttl=ttl,
             cache_if=cache_if,
@@ -1221,7 +1248,7 @@ class Cash(
                 "place; if you keep this hasher, make it return the captured "
                 "values too.",
             )
-        src_hash = self._hash_callable_source(hasher_fn)
+        src_hash = hash_callable_source(hasher_fn)
         # One type, one registration: re-registering must not leave the
         # previous entry behind in the other registry, still winning.
         self._type_hashers.pop(type_, None)

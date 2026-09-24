@@ -24,6 +24,7 @@ import sys
 import types
 
 import cash
+from cash.decorator.code_identity import is_user_module
 
 # The sleep is load-bearing, not padding. Cross-process persistence has a
 # ~0.1s compute floor: a cheaper function is never written to disk, so every
@@ -33,6 +34,7 @@ MAIN = """\
 import warnings; warnings.simplefilter('ignore')
 import time
 import cash
+from cash.decorator.code_identity import is_user_module
 import conf
 RAN = [0]
 
@@ -140,13 +142,13 @@ def test_is_user_module_classification():
     import math
     import os as os_mod
 
-    assert cash.Cash._is_user_module(math) is False, "stdlib must be excluded"
-    assert cash.Cash._is_user_module(os_mod) is False, "stdlib must be excluded"
-    assert cash.Cash._is_user_module(cash) is False, "cash's own modules must be excluded"
+    assert is_user_module(math) is False, "stdlib must be excluded"
+    assert is_user_module(os_mod) is False, "stdlib must be excluded"
+    assert is_user_module(cash) is False, "cash's own modules must be excluded"
 
     fake = types.ModuleType("looks_like_user_code")
     fake.__file__ = "/home/someone/project/conf.py"
-    assert cash.Cash._is_user_module(fake) is True
+    assert is_user_module(fake) is True
 
     builtin = types.ModuleType("no_file_at_all")
-    assert cash.Cash._is_user_module(builtin) is False
+    assert is_user_module(builtin) is False

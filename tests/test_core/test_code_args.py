@@ -2,6 +2,7 @@ import pytest
 
 import cash
 from cash import Cash as CashCls
+from cash.decorator.arg_hashing import OPAQUE_TYPES, is_opaque
 
 
 def test_mark_opaque_records_the_type():
@@ -11,16 +12,14 @@ def test_mark_opaque_records_the_type():
         pass
 
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker) is True
+    assert is_opaque(Marker) is True
 
 
 def test_an_unmarked_type_is_not_opaque():
-    c = CashCls()
-
     class Other:
         pass
 
-    assert c._is_opaque(Other) is False
+    assert is_opaque(Other) is False
 
 
 def test_the_opaque_decorator_marks_and_returns_the_class():
@@ -29,7 +28,7 @@ def test_the_opaque_decorator_marks_and_returns_the_class():
         pass
 
     assert Decorated.__name__ == "Decorated"  # returns the class, not a wrapper
-    assert cash.Cash()._is_opaque(Decorated) is True
+    assert is_opaque(Decorated) is True
 
 
 def test_the_opaque_decorator_does_not_replace_the_class_object():
@@ -74,9 +73,8 @@ def test_a_subclass_of_an_opaque_class_does_not_inherit_opacity():
     class Derived(Base):
         pass
 
-    c = cash.Cash()
-    assert c._is_opaque(Base) is True  # control: the decorated class itself
-    assert c._is_opaque(Derived) is False  # the actual claim: no inheritance
+    assert is_opaque(Base) is True  # control: the decorated class itself
+    assert is_opaque(Derived) is False  # the actual claim: no inheritance
 
 
 def test_mark_opaque_does_not_cover_a_subclass():
@@ -97,12 +95,12 @@ def test_mark_opaque_does_not_cover_a_subclass():
         pass
 
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker) is True  # control: the registered type itself
-    assert c._is_opaque(SubMarker) is False  # the actual claim: no inheritance
+    assert is_opaque(Marker) is True  # control: the registered type itself
+    assert is_opaque(SubMarker) is False  # the actual claim: no inheritance
 
 
 def test_is_opaque_never_raises_on_an_unhashable_class():
-    """``target in Cash._OPAQUE_TYPES`` needs `target` to be hashable. A
+    """``target in OPAQUE_TYPES`` needs `target` to be hashable. A
     metaclass that defines ``__eq__`` without ``__hash__`` makes the CLASS
     ITSELF unhashable -- Python's data-model default, not just its
     instances -- which is a real, if unusual, class shape (some ORM/model
@@ -124,7 +122,7 @@ def test_is_opaque_never_raises_on_an_unhashable_class():
     with pytest.raises(TypeError):
         {Foo}  # confirms Foo really is unhashable before trusting the rest
 
-    assert cash.Cash()._is_opaque(Foo) is False
+    assert is_opaque(Foo) is False
 
 
 def test_an_instance_of_a_registered_type_is_opaque():
@@ -143,7 +141,7 @@ def test_an_instance_of_a_registered_type_is_opaque():
         pass
 
     c.mark_opaque(Marker)
-    assert c._is_opaque(Marker()) is True
+    assert is_opaque(Marker()) is True
 
 
 def test_an_instance_of_a_decorated_class_is_opaque():
@@ -153,7 +151,7 @@ def test_an_instance_of_a_decorated_class_is_opaque():
     class Decorated:
         pass
 
-    assert cash.Cash()._is_opaque(Decorated()) is True
+    assert is_opaque(Decorated()) is True
 
 
 # ---------------------------------------------------------------------------
@@ -225,15 +223,15 @@ def c(tmp_path):
 def opaque_registry():
     """Isolate the process-global opaque registry.
 
-    ``mark_opaque`` writes to ``Cash._OPAQUE_TYPES``, which every Cash instance
+    ``mark_opaque`` writes to ``OPAQUE_TYPES``, which every Cash instance
     in the process shares and nothing ever clears. The suite runs under
     ``--dist worksteal``, which splits ONE file across workers, so a leak here
     is a cross-test dependency that only appears under parallelism.
     """
-    saved = set(CashCls._OPAQUE_TYPES)
+    saved = set(OPAQUE_TYPES)
     yield
-    CashCls._OPAQUE_TYPES.clear()
-    CashCls._OPAQUE_TYPES.update(saved)
+    OPAQUE_TYPES.clear()
+    OPAQUE_TYPES.update(saved)
 
 
 def _counting(c, name="takes"):

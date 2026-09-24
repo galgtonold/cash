@@ -1340,7 +1340,7 @@ decorator silences every finding in the function instead. Under
 
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
-<!-- claim: cash/decorator/code_args.py:CodeArgsMixin._is_user_code_carrier @d583a27d, cash/decorator/code_identity.py:CodeIdentityMixin._is_user_module @998fb383 -->
+<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @d583a27d, cash/decorator/code_identity.py:is_user_module @998fb383 -->
 **What happened.** A function, a class, or an object whose class carries code
 reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its

@@ -193,7 +193,7 @@ Leaf-level wins when partial reruns are common (one new `uid` added — only tha
 
 ## Mixing sync and async caches
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962 -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @a3272962 -->
 Cache keys are built from `func_name:state_hash:dynamic_hash:args_hash`, and `func_name` is derived from the function's qualified name. A sync `process(x)` and an async `process(x)` defined in the same module have different `__qualname__`s only if you give them different names; if you accidentally name them the same, the second decoration replaces the first in `self.functions[func_name]`. Use distinct names (`process_sync` / `process_async`) when you keep both — there is no automatic disambiguation by sync-vs-async dispatch.
 
 When the function names are distinct (the normal case), sync and async caches coexist with zero risk of cross-collision: the func-name prefix segregates their key spaces entirely.

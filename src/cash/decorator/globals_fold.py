@@ -30,8 +30,16 @@ from ..purity_analyzer import (
 )
 from ..source_norm import own_source
 from .call_state import CAPTURE_WATCH
-from .closure_fold import ClosureFoldMixin
-from .code_identity import CodeIdentityMixin
+from .closure_fold import iter_code_scopes, unsafe_uses_of, waived_use_filter
+from .code_identity import (
+    func_key,
+    hash_callable_source,
+    is_user_class,
+    is_user_module,
+    iter_contained,
+    own_package,
+    wraps_code,
+)
 
 # Two fix lines are shared by more than one emit site, because more than one
 # site tells the same story: a global whose value cannot be hashed is one
@@ -89,6 +97,52 @@ LOG_METHOD_NAMES = frozenset(
 )
 
 
+#: Dunder globals that are machine or import machinery, never user data.
+#:
+#: These are skipped: ``__file__`` and ``__name__`` differ per checkout and
+#: per invocation, so folding them would make a cache key un-shareable
+#: between two machines and between ``python job.py`` and ``python -m
+#: job``. Every other dunder is folded like any global, because a library
+#: declares its data that way too: a bumped ``__version__`` must invalidate
+#: what a report stamped with it.
+MACHINERY_DUNDERS = frozenset(
+    {
+        "__name__",
+        "__file__",
+        "__doc__",
+        "__package__",
+        "__loader__",
+        "__spec__",
+        "__builtins__",
+        "__path__",
+        "__cached__",
+        "__debug__",
+        "__annotations__",
+        "__dict__",
+        "__module__",
+        "__qualname__",
+    }
+)
+
+
+def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
+    """Rewrite *v* so callables (incl. lambdas held in containers) are
+    replaced by their source hash, making a container of callables hashable
+    and content-sensitive (dict-dispatch channel)."""
+    if _depth > 8:
+        return v
+    if callable(v) and not isinstance(v, type):
+        try:
+            return ("__cash_callable__", hash_callable(v))
+        except (OSError, TypeError, ValueError):
+            return ("__cash_callable__", getattr(v, "__qualname__", repr(v)))
+    if isinstance(v, dict):
+        return {k: stabilize_for_global_hash(val, hash_callable, _depth + 1) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return type(v)(stabilize_for_global_hash(x, hash_callable, _depth + 1) for x in v)
+    return v
+
+
 class GlobalsFoldMixin:
     """The globals a function and its helpers read, folded into the state segment."""
 
@@ -123,33 +177,6 @@ class GlobalsFoldMixin:
             found |= self._environment_reads(dep, visited)
         return found
 
-    #: Dunder globals that are machine or import machinery, never user data.
-    #:
-    #: These are skipped: ``__file__`` and ``__name__`` differ per checkout and
-    #: per invocation, so folding them would make a cache key un-shareable
-    #: between two machines and between ``python job.py`` and ``python -m
-    #: job``. Every other dunder is folded like any global, because a library
-    #: declares its data that way too: a bumped ``__version__`` must invalidate
-    #: what a report stamped with it.
-    _MACHINERY_DUNDERS = frozenset(
-        {
-            "__name__",
-            "__file__",
-            "__doc__",
-            "__package__",
-            "__loader__",
-            "__spec__",
-            "__builtins__",
-            "__path__",
-            "__cached__",
-            "__debug__",
-            "__annotations__",
-            "__dict__",
-            "__module__",
-            "__qualname__",
-        }
-    )
-
     def _read_global_data_names(self, func: Callable) -> tuple[str, ...]:
         """Global names *func* references that are candidates for data-folding.
 
@@ -180,7 +207,7 @@ class GlobalsFoldMixin:
             return cached
         g = getattr(func, "__globals__", {}) or {}
 
-        scopes = tuple(ClosureFoldMixin._iter_code_scopes(code))
+        scopes = tuple(iter_code_scopes(code))
         written = {
             instr.argval
             for scope in scopes
@@ -191,7 +218,7 @@ class GlobalsFoldMixin:
             n
             for scope in scopes
             for n in (scope.co_names or ())
-            if n in g and n not in GlobalsFoldMixin._MACHINERY_DUNDERS and n not in written
+            if n in g and n not in MACHINERY_DUNDERS and n not in written
         }
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
@@ -203,11 +230,7 @@ class GlobalsFoldMixin:
             c
             for scope in scopes
             for c in (scope.co_consts or ())
-            if isinstance(c, str)
-            and c.isidentifier()
-            and c in g
-            and c not in GlobalsFoldMixin._MACHINERY_DUNDERS
-            and c not in written
+            if isinstance(c, str) and c.isidentifier() and c in g and c not in MACHINERY_DUNDERS and c not in written
         }
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
@@ -222,16 +245,14 @@ class GlobalsFoldMixin:
         if candidates:
             try:
                 tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
-                hard = ClosureFoldMixin._unsafe_uses_of(
+                hard = unsafe_uses_of(
                     tree,
                     candidates,
                     bare_args=False,
                     mutating_methods_only=True,
                 )
-                suspected = ClosureFoldMixin._unsafe_uses_of(tree, candidates) - hard
-                provisional = ClosureFoldMixin._unsafe_uses_of(
-                    tree, suspected, waived=ClosureFoldMixin._waived_use_filter(func)
-                )
+                suspected = unsafe_uses_of(tree, candidates) - hard
+                provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
                 # Suspected only on waived lines (`LEDGER.record(r)  #
                 # @cash:assume-safe`): the audited effect moves it on every
                 # call, so keying on it made every hit impossible and demoting
@@ -255,26 +276,6 @@ class GlobalsFoldMixin:
             self._provisional_global_cache[code] = provisional
         return names
 
-    @staticmethod
-    def _stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
-        """Rewrite *v* so callables (incl. lambdas held in containers) are
-        replaced by their source hash, making a container of callables hashable
-        and content-sensitive (dict-dispatch channel)."""
-        if _depth > 8:
-            return v
-        if callable(v) and not isinstance(v, type):
-            try:
-                return ("__cash_callable__", hash_callable(v))
-            except (OSError, TypeError, ValueError):
-                return ("__cash_callable__", getattr(v, "__qualname__", repr(v)))
-        if isinstance(v, dict):
-            return {
-                k: GlobalsFoldMixin._stabilize_for_global_hash(val, hash_callable, _depth + 1) for k, val in v.items()
-            }
-        if isinstance(v, (list, tuple)):
-            return type(v)(GlobalsFoldMixin._stabilize_for_global_hash(x, hash_callable, _depth + 1) for x in v)
-        return v
-
     def _data_callable_identity(self, fn: Any) -> str:
         """A callable found INSIDE a data global, identified by what calling it runs.
 
@@ -293,14 +294,14 @@ class GlobalsFoldMixin:
         if getattr(fn, "_cash_cached", False):
             inner = getattr(fn, "__wrapped__", None)
             if inner is not None:
-                name = self.get_func_key(inner)
+                name = func_key(inner)
                 if name in self.functions:
                     if name not in self._populated:
                         self._ensure_closure_analyzed(inner)
                     return "cached:" + self._state_hasher.compute(name, own_source_override=self._pin_own_source(inner))
                 fn = inner
         if not isinstance(fn, types.FunctionType):
-            return self._hash_callable_source(fn)
+            return hash_callable_source(fn)
         own = self._hash_helper_identity(fn)
 
         if not own_code_is_user(fn, getattr(fn, "__module__", None)):
@@ -352,7 +353,7 @@ class GlobalsFoldMixin:
         # globals, so bailing here skipped the module-attribute channel in
         # exactly the case it exists for.
         parts: list[tuple[str, str]] = []
-        own_pkg = self._own_package(func)
+        own_pkg = own_package(func)
         root_module = getattr(func, "__module__", None)
         code = getattr(func, "__code__", None)
         # A missing provisional entry means "unknown", not "none" -- watch every
@@ -388,7 +389,7 @@ class GlobalsFoldMixin:
                     watch[name] = (carried, "carrier", (g, name), None)
                 continue
             try:
-                stabilized = self._stabilize_for_global_hash(v, self._data_callable_identity)
+                stabilized = stabilize_for_global_hash(v, self._data_callable_identity)
                 h = self._hash_arg_payload((stabilized,), {})
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
@@ -413,11 +414,11 @@ class GlobalsFoldMixin:
             # value-hashed above -- its class's method SOURCE is invisible to the
             # pickle, so editing a method served stale. Fold the class-graph
             # source too (memoized per class; see _instance_class_source_parts).
-            for item in self._iter_contained(v):
-                if self._is_user_class(type(item), own_pkg):
+            for item in iter_contained(v):
+                if is_user_class(type(item), own_pkg):
                     for cname, chash in self._instance_class_source_parts(item, own_pkg=own_pkg):
                         parts.append((f"{name}#cls:{cname}", chash))
-                elif isinstance(item, type) and self._is_user_class(item, own_pkg):
+                elif isinstance(item, type) and is_user_class(item, own_pkg):
                     # The CLASS itself, not an instance of it: `TABLE = {"fast":
                     # impl.Fast}` pickles by reference, so editing `Fast.run`
                     # moved nothing while the same dict holding a FUNCTION was
@@ -568,7 +569,7 @@ class GlobalsFoldMixin:
             callable(value)
             and not isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType))
             and not is_mock(value)
-            and self._is_user_class(type(value), self._own_package(type(value)))
+            and is_user_class(type(value), own_package(type(value)))
         ):
             payload = value
         elif callable(value) and not is_mock(value) and held_partials(value):
@@ -579,7 +580,7 @@ class GlobalsFoldMixin:
         else:
             return None
         try:
-            stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
+            stabilized = stabilize_for_global_hash(payload, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - never break a call over this
             return None
@@ -663,7 +664,7 @@ class GlobalsFoldMixin:
                     self._note_carrier_verdict(value, True)
             elif verdict[1] == "partials":
                 payload = ("wrapped partials", held_partials(value))
-            stabilized = self._stabilize_for_global_hash(payload, self._data_callable_identity)
+            stabilized = stabilize_for_global_hash(payload, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
             self._note_carrier_verdict(value, False)
@@ -811,13 +812,13 @@ class GlobalsFoldMixin:
         # paired with every identifier-shaped constant in it; a pair that does
         # not exist is dropped at fold time by the getattr below.
         g = getattr(func, "__globals__", None) or {}
-        for scope in ClosureFoldMixin._iter_code_scopes(code):
+        for scope in iter_code_scopes(code):
             modules = [n for n in (scope.co_names or ()) if isinstance(g.get(n), types.ModuleType)]
             if modules:
                 for const in scope.co_consts or ():
                     if isinstance(const, str) and const.isidentifier():
                         pairs.update((m, const) for m in modules)
-        for scope in ClosureFoldMixin._iter_code_scopes(code):
+        for scope in iter_code_scopes(code):
             instrs = list(dis.get_instructions(scope))
             for prev, nxt in zip(instrs, instrs[1:]):
                 if prev.opname != "LOAD_GLOBAL":
@@ -899,7 +900,7 @@ class GlobalsFoldMixin:
             return []
 
         imports, attr_reads, bare_reads = plan
-        own_pkg = self._own_package(func)
+        own_pkg = own_package(func)
         root_module = getattr(func, "__module__", None)
         code = func.__code__
         cells = dict(zip(code.co_freevars or (), getattr(func, "__closure__", None) or ()))
@@ -923,14 +924,14 @@ class GlobalsFoldMixin:
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 return  # code: the helper walk follows it
             try:
-                stabilized = self._stabilize_for_global_hash(value, self._data_callable_identity)
+                stabilized = stabilize_for_global_hash(value, self._data_callable_identity)
                 parts.append((label, self._hash_arg_payload((stabilized,), {})))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 pass
 
         for name, attrs in attr_reads.items():
             obj = resolve(name)
-            if not isinstance(obj, types.ModuleType) or not self._is_user_module(obj, own_pkg):
+            if not isinstance(obj, types.ModuleType) or not is_user_module(obj, own_pkg):
                 continue
             for attr in sorted(attrs):
                 try:
@@ -971,15 +972,15 @@ class GlobalsFoldMixin:
         *learned* is the drift guard's verdict: labels not to fold.
         """
         parts: list[tuple[str, str]] = []
-        own_pkg = self._own_package(func)
+        own_pkg = own_package(func)
         for mod_name, attr in self._read_module_attr_pairs(func):
             obj = g.get(mod_name)
-            is_mod = isinstance(obj, types.ModuleType) and self._is_user_module(obj, own_pkg)
+            is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
             # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
             # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
             # skipped because ``Cfg`` is a class, not a module, so editing the
             # constant served stale. Fold user-class attributes too.
-            is_cls = isinstance(obj, type) and self._is_user_class(obj, own_pkg)
+            is_cls = isinstance(obj, type) and is_user_class(obj, own_pkg)
             if not (is_mod or is_cls):
                 continue
             try:
@@ -989,7 +990,7 @@ class GlobalsFoldMixin:
             label = f"{mod_name}.{attr}"
             if isinstance(value, types.ModuleType) or isinstance(value, type):
                 continue
-            if is_cls and CodeIdentityMixin._wraps_code(value):
+            if is_cls and wraps_code(value):
                 # Read statically, a classmethod, property or cached_property is
                 # its descriptor, which is neither callable nor data: hashing it
                 # warned KEY-UNHASHABLE-GLOBAL for `A.make(v)`, whose code is
@@ -1039,7 +1040,7 @@ class GlobalsFoldMixin:
     def _safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
         try:
-            stabilized = self._stabilize_for_global_hash(value, self._data_callable_identity)
+            stabilized = stabilize_for_global_hash(value, self._data_callable_identity)
             return self._hash_arg_payload((stabilized,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             self._warn_once(

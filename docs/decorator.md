@@ -341,7 +341,7 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentityMixin._hash_callable_source @57867b7d, cash/decorator/registry.py:RegistryMixin._ensure_closure_analyzed @ecd28b28 -->
+<!-- claim: cash/decorator/code_identity.py:hash_callable_source @57867b7d, cash/decorator/registry.py:RegistryMixin._ensure_closure_analyzed @ecd28b28 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
@@ -677,7 +677,7 @@ see [known limitations](known-limitations.md#code-passed-as-an-argument).
 
 #### `@cash.opaque` / `cash.opaque(T)` — opt a type out
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._is_opaque @338bc5d6, cash/__init__.py:opaque @679c15ff -->
+<!-- claim: cash/decorator/arg_hashing.py:is_opaque @338bc5d6, cash/__init__.py:opaque @679c15ff -->
 For a marker class you pass but do not depend on, or one whose code churns for
 reasons that never change the result:
 
@@ -717,7 +717,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @a3272962, cash/decorator/code_args.py:CodeArgsMixin._fold_code_args @1945cfc2 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -824,7 +824,7 @@ def stock_price(symbol):
     return requests.get(f"https://api.example.com/{symbol}").json()
 ```
 
-<!-- claim: cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d, cash/core.py:Cash.cleanup @a259456c -->
+<!-- claim: cash/decorator/runtime.py:entry_expired @c72fd40d, cash/core.py:Cash.cleanup @a259456c -->
 After the TTL elapses, the next call recomputes and replaces the entry.
 Entries whose calls never come back stay on disk until you reclaim them —
 call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
@@ -1294,7 +1294,7 @@ bypass caching entirely.
 
 ## Passing large objects between cached functions
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHashingMixin._frame_signature @28a3f549, cash/decorator/arg_hashing.py:ArgHashingMixin._frame_memo_store @99f98c8a -->
+<!-- claim: cash/decorator/arg_hashing.py:frame_signature @28a3f549, cash/decorator/arg_hashing.py:ArgHashingMixin._frame_memo_store @99f98c8a -->
 An argument is keyed by what it holds **at the time of the call**, so a result
 you mutate in place and pass on is keyed by its new contents:
 

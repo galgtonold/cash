@@ -16,6 +16,7 @@ from ..purity_analyzer import PurityReport, bindings_changed, get_analyzer, reso
 from ..source_norm import bytecode_identity, compiled_identity
 from .cached_function import PurityMode
 from .call_state import KeyBuildFailed
+from .code_identity import func_key, hash_callable_source
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class RegistryMixin:
                 self.data_sources[dep_id] = dep
                 self.graph.add_dependency(func_name, dep_id)
             elif callable(dep):
-                dep_key = self.get_func_key(dep)
+                dep_key = func_key(dep)
                 self.graph.add_dependency(func_name, dep_key)
                 # A declared callable dep that is NOT a decorated cached function
                 # would contribute nothing to the state hash (the hasher only
@@ -95,7 +96,7 @@ class RegistryMixin:
         does not change: warn once that the declared dependency is inert
         rather than silently ignore it.
         """
-        snapshot = self._hash_callable_source(dep)
+        snapshot = hash_callable_source(dep)
         if bytecode_identity(dep) is None and snapshot == compiled_identity(dep):
             self._warn_once(
                 CashCacheIneffectiveWarning,
@@ -138,7 +139,7 @@ class RegistryMixin:
         if not callable(obj):
             return None
         try:
-            return self._hash_callable_source(obj)
+            return hash_callable_source(obj)
         except (OSError, TypeError, ValueError):
             return None
 
@@ -240,7 +241,7 @@ class RegistryMixin:
         warnings fire or when.
         """
         self._ensure_closure_analyzed(func)
-        func_name = self.get_func_key(func)
+        func_name = func_key(func)
         report = self._purity_reports.get(func_name) or PurityReport()
         mode = self._purity_mode(func_name)
         self._surface_purity(func_name, report, mode)
@@ -272,7 +273,7 @@ class RegistryMixin:
         seen: set[str] = set()
         while stack:
             f = stack.pop()
-            fname = self.get_func_key(f)
+            fname = func_key(f)
             if fname in seen:
                 continue
             seen.add(fname)

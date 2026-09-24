@@ -34,8 +34,9 @@ from ..purity_analyzer import (
     resolve_binding,
 )
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
-from .closure_fold import ClosureFoldMixin
-from .code_identity import CodeIdentityMixin
+from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
+from .code_identity import func_key, is_user_module, own_package
+from .globals_fold import stabilize_for_global_hash
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +123,73 @@ def static_effect_kinds(report: Any) -> set[str]:
     return kinds
 
 
+#: How deep into a returned container an argument is looked for.
+SHARED_RESULT_DEPTH = 2
+
+
+def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
+    """`` -- through `X.f()` in mod.helper (file:line)`` for the warning, or ``""``.
+
+    *reader* is the function whose read of *name* was watched: the cached
+    function, or a helper several calls below it. The move itself may be
+    deeper still (a method of the object), but this is the line in code the
+    user wrote that reaches it -- the first use that may mutate, the same
+    rule that made the name provisional. Only runs when warning.
+    """
+    if reader is None:
+        return ""
+    try:
+        lines, first = inspect.getsourcelines(reader)
+        filename = inspect.getsourcefile(reader) or inspect.getfile(reader)
+        source = textwrap.dedent("".join(lines))
+        tree = ast.parse(source)
+    except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
+        return ""
+    best = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Call, ast.Assign, ast.AugAssign, ast.Delete)):
+            continue
+        if name not in unsafe_uses_of(node, {name}):
+            continue
+        if best is None or (node.lineno, node.col_offset) < (best.lineno, best.col_offset):
+            best = node
+    if best is None:
+        return ""
+    lineno = max(first, 1) - 1 + best.lineno
+    text = " ".join((ast.get_source_segment(source, best) or "").split())
+    if len(text) > 80:
+        text = text[:77] + "..."
+    inside = "" if reader is cached else f" in {func_key(reader)}"
+    return f" -- through `{text}`{inside} ({filename}:{lineno})"
+
+
+#: A re-hash costing more than this marks the function as not worth
+#: verifying again. Measured: ~7.4 ms for a 16 MB ndarray, so this is
+#: roughly a 100 MB argument. The first miss still gets checked -- the
+#: budget only stops a large argument from being re-hashed on every
+#: subsequent miss.
+MUTATION_CHECK_BUDGET_S = 0.05
+
+
+def helper_mutates_global(fn: Any, name: str) -> bool:
+    """Does *fn*'s own body rebind *name* or change it in place?"""
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return False
+
+    for scope in iter_code_scopes(code):
+        for instr in dis.get_instructions(scope):
+            if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
+                return True
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
+        return False
+    return name in unsafe_uses_of(tree, frozenset({name}), bare_args=False, mutating_methods_only=True)
+
+
 class PurityChecksMixin:
     """Purity findings, observed effects and argument mutation, per cached function."""
-
-    #: How deep into a returned container an argument is looked for.
-    _SHARED_RESULT_DEPTH = 2
 
     def _warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
         """Say so when the result shares state with something the caller holds.
@@ -202,7 +265,7 @@ class PurityChecksMixin:
                 continue
             if value is result:
                 return "is the argument", name
-            if contains(result, value, self._SHARED_RESULT_DEPTH) and is_mutable(value):
+            if contains(result, value, SHARED_RESULT_DEPTH) and is_mutable(value):
                 return "holds the argument", name
             shared = shares_memory(result, value)
             if shared:
@@ -267,7 +330,7 @@ class PurityChecksMixin:
                     if not isinstance(g, dict) or name not in g:
                         continue
                     after = self._hash_arg_payload(
-                        (self._stabilize_for_global_hash(g[name], self._data_callable_identity),), {}
+                        (stabilize_for_global_hash(g[name], self._data_callable_identity),), {}
                     )
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
@@ -287,7 +350,7 @@ class PurityChecksMixin:
                 if module in MAIN_MODULE_NAMES and reader is not None:
                     module = resolve_main_module(reader)
                 where = f"module global '{module}.{name}'" if module else f"module global '{name}'"
-            site = PurityChecksMixin._describe_scope_use(reader, name, func)
+            site = describe_scope_use(reader, name, func)
             self._warn_once(
                 CashImpurityWarning,
                 func_name,
@@ -301,42 +364,6 @@ class PurityChecksMixin:
                 "may skip the change (a bill, a log), put "
                 "`# @cash:assume-safe` on the line named.",
             )
-
-    @staticmethod
-    def _describe_scope_use(reader: Any, name: str, cached: Any) -> str:
-        """`` -- through `X.f()` in mod.helper (file:line)`` for the warning, or ``""``.
-
-        *reader* is the function whose read of *name* was watched: the cached
-        function, or a helper several calls below it. The move itself may be
-        deeper still (a method of the object), but this is the line in code the
-        user wrote that reaches it -- the first use that may mutate, the same
-        rule that made the name provisional. Only runs when warning.
-        """
-        if reader is None:
-            return ""
-        try:
-            lines, first = inspect.getsourcelines(reader)
-            filename = inspect.getsourcefile(reader) or inspect.getfile(reader)
-            source = textwrap.dedent("".join(lines))
-            tree = ast.parse(source)
-        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
-            return ""
-        best = None
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Call, ast.Assign, ast.AugAssign, ast.Delete)):
-                continue
-            if name not in ClosureFoldMixin._unsafe_uses_of(node, {name}):
-                continue
-            if best is None or (node.lineno, node.col_offset) < (best.lineno, best.col_offset):
-                best = node
-        if best is None:
-            return ""
-        lineno = max(first, 1) - 1 + best.lineno
-        text = " ".join((ast.get_source_segment(source, best) or "").split())
-        if len(text) > 80:
-            text = text[:77] + "..."
-        inside = "" if reader is cached else f" in {CodeIdentityMixin.get_func_key(reader)}"
-        return f" -- through `{text}`{inside} ({filename}:{lineno})"
 
     def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
         """True when *result* must never be stored, because storing it would
@@ -382,13 +409,6 @@ class PurityChecksMixin:
         )
         return True
 
-    #: A re-hash costing more than this marks the function as not worth
-    #: verifying again. Measured: ~7.4 ms for a 16 MB ndarray, so this is
-    #: roughly a 100 MB argument. The first miss still gets checked -- the
-    #: budget only stops a large argument from being re-hashed on every
-    #: subsequent miss.
-    _MUTATION_CHECK_BUDGET_S = 0.05
-
     def _argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
         """``{parameter: hash}`` of the arguments that CAN change, before the body.
 
@@ -407,7 +427,7 @@ class PurityChecksMixin:
         # once here and once after the body. Read from what
         # `_note_arg_cost` kept: it has already taken `ARG_COST.last`.
         cost = cf.arg_cost
-        if cost is not None and cost[2] > self._MUTATION_CHECK_BUDGET_S:
+        if cost is not None and cost[2] > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
             return None
         started = _perf_counter()
@@ -419,9 +439,7 @@ class PurityChecksMixin:
         snapshot: dict[str, str] = {}
         immutable = IMMUTABLE_VALUE_TYPES
         candidates = [
-            (name, value)
-            for name, value in named
-            if not (self._is_immutable_capture(value) or isinstance(value, immutable))
+            (name, value) for name, value in named if not (is_immutable_capture(value) or isinstance(value, immutable))
         ]
         if len(candidates) == 1:
             # The only argument that can change is the one that did: named by
@@ -432,7 +450,7 @@ class PurityChecksMixin:
                 snapshot[name] = self._hash_arg_payload((value,), {})
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
-        if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+        if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
         return snapshot
 
@@ -512,7 +530,7 @@ class PurityChecksMixin:
             # not twice (a generator drained by the body, say) is not evidence
             # of mutation, and must not be reported as such.
             return
-        if _perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+        if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
             cf.mutation_check_retired = True
         if after is None or after == args_hash:
             return
@@ -617,7 +635,7 @@ class PurityChecksMixin:
         module_ns = getattr(reader, "__globals__", None)
         if not isinstance(module_ns, dict) or name not in module_ns:
             return False
-        if reader is not func and self._helper_mutates_global(reader, name):
+        if reader is not func and helper_mutates_global(reader, name):
             # The loader of a lazily filled settings dict (`_CFG.clear();
             # _CFG.update(...)`) "reads" it only to fill it: its writes are
             # findings of their own, and the dict is not its input. Reported
@@ -633,29 +651,10 @@ class PurityChecksMixin:
         if isinstance(value, types.ModuleType):
             # `conf.RATE` reads of a module of the user's are folded by value
             # (`_module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
-            return self._is_user_module(value, self._own_package(reader))
+            return is_user_module(value, own_package(reader))
         if isinstance(value, type):
             return False
         return not (callable(value) and not isinstance(value, (dict, list, tuple, set)))
-
-    @staticmethod
-    def _helper_mutates_global(fn: Any, name: str) -> bool:
-        """Does *fn*'s own body rebind *name* or change it in place?"""
-        code = getattr(fn, "__code__", None)
-        if code is None:
-            return False
-
-        for scope in ClosureFoldMixin._iter_code_scopes(code):
-            for instr in dis.get_instructions(scope):
-                if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
-                    return True
-        try:
-            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
-        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
-            return False
-        return name in ClosureFoldMixin._unsafe_uses_of(
-            tree, frozenset({name}), bare_args=False, mutating_methods_only=True
-        )
 
     def _surface_purity(
         self,

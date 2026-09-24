@@ -1,7 +1,7 @@
 import sys
 import types
 
-from cash.core import Cash
+from cash.decorator.code_identity import is_user_code_module
 
 
 def test_a_fileless_module_counts_as_user_code():
@@ -9,17 +9,17 @@ def test_a_fileless_module_counts_as_user_code():
     _is_user_module rejects it, which would make this whole feature a no-op
     in the environment it exists for."""
     nb = types.ModuleType("nbmod")  # no __file__, like a notebook __main__
-    assert Cash._is_user_code_module(nb) is True
+    assert is_user_code_module(nb) is True
 
 
 def test_builtins_are_not_user_code_despite_being_fileless():
     """The control that stops 'fileless means user code' from sweeping in
     every builtin type."""
-    assert Cash._is_user_code_module(sys.modules["builtins"]) is False
+    assert is_user_code_module(sys.modules["builtins"]) is False
 
 
 def test_stdlib_and_site_packages_are_still_excluded():
-    assert Cash._is_user_code_module(sys.modules["json"]) is False
+    assert is_user_code_module(sys.modules["json"]) is False
 
 
 import itertools

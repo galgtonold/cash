@@ -33,6 +33,7 @@ from ..source_norm import (
     own_source_digest,
     source_digest,
 )
+from .arg_hashing import is_opaque
 
 logger = logging.getLogger(__name__)
 
@@ -124,42 +125,341 @@ PYDANTIC_COMPILED = frozenset(
 )
 
 
+def func_key(func: Callable) -> str:
+    """Return a module-qualified key for a function.
+
+    Uses ``func.__module__ + '.' + func.__qualname__`` to avoid collisions
+    when different modules define functions with the same ``__qualname__``
+    (e.g. a notebook's ``dep()`` vs a library module's ``dep()``).
+
+    ``__main__`` is resolved to the name the module would have when
+    imported — see `_main_module_name`.
+
+    A ``functools.partial`` is named after the function it wraps plus a
+    digest of what it binds. Any other callable without ``__qualname__``
+    or ``__name__`` falls back to ``repr`` so keying it never crashes.
+    """
+    if isinstance(func, functools.partial):
+        # `repr(partial)` holds the wrapped function's ADDRESS, so every
+        # process took a fresh namespace and none of them ever hit. Name it after what it
+        # wraps, plus what it binds -- two partials of one function stay
+        # two namespaces, and each is the same in every process.
+        inner = func_key(func.func)
+        try:
+            bound = hashlib.sha256(
+                repr((func.args, sorted(func.keywords.items()))).encode("utf-8"),
+            ).hexdigest()[:12]
+        except Exception:  # noqa: BLE001 - an unreprable argument keys on the function
+            bound = "?"
+        return f"{inner}[partial:{bound}]"
+    module = getattr(func, "__module__", None) or "__unknown__"
+    if module in MAIN_MODULE_NAMES:
+        module = resolve_main_module(func)
+    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None) or repr(func)
+    return f"{module}.{qualname}"
+
+
+def hash_callable_source(fn: Callable) -> str:
+    """Return a stable hex digest representing *fn*'s body.
+
+    Used by `register_hasher` to embed the hasher's source
+    identity in the cache key, so that changing a hasher's body
+    invalidates dependent cache entries even when the hasher's
+    output coincidentally matches the old one. Also the
+    ``hash_callable`` injected into ``SysModulesHelperResolver``,
+    which makes it the live per-call identity of every transitive
+    HELPER -- so what this returns decides whether editing a helper
+    recomputes its callers.
+
+    This is `cash.source_norm.callable_identity`, plus a memo per code
+    object and a check that the file still holds the code that runs.
+
+    Resolution order:
+
+    1. ``own_source(fn)`` - primary (for a ``functools.wraps`` wrapper its
+       own code, with the identity of what it wraps folded in), reduced via
+       ``source_identity_digest`` so that a comment, a reformat, or a
+       change to cash's own ``@....cache`` decorator arguments in a
+       helper does not invalidate the functions that call it. Works
+       for module-level functions and lambdas defined in a
+       discoverable source file.
+    2. ``bytecode_identity(fn)`` - fallback. Works for functions defined
+       in a REPL or via ``exec()``, and for callable instances (it reads
+       ``__call__``), so two instances of the same callable class share
+       one identity. Folds consts/names/varnames, NOT ``co_code`` alone:
+       a const load's operand is an index, so bare ``co_code`` cannot
+       see ``return "alpha"`` become ``return "omega"``. Bytecode is
+       stable within a Python version; an upgrade conservatively
+       invalidates the cache.
+    3. ``opaque_identity(fn)`` (``module.qualname``) - last resort, for a
+       builtin, a ufunc or a partial. Doesn't differentiate instances of
+       the same class; stable across processes, but coarse.
+    """
+    memo_owner: Any = getattr(fn, "__code__", None)
+    if (memo_owner is None and isinstance(fn, type)) or (
+        isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__")
+    ):
+        # A class has no code object; a `functools.wraps` wrapper shares
+        # its code with every function its decorator wraps, and its
+        # identity includes the one it wraps -- so it is memoized as itself.
+        memo_owner = fn
+    memo_key = id(memo_owner) if memo_owner is not None else None
+    if memo_key is not None:
+        entry = SOURCE_HASH_MEMO.get(memo_key)
+        # ``is``, not ``==``: confirms this is the SAME object and not a
+        # recycled id, and sidesteps CodeType's by-value equality.
+        if entry is not None and entry[0] is memo_owner:
+            return entry[1]
+
+    # The source on disk may no longer be the code that is running: a file
+    # edited after this process imported it (new files land, the restart
+    # comes later) gives the NEW text for the OLD code object, and an entry
+    # keyed by the new text but computed by the old code was served to the
+    # restarted process. Key such a helper by what actually runs.
+    # One os.stat in the normal case; see `loaded_code_matches_disk`.
+    if not loaded_code_matches_disk(fn):
+        digest = loaded_class_identity(fn) if isinstance(fn, type) else compiled_identity(fn)
+        if digest is not None:
+            warn_source_changed_since_load(fn)
+            if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
+                SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+            return digest
+
+    # `callable_identity`, in its two halves: only a digest read from the
+    # file is recorded against the file's stat.
+    keyed_stat = stat_code_file(fn)
+    digest = source_digest(fn)
+    if digest is None:
+        return compiled_identity(fn)
+    if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
+        SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+    if keyed_stat is not None and len(CODE_KEYED_STATS) < SOURCE_HASH_MEMO_MAX:
+        own = digest if memo_owner is not fn else own_source_digest(fn)
+        if own is not None:
+            CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, own)
+    return digest
+
+
+def code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:
+    """A digest of what a code object DOES, independent of where it sits.
+
+    Source text is not enough on its own for a lambda: two different
+    lambdas written on the SAME physical line share their
+    ``inspect.getsource`` result, so ``a(lambda: "AAA"), a(lambda: "BBB")``
+    fingerprint identically and collide. Their code objects differ, which
+    is the signal this reads.
+
+    Deliberately built from ``co_code``/``co_names``/``co_varnames`` and the
+    constants, never from ``repr`` of a nested code object -- that carries a
+    memory address, which would make the key unstable across processes and
+    turn every restart into a miss. Nested code (a lambda inside a lambda)
+    recurses instead, bounded.
+    """
+    parts: list[str] = [
+        code.co_code.hex(),
+        repr(code.co_names),
+        repr(code.co_varnames),
+        repr(code.co_freevars),
+    ]
+    for const in code_consts_without_docstring(code):
+        if isinstance(const, types.CodeType):
+            parts.append(code_fingerprint(const, _depth + 1) if _depth < 4 else "<deep>")
+        else:
+            parts.append(repr(const))
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+# Bounds on the reference walk. Depth 4 and 64 targets are far past any
+# real object graph; they exist so a pathological one degrades into a
+# coarser digest rather than a hang. Exceeding them can only UNDER-fold,
+# which is the pre-existing behaviour, never a wrong-but-confident answer.
+MAX_CODE_REF_DEPTH = 4
+
+
+MAX_CODE_REF_TARGETS = 64
+
+
+def walk_nested_code(code: types.CodeType, glb: dict, _depth: int = 0):
+    """Yield *code* and the code objects nested in its constants.
+
+    A comprehension, a lambda, or a nested ``def`` compiles to its own
+    code object stored in ``co_consts``; the names IT references do not
+    appear in the parent's ``co_names``. ``field(default_factory=lambda:
+    B(0))`` is exactly that shape -- ``B`` is reachable only through the
+    lambda -- so a walk that stopped at the top level would miss the case
+    this exists for.
+    """
+    yield code, glb
+    if _depth >= MAX_CODE_REF_DEPTH:
+        return
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            yield from walk_nested_code(const, glb, _depth + 1)
+
+
+def iter_contained(obj: Any):
+    """Yield *obj*, or its members if it is a plain container, skipping
+    primitives outright (they can hold no user class and are common)."""
+    if isinstance(obj, (str, bytes, bytearray, int, float, bool, complex, type(None))):
+        return
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        yield from obj
+    elif isinstance(obj, dict):
+        yield from obj.values()
+    else:
+        yield obj
+
+
+def own_package(func: Any) -> str | None:
+    """The top-level package of the module that defines *func*."""
+    top = (getattr(func, "__module__", None) or "").split(".")[0]
+    return top or None
+
+
+def in_own_package(module_name: str | None, own_pkg: str | None) -> bool:
+    """Is *module_name* inside *own_pkg* (the cached function's package)?
+
+    ``__main__`` never counts: a script is not a package, and everything
+    it imports is judged on its own merits.
+    """
+    if not module_name or not own_pkg or own_pkg in MAIN_MODULE_NAMES:
+        return False
+    return module_name == own_pkg or module_name.startswith(own_pkg + ".")
+
+
+def is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
+    """True for a class defined in user code (not stdlib / third-party).
+
+    Used to fold ``ClassName.CONSTANT`` reads: editing a class-level config
+    constant should invalidate, but ``np.float64.something`` or a library
+    class's attributes should not churn the key.
+
+    *own_pkg*: the cached function's top-level package, which counts as
+    user code wherever it is installed -- see ``_is_user_module``.
+    """
+
+    if in_own_package(getattr(cls, "__module__", None), own_pkg):
+        return True
+    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    return mod is not None and is_user_module(mod)
+
+
+def is_user_module(mod: Any, own_pkg: str | None = None) -> bool:
+    """True for a module the user is plausibly editing between runs.
+
+    Third-party and stdlib modules are excluded deliberately: their
+    contents are expected to be fixed for a given environment, and folding
+    e.g. ``os.environ`` or numpy's internals would churn the key on every
+    call. Editing your venv is not a case worth keying on.
+
+    Except the cached function's OWN package (*own_pkg*), which is user code
+    wherever it is installed. The path test alone put a user's own tool,
+    once `pip install`ed, in the same bucket as numpy: `settings.FACTOR`
+    in the tool's own `settings.py` stopped reaching the key, and a
+    reinstall with a changed constant served the old report -- while
+    `from settings import FACTOR`, a helper in a sibling module and a
+    same-module global all still invalidated.
+    """
+    if in_own_package(getattr(mod, "__name__", None), own_pkg):
+        return True
+    path = getattr(mod, "__file__", None)
+    if not path or not isinstance(path, str):
+        return False  # builtin / namespace package - nothing to edit
+    return is_user_path(path)
+
+
+#: Fileless modules that are NOT the user's code. Everything else without a
+#: __file__ is a notebook cell, a REPL, or exec'd source -- i.e. something
+#: the user is plausibly editing between runs, which is the whole point.
+FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
+    "builtins",
+    "__future__",
+    "_frozen_importlib",
+    "_frozen_importlib_external",
+}
+
+
+def is_user_code_module(mod: Any) -> bool:
+    """Like :meth:`_is_user_module`, but a module with no ``__file__``
+    counts as user code rather than being disqualified.
+
+    ``_is_user_module`` returns False for a fileless module ("nothing to
+    edit"). That is right for its callers and wrong here: a class defined
+    in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
+    is precisely the thing the user edits between runs.
+    """
+    name = getattr(mod, "__name__", "") or ""
+    path = getattr(mod, "__file__", None)
+    if path is None:
+        return name not in FILELESS_NON_USER
+    return is_user_module(mod)
+
+
+def is_user_code_object(obj: Any) -> bool:
+    """True when *obj* -- a class OR a function -- is defined in code the user
+    plausibly edits. Both carry ``__module__``, so one predicate serves both.
+
+    ``__module__`` alone is not trustworthy. A class or function built by
+    ``exec(body, ns)`` where *ns* lacks a ``__name__`` key (a bare ``{}``,
+    unlike a real notebook's globals, which start with ``__name__ ==
+    '__main__'``) gets a fallback ``__module__`` from CPython's implicit
+    ``__module__ = __name__`` lookup at definition time: ``None`` for a
+    function, and -- because that lookup falls all the way through to the
+    REAL ``builtins`` module's own ``__name__`` attribute -- literally
+    ``'builtins'`` for a class. Neither reflects where the code actually
+    lives. Confirm *obj* is actually reachable through the module it
+    claims before trusting that module's verdict; otherwise this is the
+    exec()/notebook case the predicate exists to catch, so it counts as
+    user code (mirroring ``_is_user_code_module``'s fileless-module
+    handling).
+    """
+    mod_name = getattr(obj, "__module__", None)
+    mod = sys.modules.get(mod_name) if mod_name else None
+    if mod is None:
+        return True
+    if not qualname_resolves_in(mod, obj):
+        return True
+    return is_user_code_module(mod)
+
+
+def qualname_resolves_in(mod: Any, obj: Any) -> bool:
+    """True if *obj* is actually reachable by walking its ``__qualname__``
+    from *mod*, not merely claiming *mod* via ``__module__``.
+
+    ``getattr(x, name, default)`` only swallows ``AttributeError`` -- a
+    module implementing PEP 562 ``__getattr__`` (a real pattern for
+    deprecation shims: raise a custom error for an old name instead of
+    just returning it) can make this walk raise something else entirely,
+    and ``_is_user_code_object`` must never raise.
+    """
+    qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
+    if not qualname:
+        return False
+    cur = mod
+    try:
+        for part in qualname.split("."):
+            if part == "<locals>":
+                return False  # nested in a function body - not module-reachable
+            cur = getattr(cur, part, None)
+            if cur is None:
+                return False
+        return cur is obj
+    except Exception:  # noqa: BLE001 - a module __getattr__ may raise anything
+        return False  # could not confirm reachability - do not trust it
+
+
+def wraps_code(value: Any) -> bool:
+    """Is *value* a descriptor around a function (classmethod, staticmethod,
+    property, cached_property, partialmethod...)?"""
+    if isinstance(value, (classmethod, staticmethod, property, functools.cached_property, functools.partialmethod)):
+        return True
+    return hasattr(type(value), "__get__") and any(
+        callable(getattr(value, name, None)) for name in ("__func__", "fget", "func")
+    )
+
+
 class CodeIdentityMixin:
     """Identity of functions, classes and code objects, for the state segment of a key."""
-
-    @staticmethod
-    def get_func_key(func: Callable) -> str:
-        """Return a module-qualified key for a function.
-
-        Uses ``func.__module__ + '.' + func.__qualname__`` to avoid collisions
-        when different modules define functions with the same ``__qualname__``
-        (e.g. a notebook's ``dep()`` vs a library module's ``dep()``).
-
-        ``__main__`` is resolved to the name the module would have when
-        imported — see `_main_module_name`.
-
-        A ``functools.partial`` is named after the function it wraps plus a
-        digest of what it binds. Any other callable without ``__qualname__``
-        or ``__name__`` falls back to ``repr`` so keying it never crashes.
-        """
-        if isinstance(func, functools.partial):
-            # `repr(partial)` holds the wrapped function's ADDRESS, so every
-            # process took a fresh namespace and none of them ever hit. Name it after what it
-            # wraps, plus what it binds -- two partials of one function stay
-            # two namespaces, and each is the same in every process.
-            inner = CodeIdentityMixin.get_func_key(func.func)
-            try:
-                bound = hashlib.sha256(
-                    repr((func.args, sorted(func.keywords.items()))).encode("utf-8"),
-                ).hexdigest()[:12]
-            except Exception:  # noqa: BLE001 - an unreprable argument keys on the function
-                bound = "?"
-            return f"{inner}[partial:{bound}]"
-        module = getattr(func, "__module__", None) or "__unknown__"
-        if module in MAIN_MODULE_NAMES:
-            module = resolve_main_module(func)
-        qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None) or repr(func)
-        return f"{module}.{qualname}"
 
     def _analyze_method_self_deps(self, func: Callable) -> tuple[str | None, tuple[str, ...], bool]:
         """Attributes a method reads on its first parameter, and whether it calls super().
@@ -289,7 +589,7 @@ class CodeIdentityMixin:
                 getter = member.fget
                 if getter is not None:
                     try:
-                        parts.append(f"p:{attr}:{self._hash_callable_source(getter)}")
+                        parts.append(f"p:{attr}:{hash_callable_source(getter)}")
                     except (OSError, TypeError, ValueError):
                         pass
                     _, sub_attrs, _ = self._analyze_method_self_deps(getter)
@@ -299,7 +599,7 @@ class CodeIdentityMixin:
                 member = member.__func__
             if inspect.isfunction(member) or inspect.ismethod(member):
                 try:
-                    parts.append(f"m:{attr}:{self._hash_callable_source(member)}")
+                    parts.append(f"m:{attr}:{hash_callable_source(member)}")
                 except (OSError, TypeError, ValueError):
                     continue
                 # Recurse into what this method itself reaches through self.
@@ -316,94 +616,13 @@ class CodeIdentityMixin:
                 if base is object:
                     continue
                 try:
-                    parts.append(f"b:{base.__qualname__}:{self._hash_callable_source(base)}")
+                    parts.append(f"b:{base.__qualname__}:{hash_callable_source(base)}")
                 except (OSError, TypeError, ValueError):
                     continue
         if not parts:
             return state_hash
         payload = ":".join(sorted(parts))
         return hashlib.sha256(f"{state_hash}:selfdeps:{payload}".encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _hash_callable_source(fn: Callable) -> str:
-        """Return a stable hex digest representing *fn*'s body.
-
-        Used by `register_hasher` to embed the hasher's source
-        identity in the cache key, so that changing a hasher's body
-        invalidates dependent cache entries even when the hasher's
-        output coincidentally matches the old one. Also the
-        ``hash_callable`` injected into ``SysModulesHelperResolver``,
-        which makes it the live per-call identity of every transitive
-        HELPER -- so what this returns decides whether editing a helper
-        recomputes its callers.
-
-        This is `cash.source_norm.callable_identity`, plus a memo per code
-        object and a check that the file still holds the code that runs.
-
-        Resolution order:
-
-        1. ``own_source(fn)`` - primary (for a ``functools.wraps`` wrapper its
-           own code, with the identity of what it wraps folded in), reduced via
-           ``source_identity_digest`` so that a comment, a reformat, or a
-           change to cash's own ``@....cache`` decorator arguments in a
-           helper does not invalidate the functions that call it. Works
-           for module-level functions and lambdas defined in a
-           discoverable source file.
-        2. ``bytecode_identity(fn)`` - fallback. Works for functions defined
-           in a REPL or via ``exec()``, and for callable instances (it reads
-           ``__call__``), so two instances of the same callable class share
-           one identity. Folds consts/names/varnames, NOT ``co_code`` alone:
-           a const load's operand is an index, so bare ``co_code`` cannot
-           see ``return "alpha"`` become ``return "omega"``. Bytecode is
-           stable within a Python version; an upgrade conservatively
-           invalidates the cache.
-        3. ``opaque_identity(fn)`` (``module.qualname``) - last resort, for a
-           builtin, a ufunc or a partial. Doesn't differentiate instances of
-           the same class; stable across processes, but coarse.
-        """
-        memo_owner: Any = getattr(fn, "__code__", None)
-        if (memo_owner is None and isinstance(fn, type)) or (
-            isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__")
-        ):
-            # A class has no code object; a `functools.wraps` wrapper shares
-            # its code with every function its decorator wraps, and its
-            # identity includes the one it wraps -- so it is memoized as itself.
-            memo_owner = fn
-        memo_key = id(memo_owner) if memo_owner is not None else None
-        if memo_key is not None:
-            entry = SOURCE_HASH_MEMO.get(memo_key)
-            # ``is``, not ``==``: confirms this is the SAME object and not a
-            # recycled id, and sidesteps CodeType's by-value equality.
-            if entry is not None and entry[0] is memo_owner:
-                return entry[1]
-
-        # The source on disk may no longer be the code that is running: a file
-        # edited after this process imported it (new files land, the restart
-        # comes later) gives the NEW text for the OLD code object, and an entry
-        # keyed by the new text but computed by the old code was served to the
-        # restarted process. Key such a helper by what actually runs.
-        # One os.stat in the normal case; see `loaded_code_matches_disk`.
-        if not loaded_code_matches_disk(fn):
-            digest = loaded_class_identity(fn) if isinstance(fn, type) else compiled_identity(fn)
-            if digest is not None:
-                warn_source_changed_since_load(fn)
-                if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
-                    SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
-                return digest
-
-        # `callable_identity`, in its two halves: only a digest read from the
-        # file is recorded against the file's stat.
-        keyed_stat = stat_code_file(fn)
-        digest = source_digest(fn)
-        if digest is None:
-            return compiled_identity(fn)
-        if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
-            SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
-        if keyed_stat is not None and len(CODE_KEYED_STATS) < SOURCE_HASH_MEMO_MAX:
-            own = digest if memo_owner is not fn else own_source_digest(fn)
-            if own is not None:
-                CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, own)
-        return digest
 
     def _pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
         """Identity of *func* itself, pinned per function object.
@@ -514,35 +733,6 @@ class CodeIdentityMixin:
             return weakref.ref(owner, _drop)
         except TypeError:
             return lambda: owner
-
-    @staticmethod
-    def _code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:
-        """A digest of what a code object DOES, independent of where it sits.
-
-        Source text is not enough on its own for a lambda: two different
-        lambdas written on the SAME physical line share their
-        ``inspect.getsource`` result, so ``a(lambda: "AAA"), a(lambda: "BBB")``
-        fingerprint identically and collide. Their code objects differ, which
-        is the signal this reads.
-
-        Deliberately built from ``co_code``/``co_names``/``co_varnames`` and the
-        constants, never from ``repr`` of a nested code object -- that carries a
-        memory address, which would make the key unstable across processes and
-        turn every restart into a miss. Nested code (a lambda inside a lambda)
-        recurses instead, bounded.
-        """
-        parts: list[str] = [
-            code.co_code.hex(),
-            repr(code.co_names),
-            repr(code.co_varnames),
-            repr(code.co_freevars),
-        ]
-        for const in code_consts_without_docstring(code):
-            if isinstance(const, types.CodeType):
-                parts.append(CodeIdentityMixin._code_fingerprint(const, _depth + 1) if _depth < 4 else "<deep>")
-            else:
-                parts.append(repr(const))
-        return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
     def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
@@ -731,7 +921,7 @@ class CodeIdentityMixin:
         is_type = isinstance(obj, type)
         if not (is_type or callable(obj)):
             return None
-        if not self._is_user_code_object(obj):
+        if not is_user_code_object(obj):
             return None
         # By this point *obj* is a class or a callable, and while both are
         # hashable in the overwhelming common case, neither is guaranteed to
@@ -759,39 +949,14 @@ class CodeIdentityMixin:
             pass  # unhashable object - skip the memo, keep the answer
         return digest
 
-    # Bounds on the reference walk. Depth 4 and 64 targets are far past any
-    # real object graph; they exist so a pathological one degrades into a
-    # coarser digest rather than a hang. Exceeding them can only UNDER-fold,
-    # which is the pre-existing behaviour, never a wrong-but-confident answer.
-    _MAX_CODE_REF_DEPTH = 4
-    _MAX_CODE_REF_TARGETS = 64
-
-    @staticmethod
-    def _walk_nested_code(code: types.CodeType, glb: dict, _depth: int = 0):
-        """Yield *code* and the code objects nested in its constants.
-
-        A comprehension, a lambda, or a nested ``def`` compiles to its own
-        code object stored in ``co_consts``; the names IT references do not
-        appear in the parent's ``co_names``. ``field(default_factory=lambda:
-        B(0))`` is exactly that shape -- ``B`` is reachable only through the
-        lambda -- so a walk that stopped at the top level would miss the case
-        this exists for.
-        """
-        yield code, glb
-        if _depth >= CodeIdentityMixin._MAX_CODE_REF_DEPTH:
-            return
-        for const in code.co_consts:
-            if isinstance(const, types.CodeType):
-                yield from CodeIdentityMixin._walk_nested_code(const, glb, _depth + 1)
-
     def _iter_code_and_globals(self, obj: Any):
         """Yield ``(code object, globals)`` for the code *obj* carries."""
         carriers: list[Any] = []
         if isinstance(obj, type):
             for base in obj.__mro__:
-                if base is object or self._is_opaque(base):
+                if base is object or is_opaque(base):
                     continue
-                if not self._is_user_code_object(base):
+                if not is_user_code_object(base):
                     continue
                 carriers.extend(vars(base).values())
                 # Same blind spot as _class_surface_parts: a field declaring
@@ -817,7 +982,7 @@ class CodeIdentityMixin:
                 code = getattr(accessor, "__code__", None)
                 glb = getattr(accessor, "__globals__", None)
                 if isinstance(code, types.CodeType) and isinstance(glb, dict):
-                    yield from self._walk_nested_code(code, glb)
+                    yield from walk_nested_code(code, glb)
 
     def _code_ref_targets(self, obj: Any) -> list[Any]:
         """User-code objects that *obj*'s code references by global name.
@@ -856,7 +1021,7 @@ class CodeIdentityMixin:
             if not (isinstance(value, type) or callable(value)):
                 return
             try:
-                if self._is_opaque(value) or not self._is_user_code_object(value):
+                if is_opaque(value) or not is_user_code_object(value):
                     return
             except Exception:  # noqa: BLE001 - never break a call
                 return
@@ -879,7 +1044,7 @@ class CodeIdentityMixin:
             if not names:
                 continue
             modules = [glb.get(n) for n in code.co_names]
-            modules = [m for m in modules if isinstance(m, types.ModuleType) and self._is_user_module(m)]
+            modules = [m for m in modules if isinstance(m, types.ModuleType) and is_user_module(m)]
             for name in names:
                 seen_names.add(name)
                 consider(glb.get(name))
@@ -887,7 +1052,7 @@ class CodeIdentityMixin:
                     consider(getattr(module, name, None))
         if isinstance(obj, type) or callable(obj):
             seen_ids = {id(t) for t in targets}
-            for value in annotation_referents(obj, self._is_user_code_object):
+            for value in annotation_referents(obj, is_user_code_object):
                 if id(value) not in seen_ids:
                     seen_ids.add(id(value))
                     consider(value)
@@ -931,7 +1096,7 @@ class CodeIdentityMixin:
         digests: list[str] = []
         frontier: list[Any] = [obj]
         depth = 0
-        while frontier and depth < self._MAX_CODE_REF_DEPTH:
+        while frontier and depth < MAX_CODE_REF_DEPTH:
             following: list[Any] = []
             for source in frontier:
                 for target in self._code_ref_targets(source):
@@ -943,7 +1108,7 @@ class CodeIdentityMixin:
                     if digest is not None:
                         digests.append(f"{getattr(target, '__qualname__', '?')}:{digest}")
                     following.append(target)
-                    if len(digests) >= self._MAX_CODE_REF_TARGETS:
+                    if len(digests) >= MAX_CODE_REF_TARGETS:
                         return digests
             frontier = following
             depth += 1
@@ -1046,9 +1211,9 @@ class CodeIdentityMixin:
             # `docs/decorator.md` advertises it. Per-base and exact-match, so
             # opacity still does not inherit: marking a base does not make
             # `Derived` opaque, it only drops that base's own members.
-            if base is object or self._is_opaque(base):
+            if base is object or is_opaque(base):
                 continue
-            if not self._is_user_code_object(base):
+            if not is_user_code_object(base):
                 continue
             for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
                 # __firstlineno__ (class attribute since Python 3.13, absent on
@@ -1150,7 +1315,7 @@ class CodeIdentityMixin:
                     # gives every process the same answer regardless of order.
                     nested = None
                     inner_cls = member if isinstance(member, type) else type(member)
-                    if _depth < 2 and self._is_user_code_object(inner_cls):
+                    if _depth < 2 and is_user_code_object(inner_cls):
                         sub_parts = self._class_surface_parts(inner_cls, _depth + 1)
                         if sub_parts:
                             nested = hashlib.sha256(
@@ -1252,23 +1417,10 @@ class CodeIdentityMixin:
             # No source to hash (or it doesn't parse). A class has no
             # __code__, so the callable fallback would key it on its name
             # alone; the class-aware surface sees its members.
-            h = self._code_surface_hash(cls) or self._hash_callable_source(cls)
+            h = self._code_surface_hash(cls) or hash_callable_source(cls)
         if len(self._user_class_src_cache) < 4096:
             self._user_class_src_cache[cls] = h
         return h
-
-    @staticmethod
-    def _iter_contained(obj: Any):
-        """Yield *obj*, or its members if it is a plain container, skipping
-        primitives outright (they can hold no user class and are common)."""
-        if isinstance(obj, (str, bytes, bytearray, int, float, bool, complex, type(None))):
-            return
-        if isinstance(obj, (list, tuple, set, frozenset)):
-            yield from obj
-        elif isinstance(obj, dict):
-            yield from obj.values()
-        else:
-            yield obj
 
     def _instance_class_source_parts(
         self,
@@ -1302,7 +1454,7 @@ class CodeIdentityMixin:
         _seen.add(id(value))
         parts: list[tuple[str, str]] = []
         cls = type(value)
-        if self._is_user_class(cls, own_pkg):
+        if is_user_class(cls, own_pkg):
             try:
                 parts.append((cls.__qualname__, self._user_class_source_hash(cls)))
             except SOURCE_RETRIEVAL_ERRORS:
@@ -1310,154 +1462,7 @@ class CodeIdentityMixin:
         held = getattr(value, "__dict__", None)
         if isinstance(held, dict):
             for attr_val in held.values():
-                for item in self._iter_contained(attr_val):
-                    if self._is_user_class(type(item), own_pkg):
+                for item in iter_contained(attr_val):
+                    if is_user_class(type(item), own_pkg):
                         parts.extend(self._instance_class_source_parts(item, _seen, _depth + 1, own_pkg=own_pkg))
         return parts
-
-    @staticmethod
-    def _own_package(func: Any) -> str | None:
-        """The top-level package of the module that defines *func*."""
-        top = (getattr(func, "__module__", None) or "").split(".")[0]
-        return top or None
-
-    @staticmethod
-    def _in_own_package(module_name: str | None, own_pkg: str | None) -> bool:
-        """Is *module_name* inside *own_pkg* (the cached function's package)?
-
-        ``__main__`` never counts: a script is not a package, and everything
-        it imports is judged on its own merits.
-        """
-        if not module_name or not own_pkg or own_pkg in MAIN_MODULE_NAMES:
-            return False
-        return module_name == own_pkg or module_name.startswith(own_pkg + ".")
-
-    @staticmethod
-    def _is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
-        """True for a class defined in user code (not stdlib / third-party).
-
-        Used to fold ``ClassName.CONSTANT`` reads: editing a class-level config
-        constant should invalidate, but ``np.float64.something`` or a library
-        class's attributes should not churn the key.
-
-        *own_pkg*: the cached function's top-level package, which counts as
-        user code wherever it is installed -- see ``_is_user_module``.
-        """
-
-        if CodeIdentityMixin._in_own_package(getattr(cls, "__module__", None), own_pkg):
-            return True
-        mod = sys.modules.get(getattr(cls, "__module__", None) or "")
-        return mod is not None and CodeIdentityMixin._is_user_module(mod)
-
-    @staticmethod
-    def _is_user_module(mod: Any, own_pkg: str | None = None) -> bool:
-        """True for a module the user is plausibly editing between runs.
-
-        Third-party and stdlib modules are excluded deliberately: their
-        contents are expected to be fixed for a given environment, and folding
-        e.g. ``os.environ`` or numpy's internals would churn the key on every
-        call. Editing your venv is not a case worth keying on.
-
-        Except the cached function's OWN package (*own_pkg*), which is user code
-        wherever it is installed. The path test alone put a user's own tool,
-        once `pip install`ed, in the same bucket as numpy: `settings.FACTOR`
-        in the tool's own `settings.py` stopped reaching the key, and a
-        reinstall with a changed constant served the old report -- while
-        `from settings import FACTOR`, a helper in a sibling module and a
-        same-module global all still invalidated.
-        """
-        if CodeIdentityMixin._in_own_package(getattr(mod, "__name__", None), own_pkg):
-            return True
-        path = getattr(mod, "__file__", None)
-        if not path or not isinstance(path, str):
-            return False  # builtin / namespace package - nothing to edit
-        return is_user_path(path)
-
-    #: Fileless modules that are NOT the user's code. Everything else without a
-    #: __file__ is a notebook cell, a REPL, or exec'd source -- i.e. something
-    #: the user is plausibly editing between runs, which is the whole point.
-    _FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
-        "builtins",
-        "__future__",
-        "_frozen_importlib",
-        "_frozen_importlib_external",
-    }
-
-    @staticmethod
-    def _is_user_code_module(mod: Any) -> bool:
-        """Like :meth:`_is_user_module`, but a module with no ``__file__``
-        counts as user code rather than being disqualified.
-
-        ``_is_user_module`` returns False for a fileless module ("nothing to
-        edit"). That is right for its callers and wrong here: a class defined
-        in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
-        is precisely the thing the user edits between runs.
-        """
-        name = getattr(mod, "__name__", "") or ""
-        path = getattr(mod, "__file__", None)
-        if path is None:
-            return name not in CodeIdentityMixin._FILELESS_NON_USER
-        return CodeIdentityMixin._is_user_module(mod)
-
-    @staticmethod
-    def _is_user_code_object(obj: Any) -> bool:
-        """True when *obj* -- a class OR a function -- is defined in code the user
-        plausibly edits. Both carry ``__module__``, so one predicate serves both.
-
-        ``__module__`` alone is not trustworthy. A class or function built by
-        ``exec(body, ns)`` where *ns* lacks a ``__name__`` key (a bare ``{}``,
-        unlike a real notebook's globals, which start with ``__name__ ==
-        '__main__'``) gets a fallback ``__module__`` from CPython's implicit
-        ``__module__ = __name__`` lookup at definition time: ``None`` for a
-        function, and -- because that lookup falls all the way through to the
-        REAL ``builtins`` module's own ``__name__`` attribute -- literally
-        ``'builtins'`` for a class. Neither reflects where the code actually
-        lives. Confirm *obj* is actually reachable through the module it
-        claims before trusting that module's verdict; otherwise this is the
-        exec()/notebook case the predicate exists to catch, so it counts as
-        user code (mirroring ``_is_user_code_module``'s fileless-module
-        handling).
-        """
-        mod_name = getattr(obj, "__module__", None)
-        mod = sys.modules.get(mod_name) if mod_name else None
-        if mod is None:
-            return True
-        if not CodeIdentityMixin._qualname_resolves_in(mod, obj):
-            return True
-        return CodeIdentityMixin._is_user_code_module(mod)
-
-    @staticmethod
-    def _qualname_resolves_in(mod: Any, obj: Any) -> bool:
-        """True if *obj* is actually reachable by walking its ``__qualname__``
-        from *mod*, not merely claiming *mod* via ``__module__``.
-
-        ``getattr(x, name, default)`` only swallows ``AttributeError`` -- a
-        module implementing PEP 562 ``__getattr__`` (a real pattern for
-        deprecation shims: raise a custom error for an old name instead of
-        just returning it) can make this walk raise something else entirely,
-        and ``_is_user_code_object`` must never raise.
-        """
-        qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
-        if not qualname:
-            return False
-        cur = mod
-        try:
-            for part in qualname.split("."):
-                if part == "<locals>":
-                    return False  # nested in a function body - not module-reachable
-                cur = getattr(cur, part, None)
-                if cur is None:
-                    return False
-            return cur is obj
-        except Exception:  # noqa: BLE001 - a module __getattr__ may raise anything
-            return False  # could not confirm reachability - do not trust it
-
-    @staticmethod
-    def _wraps_code(value: Any) -> bool:
-        """Is *value* a descriptor around a function (classmethod, staticmethod,
-        property, cached_property, partialmethod...)?"""
-        if isinstance(value, (classmethod, staticmethod, property, functools.cached_property, functools.partialmethod)):
-            return True
-        return hasattr(type(value), "__get__") and any(
-            callable(getattr(value, name, None)) for name in ("__func__", "fget", "func")
-        )

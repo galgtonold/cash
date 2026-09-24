@@ -32,6 +32,8 @@ import warnings
 
 import pytest
 
+from cash.decorator.globals_fold import MACHINERY_DUNDERS
+
 from . import helper_registry
 
 ALIASES = {"emea": "eu"}
@@ -231,7 +233,6 @@ def test_the_machinery_dunders_are_still_skipped(cash_instance):
     folding them would make a key un-shareable between two machines and between
     ``python job.py`` and ``python -m job``. They must stay out.
     """
-    from cash.core import Cash as CashClass
 
     def reads_machinery(x):
         return f"{__file__}|{__name__}|{__doc__}|{x}"
@@ -241,7 +242,7 @@ def test_the_machinery_dunders_are_still_skipped(cash_instance):
     assert "__file__" not in names
     assert "__name__" not in names
     assert "__doc__" not in names
-    assert CashClass._MACHINERY_DUNDERS.isdisjoint(names)
+    assert MACHINERY_DUNDERS.isdisjoint(names)
 
 
 def test_a_user_dunder_is_a_candidate(cash_instance):
