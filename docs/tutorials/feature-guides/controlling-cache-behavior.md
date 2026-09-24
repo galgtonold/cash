@@ -1,267 +1,176 @@
-# Controlling cache behavior — overriding Cash's defaults per statement
+# Controlling caching
 
-Cash decides what to cache by analyzing your code, but sometimes you need to override that decision — skip a statement entirely, give it a time limit, force it to disk, or silence a warning. This guide covers every knob.
+!!! info "Applies to: notebook"
+    Notebooks with `%cash_on`. How to change what cash does with one statement or
+    one helper function.
 
-## Why this exists
+Cash decides for each statement whether to cache it, and most of the time you
+leave it alone. When you know something it cannot see, you have four levers:
 
-The notebook layer makes a verdict on every statement: cache it, refuse to cache it, persist it to disk, or just keep it in RAM. The verdict is conservative by design — Cash would rather decline to cache a statement than replay a stale result. But the analyzer doesn't know that *you* know:
+- a `# @cash:` comment on one statement ([Annotations](../../annotations.md) is the
+  full reference);
+- `@stateful` on a helper function, so statements that call it always run;
+- `%cash_on ttl=N`, a default expiry for every statement;
+- `%cash_persist on`, which stores every statement on disk.
 
-- The function with the print statement is fine to cache; the print is debug noise.
-- The API call you're caching for 60 seconds shouldn't expire never; you want fresh data each minute.
-- The 200 MB model you just trained should hit disk, even though the smart-persistence policy would normally leave it in RAM.
-- The `np.random.randn` call is intentional and you don't need a warning every cell run.
+What cash already refuses or caches without being told is in
+[What gets cached](../../notebook_caching_api.md#what-gets-cached). Check there
+before adding a directive: you do not need `no-cache` on a file write, a POST or a
+`datetime.now()`.
 
-Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Three more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit); [`# @cash:no-cache-calls`](../../annotations.md#call-level-caching-default-and-cashno-cache-calls), the opt-out for cash's default behavior of caching the *calls inside* a statement instead of just the statement itself — the fix for an accumulator loop that can never cache as a whole; and [`# @cash:assume-safe`](../../annotations.md#cashassume-safe), which caches a statement whose side effect is harmless to skip, such as a POST that only runs a query. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're read by the same parser for every cell `%cash_on` caches.
-
-## Quick start
+Start the notebook as usual, with `import cash` and `%cash_on` alone in the
+first cell:
 
 ```python { .nb-cell }
 import cash
-%cash_on ttl=3600  # default: cache entries expire after an hour
+%cash_on
+```
 
-# @cash:no-cache
-print(df.describe())            # side effect — don't cache
+The examples below use these stand-ins for a slow price feed and a chat client:
 
+```python { .nb-cell }
+import time
+
+def fetch_price(ticker):
+    time.sleep(0.2)
+    return 150.0
+
+class ChatClient:
+    def chat_postMessage(self, channel, text):
+        return {"ok": True}
+
+chat = ChatClient()
+```
+
+## Let a result expire: `ttl`
+
+A price, a feed or anything else that changes on its own should not be served
+forever. Give the statement a lifetime in seconds:
+
+```python { .nb-cell }
 # @cash:ttl=60
-price = fetch_stock("AAPL")     # re-fetch every minute, ignores the global hour
+price = fetch_price("AAPL")    # served from the cache for a minute, then fetched again
+```
 
+`%cash_on ttl=3600` in the first cell sets a default lifetime for every
+statement; a `# @cash:ttl=N` on a statement overrides it.
+
+## Run a statement every time: `no-cache`
+
+Use `no-cache` when the answer must be new on every run and cash cannot tell,
+for example a read from a live source:
+
+```python { .nb-cell }
+# @cash:no-cache
+live = fetch_price("AAPL")     # runs every time, nothing stored
+```
+
+The badge shows a plain `EXECUTED` row. Put the comment on a line of its own:
+that way it also gives a random draw a new value each run
+(see [Randomness](../../known-limitations.md#randomness)).
+
+## Keep a cheap result across restarts: `persist`
+
+Only results that took more than 0.1 s to compute are stored on disk; cheaper
+ones are kept in memory and computed again after a restart. When a cheap value
+feeds something you want back instantly after a restart, store it anyway:
+
+```python { .nb-cell }
 # @cash:persist
-model = train_xgb(X, y)         # 12 min to fit — force to disk
-
-# @cash:allow-random
-noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
+tickers = sorted({"MSFT", "AAPL", "GOOG"})
 ```
 
-<!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461, cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1 -->
-That's the everyday language — seven directives in total, counting the three specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
+`%cash_persist on` does this for every statement until `%cash_persist off`. It is
+useful for a benchmark or a reproducible run, and wasteful for everyday work.
+[Restarts and persistence](smart-persistence.md) explains what survives a restart.
 
-## The four annotations
+## Cache a request that only reads: `assume-safe`
 
-### `@cash:no-cache` — skip caching entirely
-
-Use when the statement is non-deterministic, side-effectful, or just cheaper to recompute than to look up.
+Cash runs every POST, PUT or upload every time, because a cache hit would skip
+sending it. Some APIs use POST for plain queries, such as a search endpoint or an
+LLM completion. Tell cash that skipping the request is harmless:
 
 ```python { .nb-cell }
-# test:inject: import requests
-# @cash:no-cache
-current_time = datetime.now()
+class SearchSession:
+    def post(self, url, json=None):
+        time.sleep(0.2)
+        return {"hits": [json["q"]]}
 
-# @cash:no-cache
-api_response = requests.get("https://api.example.com/data")
-
-# @cash:no-cache
-print(f"Debug: {some_value}")
+session = SearchSession()
 ```
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
-The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else. The badge shows the statement as NOT CACHED with that exact reason string.
-
-<iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
-### `@cash:ttl=<seconds>` — give it an expiration date
-
-Cache the result, but discard it if it's older than `<seconds>` next time you ask.
-
 ```python { .nb-cell }
-# @cash:ttl=60
-fast_changing = get_stock_price("AAPL")    # one minute
-
+# @cash:assume-safe
 # @cash:ttl=3600
-hourly_report = generate_summary(df)       # one hour
-
-# @cash:ttl=86400
-daily_data = fetch_daily_metrics()         # one day
+hits = session.post("https://search.example.com", json={"q": "cash"})
 ```
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/decorator/runtime.py:RuntimeMixin._entry_expired @c72fd40d -->
-The annotation TTL overrides the global TTL set by `%cash_on ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
+It waives the side effect only; a statement that changes an object in place or
+reads the clock still runs every time. Add a `ttl` when the answer can go stale.
 
-The check itself is in `Cash._entry_expired`: on a lookup hit, it asks the one TTL rule every cache path shares (`ttl_expired`) whether the entry is stale: older than the TTL, or at once for `ttl=0`, which is never fresh. A stale entry is a miss (`ttl expired`) and recomputes.
+## Stop caching calls inside a statement: `no-cache-calls`
 
-### `@cash:persist` — force it onto disk
-
-Cash's default tiered backend (`InMemoryBackend` over `FileBackend`) uses a promotion policy that only writes through to disk when the execution-time-times-savings math works out. The default cut-off is a **0.1 s** compute floor *and* re-execution slower than re-reading. See [Smart Persistence](smart-persistence.md) for the full policy.
-
-When you know better — anything that takes more than a few seconds to recompute and you can't afford to lose to a kernel crash — `@cash:persist` overrides the policy:
+Cash caches the expensive call inside a statement even when the statement itself
+cannot be cached, such as `results.append(compute(x))`. If the function has an
+effect cash cannot see, turn this off for the statement, or for a whole loop by
+putting the comment on its header:
 
 ```python { .nb-cell }
-# @cash:persist
-model = train_neural_network(X, y)         # 15 min — save it
-
-# @cash:persist
-embeddings = compute_embeddings(corpus)    # 2 GB of vectors — persist them
+results = []
+# @cash:no-cache-calls
+for t in ["AAPL", "MSFT"]:
+    results.append(fetch_price(t))     # fetch_price runs on every run
 ```
 
-The annotation sets `force_persist = True`, which the post-execute path threads into the tiered backend so promotion runs unconditionally.
+## Mark a helper `@stateful` { #stateful-helpers }
 
-### `@cash:allow-random` — accept non-reproducibility
-
-<!-- claim: cash/tracking/randomness/detect.py:check_and_warn_randomness @190e854a, cash/tracking/randomness/detect.py:MODULE_ALIASES @993c2ed1, cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb -->
-Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
-
-Two fixes. Seed it:
+A directive covers one statement. When a function's effect is the reason you call
+it (it sends a message, writes to a database through a client library, updates a
+dashboard), mark the function once, and every statement that calls it runs every
+time:
 
 ```python { .nb-cell }
-np.random.seed(42)
-noise = np.random.rand(1000)  # no warning, fully reproducible
+from cash import stateful
+
+@stateful
+def announce(text):
+    return chat.chat_postMessage(channel="#runs", text=text)
 ```
-
-Seeding is tracked per module for the rest of the session, so one `np.random.seed(42)` quiets every later `np.random.*` draw — but not a `random.random()` one.
-
-Or, if non-reproducibility is exactly what you want (you're exploring, you'll re-roll deliberately), suppress the warning:
 
 ```python { .nb-cell }
-# @cash:allow-random
-noise = np.random.rand(1000)
+receipt = announce("model trained")    # badge: NOT CACHED - Calls @stateful function
 ```
 
-The annotation flips `suppress_warning=True` in `check_and_warn_randomness`; **the cell still caches either way.** `allow-random` is advisory — it changes what Cash *says*, never what it *stores*. Unseeded randomness has never blocked caching, and adding the annotation doesn't opt you out of it; if you want the statement to re-run every time, use `@cash:no-cache`.
+<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
+Without the marker, a slow `announce` call is cached and a re-run skips the
+message: cash does not look inside `announce` for a chat client. Three things to
+know:
 
-The warning fires once per statement per session, so a re-run of an unchanged cell won't nag you and a loop won't warn per iteration.
+- **Only direct calls count.** Cash checks the functions a statement calls by
+  name, such as `announce(...)`. A method call such as `bot.announce(...)` is not
+  checked, so marking a method does nothing. Call a module-level function
+  instead, or put `# @cash:no-cache` on the statement.
+- **It does not spread to callers.** A function that calls `announce` is not
+  stateful itself, so a statement calling that wrapper is cached. Mark the
+  wrapper too.
+- **File writes need no marker.** A helper you wrote that writes a file
+  (`fig.savefig(...)`, `df.to_csv(...)`, `open(p, "w")`), directly or through
+  another of your functions, is detected: the statement runs every time and the
+  badge says `Calls save(), which writes files`. Appending to a log file does not
+  count. If such a write does not matter, mark the helper `@pure` and it caches
+  again. Apart from this, `@pure` does not change what a notebook statement does.
 
-!!! note "What the scanner can and can't see"
-    Detection is name-based: Cash recognises calls rooted at a known RNG
-    *module* (`np.random.*`, `random.*`, `torch.*`, `tf.random.*`), including
-    through aliases and `from ... import`. It does **not** see randomness hiding
-    behind a method on your own objects — `df.sample(1000)` and
-    `model.fit(X, y)` draw from the global NumPy RNG but produce no warning,
-    because Cash can't tell those methods from any other. Treat the warning as a
-    helpful catch, not a guarantee that seeded code is the only quiet code.
+## Randomness and estimators
 
-## RNG state is replayed across cache hits
-
-<!-- claim: cash/tracking/randomness/state.py:capture_object_rng_states @d8dd9223, cash/tracking/randomness/state.py:restore_object_rng_states @6cf484b7 -->
-A cache hit restores more than the value. If you hold your own RNG object — an
-`np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
-its internal state is captured alongside the cached statement and **replayed**
-when that statement is restored. Draws taken *after* a cached statement
-therefore match what a full re-run would have produced:
-
-<!-- test:skip reason="harness stubs np.random with _FakeRandomState, which has no default_rng" -->
-```python { .nb-cell }
-rng = np.random.default_rng(0)
-a = rng.random(3)     # cache this statement...
-b = rng.random(3)     # ...and b still matches a full re-run
-```
-
-Without the replay, restoring `a` from cache would leave `rng` un-advanced and
-`b` would silently draw `a`'s numbers. Cash captures
-`Generator.bit_generator.state` / `RandomState.get_state()` / `Random.getstate()`
-and re-injects it on the hit, so the carrier ends on the same post-state the
-original execution left it in. Module-global RNG state (`random`,
-`numpy.random`, `torch`) is captured and restored the same way.
-
-Cache entries written before this behaviour existed carry no object-RNG state;
-they restore unchanged rather than erroring.
-
-## Global TTL — `%cash_on ttl=N`
-
-Set a default TTL for every cached statement from here on:
-
-```python { .nb-cell }
-%cash_on ttl=3600
-# Every statement from now on expires after 1 hour
-# unless overridden by @cash:ttl=...
-```
-
-`%cash_on ttl=N` sets `self.global_ttl` on the magic. For a shorter TTL on
-one cell, put `# @cash:ttl=N` above each statement that needs it.
-
-A per-statement `# @cash:ttl=N` annotation always wins over the global TTL: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set.
-
-## Function-level controls on `@cash.cache`
-
-The decorator path has its own knobs that mirror some of the annotations:
-
-```python
-import cash
-
-c = cash.Cash()
-
-@c.cache(ttl=3600)                 # same as @cash:ttl=3600 on a statement
-def fetch_daily_summary():
-    return load_yesterdays_metrics()
-
-@c.cache(assume_safe=True)         # silence the impurity warning after audit
-def fetch_user(uid):
-    return requests.get(f"https://api/{uid}").json()
-
-@c.cache(strict=True)              # fail loudly in CI if analyzer finds issues
-def critical_function(x):
-    return ...
-```
-
-`ttl` here works identically to the statement annotation — `_entry_expired` is the same code path. `assume_safe` and `strict` are about purity, not freshness; see [Purity Decorators](purity-decorators.md) for the full breakdown. They're mutually exclusive at decoration time.
-
-To waive one statement rather than the function, annotate it — `# @cash:assume-safe` on the audited line. It is honoured under `strict=True` too, and unlike the flag it does not cover code added afterwards.
-
-## Randomness detection — what gets flagged
-
-`RandomnessDetector` keeps a session-wide set of `seeded_modules`. When it sees a seed call (`np.random.seed(42)`, `torch.manual_seed(0)`, `random.seed(...)`), it marks the module as seeded and stops warning about subsequent calls to its RNG functions. When it sees an unseeded call, it emits a `CashRandomnessWarning`.
-
-Tracked module aliases:
-
-- `np` → `numpy` (so `np.random.randn` resolves to `numpy.random.randn`)
-- `tf` → `tensorflow`
-- Full alias map in `MODULE_ALIASES`; imports detected via `visit_Import` and `visit_ImportFrom` so `import numpy.random as nr` and `from random import choice` both work.
-
-Tracked functions:
-
-- `random.*` — `random`, `randint`, `choice`, `sample`, `shuffle`, …
-- `numpy.random.*` — `rand`, `randn`, `choice`, `permutation`, plus distributions like `beta`, `binomial`, `normal`, …
-- `torch.*` — `rand`, `randn`, `randint`, `randperm`, `rand_like`, …
-- `tensorflow.random.*` / `tf.random.*` — `uniform`, `normal`, `truncated_normal`, …
-
-The full set is `RANDOM_FUNCTIONS`. Anything outside this set isn't checked — third-party RNG libraries are silently allowed.
-
-## Precedence and edge cases
-
-The merge for cacheability has one absolute winner: **`@cash:no-cache` short-circuits everything else**. If it's set, the statement is not cached, full stop — no TTL check, no persist, no purity scan.
-
-After that, the reason-source order is:
-
-1. `@cash:no-cache` annotation
-2. Forbidden function calls (e.g. `input()`)
-3. `@stateful` function calls, and calls to a helper of yours that writes a file (a chart, an export)
-4. In-place mutations / side effects detected by the AST visitor
-5. Inputs missing lineage
-
-The first source that triggers wins; later sources are not consulted.
-
-For the annotations that *don't* skip caching:
-
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @b10e0cdc -->
-- `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
-
-  ```python { .nb-cell }
-  # @cash:persist
-  # @cash:ttl=86400
-  daily_model = train_lightgbm(X, y)
-  ```
-
-- `@cash:allow-random` is purely advisory — it suppresses warnings but does not influence the cacheability decision. You can combine it with anything.
-
-- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` whenever it's set, even when its value is *longer* than the global (`StatementProcessor._parse_annotation` assigns `effective_ttl = annotation.ttl` whenever it is not `None`).
-
-- A negative or non-integer TTL: the regex captures the whole value (`\S*`) and the parser then requires ASCII digits, so `ttl=-30`, `ttl=abc` and `ttl=5m` set no TTL. They are **not** silent -- each warns and names the directive it could not read. The wide capture is what makes that possible: a `\d+` value group would match only the `5` of `ttl=5m` and silently mean *five seconds*, a 60x error whose only symptom was a cache that kept missing. See [Annotations - common mistakes](../../annotations.md#ttl-with-no-value-or-non-digits).
-
-## API reference
-
-| Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?`) | Effect |
-|---|---|---|
-| `# @cash:no-cache` | directive=`no-cache` | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
-| `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `global_ttl` for this statement. Checked at lookup time by `_entry_expired`. |
-| `# @cash:persist` | directive=`persist` | Sets `CacheAnnotation.persist=True`. Forces tiered-backend promotion to the persistent tier regardless of the smart-persistence policy. |
-| `# @cash:allow-random` | directive=`allow-random` | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
-| `%cash_on ttl=N` | line-magic flag | Sets `self.global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |
-| `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
-
-All annotation parsing lives in `src/cash/analysis/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')` — the value group is deliberately wide so a malformed value is *rejected by name* rather than silently truncated.
+`# @cash:allow-random` silences the warning about an unseeded draw without
+changing what is cached; see [Randomness](../../known-limitations.md#randomness).
+`# @cash:cache-fit` caches a bare `clf.fit(X, y)`; see
+[Annotations](../../annotations.md#cashcache-fit).
 
 ## Related
 
-- [Annotations](../../annotations.md) — short reference card for every annotation.
-- [Purity Decorators](purity-decorators.md) — `@pure`, `@stateful`, and the `assume_safe`/`strict` decorator modes.
-- [Smart Persistence](smart-persistence.md) — the default policy that `@cash:persist` overrides.
-- [Reading the Cash Badge](../../badges.md) — how each annotation shows up in the badge (skip reasons, TTL expiration).
-- [Choosing a backend](choosing-a-backend.md) — where `@cash:persist` actually writes through to.
+- [Annotations](../../annotations.md): every directive, where to put it, and how
+  several combine.
+- [Reading the badge](../../badges.md): how each decision shows up.
+- [Moving to a module](production-transition.md): the same controls on
+  `@cash.cache` are decorator arguments.

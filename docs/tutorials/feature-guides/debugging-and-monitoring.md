@@ -1,312 +1,161 @@
-# Debugging and monitoring — figuring out why Cash did what it did
+# Debugging
 
-When Cash isn't behaving the way you expect — missing when you thought it'd hit, hitting when you expected fresh — there are five tools for figuring out why: `CASH_SUMMARY` and `CASH_DEBUG` for a script you would rather not edit, `f.explain()` for per-call introspection, `%cash_debug` for verbose tracing in a notebook, `%cash_stats` / `cache_info()` for aggregate health, and the `cash` CLI for inspecting on-disk state.
+!!! info "Applies to: notebook"
+    Notebooks with `%cash_on`. How to find out why a cell ran, did not run, or
+    was not cached. For `@cash.cache` functions, see
+    [Seeing what it did](../../decorator.md#seeing-what-it-did).
 
-This guide walks through all four, plus the common diagnostic patterns and how to clear the cache once you've found the problem.
+Start with the badge; most questions end there. When it is not enough, turn on
+`%cash_debug`. `%cash_stats` tells you whether caching pays off over the
+session, and the `cash` command line shows what is on disk.
 
-## Why this exists
+## 1. Read the badge
 
-Cash makes a *lot* of decisions per call: build the cache key from the function source, dependency state, and arguments; look it up in the backend; check the TTL; check file-dependency freshness; serve the cached value or recompute. When something goes wrong the symptom is usually "it ran when I expected a hit" or "it hit when I expected a re-run" — each with several possible causes. The tools below let you match a symptom to its actual cause instead of guessing.
+Every statement's row says what happened, and when a statement ran again or was
+not stored, why. Open the row for its detail, and open the **upstream context**
+to see what cash re-ran in earlier cells. [Reading the badge](../../badges.md)
+lists every status and reason. For headless runs, `%cash_badge print` gives the
+same as text:
 
-## Quick start
-
-```python
-import cash
-
-@cash.cache
-def expensive(x):
-    return x ** 2
-
-expensive(5)                       # compute
-expensive.explain(5)               # why would the next call hit?
-# [HIT] __main__.expensive — hit
-#   cache_key: __main__.expensive:9a3c...:...
-#   cached_at: 1779637032.79
-#   cache_age_seconds: 0.05
-#   execution_time_saved: 0.0008
-
-expensive.cache_info()
-# {'hits': 0, 'misses': 1, 'hit_rate': 0.0, 'total_time_saved': 0.0, 'warnings': []}
+```text
+[Cash] EXECUTED (0.21s)
+  EXECUTED: result = featurize(df)  (0.20s) -> RAM+DISK
+    sub-call featurize(df): 0/1 hit - changed: df
 ```
 
-That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `%cash_stats`, and the badge above each cell's output. On disk, `cash inspect` and `cash clear` cover everything from outside the kernel.
-
-## In a script: `CASH_SUMMARY` and `CASH_DEBUG`
-
-<!-- claim: cash/core.py:Cash._print_run_summary @f2a46f9f, cash/decorator/reporting.py:ReportingMixin._log_decorator_call @f23b179b -->
-A script shows nothing about the cache by default. Two environment variables
-change that without touching the code:
-
-```bash
-CASH_SUMMARY=1 python model.py      # one table when the process exits
-CASH_DEBUG=1 python model.py        # one line per call, as it happens
-```
-
-`CASH_SUMMARY` prints, to stderr, what each function did and why it missed:
-
-```
-cash: 1 of 4 calls restored, 0.4s saved
-  cache: /home/me/proj/.cash
-  model.ray_component  1 hit,    1 miss      0.4s saved
-      missed: 1 no entry yet
-  model.build_grid     0 hits,   2 misses    -
-      missed: 1 no entry yet, 1 new arguments
-      kept in RAM only (2x): under the 0.1s persistence floor; a new process recomputes it
-```
-
-The `cache:` line is the directory the run used; check it first when a run
-that should have been warm was not. A "kept in RAM only" line names results
-the next run will compute again, and a `code or state changed` line names what
-changed — `global THRESHOLD changed`, `helper model._rank moved to dsp._rank`.
-
-`CASH_DEBUG` logs each call with the entry id `cash inspect --function` lists:
-
-```
-cash.calls: HIT  model.ray_component  [45be55281a10]  (saved 0.36s)
-cash.calls: MISS model.build_grid  [7d5c31acf1d4]  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
-```
-
-`CASH_VERBOSE=1` gives the per-call lines without cash's other debug records.
-If your program configures `logging`, the lines go to your handlers instead of
-stderr. [Seeing what it did](../../decorator.md#seeing-what-it-did) has the
-full format, every miss reason, and when the summary cannot print.
-
-## Tool 1: `f.explain()` — the diagnostic API
-
-Every function wrapped with `@cash.cache` gets an `explain` attribute. Call it with the same args you'd pass to the function and it tells you exactly what would happen on the next real call — without computing anything, without mutating stats, without touching the backend.
-
-```python
-import cash
-
-@cash.cache(ttl=60)
-def fetch_user(uid):
-    return {"id": uid, "name": "..."}
-
-fetch_user.explain(42)              # no entry yet
-fetch_user(42)                      # compute and store
-fetch_user.explain(42)              # hit
-```
-
-<!-- claim: cash/decorator/explain.py:CacheExplanation @9f1db6f8 broad="the field list and reason set are a claim about the whole dataclass", cash/decorator/explain.py:ExplainMixin._explain_call @bd141dbf -->
-The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`) with six fields and one of six reason codes. `cache_dir` is the directory the answer was read from, so an explain that reads a different cache from the one you expected (a nested `pyproject.toml`, say) shows it:
-
-| `reason` | Meaning | Key `details` |
-|---|---|---|
-| `hit` | Next call returns cached value. | `cached_at`, `cache_age_seconds`, `execution_time_saved`, `file_deps` |
-| `no_entry` | No matching cache entry — first call with these args, the cache was cleared, or the function source / a tracked dependency changed since the last write. `why` says which, as far as this process knows: the part of the key that moved since the last call, a result that was never stored and why, or one that was stored and since evicted. | `hint`, `why` |
-| `ttl_expired` | The configured `ttl` has elapsed, or the entry expired under the `ttl` it was written with. | `ttl_seconds`, `age_seconds`, `cached_at`, or `why` |
-| `file_changed` | An auto-tracked file dependency changed. Invalidation is decided by **content**: size first, then a content hash when the size matches — a touch alone is not a change. | `changed_files: {path: reason}`, `file_deps` |
-| `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
-| `disabled` | Caching is off (`disable=True` / `CASH_DISABLE`), so every call runs the function. | `hint` |
-
-`Cash._explain_call` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, `'fingerprinted under a different file_hash_full_max_bytes, ...'` after that setting moved across the file's size, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`.
-
-## Tool 2: `%cash_debug on` / `%cash_debug off`
-
-Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>`).
+## 2. Turn on `%cash_debug`
 
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @fb6167b9 -->
-The five log prefixes you'll see most:
+`%cash_debug on` logs each step as cells run; `%cash_debug off` stops it.
+`%cash_debug json` logs one JSON object per record, and `%cash_debug file PATH`
+also appends them to a file. The output is long, so run the one cell you are
+investigating and switch it off again.
 
-| Prefix | What it tells you |
+Each line starts with the logger name and a tag. The tags that answer "why did
+this run?":
+
+| Tag | What it tells you |
 |---|---|
-| `[CACHE_KEY]` | How the cache key for a statement was constructed (source hash, dependency hashes, args hash). |
-| `[CACHE_HIT_DEBUG]` | Why a lookup hit or missed, including which validation step failed (TTL, file deps, …). |
-| `[UPSTREAM_DEBUG]` | What made an upstream cell invalidate, cascading into a downstream re-run. |
-| `[LINEAGE_DEBUG]` | Which inputs were detected for a statement and what their resolved lineage hashes are. |
-| `[STATE]` | The tracking state at each step of cell execution. |
+| `[CACHE_KEY]` | The statement's key and what went into it: the code hash, each input and the lineage hash it resolved to, the functions it calls. Compare two runs to see which input moved. |
+| `[CACHE DEBUG]` | The key looked up, `Cache hit: True` or `False`, and what happened next: `Executing (cache miss)`, `Stored in cache`, `Restored from cache`. |
+| `[CACHE_HIT_DEBUG]` | On a hit, the input lineages the stored entry was matched on. |
+| `[SIZE_AWARE]` | Why a result was not stored, for example `below 10ms floor`. |
+| `[STORAGE]` | Where a result was written: `Stored in: RAM, DISK`. |
+| `[UPSTREAM_DEBUG]` | The check of earlier cells: which inputs the cell needs and what was re-run. |
 
-```python { .nb-cell }
-%cash_debug on
+Other tags (`TIMING`, `TIMING_PROXY`, `CELL_ID`, `ENSURE_STATE_DEBUG`) trace
+timing and cell identification.
 
-# Run a cell that you expected to hit but didn't:
-result = featurize(df)
-# [CACHE_KEY]      featurize: state=b7e2... args=4a91... key=featurize:b7e2:...:4a91
-# [CACHE_HIT_DEBUG] featurize: lookup miss — no entry for this key
-# [UPSTREAM_DEBUG] featurize: upstream df changed (state hash b7e2 vs prev 9a3c)
-# [LINEAGE_DEBUG]  featurize: inputs={df: lineage=...}, depends_on=[_normalize]
-# [STATE]          tracked_vars: {df: ..., result: ...}
+Here `df` was changed upstream, so `result = featurize(df)` ran again
+(lines shortened):
 
-%cash_debug off
+```text
+[cash.notebook.cache_key] [CACHE_KEY] Input 'df' resolved to: 70e3a0edf794526b...
+[cash.notebook.cache_key] [CACHE_KEY] Input 'featurize' resolved to: 8ca7ecb57d08c0ae...
+[cash.notebook.cache_key] [CACHE_KEY] Code: result = featurize(df)... | source_hash: 6c5677ce1711... | input_hashes: ['70e3a0edf794...', '8ca7ecb57d08...'] | ... | cache_key: stmt:ffd3d255253e...
+[cash.notebook.statement.processor] [CACHE DEBUG] Cache hit: False
+[cash.notebook.statement.processor] [CACHE DEBUG] Executing (cache miss)
+[cash.backends.tiered_backend] [STORAGE] Stored in: RAM, DISK
 ```
 
-The output is verbose by design — leave it on only long enough to diagnose. JSON mode (`%cash_debug json`) gives structured records that are easier to filter; file mode persists them past the notebook session.
+On the previous run, `Input 'df'` had resolved to a different hash: that is the
+input that moved.
 
-## Tool 3: `%cash_stats` and `cache_info()`
-
-For health checks rather than per-call diagnostics, you want aggregates.
-
-### In a notebook — `%cash_stats`
-
-```python { .nb-cell }
-%cash_stats
-```
+## 3. Check the session with `%cash_stats`
 
 <!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @711be826 -->
-Prints a summary of this kernel session (a restart resets it): cells executed, statements computed / restored / skipped, hit rate, and a time ledger of gross saved, cash overhead, and net saved. The net line is the honest headline, and it is **not** gross minus overhead: it credits only savings a measurement backs — one this session took by recomputing the same statement (*verified*), or the least an earlier kernel on this machine ever measured (*measured*), which is what lets a Restart & Run All report a number rather than a range — minus the measured overhead. Gross is printed beside it and labelled *(estimated)*, because it values each restore at what the entry cost when first written and nothing re-measures that. The consequence is deliberate understatement — an overstatement would be the bug — and a real loss prints as one ("cash cost you Xs this session"). `%cash_stats json` returns the same numbers as a dict (including `total_overhead`, `total_verified_saved`, `total_measured_saved`, `net_time_saved`, `net_time_saved_upper_bound`, and `discarded_writes`); `%cash_stats reset` zeros the counters, and forgets the measurements kept beside the cache — it cannot claim to have forgotten a baseline and then credit a later hit against it.
+`%cash_stats` summarises this kernel session: cells run, statements computed,
+restored and skipped, the hit rate, and time saved.
 
-If a cache write ever failed, a **discarded writes** line appears with the count and the first cause. Read it before anything else on the page: that work was never stored, so it recomputes every run, and no counter above can reveal it — a discarded write is not a miss, it is a hit that never got the chance to exist. Nothing raised when it happened, so the rest of the summary can look perfectly healthy. A `reset` deliberately does not clear these; the entries are still missing from disk afterwards.
-
-!!! warning "It only sees decorator hits on the *default* Cash instance"
-    `%cash_stats` drains the per-instance decorator call log of the notebook's
-    own `Cash` (or the module-level `cash.cache` singleton). A hit on a
-    separately-constructed instance — `c = cash.Cash()`, the pattern several
-    guides on this site use for `register_hasher`, custom backends and
-    `file_depends_on` — is **not** counted. Measured, same workload both ways:
-
-    | decorator | `cache_info()['total_time_saved']` | `%cash_stats` gross |
-    |---|---|---|
-    | `@cash.cache` (global) | 0.401 s | 0.401 s |
-    | `@c.cache` on `c = cash.Cash()` | 0.403 s | **0.0 s** |
-
-    Both genuinely hit the cache. If you use a custom instance, trust
-    `cache_info()` and `explain()` for that function; `%cash_stats` will
-    understate your session.
-
-### On a decorated function — `cache_info()`
-
-Each `@cash.cache` wrapper carries a per-function counter:
-
-```python
-@cash.cache
-def expensive(x):
-    return x ** 2
-
-for x in range(10):
-    expensive(x % 3)
-
-expensive.cache_info()
-# {'hits': 7, 'misses': 3, 'hit_rate': 0.7,
-#  'total_time_saved': 0.0021, 'warnings': []}
+```text
+Cash Session Statistics
+  (since this kernel started; a restart resets them)
+----------------------------------------
+  Cells executed:      4
+  Statements computed: 6
+  Statements restored: 0
+  Statements skipped:  0
+  Cache hit rate:      0.0%  (0/4 statements worth caching)
+                       0.0% counting all 6 statements -- the other 2 were too
+                       cheap to cache, so cash never tried: not misses.
+  Compute time:        402.2ms
+  Gross time saved:    0us  (estimated)
+  Cash overhead:       167.0ms  (measured)
+  Net time saved:      -167.0ms  (cash cost you 167.0ms this session)
+  Tracked variables:   4
 ```
 
-The full shape and field meanings:
+- **Net time saved** is the number to trust. It counts only savings backed by a
+  measurement (this session recomputed the statement, or an earlier kernel on
+  this machine did) and subtracts cash's own overhead. A session where cash cost
+  more than it saved says so.
+- **Discarded writes**, when shown, counts results cash failed to write, with
+  the first cause. Those recompute every run, and no other counter shows it.
+  Read this line first.
+- `%cash_stats json` returns the same numbers as a dict. `%cash_stats reset`
+  zeroes the counters and forgets the stored measurements; it keeps the
+  discarded-writes line.
 
-- `hits`, `misses`, `hit_rate` — counters since the wrapper was created (not since process start).
-- `total_time_saved` — sum of execution times avoided on hits.
-- `warnings` — rolling log of the last 20 `CashWarning` emissions for this function. Each entry has `category`, `code`, `message`, `timestamp` -- the `code` is the diagnostic code from [Warnings](../../warnings.md), so the log can be filtered on it the same way a warning handler branches on `w.message.code`. Survives `warnings.simplefilter('ignore')` so you can find silent misbehavior after the fact.
+A notebook of sub-second cells with no restarts may show a net loss: cash's
+bookkeeping can cost more than it saves there.
 
-### Reading hit rate
+## 4. Look at the cache on disk
 
-- **>80%** — healthy. Your code is deterministic enough that the cache is doing useful work.
-- **40–80%** — varies by workload. A research notebook with frequent re-runs against new arguments lives here.
-- **<40%** — something is fighting the cache. Walk through the patterns below.
-
-## Tool 4: CLI `cash inspect` and `cash clear`
-
-Outside a notebook (CI, scripts, postmortem), the `cash` CLI inspects and manages cache directories on disk:
+From a terminal in the notebook's folder, or a cell starting with `!`:
 
 ```bash
-cash inspect                          # the cache in use (the directory `cash info` reports)
-cash inspect ./notebooks/analysis.ipynb   # inspect the .cash next to a notebook
-cash inspect /tmp/some-cache-dir      # any directory
-
-cash clear --all                      # delete the cache in use (no confirmation)
-cash clear ./notebooks/analysis.ipynb # delete the sibling .cash
+cash info                         # where the cache is, its size and settings
+cash inspect                      # entries by size, with the time each saves
+cash inspect --function NAME      # one function's entries
+cash clear --all                  # delete the whole cache
 ```
 
-`cash inspect` reports total size, entry count, and a per-function table sorted by size. `--function NAME` drills into one function's individual entries, showing what each one *saves* alongside its size. See the [CLI reference](../../cli.md) for the full output and flag list.
+After a `cash clear`, restart the kernel. See the [CLI reference](../../cli.md).
 
-**When to reach for the CLI vs notebook magics** — the CLI when you can't (or don't want to) start a kernel: post-incident inspection on a CI machine, clearing a runaway cache directory on a teammate's box, or scripted size monitoring. Inside an active notebook, `%cash_stats` and `f.cache_info()` are faster.
+## Common symptoms
 
-## Common patterns — what each diagnostic tells you
+### A cell I did not change runs again
 
-### "Hit rate is low"
+Open the row. `FUNC CHANGED`, `MODULE RELOADED` and "file changed" name the
+cause. "Input lineage changed" means an upstream statement ran again: open that
+row to see why. An `unstable key` row means something upstream runs on every
+run. If the badge names nothing, compare the `[CACHE_KEY]` lines of two runs.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b -->
-Start with `cache_info()['warnings']` (decorator) or `%cash_stats` (notebook) — `cache_info()` returns a plain dict, so subscript it; `.warnings` raises `AttributeError`. Look for:
+### A cell I changed still shows the old result
 
-- `CashRandomnessWarning` — unseeded RNG; pass `random_state=42` (or whatever) to make calls reproducible.
-- `CashImpurityWarning` — analyzer found `requests.get` / `datetime.now()` / similar in the function body. See [Purity Decorators](purity-decorators.md).
-- `CashCacheIneffectiveWarning` — args weren't hashable, or the value was too big to promote past RAM, or a `cache_if` predicate excluded the call.
+Cash cannot see the change. The usual causes, each with a fix, are in
+[Writing cache-safe cells](../../known-limitations.md): an unsaved edit, a file
+read through a loader cash does not watch, a helper that reads the clock, a
+change made through another name, a function defined below the one that calls
+it. To start over, run `!cash clear --all` and restart the kernel.
 
-Once the obvious culprits are gone and the rate is still low, run `f.explain(...)` for a sample call and check whether the `reason` is mostly `no_entry` (you're editing helpers between runs, args genuinely vary, or the cache was cleared) or `key_uncomputable` (need a custom hasher).
+### Nothing seems to be cached
 
-### "Cell I didn't change is recomputing"
+- The work is in the `%cash_on` cell. Nothing there is cached; move it down.
+- The statements are under 10 ms. They show plain `EXECUTED` rows and appear in
+  `%cash_stats` as "too cheap to cache".
+- The rows say `NOT CACHED`: the reason names a side effect or an in-place
+  change. See [What gets cached](../../notebook_caching_api.md#what-gets-cached).
+- `%cash_stats` shows discarded writes.
+- `CASH_DISABLE=1` is set; `%cash_on` then says caching is disabled.
 
-Turn on `%cash_debug on` and re-run. The `[UPSTREAM_DEBUG]` lines show which upstream variable's state hash flipped — typically a notebook-level variable that an upstream cell rewrote in place (`df.sort_values(inplace=True)`), or a function whose source you edited indirectly via auto-reload. Fix by isolating the mutation (`df = df.sort_values(...)` returns a new frame) or by marking the helper `@pure` if its body really is deterministic.
+### The cache is large
 
-### "Cell I changed isn't recomputing"
+`cash inspect` lists entries by size with the time each one saves, so a large
+entry that saves little stands out. Remove it with `cash clear --function NAME`
+or `cash clear --entry ID`. [Where your cache lives](../../how-it-works/storage.md)
+explains the size caps.
 
-The opposite mystery: you edited code, but Cash is serving a stale value. Call `f.explain(...)` with the args you expect to hit. If `reason == "hit"`, Cash's view of the source genuinely hasn't changed — that usually means the edit was inside a helper that isn't in `depends_on` and isn't auto-tracked (cross-package, or behind a dynamic import). Either add the helper to `depends_on=[...]` on the decorator, or call `f.cache_clear()` to force the next call to recompute and re-key.
+## Scripted access
 
-### "Cache is huge on disk"
-
-```bash
-cash inspect ./.cash
-```
-
-<!-- claim: cash/__main__.py:_inspect_cache_dir @79ce6b6f -->
-The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME` — each row shows what that entry *saves* alongside its size, so you can tell a cheap 5 MB entry from a 900-byte one worth 41 seconds — and drop what you no longer want with `cash clear --function NAME` or `cash clear --entry ID`. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @0d042233 -->
+`status = %cash_status dict` returns the last cell's statements (status, code,
+times) and the session's tracking state, for tools and agents. It uses the enum
+names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED).
+`%cash_provenance NAME` shows how a variable was computed: the code, its inputs
+and its history. See [Magic commands](../../magics.md).
 
 <!-- claim: cash/analytics.py:AnalyticsManager.__init__ @a038a9da -->
-!!! note "The `analytics.db` telemetry file"
-    Separate from the project-local `./.cash/` cache, Cash keeps a small
-    SQLite file, `analytics.db`, in the per-user cache root (`~/.cache/cash` on
-    Linux, `~/Library/Caches/cash` on macOS, `%LOCALAPPDATA%\cash` on
-    Windows), recording per-session hit/miss/timing events for notebook
-    statements. It backs the `cash.show_stats()` dashboard; `%cash_stats` does
-    **not** read it -- that command reports in-memory session counters and
-    deliberately never walks the backend. The file is **best-effort
-    observability, never correctness** — deleting it is always safe and loses
-    only telemetry, no cached results. Cash recreates it automatically if it is
-    missing, corrupt, or oversized, so you should never see an error about it.
-    To stop recording, set `analytics = false` in the config, or
-    `CASH_ANALYTICS=0`; no file is created then.
-
-## Clearing the cache
-
-Clearing is the CLI's job. Run it from a terminal, or from a notebook cell
-with a leading `!`; restart the kernel afterwards so no in-memory lineage
-outlives the entries it pointed at:
-
-```bash
-cash clear --all                      # delete the cache in use
-cash clear ./notebooks/analysis.ipynb # delete the sibling .cash
-```
-
-The CLI has no confirmation prompt; double-check the path before pressing enter.
-
-## Browsing the cache from code
-
-`Cash.explorer()` returns a `CacheExplorer`, an interactive cache browser for richer inspection. Its API may change between releases.
-
-```python
-import cash
-
-c = cash.Cash()
-explorer = c.explorer()
-explorer.list_entries()                # every cache entry with metadata
-explorer.to_dataframe()                # same as a pandas DataFrame
-explorer.get_preview(key)              # peek at a stored value
-explorer.clear_function("mod.func")    # surgical per-function clear
-```
-
-<!-- claim: cash/ui/explorer.py:CacheExplorer @7abe3173 broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
-`CacheExplorer` is the read-side: list, preview, and surgically clear entries by function name without touching the rest of the cache.
-
-For anything that needs to survive a version bump, stick to `f.explain()` and `%cash_debug`.
-
-## API reference
-
-| Tool | Surface | Import / invocation | Effect |
-|---|---|---|---|
-| `CASH_SUMMARY=1` | Script | environment variable | A per-function hit/miss table on stderr when the process exits, with why each function missed. |
-| `CASH_DEBUG=1` / `CASH_VERBOSE=1` | Script | environment variable | One line per call: hit or miss, the entry id, and why. `VERBOSE` gives those lines alone. |
-| `f.explain(*args, **kwargs)` | Decorator | attribute on `@cash.cache`-wrapped function | Returns `CacheExplanation` for the next call. No execution, no stats mutation. |
-| `f.cache_info()` | Decorator | attribute on `@cash.cache`-wrapped function | Returns `{hits, misses, hit_rate, total_time_saved, warnings}` per function. |
-| `f.cache_clear()` | Decorator | attribute on `@cash.cache`-wrapped function | Wipes backend entries for this function; resets stats + warnings. |
-| `%cash_stats` | Notebook | line magic | Session-wide aggregate counters. `json` → dict, `reset` → zero. |
-| `%cash_debug on/off/json/file <path>` | Notebook | line magic | Toggles DEBUG-level cash logging with five labelled prefixes. |
-| `cash inspect [path]` | CLI | shell command | Summarise a cache dir or notebook's sibling `.cash`. Read-only. |
-| `cash clear [path] [--all]` | CLI | shell command | Delete a cache directory. **No confirmation prompt.** |
-| `CacheExplanation` | Type | `from cash import CacheExplanation` | Frozen dataclass returned by `explain()`. Fields: `would_hit`, `reason`, `func_name`, `cache_key`, `details`, `cache_dir`. |
-| `Cash.explorer()` | UI | method on a `Cash` instance | Returns a `CacheExplorer`: list/preview/clear backend entries. |
-
-## Related
-
-- [Cost Model](../../cost-model.md) — how cache size, hit rate, and time-saved compose into the value of caching at all.
-- [Smart Persistence](smart-persistence.md) — tune what hits disk vs stays in RAM when `cache inspect` says you're disk-heavy.
-- [Purity Decorators](purity-decorators.md) — fix "low hit rate" caused by impurity warnings the analyzer is raising.
-- [Controlling Cache Behavior](controlling-cache-behavior.md) — `# @cash:no-cache` and friends for the statements diagnostics flag as wasteful.
-- [CLI](../../cli.md) — full reference for `cash inspect`, `cash clear`, and the rest of the command-line surface.
+Cash also records per-session hit and miss events in a small `analytics.db` in
+your user cache folder, which `cash.show_stats()` reads. Deleting it is always
+safe. `CASH_ANALYTICS=0` turns it off.

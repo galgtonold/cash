@@ -339,7 +339,7 @@ def test_cash_help_topic_prints_that_magics_docstring(cash_magics):
         out = _help_output(cash_magics, topic)
         assert out.startswith("%cash_badge\n"), (topic, out)
         assert expected in out
-        assert "[R] RESTORED" in out
+        assert "CACHED      - the value came from the cache" in out
 
 
 def test_cash_help_unknown_topic_says_so_and_prints_the_card(cash_magics):

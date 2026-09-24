@@ -718,10 +718,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_badge print  - Text summary printed once after cell completes
             %cash_badge off    - No badge output at all
 
-        Badge status icons:
-            [C] COMPUTED - the statement ran (cache miss)
-            [R] RESTORED - the result was loaded from the cache (cache hit)
-            [S] SKIPPED  - unchanged since the last run, no work needed
+        Statuses on a badge row:
+            CACHED      - the value came from the cache
+            EXECUTED    - the statement ran
+            NOT CACHED  - it ran and was not stored, so it runs every time;
+                          the row says why
+            SKIPPED     - nothing to do (an import whose names are bound)
         """
         mode = strip_inline_comment(line).lower()
         if mode in ("html", "print", "off"):
@@ -748,7 +750,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             - total_restored_time: Time saved by cache hits
             - total_computed_time: Time spent computing
             - upstream_metrics: Metrics from upstream re-executions
-            - status: Overall status (COMPUTED, RESTORED, SKIPPED, MIXED)
+            - status: Overall status as an enum name: COMPUTED (the badge's
+              EXECUTED), RESTORED (CACHED), SKIPPED or MIXED
             - lineage: Current variable lineage state
             - cache_stats: {"keys": number of entries in the backend}
         """

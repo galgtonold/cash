@@ -296,11 +296,12 @@ class CashAdminMagicsMixin:
                 print(f"Tracked variables ({len(tracked)}):")
                 for var in tracked:
                     latest = self._session.provenance.get_latest(var)
-                    status_icon = {"computed": "[C]", "restored": "[R]", "skipped": "[S]"}.get(
-                        latest.status if latest else "", "[?]"
+                    # The badge's words, so the two never disagree.
+                    status_word = {"computed": "EXECUTED", "restored": "CACHED", "skipped": "SKIPPED"}.get(
+                        latest.status if latest else "", "UNKNOWN"
                     )
                     history_count = len(self._session.provenance.get_history(var))
-                    print(f"  {status_icon} {var} ({history_count} records)")
+                    print(f"  {status_word:<8} {var} ({history_count} records)")
             return
 
         if parts[0] == "--clear":

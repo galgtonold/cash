@@ -1,10 +1,8 @@
 """The ``%cash_help`` card, built from the registered magics themselves.
 
-The card used to be hand-written text. It drifted as soon as a magic was added
-or removed: it never listed ``%cash_persist`` and kept advertising magics that
-were gone. Every line here now comes from what IPython actually registered and
-from each magic's own docstring, so the card cannot name a magic that does not
-exist or miss one that does.
+Every line comes from what IPython actually registered and from each magic's
+own docstring, so the card cannot name a magic that does not exist or miss one
+that does.
 """
 
 from __future__ import annotations
@@ -53,8 +51,7 @@ def _annotation_examples() -> list[str]:
     """One working example per notebook ``# @cash:`` directive.
 
     Each is checked against the real parser, so the card never shows a line
-    that would be silently ignored. That also drops ``assume-safe``, which the
-    decorator's purity check reads and the statement parser does not.
+    that would be silently ignored.
     """
     examples = []
     for directive in KNOWN_DIRECTIVES:

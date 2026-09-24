@@ -44,13 +44,13 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # A redundant import whose names are already bound -- the runtime's
+    # SKIPPED row, which carries no reason.
     "status_skipped": [
         {
             "status": "SKIPPED",
-            "code": "result = expensive_call(x)",
+            "code": "import pandas as pd",
             "total_time": 0.0,
-            "evaluated_vars": ["result"],
-            "skipped_reason": "downstream value not requested",
             "is_upstream": False,
         },
     ],
@@ -93,14 +93,18 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # The row cell_executor.staleness_notification emits when the saved
+    # notebook is provably behind what the kernel ran; text copied from it.
     "status_warning": [
         {
             "status": "WARNING",
-            "code": "x = np.random.rand(1000)",
-            "total_time": 0.003,
-            "evaluated_vars": ["x"],
-            "uncacheable_reasons": ["unseeded random call: numpy.random.rand"],
-            "is_upstream": False,
+            "code": (
+                "[!] Notebook file is stale -- Save (Ctrl+S) and re-run to be sure. "
+                "Upstream check used the copy saved at 14:02:11. "
+                "Other cells may have changed too."
+            ),
+            "total_time": 0.0,
+            "is_upstream": True,
         },
     ],
     "status_error": [
@@ -200,47 +204,22 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
-    # §5.a — side effect detected (file write, print to stdout, plt.show,
-    # requests.get, db cursor).
+    # §5.a — a refused side effect. Reason string copied from a real kernel
+    # (`%cash_badge print` on a POST sent through a client object).
     "not_cached_side_effect": [
         {
             "status": "COMPUTED",
-            "code": "df.to_csv('out.csv')",
-            "total_time": 0.094,
-            "uncacheable_reasons": ["side effect: file write to out.csv"],
+            "code": "r = session.post(API_URL, json=query)",
+            "total_time": 0.204,
+            "evaluated_vars": ["r"],
+            "uncacheable_reasons": ["Side effect: session.post() (network)"],
             "is_upstream": False,
         },
     ],
-    # §5.b — REMOVED. This fixture hand-wrote an
-    # ``uncacheable_reasons`` entry ("unseeded random call: numpy.random.rand")
-    # that the runtime never emits, so it rendered a badge state that cannot
-    # occur.  Unseeded randomness is *cacheable by design*: ``decide_cacheability``
-    # has no randomness reason-source. What the runtime emits instead is a
-    # ``CashRandomnessWarning``, which is a Python warning — not a badge row and
-    # not an uncacheable reason.  Making the fixture "real" would have required
-    # inventing the very cacheability rule the design rejects.
-    # §5.c — cost model says caching this would be slower than recomputing.
-    "not_cached_too_cheap": [
-        {
-            "status": "COMPUTED",
-            "code": "total = sum(values)",
-            "total_time": 0.012,
-            "evaluated_vars": ["total"],
-            "skipped_reason": "below cost-model threshold (use @cash:persist to force)",
-            "is_upstream": False,
-        },
-    ],
-    # §5.d — explicit opt-out via the @cash:no-cache annotation.
-    "not_cached_explicit": [
-        {
-            "status": "COMPUTED",
-            "code": "x = compute_with_side_effect()",
-            "total_time": 0.241,
-            "evaluated_vars": ["x"],
-            "skipped_reason": "# @cash:no-cache",
-            "is_upstream": False,
-        },
-    ],
+    # No fixture for a too-cheap or `# @cash:no-cache` statement: the runtime
+    # shows both as a plain EXECUTED row with no reason, which status_computed
+    # already renders. No fixture for an unseeded draw either: randomness is a
+    # CashRandomnessWarning and a row pill, never an uncacheable reason.
     # §5.e — statement mutates a pre-existing object in place, so there is no
     # value to snapshot. The reason string is copied verbatim from a real
     # kernel (`%cash_badge print` on `out.append(fetch(1))` where `out` came
