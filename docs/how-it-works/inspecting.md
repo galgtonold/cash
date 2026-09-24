@@ -131,7 +131,7 @@ The flags are documented in full under [Magic Commands](../magics.md).
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -164,7 +164,7 @@ caching is switched off — each carrying its own `details` (which files changed
 which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @8602bf1d, cash/core.py:Cash._wrap_with_stats.cache_info @905b7b2b, cash/decorator/reporting.py:CallLog.log @f23b179b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @59560c8a, cash/core.py:Cash._wrap_with_stats.cache_info @83a06e95, cash/decorator/reporting.py:CallLog.log @5ea0cb91 -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was

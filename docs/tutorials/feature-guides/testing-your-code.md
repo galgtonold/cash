@@ -46,7 +46,7 @@ Two fixes, and CI wants both:
 
 ## Turning caching off: `CASH_DISABLE=1`
 
-<!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @8602bf1d -->
+<!-- claim: cash/config.py:CashConfig.disable == False, cash/core.py:Cash._wrap_with_stats @59560c8a -->
 ```bash
 CASH_DISABLE=1 pytest
 ```
@@ -172,7 +172,7 @@ is keyed as the date it equals, so a frozen run and a real one share entries.
 What the frozen clock does reach is TTLs, which follow `time.time()`: an
 entry's age is measured on the clock the test is pretending to.
 
-<!-- claim: cash/effect_observer.py:_hook_mock_calls @fbaaf89b, cash/decorator/store.py:ResultStore.refusal @76b546c6 -->
+<!-- claim: cash/effect_observer.py:_hook_mock_calls @fbaaf89b, cash/decorator/store.py:ResultStore.refusal @50f5a969 -->
 A mock deeper down — `mock.patch("requests.Session.request")`,
 `HTTPAdapter.send`, or a `MagicMock` swapped into a module-level session
 after the function first ran — is not part of the key, so cash cannot tell

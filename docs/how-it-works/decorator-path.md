@@ -28,7 +28,7 @@ four segments:
   </div>
 </div>
 
-<!-- claim: cash/decorator/runtime.py:compute_cache_key @a3272962 -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca -->
 The segments are joined with colons, and an unused one is simply empty — a
 function with no `dynamic_depends_on` produces a key with an empty `dynamic`
 segment (`__main__.load:ca32…::0bba…`). Each segment answers a different "did
@@ -71,7 +71,7 @@ Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is
 skipped rather than silently pretending it doesn't exist.
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7bc7e4ca -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
 The `args` segment resolves each argument through its own ladder, and the order
 is deliberate:
 
@@ -101,7 +101,7 @@ gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
 argument type, and runs the function uncached.
 
 ??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/decorator/code_identity.py:func_key @5014fa8b -->
+    <!-- claim: cash/decorator/code_identity.py:func_key @7ed93e6b -->
     Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
     `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
     `dep()` and a helper module's `dep()` produced the *same* key, so a call to
@@ -144,7 +144,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/decorator/reporting.py:CallLog.log @f23b179b -->
+<!-- claim: cash/decorator/reporting.py:CallLog.log @5ea0cb91 -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
 keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
 not keep every call of a long-running process). `cache_info()` counts each call
@@ -175,7 +175,7 @@ entry was first written. Summing `execution_time` would under-report savings by
 orders of magnitude; `time_saved` is an estimate of the *original* cost, not a
 re-measurement of what recomputing would cost today.
 
-<!-- claim: cash/core.py:Cash.drain_decorator_calls @eb8f14d5 -->
+<!-- claim: cash/core.py:Cash.drain_decorator_calls @654e6dfc -->
 After the statement runs, `drain_decorator_calls()` atomically reads and clears
 the log. The badge groups the calls by function, so a helper called in a loop is
 one line, not fifty:

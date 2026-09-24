@@ -73,7 +73,7 @@ hourly_report = generate_summary(df)       # one hour
 daily_data = fetch_daily_metrics()         # one day
 ```
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/decorator/runtime.py:entry_expired @c72fd40d -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/decorator/runtime.py:entry_expired @f9bb16b6 -->
 The annotation TTL overrides the global TTL set by `%cash_on ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
 
 The check itself is in `Cash._entry_expired`: on a lookup hit, it asks the one TTL rule every cache path shares (`ttl_expired`) whether the entry is stale: older than the TTL, or at once for `ttl=0`, which is never fresh. A stale entry is a miss (`ttl expired`) and recomputes.

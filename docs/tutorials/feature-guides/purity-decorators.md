@@ -366,7 +366,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @9fe07f2d, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -550,7 +550,7 @@ both raises `ValueError` at decoration time.
 
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @cbf80638 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @47196b48 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @cbf80638 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @5af70afb -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method

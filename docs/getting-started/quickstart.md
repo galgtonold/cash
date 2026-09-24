@@ -248,7 +248,7 @@ expensive_function(1, 2)   # second call: instant
 Results that cost more than ~0.1s persist to disk across processes and restarts;
 cheaper ones are kept in memory for the session (see the [cost model](../cost-model.md)).
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7bc7e4ca, cash/object_hashing.py:builtin_hash @bd4210c7 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb, cash/object_hashing.py:builtin_hash @bd4210c7 -->
 ### Pass DataFrames and arrays — they just work
 
 Arguments don't need to be hashable. Cash hashes by **content**, so a DataFrame or
@@ -307,7 +307,7 @@ The answer changed *and* `misses` went up: cash threw the cached result away
 because a function `pipeline` calls indirectly changed. You don't have to
 remember which entries a helper edit reaches.
 
-<!-- claim: cash/decorator/code_identity.py:is_user_module @998fb383 -->
+<!-- claim: cash/decorator/code_identity.py:is_user_module @8bcf4264 -->
 That holds across files: a helper imported from another module of your project
 is followed the same way, with nothing to declare. What cash stops at is
 installed code — `site-packages` and the standard library. If a third-party

@@ -40,7 +40,7 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @1d703750, cash/data_source.py:DataSource.state_token @89498b3e -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @44d428bd, cash/data_source.py:DataSource.state_token @89498b3e -->
 The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
@@ -169,7 +169,7 @@ The warning text reads:
 
 A transiently failing resolver (e.g. a temporary `OSError`) therefore does not break your pipeline, and it never widens the cache either: without the dependency there is no key that could be trusted, so the call pays full compute until the resolver works again.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @bd141dbf -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
 `f.explain()` builds the key with the same code a real call uses (`Cash._build_key`), with its warnings held back, so introspection never emits warnings as a side effect. A resolver the real call would refuse gives a `CacheExplanation` with `reason='key_uncomputable'` and the reason in `details`.
 
 ## Performance
