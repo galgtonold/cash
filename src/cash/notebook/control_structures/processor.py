@@ -213,10 +213,10 @@ class ControlStructureProcessor:
                 # statement's reads are kept (``persist_read_provenance``). A
                 # restored iteration records no read, hence the same condition.
                 # ``for f in files: pd.read_csv(f)`` names no path a reader can
-                # resolve, so without it the read set of every cell below was
-                # unknown after a restart, no writer could be ruled out as
-                # unread, and a table cell under a chart cell re-drew the charts
-                # with everything they read.
+                # resolve, so without it the read set of every cell below is
+                # unknown after a restart and no writer can be ruled out as
+                # unread: a table cell under a chart cell would re-draw the
+                # charts with everything they read.
                 sp.persist_read_provenance(code, files)
         return result
 
@@ -226,8 +226,9 @@ class ControlStructureProcessor:
         The simulation plans a loop as one statement, so that is where the
         planner looks for a writer's provenance. Each body statement ran on
         its own and knew its writes, but ``for kind in KINDS: save_chart(kind)``
-        as a whole had none, and after a restart it was re-fired -- with
-        everything it reads, to redraw charts already on disk.
+        as a whole has none unless recorded here, and after a restart the
+        planner would re-fire it, with everything it reads, to redraw charts
+        already on disk.
         """
         sp = self.statement_processor
         try:
@@ -243,14 +244,14 @@ class ControlStructureProcessor:
         """Keep a loop's outcome for the simulation of a later kernel.
 
         ``control_outcomes`` dies with the kernel, and without it the
-        simulation's lineages for what a loop built disagreed with the
+        simulation's lineages for what a loop built disagree with the
         entries written from them: after a restart nothing downstream of a
-        loop restored, and the loop ran again (see ``control_outcome_key``). A record is trusted instead of a replay, so
-        it is written only for a loop whose outcome is all it did
-        (``_persistable_callees``), together with the lineages of what its
-        callees read. A loop that no longer qualifies deletes its record.
-        Best-effort both ways: without a record the loop is replayed, as it
-        always was.
+        loop restores, and the loop runs again (see ``control_outcome_key``).
+        A record is trusted instead of a replay, so it is written only for a
+        loop whose outcome is all it did (``_persistable_callees``), together
+        with the lineages of what its callees read. A loop that no longer
+        qualifies deletes its record. Best-effort both ways: without a record
+        the loop is replayed.
         """
         sp = self.statement_processor
         key = control_outcome_key(code)
@@ -499,8 +500,7 @@ class ControlStructureProcessor:
 
         Called by BOTH the sync (:meth:`execute_as_single_unit`) and awaited
         (:meth:`process_await_unit`) paths so their lineage update, badge
-        annotation, and clean-traceback line offset can never drift — the drift
-        between a flagged and an unflagged compile path is exactly what produced it.
+        annotation, and clean-traceback line offset can never drift apart.
         """
         # After execution, update lineage for mutated variables
         if metrics.get("status") in (CacheStatus.COMPUTED, CacheStatus.RESTORED):

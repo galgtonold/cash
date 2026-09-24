@@ -5,9 +5,8 @@ an assumed per-statement cost times an iteration count, decided without
 seeing the loop run. That leaves a band where the guess says "decompose" and
 reality disagrees: n below the single-unit threshold, every call below
 ``call_unit._COST_FLOOR_S``, so neither mechanism caches anything while
-per-iteration machinery is charged on every pass. Measured at n=124 on a warm
-rerun against a cash-off arm, cash was SLOWER than not using cash: 0.1ms body
-22ms off vs 215ms on; 2.5ms body 320ms vs 617ms.
+per-iteration machinery is charged on every pass, and cash is slower than no
+cash at all.
 
 This policy MEASURES such a loop and records a verdict; the handler reads the
 verdict back on later runs. Executing a split is the handler's job and the
@@ -32,8 +31,7 @@ logger = logging.getLogger(__name__)
 # Iterations measured before judging, and the split point thereafter.
 # Small on purpose: the head re-runs on every warm pass and per-iteration
 # overhead is exactly what the split removes, so a long head keeps the
-# cost it is meant to eliminate (k=10 measured ~25ms warm on a 0.1ms body
-# against 22ms for cash-off -- no gain at all; k=5 roughly halves it).
+# cost it is meant to eliminate.
 PROBE_ITERS = 5
 
 _UNSET = object()

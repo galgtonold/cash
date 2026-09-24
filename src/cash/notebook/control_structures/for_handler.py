@@ -179,8 +179,8 @@ class ForLoopHandler:
             # `propagate_to_parent` is required, not tidiness. A manual
             # `with FileAccessTracker(...)` is isolated by default, so a
             # plain nested tracker would RECORD this read here and hide it
-            # from the statement-level tracker this loop runs inside --
-            # moving the bug rather than fixing it. Propagating registers
+            # from the statement-level tracker this loop runs inside.
+            # Propagating registers
             # the read with both, which is what the decorator does for a
             # cached call nested inside another.
             iter_code = ast.unparse(node.iter)
@@ -204,10 +204,10 @@ class ForLoopHandler:
             # * this branch is what splits a DIRECT re-run of the cell, which
             #   never goes through the planner at all.
             #
-            # Splitting in only one of them is the bug that reverted three
-            # earlier attempts -- runtime-only left the planner re-running the
-            # whole loop against entries written for halves (stale value),
-            # simulator-only left a plain re-run paying full decomposition.
+            # Splitting in only one of them is wrong either way: runtime-only
+            # leaves the planner re-running the whole loop against entries
+            # written for halves (a stale value), simulator-only leaves a
+            # plain re-run paying full decomposition.
             user_ns = getattr(self.shell, "user_ns", None) or {}
             _verdict_k = self._split_policy.recorded_k(node, iterable, user_ns)
             if _verdict_k is not None:
@@ -395,14 +395,11 @@ class ForLoopHandler:
         # `variable_lineage` is a FLAT, never-popped dict: a nested loop
         # reusing this iteration's target name would overwrite the entry
         # for the rest of this iteration, with nothing to restore it once
-        # the inner loop ends. `loop_vars_scope`'s stack has real scope
-        # discipline (popped when this iteration's body finishes), so
-        # `call_unit._loop_var_digest` sources the digest from there instead
-        # -- see that function's docstring for the live repro that found
-        # this. The `variable_lineage` write below is UNCHANGED and still
-        # needed for its own, separate purpose (bare-Name argument
-        # resolution in the base cache key, `compute_cache_key`'s lineage
-        # ladder) -- this task does not touch that.
+        # the inner loop ends. `loop_vars_scope`'s stack is popped when this
+        # iteration's body finishes, so `call_unit._loop_var_digest` reads
+        # the digest from there. The `variable_lineage` write below serves
+        # bare-Name argument resolution in the base cache key
+        # (`compute_cache_key`'s lineage ladder).
         loop_var_digests: dict[str, str] = {}
         for name, val in bindings.items():
             try:

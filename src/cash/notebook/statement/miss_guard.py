@@ -1,14 +1,12 @@
 """Perpetual-miss guard: stop serialising a statement that can never hit.
 
-**The shape this bounds.** Five independent rounds of user testing each surfaced a
-new instance of one recurring failure: some input hashes *unstably* across runs,
-so the statement's cache key differs every run, so it never hits — yet cash still
-pays the (large) serialisation on every run. The cache can never pay the user
-back, and the statement is net-negative forever. Known instances: a bare
-fit on a DataFrame (-25 s); sampled content-hashing of a large file, which
-destabilises keys across restarts; a ``make_classification``-derived frame that
-poisons downstream caching (-7.9 s). We have conceded we cannot enumerate the
-causes, so this module bounds the *consequence* regardless of cause.
+**The shape this bounds.** When some input hashes *unstably* across runs, the
+statement's cache key differs every run, so it never hits — yet cash still pays
+the (large) serialisation on every run. The cache can never pay the user back,
+and the statement is net-negative forever. Known causes include a bare fit on a
+DataFrame, sampled content-hashing of a large file (which destabilises keys
+across restarts) and a ``make_classification``-derived frame. The causes cannot
+be enumerated, so this module bounds the *consequence* regardless of cause.
 
 **What is and is not guarded.** The guard fires on the perpetual-MISS
 *signature* only: identical source, a cache key that keeps changing, zero hits.
@@ -19,8 +17,7 @@ once, on the run that matters. Net-negative-in-session is that statement's
 normal, healthy state. The discriminator is key CHURN, not cost.
 
 Churn alone over-reaches in one direction, though: five upstream edits in a
-row churn a key too, and that is an ordinary morning of model tuning.
-So the
+row churn a key too, and that is an ordinary morning of model tuning. So the
 processor applies the verdict only to a statement whose write is not cheap
 next to its compute (``StatementStore.write_is_cheap``): a small, slow
 value keeps being written, since its wasted writes cost next to nothing.
@@ -32,12 +29,10 @@ value keeps being written, since its wasted writes cost next to nothing.
   lets a statement recover on its own if its key later stabilises onto an entry
   that already exists.
 * Persists only the *verdict* (guarded / not), and only when it FLIPS. The hot
-  path never touches disk: an earlier change removed a per-cell fsync that cost 8-12 ms a
-  cell, and this must not reintroduce one under a new name. The churn counter is
-  in-memory-only for exactly that reason — persisting it would mean a write per
-  cell. The cost is that a session which accumulates fewer than
-  ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` misses before a restart starts over;
-  the cost of the alternative is the fsync we already paid once to delete.
+  path never touches disk: a write per cell costs milliseconds on every cell. The
+  churn counter is in-memory-only for exactly that reason — persisting it would
+  mean a write per cell. The cost is that a session which accumulates fewer than
+  ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` misses before a restart starts over.
 * Re-probes periodically (see ``REPROBE_EVERY_N_RUNS``). A guard with no escape
   hatch is a new bug, not a fix.
 

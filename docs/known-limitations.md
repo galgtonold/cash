@@ -669,7 +669,7 @@ not running, there is nothing to diverge on and this never triggers.
 **What to do:** avoid editing the same notebook open in two tabs at once, or
 save (`Ctrl+S` / `Cmd+S`) before switching tabs to run a cell.
 
-<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/server_discovery.py:NotebookCellReaders.vscode_backup @0432293d -->
+<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/server_discovery.py:NotebookCellReaders.vscode_backup @f028c2a5 -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
 cells from there instead of the saved `.ipynb` — so editing one cell and running

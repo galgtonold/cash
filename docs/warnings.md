@@ -339,7 +339,7 @@ speaks up once the loss has accumulated past a couple of real seconds *and* its
 per-call overhead exceeds even the largest body time it has seen, so a function
 that is usually fast but occasionally very slow will not be flagged.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @f71a83d3 -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @0e2aaab4 -->
 It needs three calls of a function to judge during the run, and a command-line
 tool that calls each function once per process never gets there — so the same
 test runs again when the process exits, and there one call can count. The

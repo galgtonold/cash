@@ -23,8 +23,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Approximate per-statement overhead in seconds (analysis + cache + capture).
-# Measured empirically: ~8-10ms per process() call.
+# Approximate per-statement overhead in seconds (analysis + cache + capture)
+# of one process() call.
 PER_STMT_OVERHEAD_SEC = 0.008
 
 # Minimum number of iterations before single-unit mode is even considered.
@@ -50,13 +50,11 @@ MIN_OVERHEAD_SEC = 1.0
 # The builtins that compute a BOUND are here too, not only the ones that
 # produce the iterable. `for t in range(0, len(frame), STEP):` is about
 # the commonest loop header there is, and without `len` on this list it
-# was refused the fast path and decomposed per iteration: 627 iterations
-# of four cheap numpy statements took 2.5 s where the same loop with a
-# literal bound took 0.06 s.
+# would be refused the fast path and decomposed per iteration.
 #
 # A name on this list is only trusted while it still IS the builtin -- see
 # `header_safe_to_reevaluate`. And none of these can drain a one-shot
-# iterator unseen any more, because every name the header reads is checked
+# iterator unseen, because every name the header reads is checked
 # for being one; that check, not this list, is what stops `sorted(g)`
 # re-draining `g`.
 PURE_ITER_PRODUCERS = frozenset(
@@ -223,13 +221,10 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
     for sub in ast.walk(iter_node):
         # A one-shot iterator ANYWHERE in the header, not only as the
         # header. The check above only sees the RESULT, and
-        # `sorted(g)` returns a list: the first evaluation drained `g`,
-        # the second got nothing, and the loop ran zero times. Measured
-        # on a 400-item generator: `for x in sorted(g)` and
-        # `for x in list(g)` both left OUT empty, first run, no cache
-        # involved, with a clean EXECUTED badge -- where plain Python
-        # gives 400. A dict lookup, so this costs nothing and runs no
-        # user code.
+        # `sorted(g)` returns a list: the first evaluation drains `g`,
+        # the second gets nothing, and the loop runs zero times, on the
+        # first run and with a clean EXECUTED badge. A dict lookup, so
+        # this costs nothing and runs no user code.
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
             value = user_ns.get(sub.id)
             if value is not None:

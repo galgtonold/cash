@@ -19,11 +19,10 @@ to **no possible execution of the notebook** — cash's cardinal sin.
 handles are carriers too, but they are ALREADY handled — by the consumable
 channel, whose producer re-execution is gated on a per-type divergence probe
 (``has_diverged`` against a cell-entry baseline) so it self-disables on
-``run_all``. Classifying them here as well made this pass re-derive their
-producers UNCONDITIONALLY, which re-initialised cross-cell accumulators and
-regressed 12 integration tests while tripling their runtime. The two channels
-stay disjoint: ``consumables`` owns the drain-position carriers, this table owns
-the ones nothing else classifies.
+``run_all``. Classifying them here as well would make this pass re-derive their
+producers UNCONDITIONALLY, re-initialising cross-cell accumulators. The two
+channels stay disjoint: ``consumables`` owns the drain-position carriers, this
+table owns the ones nothing else classifies.
 
 Classification is by MRO ``module.qualname`` STRING match, mirroring
 ``cacheability_decision._IDENTITY_COUPLED_BASES``: it imports nothing,
@@ -31,18 +30,16 @@ so a notebook without numpy/matplotlib installed pays nothing and cannot break.
 We match BASE classes, not leaves, so subclasses and projections (``Axes3D``,
 a user's ``class MyFig(Figure)``) are covered.
 
-**This table is a coverage floor, not a proof**, and the known gaps are measured
-rather than assumed:
+**This table is a coverage floor, not a proof.** The known gaps:
 
 * ``plt.savefig()`` (as opposed to ``fig.savefig()``) depends on the current
   figure through pyplot's process-global ``Gcf`` registry, so the consuming
   statement's only input is the MODULE ``plt`` and there is no variable edge for
   the planner to follow at all. Not reachable from here.
-* A generic accumulate-then-flush builder (``wb.save``, ``csv.writer``) was
-  probed and does NOT exhibit the defect: being cacheable, its producer is
-  RESTORED rather than re-derived, so its history never goes incoherent. That is
-  why this table stops at the identity-coupled types instead of guessing at a
-  long list of builders.
+* A generic accumulate-then-flush builder (``wb.save``, ``csv.writer``) is not
+  one: being cacheable, its producer is RESTORED rather than re-derived, so its
+  history never goes incoherent. That is why this table stops at the
+  identity-coupled types instead of guessing at a long list of builders.
 """
 
 from __future__ import annotations
@@ -56,11 +53,10 @@ __all__ = ["stateful_carrier_kind", "carrier_kind_from_producer"]
 
 # What a carrier's PRODUCER looks like, for when there is no live object to
 # classify: after a kernel restart ``fig`` is not in the namespace, so
-# ``stateful_carrier_kind(user_ns.get('fig'))`` is None and the history pass
-# went quiet exactly when a plan rebuilds the figure from scratch. Measured:
-# restart, a corrected data file, run
-# the backtest cell -> ``plt.subplots``, ``tight_layout`` and ``savefig`` re-ran
-# without the two ``.plot(ax=...)`` calls, and a wrong chart was written.
+# ``stateful_carrier_kind(user_ns.get('fig'))`` is None, which is exactly when a
+# plan rebuilds the figure from scratch. Without these, a plan after a restart
+# re-runs ``plt.subplots``, ``tight_layout`` and ``savefig`` without the
+# ``.plot(ax=...)`` calls between them, and writes a wrong chart.
 _PRODUCER_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     (re.compile(r"\b(?:plt|pyplot)\s*\.\s*(?:subplots|subplot_mosaic|figure|subplot|axes)\s*\("), "matplotlib Figure"),
     (re.compile(r"\b(?:default_rng|RandomState|Generator|PCG64|MT19937|Philox|SFC64)\s*\("), "numpy Generator"),
@@ -86,15 +82,15 @@ _CARRIER_BASES: Mapping[str, str] = {
     "random.Random": "random.Random",
     # Accumulate-then-flush builders: content is added by mutation and only
     # later written out, so a re-derived-but-unfilled builder writes a blank
-    # artifact over a good one. These two are here rather than in a
-    # longer list of plausible builders because they are the ones that PROVABLY
-    # break refuses to cache them (they are identity-coupled to
-    # pyplot's globals), so the plan RE-EXECUTES the ``plt.subplots()`` that
-    # produces them while the ``ax.bar(...)`` that fills them merely restores.
-    # An ordinary builder (a user's ``Report``, an openpyxl ``Workbook``) is
-    # cacheable, so its producer is restored rather than re-derived and the
-    # incoherence never arises -- measured, not assumed. Adding speculative
-    # entries here is not free: a table hit FORCES a producer re-execution.
+    # artifact over a good one. These two are here rather than a longer
+    # list of plausible builders because cash refuses to cache them (they
+    # are identity-coupled to pyplot's globals), so the plan RE-EXECUTES the
+    # ``plt.subplots()`` that produces them while the ``ax.bar(...)`` that
+    # fills them merely restores. An ordinary builder (a user's ``Report``,
+    # an openpyxl ``Workbook``) is cacheable, so its producer is restored
+    # rather than re-derived and the incoherence never arises. Adding
+    # speculative entries here is not free: a table hit FORCES a producer
+    # re-execution.
     "matplotlib.figure.FigureBase": "matplotlib Figure",  # Figure, SubFigure
     "matplotlib.axes._base._AxesBase": "matplotlib Axes",  # Axes + projections
 }
@@ -114,7 +110,7 @@ def stateful_carrier_kind(value: Any) -> str | None:
     """Return a human-readable carrier kind for *value*, or ``None``.
 
     ``None`` means "no evidence this object carries hidden state a consumer
-    depends on" — the planner then leaves its producer alone, exactly as before.
+    depends on" — the planner then leaves its producer alone.
     """
     if value is None:
         return None

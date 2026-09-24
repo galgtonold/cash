@@ -118,10 +118,9 @@ class ComputeBaselineStore(VersionedJsonStore[float]):
 
 
 def _flush_at_exit(store: ComputeBaselineStore) -> None:
-    # The first measurement is written straight away and the rest are
-    # throttled, so this only catches the last few seconds of a session --
-    # and a kernel killed outright runs no hook at all. Cheap insurance,
-    # never relied upon.
+    # The magics flush the store at the end of every cell, so this only
+    # catches what was recorded since -- and a kernel killed outright runs no
+    # hook at all. Cheap insurance, never relied upon.
     with contextlib.suppress(Exception):
         atexit.register(store.flush)
 

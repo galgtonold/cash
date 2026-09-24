@@ -80,11 +80,10 @@ _NOTEBOOK_PATH_CACHE_TTL: float = 300.0  # seconds (5 minutes)
 #
 # Discovery that FAILS is even more expensive than one that succeeds: a stale or
 # dead Jupyter runtime entry makes ``ipynbname`` / ``list_running_servers`` block
-# on a network round-trip until it times out, then returns nothing.  The success
-# cache above never covered this — every failed lookup re-probed from scratch —
-# and the upstream checker resolves the path many times per cell, so a single
-# ``run_all`` under slow-failing discovery paid that timeout dozens of times
-# (measured ~78s to cache ``z = 1 + 1``).
+# on a network round-trip until it times out, then returns nothing.  The
+# upstream checker resolves the path many times per cell, so without this cache
+# a single ``run_all`` under slow-failing discovery would pay that timeout
+# dozens of times.
 #
 # We memoize the failure too, but with a MUCH shorter TTL than the success case:
 # long enough to dedupe the many resolves within one ``run_all`` down to a single
@@ -113,8 +112,8 @@ def _a_live_reader_can_answer() -> bool:
     anyway.
 
     VS Code is deliberately absent. Its backup reader is reached only when
-    ``_try_vscode_path()`` found a path, in which case ``get_notebook_path()``
-    returned that path and this advisory was never on the table.
+    ``_try_vscode_path()`` finds a path, in which case ``get_notebook_path()``
+    returns that path and this advisory never applies.
     """
     try:
         return live_cells.latest_cells() is not None or in_colab()
@@ -314,13 +313,11 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
                     if session["kernel"]["id"] == kernel_id:
                         # ``notebook_dir`` is the CLASSIC notebook server's key.
                         # ``jupyter_server`` (i.e. every current JupyterLab) calls
-                        # it ``root_dir``, so indexing ``notebook_dir`` raised a
-                        # KeyError that this except tuple swallowed -- AFTER a
-                        # perfectly successful 200 response. Discovery then
-                        # returned None, upstream dependency tracking went off for
-                        # the whole session, and an edited-but-not-re-run cell fed
-                        # a stale value downstream with no error. Prefer the modern
-                        # key and keep the legacy one as a fallback. Same for the
+                        # it ``root_dir``. Indexing only ``notebook_dir`` would
+                        # fail AFTER a successful 200 response, and discovery
+                        # returning None turns upstream dependency tracking off
+                        # for the whole session. Prefer the modern key and keep
+                        # the legacy one as a fallback. Same for the
                         # session path: ``session['path']`` is current, the nested
                         # ``notebook`` dict is deprecated and may disappear.
                         notebook_path = session.get("path") or session.get("notebook", {}).get("path")
@@ -333,10 +330,10 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
                             continue
                         return os.path.join(root_dir, notebook_path)
         except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
-            # Deliberately no longer catches KeyError blind. A missing key is a
-            # SCHEMA mismatch, not a transport failure, and reporting it as
-            # "failed to query" sends the reader hunting the network while the
-            # request had actually returned 200.
+            # KeyError is handled apart, below. A missing key is a SCHEMA
+            # mismatch, not a transport failure, and reporting it as "failed
+            # to query" sends the reader hunting the network while the
+            # request actually returned 200.
             logger.debug(
                 "[UTILS] Failed to query sessions from server %s: %s",
                 server.get("url", "?"),
@@ -356,14 +353,12 @@ def _kernel_id_from_connection_file(connection_file: str | None) -> str | None:
 
     Returns ``None`` — never raises — for any filename that carries no id.
     Under bare nbclient / papermill / nbconvert the connection file can be a
-    plain ``kernel.json`` with no ``-``, and indexing the split blindly
-    (``.split('-', 1)[1]``) raised an ``IndexError`` that was NOT in the caller's
-    except tuple. It escaped ``get_notebook_path``, disabled caching for the whole
-    run, and printed "Cash auto-caching failed: list index out of range" on EVERY
-    cell instead of cash's intended one-time "notebook not found" disclosure.
+    plain ``kernel.json`` with no ``-``. An exception here would escape
+    ``get_notebook_path`` and disable caching for the whole run, with an error
+    on every cell instead of the one-time "notebook not found" disclosure.
 
-    Semantics are otherwise identical to the original expression: split on the
-    FIRST ``-`` (so a UUID's own dashes are preserved) and drop at the first ``.``.
+    Splits on the FIRST ``-`` (so a UUID's own dashes are preserved) and drops
+    everything from the first ``.``.
     """
     base = os.path.basename(connection_file or "")
     _, sep, rest = base.partition("-")
@@ -781,9 +776,8 @@ class NotebookCellReaders:
         Memoized against both the backup's and the file's signature so that
         the ~3 calls a single cell run makes (the magic once, the upstream
         checker twice) pay for the backup-directory scan and the settle wait
-        at most once per actual change, not once per call -- an unmemoized
-        version was measured to turn the settle wait's 1.5s cap into up to 3x
-        that across one run, since each call waited independently.
+        at most once per actual change, not once per call: unmemoized, each
+        call would wait out the settle cap on its own.
         """
         if not _in_vscode():
             return None

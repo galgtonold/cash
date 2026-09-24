@@ -2,14 +2,13 @@
 
 A loop that neither caching mechanism covers -- too few iterations for the
 single-unit heuristic, too cheap per call for ``call_unit`` -- caches nothing
-while still paying per-iteration decomposition overhead on every pass. At
-n=124 that made cash SLOWER than not using cash (0.1ms body: 22ms off vs
-215ms on). Such a loop is learned on one run and thereafter executed as two
-statements: a short decomposed head and its remainder as one unit.
+while still paying per-iteration decomposition overhead on every pass, which
+can make cash slower than no cash at all. Such a loop is learned on one run
+and thereafter executed as two statements: a short decomposed head and its
+remainder as one unit.
 
 **The simulator is what makes that happen.** This is the single most
-important fact about this module, and three reverted attempts came from not
-knowing it. ``upstream/`` does not merely predict what the runtime will do
+important fact about this module. ``upstream/`` does not merely predict what the runtime will do
 for metrics or key parity -- the re-execution planner executes *the
 statements the simulator modelled*. Split the simulator's model and the
 runtime follows; split only the runtime and the planner re-runs the whole

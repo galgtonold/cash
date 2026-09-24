@@ -5,13 +5,10 @@ caching. The decorator deliberately does not: it is an explicit instruction
 from the user and second-guessing it is not its job. But that leaves a gap
 where cash can make code *slower*, every call, and never say so.
 
-Measured on the case that motivated this -- a 153 MiB DataFrame passed to a
-function that sums one column::
+A 153 MiB DataFrame passed to a function that sums one column, for example,
+costs about 390 ms to hash for the key against 11 ms of work: 34x slower.
 
-    key hash   389.59 ms
-    the work    11.31 ms      -> 34x slower, on every call
-
-And it really is every call, for anything cash cannot check cheaply for
+And that is every call, for anything cash cannot check cheaply for
 changes: outside a notebook a cached result's lineage tag is not trusted (it
 is never updated when the object is mutated), so a numpy array, a model or a
 pandas frame without copy-on-write is re-hashed from scratch each time. The
@@ -87,8 +84,8 @@ class _FunctionLedger:
     def typical_overhead(self) -> float:
         """What one call usually costs: a hit's overhead when there are hits,
         a miss's otherwise. A miss pays its store once per key; averaged in, one
-        slow write under load made a hasher that was the whole cost of every
-        hit read as "almost none of it is the key"."""
+        slow write under load would make a hasher that is the whole cost of
+        every hit read as "almost none of it is the key"."""
         if self.hits:
             return self.hit_overhead / self.hits
         return self.miss_overhead / max(1, self.calls)
@@ -166,9 +163,8 @@ class EffectivenessLedger:
         # body time seen. If cash still costs more than the best case it could
         # ever save, the verdict does not depend on which call you look at.
         # Typical, not the mean: the first call carries once-per-process work
-        # (source analysis, the first write), and on windows-3.14 one 0.5s
-        # miss averaged over 3 calls convicted a 103ms body whose hits cost
-        # 12ms -- every one of them saving 90ms.
+        # (source analysis, the first write), and one slow miss averaged over
+        # a few calls would convict a body whose every hit saves time.
         per_call_overhead = led.typical_overhead()
         best_case_saving = max(led.body_samples)
         if per_call_overhead <= best_case_saving:
@@ -182,10 +178,10 @@ class EffectivenessLedger:
 
         `record` waits for `MIN_OBSERVATIONS` calls of a function, which a
         command-line tool that calls each function once per process never
-        reaches: its parser was a net loss of seconds on every run, and nothing
-        ever said so. At the end of the run one call is allowed to
-        count -- under the same bar: seconds of real loss, and overhead above
-        the largest body time seen.
+        reaches, so a parser that loses seconds on every run would never be
+        reported. At the end of the run one call is allowed to count -- under
+        the same bar: seconds of real loss, and overhead above the largest body
+        time seen.
         """
         out: list[tuple[str, str]] = []
         # Functions losing, each under the bar: ten of them losing 0.4-0.9 s
