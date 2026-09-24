@@ -113,7 +113,7 @@
 
     <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell }
-    # first cell, on its own
+    # first cell
     import cash
     %cash_on
     ```

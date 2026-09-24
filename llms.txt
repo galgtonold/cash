@@ -3,8 +3,8 @@
 > A Python cache that re-runs only what changed. Two paths: `@cash.cache` caches
 > a function call in scripts and modules, keyed on its arguments, its source and
 > the source of the helpers it calls, and writes every result to disk.
-> In a notebook, a first cell holding only `import cash` and `%cash_on` makes
-> every statement below it cache itself, keyed on its code, its inputs and the
+> In a notebook, `import cash` and `%cash_on` in the first cell make every
+> statement below it cache itself, keyed on its code, its inputs and the
 > files it reads.
 
 ## If you are a coding agent
@@ -13,7 +13,7 @@ Read this page first. `cash.help()` returns the same text in a running kernel:
 
 - [Using cash — a guide for coding agents](docs/for-coding-agents.md)
 
-For headless notebook runs (papermill, nbconvert), the first cell is exactly
+For headless notebook runs (papermill, nbconvert), the first cell is
 `import cash`, `%cash_on` and `%cash_badge print`. The default badge is an HTML
 widget that headless runs strip, and statements in the `%cash_on` cell are
 never cached.

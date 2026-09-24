@@ -22,7 +22,7 @@ returns.
   on its arguments, the function's source and the source of the helpers it
   calls. Every result is written to disk (`.cash/` in the project), so a new
   process gets it back.
-- **Notebook:** the first cell is exactly:
+- **Notebook:** the first cell is:
 
   ```
   import cash
@@ -30,7 +30,9 @@ returns.
   %cash_badge print
   ```
 
-  Nothing else goes in it: statements in the `%cash_on` cell are never cached.
+  To change a setting, add `cash.configure(...)` before `%cash_on`. Nothing
+  that does work goes in this cell: statements in the `%cash_on` cell are
+  never cached.
   Put imports, paths and constants in the next cell. Each statement below is
   keyed on its code, its input variables and the files it reads; editing a
   cell or an input re-runs what depends on it.
@@ -42,7 +44,7 @@ returns.
 - Cash cannot find the `.ipynb` in a headless run. It warns
   `NOTEBOOK-NOT-FOUND` and turns off upstream tracking: a variable defined in
   the `%cash_on` cell then makes every statement that reads it `NOT CACHED`.
-  That is why the first cell holds nothing else.
+  That is why the first cell does no work.
 
 The text badge, one line per statement:
 

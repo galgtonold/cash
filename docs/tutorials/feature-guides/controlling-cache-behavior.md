@@ -18,8 +18,7 @@ What cash already refuses or caches without being told is in
 before adding a directive: you do not need `no-cache` on a file write, a POST or a
 `datetime.now()`.
 
-Start the notebook as usual, with `import cash` and `%cash_on` alone in the
-first cell:
+Start the notebook with the usual first cell:
 
 ```python { .nb-cell }
 import cash

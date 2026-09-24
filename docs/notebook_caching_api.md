@@ -11,13 +11,14 @@ to turn it on, what is and is not cached, and where the cache lives.
 
 ## Turn it on
 
-Put these two lines alone in the first cell:
+The first cell is the setup cell:
 
 ```python { .nb-cell }
 import cash
 %cash_on
 ```
 
+It holds `import cash`, then any `cash.configure(...)` call, then `%cash_on`.
 Nothing in the `%cash_on` cell is cached, so load data and do work in the cells
 below it. `import cash` registers the magics. `%cash_off` switches caching off
 again. With `CASH_DISABLE=1` set, `%cash_on` says so and does nothing.
@@ -154,8 +155,8 @@ To let colleagues or CI reuse your results, see
 
 Under papermill, nbconvert or CI:
 
-- Run `%cash_badge print` in the second cell for a plain-text badge that reads
-  well in logs.
+- Add `%cash_badge print` to the first cell, after `%cash_on`, for a
+  plain-text badge that reads well in logs.
 - Expect one `NOTEBOOK-NOT-FOUND` warning. With no Jupyter server there is no
   notebook file to read, so cash does not re-check earlier cells. A
   top-to-bottom run does not need that. In JupyterLab or VS Code the warning

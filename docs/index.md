@@ -44,8 +44,7 @@ slow_square(4)           # cache hit: instant, also in the next process
 
 ## Notebook
 
-Put `import cash` and `%cash_on` alone in the first cell, and work in the cells
-below it:
+Make this the first cell, and work in the cells below it:
 
 ```python { .nb-cell }
 import cash

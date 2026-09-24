@@ -29,8 +29,8 @@ lists them in the notebook, and `%cash_help NAME` prints one magic's usage.
 
 **Usage:** `%cash_on [ttl=N]`
 
-Caches every cell run after this one. Put it with `import cash`, alone, in the
-first cell: nothing in that cell is cached.
+Caches every cell run after this one. It goes in the first cell, after
+`import cash` (see [Turn it on](notebook_caching_api.md#turn-it-on)).
 
 - `ttl=N`: every stored result expires after `N` seconds. A `# @cash:ttl=N` on a
   statement overrides it. Any other argument, or a value that is not a whole

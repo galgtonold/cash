@@ -11,7 +11,7 @@ tour.
 
 ## 1. Turn cash on
 
-Make this the first cell, with nothing else in it:
+Make this the first cell:
 
 ```python { .nb-cell }
 import cash
@@ -19,9 +19,10 @@ import cash
 ```
 
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
-cash starts tracking after this cell, so anything else you put in it is never
-cached. To skip this cell in every new kernel, run `cash autoload on` once in a
-terminal.
+This is the setup cell: `import cash`, then any `cash.configure(...)` call, then
+`%cash_on`. cash starts tracking after this cell, so work you put in it is never
+cached. Do your work in the cells below. To skip this cell in every new kernel,
+run `cash autoload on` once in a terminal.
 
 ## 2. Write your code in the cells below
 

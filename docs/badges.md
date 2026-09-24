@@ -224,7 +224,7 @@ Names bound in the `%cash_on` cell itself are handled: imports, constants and
 paths get their lineage from the notebook, and a load such as
 `df = pd.read_parquet(...)` is run once more under tracking by the first cell
 that needs it (an `^EXECUTED` upstream row). To avoid reading that file twice,
-keep `import cash` and `%cash_on` alone in the first cell and load data below.
+load data in a cell below the first cell.
 
 ## See also
 

@@ -28,8 +28,8 @@ You use it in one of two ways:
 
 - **In scripts, services and libraries:** decorate a slow function with
   `@cash.cache`.
-- **In a notebook:** put `import cash` and `%cash_on` alone in the first cell,
-  and every statement below it caches itself.
+- **In a notebook:** put `import cash` and `%cash_on` in the first cell, and
+  every statement below it caches itself.
 
 **What a restore costs:** a 100 MB DataFrame comes back from disk in **70 ms** on the machine the [benchmark table](https://cash-lib.readthedocs.io/en/latest/benchmarks/) was measured on. Your hardware and disk change that number, so the benchmarks page shows how to measure your own. cash quotes this rather than a speedup, because the speedup depends on how long your code takes to compute.
 

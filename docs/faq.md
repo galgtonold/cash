@@ -74,12 +74,12 @@
 ## Notebook
 
 ??? question "Do I need to change my notebook?"
-    No. Put `import cash` and `%cash_on` alone in the first cell; the cells
-    below cache as they are.
+    No. Add `import cash` and `%cash_on` as the first cell; the cells below
+    cache as they are.
 
 ??? question "Why is nothing in my first cell cached?"
     Statements in the cell that runs `%cash_on` are never cached: cash starts
-    tracking after it. Keep that cell to `import cash` and `%cash_on`.
+    tracking after it. Do your work in the cells below it.
 
 ??? question "How do I turn it on for every notebook?"
     Run `cash autoload on` once in a terminal. See
