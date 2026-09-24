@@ -17,6 +17,10 @@ Two layers:
 
 Every notebook is either on ``RUNNABLE`` or in ``NOT_RUN`` with a reason, and
 a test fails when a new one is on neither, so nothing is silently left out.
+
+The examples link to the published docs by absolute URL, which ``mkdocs build``
+never checks, so a test resolves each such link to a page under ``docs/`` and,
+when it names one, to a heading anchor on that page.
 """
 
 from __future__ import annotations
@@ -25,12 +29,14 @@ import json
 import os
 import re
 import shutil
+import unicodedata
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "examples"
+DOCS = REPO / "docs"
 
 #: Run by the execution test: offline, small data, well under a minute each.
 RUNNABLE = [
@@ -109,6 +115,46 @@ def test_no_misleading_leftovers(path: Path):
             if re.search(pattern, src, re.MULTILINE):
                 problems.append(f"code cell {i}: {why}")
     assert not problems, f"{_rel(path)}:\n  " + "\n  ".join(problems)
+
+
+_DOCS_URL = re.compile(
+    r"https://cash-lib\.readthedocs\.io/en/latest/(?P<page>[\w/.-]*?)/?(?:#(?P<anchor>[\w-]+))?(?=[)\s\"'>]|$)"
+)
+_HEADING = re.compile(r"^#{1,6}\s+(?P<text>.+?)\s*(?:\{[^}]*#(?P<id>[\w-]+)[^}]*\})?\s*$", re.MULTILINE)
+
+
+def _slug(text: str) -> str:
+    """python-markdown's default heading slug, as mkdocs uses it."""
+    text = unicodedata.normalize("NFKD", re.sub(r"<[^>]+>", "", text)).encode("ascii", "ignore").decode()
+    return re.sub(r"[-\s]+", "-", re.sub(r"[^\w\s-]", "", text).strip().lower())
+
+
+_RAW_ID = re.compile(r"<a\s+(?:name|id)=\"(?P<id>[\w-]+)\"")
+
+
+def _anchors(md: Path) -> set[str]:
+    """Heading anchors (slug or ``{ #id }``) and raw ``<a id>`` anchors on a page."""
+    text = md.read_text(encoding="utf-8")
+    headings = {m.group("id") or _slug(m.group("text")) for m in _HEADING.finditer(text)}
+    return headings | {m.group("id") for m in _RAW_ID.finditer(text)}
+
+
+def _example_files() -> list[Path]:
+    return [p for p in sorted(EXAMPLES.rglob("*")) if p.suffix in (".ipynb", ".md", ".py")]
+
+
+def test_docs_links_in_the_examples_resolve():
+    broken = []
+    for path in _example_files():
+        for m in _DOCS_URL.finditer(path.read_text(encoding="utf-8")):
+            page = m.group("page")
+            candidates = [DOCS / "index.md"] if not page else [DOCS / f"{page}.md", DOCS / page / "index.md"]
+            md = next((c for c in candidates if c.is_file()), None)
+            if md is None:
+                broken.append(f"{_rel(path)}: no docs page for {m.group(0)}")
+            elif m.group("anchor") and m.group("anchor") not in _anchors(md):
+                broken.append(f"{_rel(path)}: no heading #{m.group('anchor')} on {md.relative_to(REPO)}")
+    assert not broken, "\n".join(broken)
 
 
 def _unexpected_stderr(nb) -> list[str]:
