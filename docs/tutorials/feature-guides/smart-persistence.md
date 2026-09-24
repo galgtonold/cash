@@ -90,7 +90,7 @@ holds while the cell runs: a statement whose every output a later statement of
 the cell writes again (`sales = sales.merge(...)` three times over) keeps its
 result in RAM, and `# @cash:persist` still writes it.
 
-<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator.plan_cell_run @08f1e9d7, cash/notebook/ipython/cell_executor.py:_writes_only_into_its_own_objects @9faf10be -->
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator.plan_cell_run @e6aa3247, cash/notebook/ipython/cell_executor.py:_writes_only_into_its_own_objects @9faf10be -->
 Running that cell again after a restart does not rebuild the versions in
 between. Cash simulates the cell's run of assignments the way it simulates a
 cell above, restores the last versions it has on disk, and runs only what they

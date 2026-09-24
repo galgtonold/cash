@@ -67,7 +67,7 @@ already loaded, and otherwise from what that import bound when it last ran, whic
 Cash records. Without them the key never matched, and every statement that called
 a notebook function was re-run after a restart, along with everything it needed.
 
-<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @f4ee5f5c -->
+<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._propagate_import_lineage @df5c7000 -->
 A module's lineage is the lineage of the import that bound it. Some imports run
 without Cash: the cell that turns Cash on is already running when `%cash_on`
 executes, so the imports after it in that cell run uncached. The upstream check

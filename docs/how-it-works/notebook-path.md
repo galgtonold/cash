@@ -266,7 +266,7 @@ line of the chart, or an upstream edit to the data it writes. Writes a C
 extension makes without going through Python's `open` are not seen; such a
 writer is re-run as before.
 
-<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @42142a9a, cash/notebook/upstream/file_writers.py:FileWriterScheduler.note_stale_exports @cbaec54b -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @5c48f391, cash/notebook/upstream/file_writers.py:FileWriterScheduler.note_stale_exports @4a56bc8c -->
 A writer whose file the cell you run does not read is left alone, as a plain
 kernel leaves a cell you did not run. "Does not read" has to be provable: a
 path in the code, a name bound to one, or a list of paths a loop or
