@@ -47,7 +47,7 @@ It's applied with `re.search` (not `re.match`), so the directive can appear **an
 <!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
 !!! warning "One consumer reads own-line comments only"
     That is true of the *parser*. It is not true of everything downstream of it.
-    `RngRewind._opts_out_of_rng_rewind` — the check that decides whether
+    `UpstreamChecker._opts_out_of_rng_rewind` — the check that decides whether
     `# @cash:no-cache` also switches off the RNG rewind (see "A value can be
     frozen without being cached", below) — walks the cell's lines and skips any
     that does not start with `#` once stripped, so it never sees a trailing

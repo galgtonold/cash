@@ -2,9 +2,9 @@
 
 A seed or a draw binds no variable, so the simulation never links a draw to
 the seed it depends on. :class:`RngRewind` supplies that link for the upstream
-check: it re-runs a stale seed and the draws after it (ADR-017), brings in the
+check: it re-runs a stale seed and the draws after it, brings in the
 chain ahead of a re-executed draw, and puts the stream back to the position a
-top-to-bottom run gives just before the cell (ADR-018).
+top-to-bottom run gives just before the cell.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class RngRewind:
-    """The upstream check's handling of the random stream (ADR-017, ADR-018)."""
+    """The upstream check's handling of the random stream."""
 
     def __init__(self, shell: ShellProtocol, tracking_state: TrackingState) -> None:
         self.shell = shell
@@ -44,7 +44,7 @@ class RngRewind:
         """*statements*, with what re-establishes the random stream the cell
         draws from in front; and which of those were added for that alone.
 
-        ADR-017: a bare ``np.random.seed(N)`` binds no variable, so the
+        A bare ``np.random.seed(N)`` binds no variable, so the
         simulator never links it to a downstream draw. An upstream seed cell
         edited but not re-run is re-run first -- re-running a seed is
         idempotent -- and a draw re-executed because an ORDINARY input changed
@@ -62,7 +62,7 @@ class RngRewind:
         statements: list[str],
         current_cell_idx: int | None,
     ) -> list[str]:
-        """Schedule an edited-but-not-rerun seed cell ahead of a draw (ADR-017).
+        """Schedule an edited-but-not-rerun seed cell ahead of a draw.
 
         When the current cell draws from a global RNG and an UPSTREAM cell seeds
         that module with source that has not executed this session (an edited or
@@ -115,7 +115,7 @@ class RngRewind:
         statements: list[str],
         current_cell_idx: int | None,
     ) -> list[str]:
-        """Re-establish the RNG stream before a *re-executed* upstream draw (ADR-017).
+        """Re-establish the RNG stream before a *re-executed* upstream draw.
 
         The RNG state is a side-effect dependency a draw consumes, but it binds no
         variable, so the lineage graph carries no edge from a draw back to its
@@ -297,7 +297,7 @@ class RngRewind:
         """RNG modules this cell draws from — statically OR by prior observation.
 
         Static analysis sees ``np.random.rand()`` in the cell; the observed set
-        (ADR-018) adds modules a call like ``model.fit()`` changed at runtime, so
+        adds modules a call like ``model.fit()`` changed at runtime, so
         an indirect draw is treated like a direct one on re-run.
         """
         modules = set(get_drawing_rng_modules(cell_code))
@@ -341,7 +341,7 @@ class RngRewind:
         notebook_cells: list[str],
         current_cell_idx: int | None,
     ) -> None:
-        """Restore the RNG to the state it holds just before this cell (ADR-018).
+        """Restore the RNG to the state it holds just before this cell.
 
         If the current cell draws, find the nearest UPSTREAM cell that touched the
         RNG (seed or draw) and whose post-state we recorded this session, and
