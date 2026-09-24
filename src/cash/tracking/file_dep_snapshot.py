@@ -51,6 +51,7 @@ from typing import Any, NamedTuple
 from cash._active import active_config
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
+from cash.remote_source import RemoteFileDataSource
 from cash.tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -469,9 +470,6 @@ def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
     entry with no dependency at all - a permanent silent stale hit, the bug this
     whole mechanism exists to prevent.
     """
-    # Local: import cycle tracking.file_dep_snapshot -> remote_source -> tracking.file_dep_snapshot.
-    from cash.remote_source import RemoteFileDataSource
-
     snapshot: dict[str, dict[str, Any]] = {}
     for url in urls:
         entry: dict[str, Any] = {_REMOTE_MARKER: True}
@@ -519,9 +517,6 @@ def remote_dep_is_fresh(url: str, stored: dict[str, Any]) -> tuple[bool, str | N
     a token that could not be resolved in the first place - is stale, so the
     call recomputes rather than serving a result nobody could verify.
     """
-    # Local: import cycle tracking.file_dep_snapshot -> remote_source -> tracking.file_dep_snapshot.
-    from cash.remote_source import RemoteFileDataSource
-
     stored_token = stored.get("hash")
     if stored_token is None:
         return False, "remote-unresolved"
