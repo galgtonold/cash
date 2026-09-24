@@ -344,3 +344,79 @@ def test_every_pending_fence_entry_still_matches_a_fence():
             if f"pending page edit: {reason}" not in reasons:
                 stale.append(f"{rel}: {prefix!r}")
     assert not stale, "remove these PENDING_FENCES entries from tests/docs/_harness.py:\n  " + "\n  ".join(stale)
+
+
+# The docs conftest caps time.sleep at 1 ms, so nothing here is slow enough to
+# clear cash's cost floor; ``# @cash:persist`` caches the statement regardless.
+_BADGE_PAGE = """# Badges
+
+```python { .nb-cell }
+import time
+%cash_on
+```
+
+```python { .nb-cell }
+def square(n):
+    return n * n
+```
+
+{annotation}
+```python {{ .nb-cell }}
+# @cash:persist
+value = square(3)
+```
+"""
+
+
+def _badge_page(tmp_path, annotation: str) -> Path:
+    page = tmp_path / "badges.md"
+    page.write_text(_BADGE_PAGE.replace("{annotation}", annotation).replace("{{", "{").replace("}}", "}"))
+    return page
+
+
+def test_expect_badge_passes_when_the_badge_matches(tmp_path):
+    from tests.docs._harness import run_page
+
+    page = _badge_page(tmp_path, "<!-- test:expect-badge first=EXECUTED rerun=CACHED -->")
+    result = run_page(page)
+    assert result.tested_fences == 3
+
+
+def test_expect_badge_fails_when_the_badge_differs(tmp_path):
+    from tests.docs._harness import PageBadgeError, run_page
+
+    page = _badge_page(tmp_path, "<!-- test:expect-badge rerun=EXECUTED -->")
+    with pytest.raises(PageBadgeError, match="rerun run: the badge reads CACHED, the page expects EXECUTED"):
+        run_page(page)
+
+
+def test_expect_badge_rejects_an_unknown_word(tmp_path):
+    page = _badge_page(tmp_path, "<!-- test:expect-badge HIT -->")
+    with pytest.raises(ValueError, match="bad test:expect-badge token 'HIT'"):
+        extract_fences(page)
+
+
+def test_expect_badge_reads_past_other_annotations(tmp_path):
+    page = _badge_page(tmp_path, "<!-- test:expect-badge EXECUTED -->\n<!-- test:expect-warning -->")
+    fence = extract_fences(page)[2]
+    assert fence.expect_badge == {"first": "EXECUTED"}
+    assert fence.expect_warning
+
+
+def test_rerun_mode_fails_a_cell_that_executes_again(tmp_path, monkeypatch):
+    """CASH_DOCS_RERUN_NB_CELLS=1: a cell run twice must take something from the cache."""
+    from tests.docs import _harness
+
+    monkeypatch.setattr(_harness, "_RERUN_NB_CELLS", True)
+    cheap = _badge_page(tmp_path, "").read_text().replace("# @cash:persist\n", "")
+    page = tmp_path / "cheap.md"
+    page.write_text(cheap)
+    with pytest.raises(_harness.PageBadgeError, match="rerun run: the badge reads EXECUTED"):
+        _harness.run_page(page)
+
+    page.write_text(
+        cheap.replace(
+            "```python { .nb-cell }\nvalue", "<!-- test:expect-badge rerun=EXECUTED -->\n```python { .nb-cell }\nvalue"
+        )
+    )
+    assert _harness.run_page(page).tested_fences == 3
