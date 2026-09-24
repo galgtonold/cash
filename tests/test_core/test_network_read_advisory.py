@@ -15,6 +15,8 @@ else sent to ``execute`` is a write.
 
 from __future__ import annotations
 
+import contextlib
+import gc
 import http.server
 import sqlite3
 import threading
@@ -28,6 +30,22 @@ from cash.analysis.purity_analyzer import ISSUE_NETWORK_READ, PurityAnalyzer
 from cash.exceptions import CashImpureFunctionError
 
 pytestmark = [pytest.mark.timeout(120)]
+
+
+@pytest.fixture(autouse=True)
+def no_connection_is_left_open():
+    """Each test closes the connections it opens. From Python 3.13 an unclosed
+    ``sqlite3.Connection`` warns when it is freed, and it is freed only by a
+    garbage collection, whenever that runs: its ResourceWarning then lands in
+    whichever test is recording warnings, which fails a test that expects
+    none. Collecting here makes a leak fail the test that made it, on every
+    platform."""
+    yield
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        gc.collect()
+    leaked = [str(w.message) for w in rec if issubclass(w.category, ResourceWarning)]
+    assert not leaked, leaked
 
 
 def _codes(record):
@@ -151,16 +169,19 @@ def _connect():
 
 
 def query_elsewhere():
-    return _connect().execute("SELECT 1").fetchone()[0]
+    with contextlib.closing(_connect()) as con:
+        return con.execute("SELECT 1").fetchone()[0]
 
 
+# ``with sqlite3.connect(...) as con`` commits but does not close: closing()
+# does.
 def count_rows(path):
-    with sqlite3.connect(path) as con:
+    with contextlib.closing(sqlite3.connect(path)) as con:
         return con.execute("SELECT count(*) FROM t").fetchone()[0]
 
 
 def add_row(path):
-    with sqlite3.connect(path) as con:
+    with contextlib.closing(sqlite3.connect(path)) as con, con:
         con.execute("INSERT INTO t VALUES (1)")
     return 1
 
@@ -168,7 +189,7 @@ def add_row(path):
 @pytest.fixture
 def db(tmp_path):
     path = str(tmp_path / "rows.db")
-    with sqlite3.connect(path) as con:
+    with contextlib.closing(sqlite3.connect(path)) as con, con:
         con.execute("CREATE TABLE t (x)")
     return path
 
@@ -191,7 +212,7 @@ def test_a_sqlite_file_the_body_opens_is_already_in_the_key(c, db):
     cached = c.cache(count_rows)
     rec = _call(cached, db)
     assert _codes(rec) == [], _codes(rec)
-    with sqlite3.connect(db) as con:
+    with contextlib.closing(sqlite3.connect(db)) as con, con:
         con.execute("INSERT INTO t VALUES (1)")
     assert cached(db) == 1
 
