@@ -1,101 +1,78 @@
-# Exceptions & warnings
+# Exceptions and warnings
 
-The exceptions and warnings Cash exports from the top-level `cash` module.
-
-A few internal warnings live on their own submodule and are not re-exported —
-`CashNotebookDiscoveryWarning` (raised when Jupyter path discovery fails and
-upstream tracking degrades) is importable from
-`cash.notebook.server_discovery`, not from `cash`.
-
-This page is the class hierarchy. For what an individual warning *means* and
-what to do about it, every warning carries a diagnostic code — look it up in
+For both paths: every exception and warning class, and how to filter
+warnings. What each warning code means, and what to do about it, is on
 [Warnings](../warnings.md).
-
-## Imports
 
 ```python
 from cash import (
-    # Exceptions
-    CashError,
-    CacheBackendError, CacheSerializationError,
-    DependencyNotFoundError,
-    AmbiguousCellError, UpstreamStateError, CacheKeyComputationError,
-    ForwardReferenceError,
-    CashImpureFunctionError,
-    # Warnings
-    CashWarning,
-    CashCacheIneffectiveWarning, CashImpurityWarning,
-    CashCacheStoreFailedWarning,
-    CashRandomnessWarning, CashUpstreamSyntaxWarning,
+    CashError, CacheBackendError, CacheSerializationError,
+    DependencyNotFoundError, CashImpureFunctionError,
+    AmbiguousCellError, UpstreamStateError, ForwardReferenceError,
+    CacheKeyComputationError,
+    CashWarning, CashCacheIneffectiveWarning, CashImpurityWarning,
+    CashCacheStoreFailedWarning, CashRandomnessWarning,
+    CashUpstreamSyntaxWarning,
 )
 ```
 
-Every exception and warning Cash produces is reachable from the
-top-level `cash` module, except the internal warnings named at the top of
-this page. `CashError` and `CashWarning` are the
-inheritance roots — see the hierarchies below for filtering recipes.
-
 <!-- claim: cash/exceptions.py:__all__ @7e2c7a88 broad="the page claims to be the COMPLETE hierarchy, which is a claim about the whole module's exports" -->
-## Exception hierarchy
+## Exceptions
 
-```text
-Exception
-└── CashError                          — base for everything Cash raises
-    ├── CacheBackendError              — backend I/O failures
-    ├── CacheSerializationError        — pickle / serialize round-trip failed
-    ├── CacheKeyComputationError       — cache key build failed (notebook)
-    ├── CashImpureFunctionError        — @cash.cache(strict=True) saw issues
-    ├── AmbiguousCellError             — notebook cell cannot be identified
-    ├── ForwardReferenceError          — a cell reads what a later cell binds
-    ├── UpstreamStateError             — upstream cell state unrestorable
-    └── DependencyNotFoundError        — optional backend extra missing
-        (also ImportError so existing handlers still match)
-```
+Every exception derives from `CashError`, so `except cash.CashError`
+catches them all.
 
-A single `except cash.CashError` catches everything cash throws.
+**Raised to your code** (decorator path, or backend methods you call):
+
+| Exception | Cause | Fix |
+|---|---|---|
+| `CashImpureFunctionError` | First call of a cached function that picks what to call at run time (`getattr(obj, name)()`, `eval`, `importlib.import_module`), or any purity finding under `strict=True`. | Call the code directly, mark an audited helper with `pure`, or pass `assume_safe=True`. |
+| `DependencyNotFoundError` | A backend needs a package that is not installed. Also an `ImportError`. | Run the `pip install` the message names. |
+| `CacheBackendError` | A backend method you called could not reach its storage. A cached function warns instead. | Check the disk, server or credentials. |
+| `CacheSerializationError` | A stored entry could not be turned back into a value. | Clear the entry or the function; the next call recomputes. |
+
+**Shown as a notebook cell's error** (with `%cash_on`):
+
+| Exception | Cause | Fix |
+|---|---|---|
+| `ForwardReferenceError` | The cell reads a name only a later cell defines. | Move the definition above the cell. |
+| `UpstreamStateError` | An earlier statement the cell needs failed when cash re-ran it. | Fix that statement, or run the notebook from the top. |
+| `AmbiguousCellError` | The cell's code appears more than once and cash cannot tell which copy is running. | Save the notebook, or make the copies differ. |
+| `CacheKeyComputationError` | No key could be built for a statement. Not shown as an error: the statement runs uncached and cash warns [`NOTEBOOK-BAILOUT`](../warnings.md#notebook-bailout). | See that code. |
 
 ::: cash.CashError
+
+::: cash.CashImpureFunctionError
+
+::: cash.DependencyNotFoundError
 
 ::: cash.CacheBackendError
 
 ::: cash.CacheSerializationError
 
-::: cash.DependencyNotFoundError
-
-::: cash.AmbiguousCellError
+::: cash.ForwardReferenceError
 
 ::: cash.UpstreamStateError
 
-::: cash.ForwardReferenceError
+::: cash.AmbiguousCellError
 
 ::: cash.CacheKeyComputationError
 
-::: cash.CashImpureFunctionError
-
----
-
-## Warning hierarchy
+## Warnings
 
 ```text
-UserWarning
-└── CashWarning                        — base for everything Cash warns about
-    ├── CashCacheIneffectiveWarning    — cache won't help this call
-    │   └── CashImpurityWarning        — purity analyzer found issues
-    ├── CashCacheStoreFailedWarning    — compute OK but backend rejected store
-    ├── CashRandomnessWarning          — unseeded draw; the cached value is frozen
-    ├── CashUpstreamSyntaxWarning      — an upstream cell won't parse, so it
-    │                                    could not be simulated
-    └── CashNotebookDiscoveryWarning   — no notebook path; upstream tracking is
-                                         off (not re-exported from `cash`)
+CashWarning
+├── CashCacheIneffectiveWarning     caching is not working or not paying off
+│   └── CashImpurityWarning         the function has side effects a hit skips
+├── CashCacheStoreFailedWarning     a result was computed but not stored
+├── CashRandomnessWarning           an unseeded random draw was cached
+├── CashUpstreamSyntaxWarning       an earlier notebook cell does not parse
+└── CashNotebookDiscoveryWarning    the notebook file was not found
 ```
 
-`CashImpurityWarning` deliberately subclasses `CashCacheIneffectiveWarning`
-so existing filters that catch the parent also catch impurity warnings.
-Filter more precisely with `CashImpurityWarning` directly.
-`CashNotebookDiscoveryWarning` is the class behind
-[`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found); it hangs off
-`CashWarning` like the two above it, so only a filter on `CashWarning` itself
-catches all five branches.
+`CashNotebookDiscoveryWarning` is not importable from `cash`; filter it by its
+code, [`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found). The
+[Warnings index](../warnings.md#index) gives the class of every code.
 
 ::: cash.CashWarning
 
@@ -109,30 +86,25 @@ catches all five branches.
 
 ::: cash.CashUpstreamSyntaxWarning
 
----
+## Filtering warnings
 
-## Common filter recipes
+Filter by class with the standard `warnings` module. A filter on a class
+also catches its subclasses, so a filter on `CashCacheIneffectiveWarning`
+catches `CashImpurityWarning` but none of the other branches.
 
 ```python
 import warnings
 import cash
 
-# Suppress all Cash warnings:
+# Silence every cash warning.
 warnings.filterwarnings("ignore", category=cash.CashWarning)
 
-# Fail CI on any purity warning:
+# Fail CI on any side effect in a cached function.
 warnings.filterwarnings("error", category=cash.CashImpurityWarning)
 
-# Suppress just the "the analyzer found issues" warning:
-warnings.filterwarnings("ignore", category=cash.CashImpurityWarning)
-
-# Suppress just the store-failed warnings:
+# Silence failed stores only.
 warnings.filterwarnings("ignore", category=cash.CashCacheStoreFailedWarning)
-
-# Stop being told a cached random draw is a replay (it still is one):
-warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 ```
 
-Note that `CashRandomnessWarning` and `CashUpstreamSyntaxWarning` hang
-directly off `CashWarning`, *not* off `CashCacheIneffectiveWarning` — a filter
-on the ineffective-cache branch will not catch them.
+To silence a single code, see
+[Silencing one code](../warnings.md#silencing-one-code).

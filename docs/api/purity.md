@@ -1,130 +1,38 @@
-# Purity & annotations
+# Purity markers
 
-<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/purity.py:stateful @d2b97ef0 -->
-The decorators and helpers that control what Cash considers safe to
-cache. For a walkthrough — when to use each, common footguns — see the [Purity tutorial](../tutorials/feature-guides/purity-decorators.md).
-
-## Imports
+For both paths, mainly the decorator: the markers that tell cash what to
+trust about a function or class. The
+[purity guide](../tutorials/feature-guides/purity-decorators.md) shows when
+to use each; line-level `# @cash:` comments are on
+[Annotations](../annotations.md).
 
 ```python
-from cash import (
-    pure, stateful,           # decorators; also mark a third-party callable in place
-    is_pure, is_stateful,     # introspection
-)
-
-# For richer programmatic analysis:
-from cash.purity_analyzer import (
-    PurityAnalyzer, PurityReport, PurityIssue,
-    get_analyzer,             # process-wide singleton
-    ISSUE_IMPURE_CALL, ISSUE_DYNAMIC_PATTERN,
-    ISSUE_DISCARDED_CALL, ISSUE_SCOPE_MUTATION,
-)
+from cash import pure, stateful, opaque, is_pure, is_stateful
 ```
 
-## Decorators
+| Marker | With `@cash.cache` | In a notebook |
+|---|---|---|
+| `pure` | A cached function that calls it is not warned about it. | A statement that calls a file-writing helper caches only if the helper is marked. |
+| `stateful` | Reported as a side effect; refused under `strict=True`. | A statement that calls it is never cached. |
+| `opaque` | The class's code is left out of the key of any call that receives the class or an instance. | No effect on statements. |
 
-The two below are decorators — apply with `@pure` / `@stateful` above
-your function. They wrap the function and set `_cash_pure` /
-`_cash_stateful` on the returned object so the analyzer trusts your
-declaration.
+To mark a function you do not own, call the marker on it where you import
+it. The mark is set on the function itself, so you can ignore the return
+value:
 
+```python
+import cash
+
+cash.stateful(pd.DataFrame.to_sql)  # pd is pandas
+```
+
+<!-- claim: cash/purity.py:pure @4b66a8c3, cash/purity.py:stateful @ee349167 -->
 ::: cash.pure
 
 ::: cash.stateful
 
----
-
-## Marking third-party callables
-
-For library callables you can't decorate at the source, call the same
-decorators on them where you import them. They set the marker on the
-callable itself before wrapping it, so the returned wrapper can be ignored:
-
-```python
-import cash, pandas as pd
-
-cash.pure(pd.DataFrame.merge)        # tell the analyzer this is fine
-cash.stateful(pd.DataFrame.to_sql)   # tell it this writes
-```
-
----
-
-## Introspection
-
-The two helpers below query the marker state.
+::: cash.opaque
 
 ::: cash.is_pure
 
 ::: cash.is_stateful
-
----
-
-## Programmatic analysis
-
-The analyzer behind `@cash.cache`'s purity warnings. Use it to
-surface specific issues in a custom lint tool, to drive a pre-commit
-hook, or to walk a function's helper hierarchy yourself.
-
-```python
-from cash.purity_analyzer import get_analyzer
-
-analyzer = get_analyzer()
-report = analyzer.analyze(my_function)
-print(report.format())
-# Lists each detected issue (line + kind + description) grouped by
-# the function where it appears. Empty when the function is clean.
-```
-
-::: cash.purity_analyzer.PurityAnalyzer
-    options:
-      members:
-        - analyze
-
-::: cash.purity_analyzer.get_analyzer
-
-::: cash.purity_analyzer.PurityReport
-    options:
-      members:
-        - issues
-        - helper_source_hashes
-        - helper_resolution_paths
-        - opaque_callees
-        - is_clean
-        - format
-
-::: cash.purity_analyzer.PurityIssue
-    options:
-      members:
-        - kind
-        - description
-        - where
-        - line
-
-### Issue kinds
-
-The six `kind` values you'll see in `PurityIssue.kind` are
-exported as module-level constants. Five of them **warn**;
-`ISSUE_UNTRACKABLE_DEP` is the one that **raises** in default mode:
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `ISSUE_IMPURE_CALL` | `"impure_call"` | Known I/O / side-effecting call (`requests.post`, `os.system`, `to_csv`, pandas `inplace=True`, `print`, `logging.*`, etc.) |
-| `ISSUE_DYNAMIC_PATTERN` | `"dynamic_pattern"` | Code chosen at runtime out of a table that cannot reach the cache key: one built inside the body (`t = {...}; t[key]()`), one on a parameter (`router.table[key]()`), or a runtime namespace (`globals()[name]()`, `vars(mod)[name]()`). A **module-level** table (`HANDLERS[key]()`) is not flagged — cash hashes it as a global — and neither is a callable passed as an argument |
-| `ISSUE_UNTRACKABLE_DEP` | `"untrackable_dep"` | Explicit dynamism cash refuses to cache silently — `eval`/`exec`/`compile`, `getattr(obj, name)()` with a non-constant name, `getattr(mod, "exec")(...)`, `importlib.import_module`. **Raises `CashImpureFunctionError` on the first call even in default mode**; `# @cash:assume-safe` on the line, or `assume_safe=True` on the function, suppresses it |
-| `ISSUE_DISCARDED_CALL` | `"discarded_call"` | Bare-statement call whose return value is thrown away, with a callee not in `KNOWN_PURE_BUILTINS` |
-| `ISSUE_SCOPE_MUTATION` | `"scope_mutation"` | `global`/`nonlocal` declaration, attribute assignment, subscript assignment, augmented-assign to same |
-| `ISSUE_MUTABLE_GLOBAL` | `"mutable_global"` | Reads a module-level global that is reassigned or mutated somewhere in its module, so the cached result won't reflect changes to it |
-
-```python
-from cash.purity_analyzer import (
-    ISSUE_IMPURE_CALL,
-    ISSUE_DYNAMIC_PATTERN,
-    ISSUE_UNTRACKABLE_DEP,
-    ISSUE_DISCARDED_CALL,
-    ISSUE_SCOPE_MUTATION,
-    ISSUE_MUTABLE_GLOBAL,
-)
-
-if any(i.kind == ISSUE_IMPURE_CALL for i in report.issues):
-    print("function does I/O — definitely not pure")
-```
