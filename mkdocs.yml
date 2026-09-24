@@ -38,11 +38,9 @@ extra_css:
 
 extra_javascript:
   - javascripts/badge-iframe-resize.js
-  - javascripts/why-cash-calculator.js
   - javascripts/why-cash-matrix.js
   - javascripts/invalidation-playground.js
   - javascripts/cacheability-checker.js
-  - javascripts/promotion-explorer.js
 
 plugins:
   - search
@@ -134,7 +132,6 @@ nav:
     - Threads and processes: tutorials/feature-guides/thread-safety.md
     - Caching over a grid: tutorials/feature-guides/caching-over-a-grid.md
     - Deploying: tutorials/feature-guides/deploying.md
-    - Coming from other caches: migration_guide.md
     - Use cases:
       - LLM API calls: tutorials/use-cases/llm-api-calls.md
       - Data engineering: tutorials/use-cases/data-engineering.md
@@ -157,6 +154,7 @@ nav:
     - Choosing a backend: tutorials/feature-guides/choosing-a-backend.md
     - Sharing a cache: tutorials/feature-guides/sharing-caches.md
     - Command-line interface: cli.md
+    - Coming from other caches: migration_guide.md
   - How it works:
     - Overview: how-it-works/overview.md
     - The decorator path: how-it-works/decorator-path.md
@@ -171,7 +169,7 @@ nav:
       - Overview: api/index.md
       - Cash class: api/cash.md
       - Backends: api/backends.md
-      - Backend internals: api/backend_internals.md
+      - Internals: api/backend_internals.md
       - Purity markers: api/purity.md
       - Configuration: api/config.md
       - Data sources: api/data_sources.md

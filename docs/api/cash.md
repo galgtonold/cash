@@ -8,8 +8,10 @@ every cached function gets, and the module-level functions. The
 from cash import Cash, CacheExplanation, configure, disabled, reset_session, cleanup
 ```
 
-`@cash.cache` uses a default `Cash` built on first use. Create your own
-`Cash(...)` when you need different settings for some functions.
+`cash.cache`, `cash.register_hasher` and `cash.show_stats` are those methods
+of a default `Cash` built on first use; `cash.help()` prints the guide for
+coding agents. Create your own `Cash(...)` when you need different settings
+for some functions.
 
 ## Signatures at a glance
 

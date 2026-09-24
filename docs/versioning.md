@@ -11,12 +11,13 @@ releases (a change in the third number) only fix bugs.
 
 ## The public API
 
-The public API is what the [API reference](api/index.md) documents: the names
-in `cash.__all__`, plus `cash.cache`, `cash.show_stats`, `cash.register_hasher`
-and `cash.help` (kept out of `__all__` so `from cash import *` leaves your
-`help()` alone and builds nothing), the magics, the `# @cash:` annotations and
-the `cash` command. Anything else, including any name that
-starts with an underscore, can change in any release.
+The public API is what the [API reference](api/index.md) documents, except
+the [Internals](api/backend_internals.md) page: the names in `cash.__all__`,
+plus `cash.cache`, `cash.show_stats`, `cash.register_hasher` and `cash.help`
+(left out of `__all__` so that `from cash import *` leaves your `help()` alone
+and builds nothing), the magics, the `# @cash:` annotations and the `cash`
+command. Anything else, including any name that starts with an underscore, can
+change in any release.
 
 ## The cache format
 
