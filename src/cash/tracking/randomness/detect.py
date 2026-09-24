@@ -1099,11 +1099,16 @@ class RandomnessDetector:
         # in ``check_and_warn_randomness`` and the rest in docs/warnings.md.
         for call in unseeded_calls:
             if call.carrier is not None:
+                # Not "frozen": the rewind puts back the module streams only,
+                # never a generator held in a variable, so a draw too cheap to
+                # cache runs again off the live generator and differs each run.
                 warnings_list.append(
                     f"Unseeded randomness detected: {describe_random_call(call)} "
                     f"at line {call.lineno}. '{call.carrier}' came from an unseeded "
-                    f"{call.module} generator, so the cached result is frozen at "
-                    f"one arbitrary draw rather than redrawn."
+                    f"{call.module} generator, so the value is not reproducible: "
+                    f"if the result is cached it is frozen at one arbitrary draw, "
+                    f"and if it is too cheap to cache it is drawn again, differently, "
+                    f"on every run."
                 )
             else:
                 warnings_list.append(
@@ -1116,9 +1121,10 @@ class RandomnessDetector:
         return unseeded_calls, warnings_list, has_seed_calls
 
 
-# The remedy half of each randomness diagnostic. Four of them rather than one,
+# The remedy half of each randomness diagnostic. Five of them rather than one,
 # because the three outcomes a user can want are spelled differently for a draw
-# and for an estimator fit (a seed argument vs. ``random_state=``), and the
+# and for an estimator fit (a seed argument vs. ``random_state=``), a draw off a
+# generator held in a variable cannot be kept frozen (see below), and the
 # restore-time twins address a value already on screen rather than the source.
 # ASCII only, like the messages they accompany: this lands in a kernel's stderr,
 # where a Windows console codepage mangles an em-dash.
@@ -1129,7 +1135,7 @@ class RandomnessDetector:
 # ``strip().startswith('#')``, so a TRAILING ``x = random.random()  #
 # @cash:no-cache`` turns caching off and leaves the RNG rewind ON -- the
 # statement re-executes and redraws the identical number, which is the exact
-# outcome these four strings promise to prevent. Measured: own line ->
+# outcome these strings promise to prevent. Measured: own line ->
 # opts_out=True; trailing -> opts_out=False while the annotation itself still
 # parses as no_cache=True. Do not shorten this back.
 _UNSEEDED_FIX = (
@@ -1137,6 +1143,14 @@ _UNSEEDED_FIX = (
     "reproducible, put `# @cash:no-cache` on a line of its own above the "
     "statement for a genuinely fresh draw each run, or `# @cash:allow-random` "
     "to keep it frozen on purpose."
+)
+# A generator held in a variable is not rewound, so a cheap draw from it is
+# drawn again each run and ``allow-random`` cannot "keep it frozen".
+_UNSEEDED_CARRIER_FIX = (
+    "seed the generator where it is created (np.random.default_rng(0), "
+    "random.Random(0)) to make it reproducible, put `# @cash:no-cache` on a "
+    "line of its own above the statement to always draw fresh, or "
+    "`# @cash:allow-random` to silence this."
 )
 _REPLAY_FIX = (
     "put `# @cash:no-cache` on a line of its own above the statement if you "
@@ -1255,7 +1269,7 @@ def check_and_warn_randomness(
                 CashRandomnessWarning,
                 code="RANDOM-UNSEEDED",
                 what=warning_msg,
-                fix=_UNSEEDED_FIX,
+                fix=_UNSEEDED_FIX if call.carrier is None else _UNSEEDED_CARRIER_FIX,
                 location=("<cash>", call.lineno),
             )
 

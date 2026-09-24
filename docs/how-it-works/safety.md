@@ -286,7 +286,7 @@ first result is simply frozen:
 | `torch` | `rand()`, `randn()`, `randint()`, `randperm()`, `normal()`, … |
 | `tensorflow.random` | `uniform()`, `normal()`, `truncated_normal()`, `shuffle()`, … |
 
-<!-- claim: cash/tracking/randomness/detect.py:RandomnessDetector @e549910f broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734, cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9 -->
+<!-- claim: cash/tracking/randomness/detect.py:RandomnessDetector @c507dd0e broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734, cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9 -->
 Two channels feed it, because there are two ways to be random. **Module
 globals** (`np.random.rand()`) are reproducible if the *module* was seeded, so
 the detector tracks `seed()` calls across the session: once a module is seeded,

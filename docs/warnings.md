@@ -1797,6 +1797,13 @@ stream, Cash rewinds the RNG to where the cell started — so a cheap draw such 
 and still hand back the same number. See "A value can be frozen without being
 cached" in [Annotations](annotations.md).
 
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @2471d11d -->
+The rewind covers the module streams only (`random`, `np.random`, `torch`), not
+a generator you hold in a variable. So a cheap draw from
+`rng = np.random.default_rng()` is the exception: it re-executes against the
+live generator and gives a new value on every run. Only a draw expensive enough
+to cache is frozen, and the message for a generator draw says so.
+
 **What to do.** Choose the outcome you actually want.
 
 - **Reproducible:** seed the source — `random_state=42` on the estimator,
@@ -1808,7 +1815,8 @@ cached" in [Annotations](annotations.md).
   decorator, leave the function undecorated.
 - **Frozen, deliberately:** `# @cash:allow-random` on the statement, or
   `@cash.cache(allow_random=True)`. Both silence the warning and change nothing
-  else — the value was frozen before and stays frozen.
+  else — the value was frozen before and stays frozen. A cheap draw from a
+  generator in a variable was never frozen, and this does not freeze it.
 
 <!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
 !!! warning "Write `# @cash:no-cache` on a line of its own"
