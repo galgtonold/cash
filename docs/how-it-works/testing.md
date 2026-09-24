@@ -22,7 +22,7 @@ spread over <!-- docnum:test_files -->~1,010<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~6,250<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Unit | <!-- docnum:tests_unit -->~6,270<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
 | Notebook integration | <!-- docnum:tests_integration -->~3,960<!-- /docnum --> | Real kernels executing real notebooks, cell by cell, one folder per feature |
 | Docs | <!-- docnum:tests_docs -->~430<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 

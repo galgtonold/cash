@@ -24,7 +24,7 @@ To accept one side effect in one place, you don't need a marker: put
 
 ## Why this exists
 
-<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity_analyzer.py:PurityAnalyzer.analyze @7dc29215 -->
+<!-- claim: cash/purity.py:pure @0981f61d, cash/purity_analyzer.py:PurityAnalyzer.analyze @7dc29215 -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. Cash then stops reporting it:
@@ -103,7 +103,7 @@ That is the whole notebook-statement story: **`@stateful` is the lever; nothing
 else is required.** `@pure` earns its keep on the decorator — see
 [Purity on the decorator](#purity-on-the-decorator-cashcache).
 
-<!-- claim: cash/purity.py:stateful @f86f4e92 -->
+<!-- claim: cash/purity.py:stateful @c83f055c -->
 Mark a helper `@cash.stateful` when calling it does something a cache hit must
 not skip silently: it posts a notification, writes to a database, updates a
 model registry. A cached function that calls it warns
@@ -132,7 +132,7 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-<!-- claim: cash/purity.py:stateful @d2b97ef0, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
+<!-- claim: cash/purity.py:stateful @c83f055c, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
 `@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `_check_callable_stateful` looks only for `@stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
@@ -552,7 +552,7 @@ Two limits worth stating:
   globals would be both expensive and noisy. If a library keeps a registry you
   depend on being updated, that call is a poor candidate for caching.
 
-<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/purity.py:stateful @d2b97ef0 -->
+<!-- claim: cash/purity.py:pure @0981f61d, cash/purity.py:stateful @c83f055c -->
 ### Marking a third-party callable: `cash.pure(func)` and `cash.stateful(func)`
 
 `@pure` and `@stateful` mark the function they are given before they wrap

@@ -1,6 +1,6 @@
 # Purity & annotations
 
-<!-- claim: cash/purity.py:pure @b3cd5bc3, cash/purity.py:stateful @d2b97ef0 -->
+<!-- claim: cash/purity.py:pure @0981f61d, cash/purity.py:stateful @c83f055c -->
 The decorators and helpers that control what Cash considers safe to
 cache. For a walkthrough — when to use each, common footguns — see the [Purity tutorial](../tutorials/feature-guides/purity-decorators.md).
 
@@ -34,7 +34,7 @@ import cash
 cash.stateful(pd.DataFrame.to_sql)  # pd is pandas
 ```
 
-<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity.py:stateful @f86f4e92 -->
+<!-- claim: cash/purity.py:pure @0981f61d, cash/purity.py:stateful @c83f055c -->
 ::: cash.pure
 
 ::: cash.stateful
