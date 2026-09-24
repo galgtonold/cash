@@ -19,7 +19,6 @@ per-test fixed cost of a serial run.
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 
@@ -118,69 +117,68 @@ def test_unreadable_path_is_not_an_error(tmp_path, monkeypatch):
     assert slept == []
 
 
-@pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason=(
-        "Fails on macOS 3.10-3.13 for a reason not yet found. Two "
-        "genuine races were removed and macOS 3.14 went green, so a third "
-        "factor remains -- most likely the _SAVE_FRESH_WINDOW_S gate declining "
-        "to engage on a slow runner, but that is a hypothesis, not a finding. "
-        "Skipped rather than deleted: this is the only test here that uses a "
-        "REAL thread and a real clock, so it is what stops the other five "
-        "passing for monkeypatched-clock reasons. Diagnose on the WSL + "
-        "symlinked-TMPDIR harness that reproduces macOS CI locally, then "
-        "remove this marker."
-    ),
-)
 def test_a_write_landing_mid_wait_is_waited_out(nb, monkeypatch):
-    """Sanity: a real concurrent writer, no monkeypatched clock.
+    """Sanity: a real concurrent writer thread and real sleeps.
 
     Guards against the fake-sleep tests above passing for reasons that have
-    nothing to do with the real polling loop.
-    """
-    # The writer must be provably UNDER WAY before the wait starts. The first
-    # version of this test started the thread and immediately began waiting,
-    # with the writer sleeping before its first write -- so the file was still
-    # untouched, the poll loop could see two identical (mtime, size) readings
-    # and return having waited for nothing. Linux and Windows scheduled the
-    # thread fast enough to hide it; every macOS job failed.
-    first_write = threading.Event()
-    done = threading.Event()
+    nothing to do with the real polling loop: the writes come from another
+    thread, land while the poller really sleeps, and move the file's real
+    mtime and size.
 
-    # Long enough to span several poll cycles, comfortably short of the loop's
-    # own cap -- if the writer outlasted the cap, the wait would return early
-    # for a legitimate reason and this test would fail for the wrong one. Both
-    # margins are derived from the module's constants and asserted below, so
-    # changing a constant reports here instead of going quietly flaky.
-    # The gap must be SHORTER than the poll interval, not equal to it. At the
-    # same rate the poller can land twice between two writes, read an identical
-    # (mtime, size) both times and conclude the file has settled while it very
-    # much has not -- which is exactly what happened when this was first
-    # written with `gap = _SAVE_POLL_INTERVAL_S`: a deterministic failure, not
-    # a flake. The writer has to out-pace the poller for "still changing" to be
-    # observable at all.
-    gap = sd._SAVE_POLL_INTERVAL_S / 2
-    n_writes = 12
-    assert gap < sd._SAVE_POLL_INTERVAL_S, "writer must out-pace the poller"
-    assert n_writes * gap > 2 * sd._SAVE_POLL_INTERVAL_S, "writer too brief to span a poll cycle"
-    assert n_writes * gap < sd._SAVE_MAX_WAIT_S * 0.6, "writer outlasts the wait cap"
+    The writer runs in lockstep with the poller, one append per poll. A
+    free-running writer on a real clock made this test fail under load: a
+    writer thread starved for longer than one poll interval leaves the file
+    unchanged across two polls, which is exactly what "the save has settled"
+    looks like, so the wait returned early for a reason the test did not
+    control. In lockstep every poll but the last finds the file changed, so
+    the test fails only when the loop stops polling a changing file.
+    """
+    n_writes = 5
+    real_sleep = time.sleep  # the hook below replaces time.sleep everywhere
+    # Keep the two timing gates, which have their own tests above, out of
+    # this one: a slow runner must not make the file look stale before the
+    # wait starts, or run into the cap while the writer still has turns left.
+    monkeypatch.setattr(sd, "_SAVE_FRESH_WINDOW_S", 60.0)
+    monkeypatch.setattr(sd, "_SAVE_MAX_WAIT_S", 60.0)
+
+    your_turn = threading.Semaphore(0)
+    wrote = threading.Semaphore(0)
+    done = threading.Event()
 
     def writer():
         for _ in range(n_writes):
+            if not your_turn.acquire(timeout=30):
+                return  # the poller stopped handing out turns; the asserts say so
             with open(nb, "a", encoding="utf-8") as f:
                 f.write("x")
-            first_write.set()
-            time.sleep(gap)
+            wrote.release()
         done.set()
 
+    polls = []
+
+    def poll(interval):
+        polls.append(interval)
+        if len(polls) <= n_writes:
+            your_turn.release()  # the write lands while this poll sleeps
+            real_sleep(interval)
+            # A starved writer delays the poll; it cannot pass for a settled file.
+            assert wrote.acquire(timeout=30), "the writer thread never made its write"
+        else:
+            real_sleep(interval)
+
+    monkeypatch.setattr(sd._time, "sleep", poll)
     t = threading.Thread(target=writer, daemon=True)
     t.start()
-    assert first_write.wait(timeout=5), "the writer thread never ran"
     sd._wait_for_notebook_save(str(nb))
     # Read the flag BEFORE joining. Joining first would let the writer finish
     # on its own and the assertion would hold however early the wait returned
     # -- the test would pass against a wait that does nothing at all.
     settled_before_return = done.is_set()
+    for _ in range(n_writes):
+        your_turn.release()  # let a writer left waiting finish, then join it
     t.join(timeout=5)
 
-    assert settled_before_return, "returned while the writer was still appending"
+    assert settled_before_return, f"returned after {len(polls)} polls while the writer was still appending"
+    # One poll per write, plus the one that found the file unchanged.
+    assert polls == [sd._SAVE_POLL_INTERVAL_S] * (n_writes + 1), polls
+    assert nb.read_text(encoding="utf-8") == "{}" + "x" * n_writes
