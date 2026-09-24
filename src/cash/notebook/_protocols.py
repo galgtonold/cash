@@ -1,7 +1,7 @@
 """Protocol types and shared data structures for the notebook subsystem.
 
 These protocols define the minimal interfaces that the notebook subsystem
-requires from external objects (IPython shell, cache backend, etc.).
+requires from external objects (the IPython shell, the ``Cash`` instance).
 Using protocols instead of ``Any`` provides:
 
 - Better IDE support (autocomplete, type checking)
@@ -13,9 +13,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from cash.notebook.lineage_store import LineageStore
+
+if TYPE_CHECKING:
+    from cash.backends import CacheBackend
 
 
 @runtime_checkable
@@ -34,35 +37,18 @@ class ShellProtocol(Protocol):
 
 
 @runtime_checkable
-class CacheBackendProtocol(Protocol):
-    """Minimal interface for a cache backend used by the notebook subsystem.
-
-    Matches the subset of :class:`cash.backends.CacheBackend` that
-    ``StatementProcessor`` and ``UpstreamChecker`` actually use.
-    """
-
-    def get(self, key: str) -> tuple[dict[str, Any] | None, Any]:
-        """Retrieve a cached value and its metadata by key."""
-        ...
-
-    def set(self, key: str, value: Any, metadata: dict[str, Any] | None = None, serializer: Any = None) -> None:
-        """Store a value with optional metadata and serializer."""
-        ...
-
-    def delete(self, key: str) -> None:
-        """Remove a cached entry by key."""
-        ...
-
-
-@runtime_checkable
 class CashInstanceProtocol(Protocol):
     """Minimal interface for the ``Cash`` instance used by the notebook subsystem.
 
     ``StatementProcessor`` and ``UpstreamChecker`` access the ``Cash``
-    object only through its ``.backend`` attribute.
+    object only through its ``.backend`` attribute. That is typed as the
+    backend base class itself, which every backend subclasses and which
+    declares, with a default where one makes sense, every method the
+    notebook calls (``get_metadata``, ``set_metadata_only``, ``hold_notices``,
+    ...).
     """
 
-    backend: CacheBackendProtocol
+    backend: CacheBackend
 
 
 @dataclass

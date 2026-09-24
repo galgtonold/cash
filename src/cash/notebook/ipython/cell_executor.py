@@ -985,6 +985,10 @@ class CellExecutor:
                     "is_upstream": True,
                     "total_time": 0.0,
                     "execution_time": 0.0,
+                    "saved_time": 0.0,
+                    "error": None,
+                    "restored_vars": [],
+                    "uncacheable_reasons": [],
                     "outputs": [],
                     "changed_modules": dict(changed_modules.items()),
                 }

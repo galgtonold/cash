@@ -32,11 +32,39 @@ class ProcessResultRequired(TypedDict):
 
 
 class DecoratorCallMetric(TypedDict, total=False):
-    """Metrics for a single ``@cash.cache`` decorated function call."""
+    """One call event in a statement's ``decorator_calls``.
+
+    Written by ``@cash.cache`` (``Cash.drain_decorator_calls``) and, in the
+    same shape, by an intercepted call (``CallUnit._record``). The loop
+    handler stamps the ``loop_header``/``body_index`` keys onto an event whose
+    statement ran inside a loop.
+    """
 
     func_name: str
     cache_hit: bool
     execution_time: float
+    time_saved: float
+    args_hash: str
+    cache_key: str | None
+    timestamp: float
+    # A decorator miss carries a ``MissReason``; an intercepted one a string.
+    miss_reason: Any
+    # --- @cash.cache only ---
+    body_seconds: float | None
+    cash_seconds: float
+    not_persisted: Any
+    not_stored: Any
+    sampled_files: tuple[str, ...]
+    # --- intercepted calls only ---
+    call_source: str
+    occurrence_index: int
+    intercepted: bool
+    ran_plain: bool
+    stored: bool
+    # --- stamped inside a loop ---
+    loop_header: str
+    loop_header_chain: list[str]
+    body_index_chain: list[int]
 
 
 class ProcessResult(ProcessResultRequired, total=False):
@@ -48,6 +76,18 @@ class ProcessResult(ProcessResultRequired, total=False):
     """
 
     # --- Set when available ---
+    # The statement as the user laid it out, for the badge; never hashed.
+    display_code: str | None
+    cache_key: str | None
+    # What moved since the statement last ran, when it missed.
+    miss_reason: str
+    # Why the miss guard stopped storing it (see ``MissGuard.cause``).
+    guard_cause: str
+    # What the statement cost to run, and what cash spent around it.
+    compute_cost: float
+    cash_tax: float
+    # Rich display outputs captured on a miss or replayed on a hit.
+    rich_outputs: list[Any]
     outputs: list[str]
     storage: list[str]
     _output_flushed: bool
@@ -66,6 +106,11 @@ class ProcessResult(ProcessResultRequired, total=False):
     loop_vars: dict[str, Any]
     control_context: str
     branch_label: str
+    # Stamped by the loop handler on a statement that ran inside a loop.
+    loop_header: str
+    loop_header_chain: list[str]
+    body_index: int
+    body_index_chain: list[int]
     changed_functions: list[str]
     changed_modules: dict[str, str]
     # A statement's RNG role, surfaced on the badge: 'seed' sets a global seed,

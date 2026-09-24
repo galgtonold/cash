@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
+    from ..cache_status import CacheStatus
     from ..statement import ProcessResult
 
 
@@ -25,13 +26,19 @@ class TimingBreakdown(TypedDict, total=False):
     upstream_check: float
     upstream_check_raw: float
     badge_progress: float
+    # Writing what the cell deferred to its end (``end_cell_persistence``).
+    persist_final: float
+    # Asking object storage whether tracked remote data changed, and how often
+    # (``remote_source``'s validation sink).
+    remote_validate: float
+    remote_validate_count: int
 
 
 class StatementSummary(TypedDict):
     """Per-statement summary stored in ``CellMetrics.statements``."""
 
     code: str
-    status: str | None
+    status: CacheStatus | None
     execution_time: float
     saved_time: float
     outputs: list[str]
