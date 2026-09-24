@@ -539,7 +539,7 @@ this code; filter it by code if you must.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4 -->
 **What happened.** Before the first call, cash read the source of the
 function and its helpers and found shapes that make a cached result doubtful.
 Each finding has a line number and a label:
@@ -791,7 +791,7 @@ depends on:
 
 *Decorator.*
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @c6f9471b -->
 <!-- claim: cash/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT

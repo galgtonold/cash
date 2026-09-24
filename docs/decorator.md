@@ -181,7 +181,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when any input below changed. The
 left column is tracked for you. The right column is not, and says what to do.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @2412d23d, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
 | Tracked: a change recomputes | Not tracked: what to do |
 |---|---|
 | The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |
@@ -336,7 +336,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @3f8526f2, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4, cash/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | Cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |

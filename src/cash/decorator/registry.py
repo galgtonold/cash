@@ -129,6 +129,8 @@ class FunctionRegistry:
         #: Functions whose purity findings have been *surfaced*, on their
         #: first call.
         self.analyzed: set[str] = set()
+        #: Closures whose own findings have been surfaced (see `needs_surfacing`).
+        self._surfaced_closures: weakref.WeakSet = weakref.WeakSet()
         #: Functions whose graph edges and purity report are populated
         #: (separate from `analyzed`: a dependency can be populated to
         #: complete a parent's state hash long before it is called directly
@@ -182,6 +184,31 @@ class FunctionRegistry:
             return func not in self._closure_reports
         except TypeError:
             return False
+
+    def needs_surfacing(self, func: Callable[..., Any], func_name: str) -> bool:
+        """Are *func*'s purity findings still to be shown, on this call?
+
+        Once per name, and once per closure: a second closure from one
+        factory reaches its own helpers (`report_for`), so what the first
+        one's findings said does not cover it.
+        """
+        if func_name not in self.analyzed:
+            return True
+        if not getattr(func, "__closure__", None):
+            return False
+        try:
+            return func not in self._surfaced_closures
+        except TypeError:
+            return False
+
+    def mark_surfaced(self, func: Callable[..., Any], func_name: str) -> None:
+        """Record that *func*'s findings were shown (`needs_surfacing`)."""
+        self.analyzed.add(func_name)
+        if getattr(func, "__closure__", None):
+            try:
+                self._surfaced_closures.add(func)
+            except TypeError:
+                pass  # not weak-referenceable: the name stands for it
 
     def purity_mode(self, func_name: str) -> PurityMode:
         cf = self.cached.get(func_name)

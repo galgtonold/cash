@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import dis
+import hashlib
 import inspect
 import logging
 import textwrap
@@ -713,6 +714,8 @@ class PurityChecks:
         func_name: str,
         report: PurityReport,
         mode: str,
+        *,
+        per_report: bool = False,
     ) -> None:
         """Turn a `PurityReport` into warnings or an exception.
 
@@ -727,7 +730,18 @@ class PurityChecks:
           so helper source hashes invalidate correctly.
         * ``strict``: raise `CashImpureFunctionError`. Opaque
           callees count as issues in this mode (paranoid).
+
+        ``per_report``: *func_name* is a closure, which shares its name with
+        every other closure its factory makes but not its helpers. A warning
+        is then shown once per distinct finding rather than once per name, so
+        a second closure reaching an impure helper is told.
         """
+
+        def slot(kind: str, findings: str) -> str:
+            if not per_report:
+                return kind
+            return f"{kind}:{hashlib.sha256(findings.encode('utf-8')).hexdigest()[:16]}"
+
         issues = [i for i in report.issues if not self._mutable_global_is_keyed(func_name, report, i)]
         if any(getattr(i, "kind", None) == ISSUE_NETWORK_READ for i in issues):
             # Named statically, so the observer does not report the same read
@@ -788,7 +802,7 @@ class PurityChecks:
             self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
-                "ambient",
+                slot("ambient", format_issues_summary(ambient)),
                 f"@cash.cache on {func_name}: the body reads ambient state "
                 f"(the clock, the environment, the working directory, a fresh "
                 f"UUID). That value is not part of the cache key, so the first "
@@ -813,7 +827,7 @@ class PurityChecks:
             self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
-                "network_read",
+                slot("network_read", format_issues_summary(remote)),
                 f"@cash.cache on {func_name}: the result depends on what a "
                 f"server or a database returned, and that answer is not part "
                 f"of the cache key. The first call's answer is what every later call gets "
@@ -844,7 +858,7 @@ class PurityChecks:
         self._notices.warn_once(
             CashImpurityWarning,
             func_name,
-            "purity",
+            slot("purity", summary),
             f"@cash.cache on {func_name}: reading the source found likely "
             f"side effects or scope mutations, so cached results may not "
             f"reflect what the body does.\n{summary}",

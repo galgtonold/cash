@@ -441,7 +441,7 @@ class CallRunner:
         func_name = func_key(func)
         report = self._registry.report_for(func, func_name) or PurityReport()
         mode = self._registry.purity_mode(func_name)
-        self._purity.surface_purity(func_name, report, mode)
+        self._purity.surface_purity(func_name, report, mode, per_report=bool(getattr(func, "__closure__", None)))
 
     def lookup(self, spec: CachedFunction, args: tuple, kwargs: dict, *, async_body: bool) -> Call:
         """Everything a call does before the body: analysis, key, lookup.
@@ -453,18 +453,16 @@ class CallRunner:
         func, func_name = spec.func, spec.name
         call = Call(args, kwargs)
         call.call_start = _perf_counter()
-        if func_name not in self._registry.analyzed:
+        if self._registry.needs_surfacing(func, func_name):
             # Double-checked under a per-function lock: the key is built
             # from what this populates, so two threads must not race it.
+            # Once per name, and once per closure: another closure from a
+            # factory already called is keyed by, and checked against, the
+            # helpers it captures, not its sibling's.
             with self._registry.analysis_lock:
-                if func_name not in self._registry.analyzed:
+                if self._registry.needs_surfacing(func, func_name):
                     self._analyze_dependencies(func)
-                    self._registry.analyzed.add(func_name)
-        elif self._registry.needs_population(func, func_name):
-            # Another closure from a factory already called: it is keyed by
-            # the helpers it captures, not its sibling's. Its findings were
-            # surfaced under the shared name.
-            self._registry.ensure_closure_analyzed(func)
+                    self._registry.mark_surfaced(func, func_name)
         # Inherit the shortest TTL of any TTL'd dependency (computed after
         # analysis populates the graph).
         call.ttl = self._registry.effective_ttl(func_name, spec.ttl)

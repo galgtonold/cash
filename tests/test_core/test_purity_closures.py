@@ -194,3 +194,61 @@ def test_closure_helper_works_under_strict(tmp_path):
     with pytest.raises(CashImpureFunctionError) as exc_info:
         main(5)
     assert "os.system" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Closures from one factory: each is checked against its own helpers
+# ---------------------------------------------------------------------------
+
+
+def _quiet_helper(x):
+    return x
+
+
+def _noisy_helper(x):
+    import os
+
+    os.system("echo")
+    return x
+
+
+def _closure_over(c, helper, *, strict=False):
+    """One factory, so every closure it makes shares a name and a body."""
+
+    @c.cache(strict=strict)
+    def main(x):
+        return helper(x)
+
+    return main
+
+
+def _impurity_messages(fn, *args):
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        fn(*args)
+    return [str(w.message) for w in captured if issubclass(w.category, CashImpurityWarning)]
+
+
+def test_a_second_closure_from_one_factory_warns_about_its_own_helper(tmp_path):
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    assert _impurity_messages(_closure_over(c, _quiet_helper), 1) == []
+
+    noisy = _closure_over(c, _noisy_helper)
+    first = _impurity_messages(noisy, 1)
+    assert len(first) == 1 and "os.system" in first[0], first
+    assert _impurity_messages(noisy, 2) == []  # once for this closure
+    # Another closure with the same findings is not news either.
+    assert _impurity_messages(_closure_over(c, _noisy_helper), 3) == []
+
+
+def test_strict_raises_for_an_impure_helper_only_a_second_closure_reaches(tmp_path):
+    from cash import CashImpureFunctionError
+
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    assert _closure_over(c, _quiet_helper, strict=True)(1) == 1
+
+    noisy = _closure_over(c, _noisy_helper, strict=True)
+    for _ in range(2):  # every call, as for a function strict rejects on its first
+        with pytest.raises(CashImpureFunctionError) as exc_info:
+            noisy(1)
+        assert "os.system" in str(exc_info.value)
