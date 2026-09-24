@@ -172,6 +172,8 @@ The `benchmarks/` directory holds the harness:
   `warm-session` or `warm-restart` mode; each result records the Python
   version, cash version and platform.
 - `benchmarks/bench_core.py`: decorator and hashing microbenchmarks.
+- `benchmarks/bench_tiered_overhead.py`: what the default two-tier backend adds
+  over a single tier.
 - `benchmarks/_rerun_sweep.py` and `benchmarks/compare_modes.py`: a sweep over
   the reference notebooks and a per-cell comparison of its results.
 

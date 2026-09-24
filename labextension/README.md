@@ -114,6 +114,13 @@ pip install "jupyterlab>=4,<5"
 `node_modules/`, `lib/` (the intermediate `tsc` output) and `package-lock.json`
 are ignored; only `src/cash/labextension/` is committed.
 
+The unit and integration tests stop at the comm. Whether an unsaved edit reaches
+the kernel before its `execute_request` can only be checked in a real browser:
+`scripts/jupyterlab_live_cells_probe.py` describes that manual check step by
+step; its `setup` command builds the environment and prints the launch command,
+and `check` prints what to compare against the screen. Redo it after changing
+`src/index.ts`.
+
 ## Shipping
 
 `pyproject.toml` maps the built output into the wheel as
