@@ -67,6 +67,18 @@ def _version_slot(source_hash: str, outputs: set[str]) -> str:
     return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
 
 
+def _cost_fields(prediction: dict[str, Any] | None) -> dict[str, Any]:
+    """The cost-model prediction as the metadata fields that carry it."""
+    if prediction is None:
+        return {}
+    return {
+        "cost_model_size_bytes": prediction["size_bytes"],
+        "cost_model_restore_seconds": prediction["restore_seconds"],
+        "cost_model_type_name": prediction["type_name"],
+        "cost_model_family": prediction["family"],
+    }
+
+
 def _is_only_definitions(code: str) -> bool:
     """Whether *code* is nothing but ``def``/``class`` statements."""
     try:
@@ -357,56 +369,107 @@ class StatementStore:
         that we don't even write a metadata-only entry (the next lookup
         will miss cleanly rather than hit a metadata-only entry and
         pay a per-file read just to decide 'recompute')."""
-        cache_key, code, source_hash = run.cache_key, run.code, run.source_hash
-        inputs, outputs, ttl = run.inputs, run.outputs, run.effective_ttl
-        force_persist = run.force_persist
-        execution_time = execution.cost
-        captured_output = execution.captured
-        accessed_remote = execution.accessed_remote
         t_store = time.time()
         # What this key recorded is about to change (``_producer_file_snapshots``).
-        self._producer_snapshots.pop(cache_key, None)
+        self._producer_snapshots.pop(run.cache_key, None)
 
-        # "Too cheap to cache" floor — checked here (not inside
-        # ``should_skip_large_object_caching``) so we can skip writing
-        # even a metadata-only entry. Without this, a notebook with many
-        # trivial statements (e.g. 100 `a_i = i + 1`) would write 100
-        # metadata-only files on the first run; every subsequent run
-        # would pay ~1ms/statement of cache-lookup overhead reading
-        # them only to discover they're skipped entries. By writing
-        # nothing, the next lookup is a fast clean miss.
-        # The restore-cost check below is waived only for a statement that
-        # READS a file itself: reading is the expensive part then.
-        # `file_dependencies` also holds every file the inputs were built from,
-        # and waiving on those exempted everything downstream of a load:
-        # ~400 MiB frames restoring slower than they computed, served as hits.
-        #
-        # The too-cheap FLOOR keeps the old rule on purpose. A first version
-        # narrowed it too, and a cheap reader of a file HANDLE
-        # (`lines = [l for l in fh]`) stopped being stored, re-ran on the second
-        # Run All against the handle its skipped producer had left at EOF, and
-        # printed [] (test_file_handle_iteration_second_run_all).
-        reads_files = bool(execution.accessed_files or accessed_remote)
-        if not force_persist and not file_dependencies and not accessed_remote:
-            # On a contended machine a trivial statement can measure tens of ms
-            # and clear the floor, so nothing may assume this branch is taken
-            # for a given statement (the floor-exit test pins the threshold
-            # rather than trusting the machine to be fast).
-            policy = self.policy()
-            if policy.too_cheap_to_store(execution_time) and not self._rebuild_cost.final_over_costly_inputs(
-                inputs, outputs, in_loop=self._calls.in_loop, written_later=self.written_later_in_cell
-            ):
-                logger.debug(
-                    "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
-                    execution_time * 1000,
-                    policy.store_floor_s * 1000,
-                )
-                return None
+        if self._too_cheap_to_store(run, execution, file_dependencies):
+            return None
+        should_skip, skip_reason, prediction = self._refusal(run, execution, captured_vars, miss_guarded)
+        cost_fields = _cost_fields(prediction)
+        if should_skip:
+            return self._store_metadata_only(run, execution, skip_reason, cost_fields)
 
-        # Size-aware caching: skip storing large objects when serialization overhead dominates
+        metadata = StatementCacheMetadata(
+            timestamp=time.time(),
+            inputs=list(run.inputs),
+            outputs=list(run.outputs),
+            execution_time=execution.cost,
+            source_hash=run.source_hash,
+            code=run.code,
+            key=run.cache_key,
+            file_dependencies=_snapshot_with_inherited(
+                file_dependencies, execution.accessed_remote, inherited_snapshots
+            ),
+            force_persist=run.force_persist,
+            output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
+            input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
+            ttl=run.effective_ttl,
+            version_slot=_version_slot(run.source_hash, run.outputs),
+            **cost_fields,
+        )
+        payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
+        wire = self._wire(run, metadata, referenced)
+        self._write(run, payload, wire, prediction)
+
+        store_time = time.time() - t_store
+        total_time = time.time() - run.process_start
+        logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
+        logger.debug("[CACHE DEBUG] Stored in cache: %s", run.cache_key)
+
+        return StatementCacheMetadata.from_dict(wire)
+
+    def _too_cheap_to_store(
+        self, run: StatementRun, execution: StatementExecution, file_dependencies: set[str]
+    ) -> bool:
+        """Whether *run* gets no entry at all, not even a metadata-only one.
+
+        Checked apart from the refusals below so that nothing is written:
+        a notebook with many trivial statements (100 ``a_i = i + 1``) would
+        otherwise write 100 metadata-only files on its first run, and every
+        later run would pay ~1ms a statement reading them only to find
+        skipped entries. Writing nothing makes the next lookup a fast clean
+        miss.
+
+        The floor is waived for a statement with any file dependency, its
+        inputs' included. A cheap reader of a file HANDLE
+        (``lines = [l for l in fh]``) must still be stored: re-run on a second
+        Run All, it reads the handle its skipped producer left at EOF and
+        gets [] (test_file_handle_iteration_second_run_all).
+        """
+        if run.force_persist or file_dependencies or execution.accessed_remote:
+            return False
+        # On a contended machine a trivial statement can measure tens of ms
+        # and clear the floor, so nothing may assume this branch is taken
+        # for a given statement (the floor-exit test pins the threshold
+        # rather than trusting the machine to be fast).
+        policy = self.policy()
+        execution_time = execution.cost
+        if not policy.too_cheap_to_store(execution_time) or self._rebuild_cost.final_over_costly_inputs(
+            run.inputs, run.outputs, in_loop=self._calls.in_loop, written_later=self.written_later_in_cell
+        ):
+            return False
+        logger.debug(
+            "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
+            execution_time * 1000,
+            policy.store_floor_s * 1000,
+        )
+        return True
+
+    def _refusal(
+        self,
+        run: StatementRun,
+        execution: StatementExecution,
+        captured_vars: dict[str, Any],
+        miss_guarded: bool,
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
+        """Whether *run*'s value is kept as metadata only, and why.
+
+        Returns ``(should_skip, reason, prediction)``: *reason* may be None
+        for a skip nothing needs to report, and *prediction* is the cost
+        model's for the largest output. The gates run in order, each only if
+        the ones before let the value through.
+        """
+        code, force_persist = run.code, run.force_persist
+        # The restore-cost check is waived only for a statement that READS a
+        # file itself: reading is the expensive part then. Waiving it for every
+        # file the inputs were built from exempted everything downstream of a
+        # load: ~400 MiB frames restoring slower than they computed, served as
+        # hits.
+        reads_files = bool(execution.accessed_files or execution.accessed_remote)
         should_skip, skip_reason, prediction = self.should_skip_large_object_caching(
             captured_vars,
-            execution_time,
+            execution.cost,
             force_persist,
             has_file_dependencies=reads_files,
         )
@@ -439,14 +502,13 @@ class StatementStore:
                     # file-loaded data got here past the too-cheap floor and
                     # its badge row said NOT CACHED.
                     skip_reason = None
-        # Perpetual-miss guard. Placed LAST so it can override the
-        # exemptions above: ``has_file_dependencies`` waives the whole size-aware
-        # cost model, and that waiver is precisely how it shipped — a fit
-        # on a CSV-derived frame inherits the read's file deps, so the cost model
-        # never got a vote and the frame was re-serialised every run for a cache
-        # that could never hit. An unstable key does not become stable because the
-        # statement touched a file. ``force_persist`` is checked by the caller and
-        # is the one thing that outranks this.
+        # Perpetual-miss guard. After the gates above so it can override their
+        # exemptions: ``has_file_dependencies`` waives the whole size-aware
+        # cost model, and a fit on a CSV-derived frame inherits the read's file
+        # deps, so without this the frame is re-serialised every run for a
+        # cache that can never hit. An unstable key does not become stable
+        # because the statement touched a file. ``force_persist`` is checked by
+        # the caller and is the one thing that outranks this.
         if not should_skip and miss_guarded:
             should_skip = True
             skip_reason = GUARD_SKIP_REASON
@@ -466,61 +528,51 @@ class StatementStore:
             if amplified:
                 should_skip = True
                 skip_reason = amplified_reason
+        return should_skip, skip_reason, prediction
 
-        # Cost-model prediction fields are shared by both the skip and the
-        # full-store branches; build them once.
-        cost_fields: dict[str, Any] = {}
-        if prediction is not None:
-            cost_fields = {
-                "cost_model_size_bytes": prediction["size_bytes"],
-                "cost_model_restore_seconds": prediction["restore_seconds"],
-                "cost_model_type_name": prediction["type_name"],
-                "cost_model_family": prediction["family"],
-            }
-
-        if should_skip:
-            skip_metadata = StatementCacheMetadata(
-                timestamp=time.time(),
-                inputs=list(inputs),
-                outputs=list(outputs),
-                execution_time=execution_time,
-                source_hash=source_hash,
-                code=code,
-                key=cache_key,
-                skipped_reason=skip_reason,
-                metadata_only=True,
-                output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, outputs),
-                input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, inputs),
-                **cost_fields,
-            )
-            try:
-                backend = self.cash_instance.backend if self.cash_instance else None
-                if backend is not None:
-                    backend.set_metadata_only(cache_key, skip_metadata.to_dict())
-            except (OSError, TypeError, ValueError, AttributeError):
-                logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
-            return skip_metadata
-
-        metadata = StatementCacheMetadata(
+    def _store_metadata_only(
+        self,
+        run: StatementRun,
+        execution: StatementExecution,
+        skip_reason: str | None,
+        cost_fields: dict[str, Any],
+    ) -> StatementCacheMetadata:
+        """Record a refused value's metadata, lineages included, without the value."""
+        skip_metadata = StatementCacheMetadata(
             timestamp=time.time(),
-            inputs=list(inputs),
-            outputs=list(outputs),
-            execution_time=execution_time,
-            source_hash=source_hash,
-            code=code,
-            key=cache_key,
-            file_dependencies=_snapshot_with_inherited(file_dependencies, accessed_remote, inherited_snapshots),
-            force_persist=force_persist,
-            output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, outputs),
-            input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, inputs),
-            ttl=ttl,
-            version_slot=_version_slot(source_hash, outputs),
+            inputs=list(run.inputs),
+            outputs=list(run.outputs),
+            execution_time=execution.cost,
+            source_hash=run.source_hash,
+            code=run.code,
+            key=run.cache_key,
+            skipped_reason=skip_reason,
+            metadata_only=True,
+            output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
+            input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
             **cost_fields,
         )
+        try:
+            backend = self.cash_instance.backend if self.cash_instance else None
+            if backend is not None:
+                backend.set_metadata_only(run.cache_key, skip_metadata.to_dict())
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
+        return skip_metadata
 
+    def _payload(
+        self,
+        run: StatementRun,
+        execution: StatementExecution,
+        captured_vars: dict[str, Any],
+        seed_epochs: Mapping[str, str],
+    ) -> tuple[dict[str, Any], dict[str, int]]:
+        """The value entry for *run*, and the call entries it refers to
+        (key -> bytes) in place of the results they hold."""
+        captured_output = execution.captured
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
-        variables = self._calls.with_call_refs(variables, code, referenced)
+        variables = self._calls.with_call_refs(variables, run.code, referenced)
         payload = {
             "variables": variables,
             "stdout": captured_output.stdout,
@@ -543,16 +595,20 @@ class StatementStore:
         # entirely when there are none, keeping the payload shape unchanged for
         # the overwhelming majority of statements.
         try:
-            object_rng_states = capture_object_rng_states(inputs, self.shell.user_ns)
+            object_rng_states = capture_object_rng_states(run.inputs, self.shell.user_ns)
             if object_rng_states:
                 payload["rng_object_states"] = object_rng_states
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Object RNG capture skipped: %s", e)
+        return payload, referenced
 
-        # Dict-on-the-wire: the backend round-trips a plain dict and may
-        # inject the resolved ``storage`` destinations back into it. We
-        # re-wrap that mutated dict at the end so the returned view carries
-        # the storage info on to the badge metrics.
+    def _wire(self, run: StatementRun, metadata: StatementCacheMetadata, referenced: dict[str, int]) -> dict[str, Any]:
+        """*metadata* as the dict the backend stores.
+
+        Dict-on-the-wire: the backend round-trips a plain dict and may inject
+        the resolved ``storage`` destinations back into it, so the caller
+        re-wraps the mutated dict to carry the storage info on to the badge.
+        """
         wire = metadata.to_dict()
         if referenced:
             wire[REFS_FIELD] = sorted(referenced)
@@ -560,18 +616,24 @@ class StatementStore:
         # An intermediate of this cell (``cell_executor._written_later_in_cell``)
         # stays in RAM; the cell's final version is persisted at its end.
         later = self.written_later_in_cell
-        if not force_persist and outputs and later and set(outputs) <= later:
+        if not run.force_persist and run.outputs and later and set(run.outputs) <= later:
             wire["defer_persist"] = True
+        return wire
 
+    def _write(
+        self, run: StatementRun, payload: dict[str, Any], wire: dict[str, Any], prediction: dict[str, Any] | None
+    ) -> None:
+        """Write the entry, and the metadata-only record a RAM-only value needs."""
+        cache_key = run.cache_key
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
             logger.warning("[CACHE] Failed to write to cache backend: %s", e)
         else:
             # Charge this write to its statement's amplification budget, now
-            # that the backend has reported which tiers actually took it
-            # . Only durable destinations count.
-            self._amplification.account(code, prediction, wire)
+            # that the backend has reported which tiers actually took it.
+            # Only durable destinations count.
+            self._amplification.account(run.code, prediction, wire)
 
         # The metadata-only record keeps a RAM-only value's lineage across a
         # restart. A value written to a persistent tier carries its metadata
@@ -586,11 +648,3 @@ class StatementStore:
                 backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
-
-        store_time = time.time() - t_store
-        total_time = time.time() - run.process_start
-
-        logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
-        logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)
-
-        return StatementCacheMetadata.from_dict(wire)
