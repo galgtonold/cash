@@ -52,9 +52,8 @@ class FileDepsMixin:
         """Record *func_name*'s ``file_depends_on=`` paths on *tracker*.
 
         As reads, so the entry snapshots their content and every lookup checks
-        it with ``file_dep_is_fresh``, exactly like a file the body opened. They
-        used to become a ``FileDataSource`` in the key, keyed on the mtime
-        alone: a ``touch`` recomputed, and an edit that kept the mtime hit.
+        it with ``file_dep_is_fresh``, exactly like a file the body opened: a
+        ``touch`` does not recompute, and an edit that keeps the mtime does.
         Called inside the timed body, so the content hash is taken off the body
         time with the tracker's other read hashes.
         """

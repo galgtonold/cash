@@ -56,9 +56,8 @@ def plain_key_part(value: Any) -> Any:
     """*value*, or -- for plain data -- a marker holding the digest of its content.
 
     Each plain argument is keyed by its content on its own, pickled without the
-    memo (`_plain_data.pickle_unshared`). It used to take the fast path only
-    when EVERY argument did: one small dict beside two million rows sent the
-    whole call down the general path, 8x the cost.
+    memo (`_plain_data.pickle_unshared`), so one small dict beside two million
+    rows does not send the rows down the general path.
     """
     if type(value) not in PLAIN_SEQS:
         return value
@@ -210,12 +209,10 @@ class ArgHashingMixin:
     def _first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
         """The argument that could not be hashed, or ``NO_SUSPECT``.
 
-        Each candidate is hashed ALONE and the first that fails is named. It
-        used to be simply the first argument of a non-built-in type, so
-        ``score(df, lambda d: d * 2)`` blamed the DataFrame and advised a
-        DataFrame hasher -- which cash rejects, and which with override=True
-        would re-key every DataFrame function -- while the lambda was the
-        culprit. This runs only on the failure path. Strings,
+        Each candidate is hashed ALONE and the first that fails is named, so
+        ``score(df, lambda d: d * 2)`` blames the lambda, not the DataFrame
+        (whose hasher cash rejects, and which with override=True would re-key
+        every DataFrame function). This runs only on the failure path. Strings,
         numbers, None and built-in containers are skipped: a scalar always
         hashes, and a container holding the culprit is reported as "nested",
         which says more than naming the list. When no single candidate fails

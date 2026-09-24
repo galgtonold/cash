@@ -735,11 +735,8 @@ class ExplainMixin:
             return None
         if skipped == "size":
             return "too big for the persistent tier's size cap"
-        # There used to be three more answers here: "under the 0.1s
-        # persistence floor", "the cost model judged restoring it no cheaper
-        # than recomputing it", and the rate ceiling's "more cache per second
-        # saved than cash will spend". None can happen to a decorated result:
-        # `@cash.cache` persists what it is given, and only a size cap stops it
-        # (see `TieredBackend.set`). Reporting a floor that no longer applies
-        # would send the reader looking for a setting to change.
+        # The notebook's other reasons (the persistence floor, the cost model,
+        # the rate ceiling) cannot apply to a decorated result: `@cash.cache`
+        # persists what it is given, and only a size cap stops it (see
+        # `TieredBackend.set`).
         return None

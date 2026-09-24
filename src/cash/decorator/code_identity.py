@@ -420,10 +420,10 @@ class CodeIdentityMixin:
 
         Taken when the decorator runs (*source_hash* is the hash registration
         just computed), because that is when the text on disk is the text the
-        import compiled. It used to be taken at the FIRST CALL, and a deploy
-        that landed new files between import and that call keyed the old
-        body's result by the new body's text; every restarted process then
-        served it as an ordinary hit.
+        import compiled. Taken at the first call instead, a deploy that lands
+        new files between import and that call would key the old body's
+        result by the new body's text, and every restarted process would
+        serve it as an ordinary hit.
         The first call still compares the loaded code with the file once, to
         say so. A pin not taken at decoration (the table is full) falls back to
         the same loaded-vs-disk check helpers get.
@@ -610,12 +610,10 @@ class CodeIdentityMixin:
 
         ``_hash_arg_payload`` folds CONTENT and is the established,
         address-free tool used throughout this file for exactly this. What it
-        cannot pickle used to fall back to ``repr()`` -- and ``repr()`` is a
-        memory ADDRESS for the most ordinary unpicklable default there is.
-        Measured in three fresh processes, ``def m(self, key=lambda r: r)``
-        produced three different class digests, as did ``lock=threading.
-        Lock()`` and the keyword-only spelling; the entry could therefore
-        never hit again after a kernel restart, silently and permanently.
+        cannot pickle goes to `_unpicklable_identity`, not to ``repr()``:
+        ``repr()`` is a memory ADDRESS for the most ordinary unpicklable
+        defaults (``key=lambda r: r``, ``lock=threading.Lock()``), different
+        in every process, so the entry would never hit after a restart.
 
         ``_class_surface_parts`` already refuses a ``repr()`` fallback, on the
         grounds that it "would reintroduce the address leak this member-content
@@ -634,9 +632,8 @@ class CodeIdentityMixin:
         CAN be folded still is, and only the residue is approximated.
 
         A lambda, function or class is approximated by its CODE SURFACE, which
-        is strictly better than the old ``repr()`` on both counts -- stable
-        across processes, and sensitive to an edit of the lambda's body, which
-        an address never was.
+        is stable across processes and moves with an edit of the lambda's
+        body; an address does neither.
 
         Everything else keeps its ``repr()`` UNLESS that repr carries a memory
         address. Only an address-bearing repr is the thing this method exists
@@ -831,11 +828,10 @@ class CodeIdentityMixin:
         and that change is precisely what must invalidate.
 
         Names come from ``co_names``, i.e. what the code actually LOADS, and
-        from *obj*'s annotations. Annotations used to be skipped as hints that
-        never run, but pydantic runs ``B``'s validators for a field ``b: B``
-        and a ``typing.get_type_hints`` builder constructs ``B`` from ``A``'s
-        hints: editing ``B`` served the old result (see
-        ``cash._annotation_refs``). A hint that really is inert costs a
+        from *obj*'s annotations. An annotation is not always a hint that never
+        runs: pydantic runs ``B``'s validators for a field ``b: B``, and a
+        ``typing.get_type_hints`` builder constructs ``B`` from ``A``'s hints
+        (see ``cash._annotation_refs``). A hint that really is inert costs a
         recompute when its class is edited, never a stale value.
         """
         pairs = None
@@ -998,10 +994,8 @@ class CodeIdentityMixin:
         sees it -- and the only other place they appear is the compiled trio
         skipped above, whose digest is different in every process.
 
-        So before this, a pydantic spec passed as an argument was tracked
-        (through the compiled schema) but never cached across processes:
-        measured 2 executions for 2 runs of an unedited model, against 1 for
-        the equivalent dataclass. Safe and useless.
+        Without these parts a pydantic spec passed as an argument would have
+        no stable digest, and would never be cached across processes.
 
         `description` is the load-bearing one -- it is the instruction sent to
         the model in every structured-output library there is.

@@ -14,10 +14,8 @@ class StreamingCachedIterator:
     """Passes the producer's items through as they arrive, caching at the end.
 
     Returned on a MISS. `@cash.cache` should not change how a function
-    behaves, and for a generator it used to: cash drained the whole thing
-    before returning anything, so a streamed response arrived all at once
-    after the full latency. Measured on a token stream -- 494ms to first item
-    uncached, 2444ms cached, the entire completion in one go.
+    behaves: draining the generator before returning anything would make a
+    streamed response arrive all at once, after the full latency.
 
     Same surface as the replay iterator, deliberately: `send` and `throw`
     raise, because a cached generator cannot support them on the hit either.
@@ -70,9 +68,8 @@ class ChunkedCachedIterator:
 
     A chunk can go while the caller is still reading: another process clears
     or rewrites the entry, or the RAM tier evicts it. ``_chunks_are_intact``
-    is checked at lookup, which is before that -- so a lost chunk used to end
-    the iteration, and the caller got a silent PREFIX (100 of 1000 items).
-    The rest is recomputed
+    is checked at lookup, which is before that, and ending the iteration at a
+    lost chunk would hand the caller a silent PREFIX. The rest is recomputed
     from *recompute* instead, skipping what was already yielded; with no way
     to recompute, the loss is raised. A truncated answer is worse than a slow
     one.

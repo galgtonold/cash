@@ -217,11 +217,11 @@ class PurityChecksMixin:
     def _learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
         """Demote any provisional global this call was OBSERVED to mutate.
 
-        A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) used to
-        be dropped from the key outright, on the theory that the callee might
-        mutate it. That silently served stale values forever. Those
-        names are folded now, and confirmed here: hash them again once the body
-        has run and compare against the hash the key already needed.
+        A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) might
+        be mutated by the callee, but dropping it from the key would serve
+        stale values forever. Such names are folded, and confirmed here: hash
+        them again once the body has run and compare against the hash the key
+        already needed.
 
         Changed across the call => calling this function is what moves the value,
         so folding it would key the entry on the function's own output and miss
@@ -555,9 +555,8 @@ class PurityChecksMixin:
           effect alone (see ``EffectObserver.record_effect``).
         * the static findings already name that KIND of effect -- a write the
           analyzer listed is not news when the observer sees it too. Only the
-          kinds they cover are dropped. The whole warning used to be, so a
-          static finding about a log line hid a network read in the same
-          function: never reported in 30 starts.
+          kinds they cover are dropped, so a static finding about a log line
+          does not hide a network read in the same function.
         * nothing was observed -- which is *not* proof of purity. Only the
           path this call took was watched, so an effect behind a branch that
           did not run is unobserved. That is why this supplements the static

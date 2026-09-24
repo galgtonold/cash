@@ -54,8 +54,7 @@ class ReportingMixin:
         cached entry), and 0.0 on a miss. They are distinct: a hit's
         ``execution_time`` is microseconds, but its ``time_saved`` is the full
         compute it stood in for. ``cache_info()['total_time_saved']`` sums the
-        latter - summing ``execution_time`` (the old behaviour) under-reported
-        savings by orders of magnitude.
+        latter.
 
         *miss* is the reason for a miss that had no lookup (no key, or the
         body raised); a looked-up miss takes the one `_note_miss` held.
@@ -173,10 +172,8 @@ class ReportingMixin:
     ) -> None:
         """Surface a raised ``cache_if`` predicate as a user-visible warning.
 
-        Previously this was a ``logger.debug`` - invisible to anyone not
-        explicitly configuring logging. Promoted to a one-shot
-        `CashCacheIneffectiveWarning` so a buggy predicate is
-        diagnosed instead of silently disabling the cache.
+        A one-shot `CashCacheIneffectiveWarning` rather than a log line, so a
+        buggy predicate is diagnosed instead of silently disabling the cache.
         """
         self._warn_once(
             CashCacheIneffectiveWarning,
@@ -221,10 +218,8 @@ class ReportingMixin:
     ) -> None:
         """Surface a backend-locking failure as a user-visible warning.
 
-        Previously this was ``logger.warning`` - visible to anyone who
-        wired up logging.warning, but invisible to anyone running with
-        default config. Promoted to a CashCacheIneffectiveWarning so
-        the user notices the implicit race risk.
+        A CashCacheIneffectiveWarning rather than a log line, which default
+        logging settings hide, so the user notices the implicit race risk.
         """
         self._warn_once(
             CashCacheIneffectiveWarning,
@@ -351,10 +346,9 @@ class ReportingMixin:
         this one. See ``cash.effectiveness`` for when it speaks up.
 
         ``overhead_seconds`` is everything cash did around the body: the key and
-        lookup, and on a miss the store as well. The store used to be left out
-        as a once-per-key cost, but a result kept in RAM only is copied in
-        every process that computes it, and a 2.5M-row parse cost 4x its body
-        that way with nothing reporting it.
+        lookup, and on a miss the store as well: the store is not a once-per-key
+        cost, since a result kept in RAM only is copied in every process that
+        computes it.
         """
         cf = self._cached.get(func_name)
         culprit = cf.arg_cost if cf is not None else None
@@ -373,12 +367,10 @@ class ReportingMixin:
         except Exception:  # noqa: BLE001 - accounting must never break a call
             return
         # The warn is deliberately OUTSIDE that guard. Under ``-W error`` it
-        # raises into the caller -- which is the shape this project spent
-        # 8b47cc4 removing from the backend, so it is worth being explicit
-        # that it is different here: there, cash raised on its own initiative
-        # over a failure the user had not asked to hear about. Here the user
-        # configured warnings-as-errors and is entitled to have that honoured.
-        # Swallowing it would silently override their filter, which is worse.
+        # raises into the caller: the user configured warnings-as-errors and
+        # is entitled to have that honoured. This is unlike the backend, which
+        # never raises over a failure the user did not ask to hear about.
+        # Swallowing it would silently override their filter.
         if verdict:
             what, fix = verdict
             warn_diagnostic(

@@ -124,9 +124,7 @@ class RuntimeMixin:
 
         The ONE key build: a real call (`_resolve_cache_key`) and ``explain()``
         (`_explain_call`) both use it, so the key explain() predicts is the key
-        the call looks up. It used to be written out twice, and the copy in
-        explain() lacked the random-seed epoch and the class members of a
-        method's arguments, so it reported ``no_entry`` for calls that hit.
+        the call looks up.
 
         Raises when there is no key: `UnhashableDefault`, `UnhashableArgs`,
         `KeyBuildFailed`, or whatever else a step raised. Never keys the call
@@ -287,24 +285,18 @@ class RuntimeMixin:
     def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
         """True unless this is a chunked manifest missing some of its chunks.
 
-        A manifest can outlive its chunks -- eviction reaches them separately,
-        and until chunks carried the producer's execution_time the persistence
-        gate dropped them while keeping the manifest. The reader terminates
-        iteration on a missing chunk, so the result of that split was an
-        entry that returned FEWER items than it stored, or none at all,
-        without a word. A truncated answer is worse than a slow one, so the
-        entry is treated as absent and recomputed.
+        A manifest can outlive its chunks -- eviction reaches them separately
+        -- and served as it is, such an entry returns FEWER items than it
+        stored, or none at all, without a word. A truncated answer is worse
+        than a slow one, so the entry is treated as absent and recomputed.
 
         Metadata-only reads: the point is to check presence, not to load the
         payload and undo the laziness chunking exists for.
 
         Scope, because the docs depend on it: BOTH read paths apply this --
         ``_try_get_cached`` for the default one, and the double-checked re-read
-        inside ``_compute_with_lock`` for ``use_locking=True``. Keep it that
-        way. The locking path skipped it until 2026-09-06 and served a short
-        iterator with no recompute, no error and no warning: measured 3 of 10
-        items when a later chunk was missing, and 0 items when the first one
-        was. Both paths are pinned by
+        inside ``_compute_with_lock`` for ``use_locking=True``, since both go
+        through `_try_get_cached`. Both paths are pinned by
         ``tests/test_core/test_iterator_caching.py``.
         """
         if getattr(metadata, "iterator_storage", None) != "chunked":
@@ -335,9 +327,8 @@ class RuntimeMixin:
 
         Every hit path goes through here -- the first lookup, the locked
         re-read (`_compute_with_lock`) and the async single-flight follower
-        (`_await_leader`) -- and all of them pass the call's `recompute`. The
-        async ones used to leave it out, so a missing chunk raised there
-        instead of recomputing.
+        (`_single_flight`) -- and all of them pass the call's `recompute`, so a
+        missing chunk is recomputed on every path rather than raised.
         """
         if metadata and metadata.iterator_storage == "chunked":
             n_chunks = metadata.n_chunks or 0
@@ -404,11 +395,9 @@ class RuntimeMixin:
         the hit, wrapped like any other, or ``CACHE_MISS``.
 
         The SAME validity test as the first lookup, by calling the same
-        function -- not a hand-rolled subset of it. The locked re-read used to
-        re-implement the checks, and it kept losing one: first
-        ``_chunks_are_intact`` (a short iterator came back), then
-        ``_auto_file_deps_fresh`` (under ``use_locking=True`` an edited file
-        was served stale). One function decides whether an entry may be served.
+        function -- not a hand-rolled subset of it, which would lose a check
+        (``_chunks_are_intact``, ``_auto_file_deps_fresh``) as they are added.
+        One function decides whether an entry may be served.
         """
         raw_metadata, cached_data = self.backend.get(call.cache_key)
         if raw_metadata is None:

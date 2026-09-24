@@ -55,9 +55,9 @@ class StoreMixin:
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
 
-        One decision for the sync, async and streaming paths, which used to
-        carry three copies of it -- and it now says WHY, because "not stored"
-        is the answer to the next call's "why did that miss?".
+        One decision for the sync, async and streaming paths, and it says WHY,
+        because "not stored" is the answer to the next call's "why did that
+        miss?".
         """
         # Skip the write exactly once when THIS call revealed that the
         # function draws: its key was built before we knew, so an entry stored
@@ -326,9 +326,9 @@ class StoreMixin:
                 # than sharing it. Not for a `frozen=True` function: declaring
                 # a result frozen says it is not modified, and handing the same
                 # object back is what that promises for a result no pickle can
-                # copy at all. This used to ride on `decorator_entry`, which
-                # made `frozen=True` look undecorated to the rate ceiling and
-                # cost it disk persistence entirely.
+                # copy at all. Kept apart from `decorator_entry`, so that
+                # `frozen=True` does not look undecorated to the rate ceiling
+                # and lose disk persistence.
                 copy_required=not self._is_frozen(func_name),
             )
 
@@ -379,9 +379,9 @@ class StoreMixin:
         The fix line says **raise** the thresholds, and that direction is
         load-bearing. ``cache_if`` is consulted only in the ``chunk_index == 0``
         branch of ``_stream_and_store`` -- the whole result fit one chunk -- and
-        this fires at ``chunk_index == 1``, once it did not. The message used to
-        advise *lowering* the thresholds, which produces more chunks and so
-        guarantees the very bypass it is warning about.
+        this fires at ``chunk_index == 1``, once it did not. Lowering the
+        thresholds would produce more chunks and so guarantee the very bypass
+        it is warning about.
         """
         self._warn_once(
             CashCacheIneffectiveWarning,
@@ -429,8 +429,7 @@ class StoreMixin:
         that breaks out, or a producer that raises, leaves no entry -- a
         truncated result under the full result's key is a wrong answer, not a
         slow one. Chunks already flushed are removed on the way out. The cost
-        is real and accepted: draining eagerly used to leave a complete entry
-        behind even when the caller took two items, and it no longer does.
+        is real and accepted: a caller that takes two items leaves no entry.
 
         **Time is the producer's, not the wall clock.** Only the spans inside
         `next()` are summed, so a slow consumer cannot inflate the number the
@@ -449,8 +448,7 @@ class StoreMixin:
         try:
             # Entered ONCE. Per item we only suspend around the `yield`, which
             # is a ContextVar swap; `__enter__` reinstalls patches and rechecks
-            # the import hook, and paying that per item cost 5.1us each --
-            # measured 294ms -> 1521ms on a 200k-item iterator before this.
+            # the import hook, which costs microseconds per item.
             with tracker, observer:
                 while True:
                     started = _perf_counter()
@@ -583,9 +581,7 @@ class StoreMixin:
                 # NOT "you will get a truncated iterator". ``_chunks_are_intact``
                 # probes every chunk and turns a manifest with a hole into a
                 # MISS, on both read paths, so the cost is a permanent recompute
-                # rather than a short answer. The locked re-read skipped that
-                # guard until 2026-09-06; do not re-introduce the truncation
-                # language here without first checking it is true again.
+                # rather than a short answer.
                 f"@cash.cache: backend {backend_name} failed to store "
                 f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}), "
                 f"so the entry can never be read back and every later call "

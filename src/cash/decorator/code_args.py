@@ -215,10 +215,8 @@ class CodeArgsMixin:
             # ``__code__`` of its own -- its code lives on its class -- so
             # yielding the instance would fold NOTHING, while the identical
             # object WITHOUT ``__call__`` takes the instance branch below and
-            # folds its class. Measured before this branch existed: adding
-            # ``__call__`` to a class silently removed that class's code from
-            # the key, and the instance then also tripped the unhashable
-            # advisory. ``_is_opaque`` returns the same verdict for a class as
+            # folds its class: adding ``__call__`` to a class must not remove
+            # that class's code from the key. ``_is_opaque`` returns the same verdict for a class as
             # for one of its instances, so routing the class here rather than
             # the instance leaves opacity unchanged.
             call = getattr(type(value), "__call__", None)

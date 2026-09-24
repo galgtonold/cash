@@ -202,7 +202,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # hashed, so changing it invalidates nothing
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
-        # ran the cell uncached; previously log-only
+        # ran the cell uncached
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
@@ -256,8 +256,8 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
           https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash
 
     *what* is one sentence of what happened; *fix* is one imperative sentence.
-    Everything else belongs in the doc section, which is the whole point — the
-    message used to carry a paragraph because it had nowhere to point.
+    Everything else belongs in the doc section the link points at, so the
+    message stays short.
     """
     return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
 

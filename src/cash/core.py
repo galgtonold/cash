@@ -366,16 +366,11 @@ class Cash(
         self._analyzed = set()  # Track which functions we've *surfaced* purity for
         # ONE lock for the one-time analysis, whatever function triggers it.
         #
-        # The check-and-analyze below is not atomic, and the CACHE KEY depends
-        # on what the analysis populates (helper source hashes, graph edges).
-        # Concurrent first calls therefore resolved two different keys for one
-        # call -- the threads that got there before the analysis finished, and
-        # the one that did it -- so `use_locking=True` looked like it admitted
-        # exactly two threads into the compute at every thread count. It was
-        # not the lock: each key was single-flighted correctly, there were just
-        # two of them, and the pre-analysis one is an entry no later run will
-        # ever look up. Measured: warming the analysis in the main thread first
-        # collapsed 6 threads to one key and one execution.
+        # The CACHE KEY depends on what the analysis populates (helper source
+        # hashes, graph edges), so a thread that built a key while another was
+        # still analysing would get a different key for the same call: an
+        # entry no later run looks up, and under `use_locking=True` a second
+        # execution, since each key is single-flighted on its own.
         #
         # RLock, not Lock: analysis walks the dependency graph and re-enters
         # this same guard for the callees it populates on the way.
@@ -870,8 +865,8 @@ class Cash(
 
         One wrapper for both: everything before and after the body is the
         same sync code (`_lookup`, `_body_scope`, `_finish_miss`), and the
-        two variants differ only in whether they await the body. The sync and
-        async wrappers used to be two ~150-line copies, and they had drifted.
+        two variants differ only in whether they await the body, so they
+        cannot drift apart.
         """
         func = spec.func
 
@@ -1432,11 +1427,10 @@ class Cash(
         from .ui.dashboard import HAS_WIDGETS, show_analytics_dashboard
 
         # Asking the dashboard whether it CAN run, rather than calling it and
-        # catching. It prints "ipywidgets is required" and returns normally, so
-        # the except-ImportError fallback this replaces was unreachable: the
-        # documented script behaviour never once happened.
-        # And whether anything can draw it: outside a kernel, displaying the
-        # widgets only prints their repr.
+        # catching: without ipywidgets it prints "ipywidgets is required" and
+        # returns normally, so there is nothing to catch. And whether anything
+        # can draw it: outside a kernel, displaying the widgets only prints
+        # their repr.
         if HAS_WIDGETS and _in_kernel():
             try:
                 show_analytics_dashboard(self.analytics)

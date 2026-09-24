@@ -230,10 +230,10 @@ class RegistryMixin:
         Populating the WHOLE closure (not just *func*) before the first cache
         key is computed is what keeps the key stable from the very first call.
         The state hash folds in each dependency's purity-report
-        ``helper_source_hashes``; those used to be filled lazily on each
-        dependency's own first call, so the key deepened only after the chain
-        warmed - and a fresh process therefore missed the first call to every
-        cached function even though a valid entry was on disk.
+        ``helper_source_hashes``; filled lazily on each dependency's own first
+        call, the key would deepen only after the chain warmed, and a fresh
+        process would miss the first call to every cached function even with a
+        valid entry on disk.
 
         Surfacing stays per-function: each dependency warns/raises on its OWN
         first direct call, not here, so eager population doesn't change which

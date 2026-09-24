@@ -314,10 +314,9 @@ class RngMixin:
     ) -> None:
         """Warn once if *func*'s source draws from an unseeded RNG.
 
-        The decorator used to be completely silent here while the notebook path
-        warned, so ``@cash.cache`` would freeze a non-deterministic result
-        forever with nothing on screen to say so. The two paths now share ONE
-        detector — :class:`~cash.tracking.randomness.RandomnessDetector`, reused
+        Otherwise ``@cash.cache`` would freeze a non-deterministic result
+        forever with nothing on screen to say so. The decorator and the
+        notebook path share ONE detector — :class:`~cash.tracking.randomness.RandomnessDetector`, reused
         verbatim — so "what counts as unseeded" cannot drift between them.
 
         Runs at DECORATION time, once per function. The analysis is a pure

@@ -81,14 +81,14 @@ class ClosureFoldMixin:
         try:
             tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
         except SOURCE_RETRIEVAL_ERRORS:
-            # No source: keep the old conservative answer. Nothing can be told
+            # No source: the conservative answer. Nothing can be told
             # apart, so nothing is folded and nothing is provisional.
             result = frozenset(freevars)
         else:
             # Only mutations visible in this function's own source disqualify a
             # capture outright. "Passed to a call" is provisional: folded, then
-            # confirmed by observation. Before this split, `sum(data)`
-            # put `data` beyond the fold and the closure served stale forever.
+            # confirmed by observation, so `sum(data)` does not put `data`
+            # beyond the fold, where the closure would serve stale forever.
             result = ClosureFoldMixin._unsafe_uses_of(
                 tree,
                 freevars,
@@ -280,7 +280,7 @@ class ClosureFoldMixin:
             # A call cannot mutate a function, so the reason `unsafe` exists
             # does not apply. Same predicate as `_fingerprint_default`, and the
             # same deliberate limit: functions, methods and builtins only. An
-            # arbitrary callable INSTANCE keeps the old path rather than being
+            # arbitrary callable INSTANCE takes the paths below rather than being
             # keyed on its class and silently sharing entries across instances
             # holding different state.
             fingerprint = self._fingerprint_default(v)
@@ -313,7 +313,7 @@ class ClosureFoldMixin:
                 captures.append((name, v))
             elif name not in unsafe:
                 # Read-only mutable capture: fold its content hash.
-                # Unhashable content keeps the old skip behavior.
+                # Unhashable content is skipped.
                 try:
                     h = self._hash_arg_payload((v,), {})
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):

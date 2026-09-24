@@ -125,15 +125,12 @@ class GlobalsFoldMixin:
 
     #: Dunder globals that are machine or import machinery, never user data.
     #:
-    #: Every dunder used to be skipped, which is right for these -- ``__file__``
-    #: and ``__name__`` differ per checkout and per invocation, so folding them
-    #: would make a cache key un-shareable between two machines and between
-    #: ``python job.py`` and ``python -m job``. It is wrong for the ones a
-    #: library actually declares: a bumped ``__version__`` invalidated
-    #: NOTHING, and a report stamped with the old version went on being
-    #: published through three further edits that each correctly invalidated
-    #: other stages. ``RELEASE`` and ``LEVEL`` in the same file were
-    #: tracked; only the dunder spelling was not.
+    #: These are skipped: ``__file__`` and ``__name__`` differ per checkout and
+    #: per invocation, so folding them would make a cache key un-shareable
+    #: between two machines and between ``python job.py`` and ``python -m
+    #: job``. Every other dunder is folded like any global, because a library
+    #: declares its data that way too: a bumped ``__version__`` must invalidate
+    #: what a report stamped with it.
     _MACHINERY_DUNDERS = frozenset(
         {
             "__name__",
@@ -217,8 +214,7 @@ class GlobalsFoldMixin:
         # otherwise drift every call and cause a permanent miss.
         #
         # `hard` is that set: mutations visible in this function's own source.
-        # `provisional` is the weaker case the argument rule used to lump in with
-        # it - a name merely PASSED to a call. Those are folded (so a change
+        # `provisional` is the weaker case - a name merely PASSED to a call. Those are folded (so a change
         # invalidates) and confirmed at runtime by
         # `_learn_mutating_captures`, which demotes any that the call is actually
         # observed to mutate.
@@ -243,7 +239,7 @@ class GlobalsFoldMixin:
                 hard |= suspected - provisional
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
-                # No source: keep the old conservative answer. Without an AST
+                # No source: the conservative answer. Without an AST
                 # there is no way to tell a read from a mutation, and folding
                 # blind would risk the permanent-miss trap with nothing to
                 # learn from.
@@ -377,8 +373,8 @@ class GlobalsFoldMixin:
             if name in learned_mutating:
                 # Observed to drift as a result of calling this function. Folding
                 # it would key the entry on the function's own output and miss
-                # forever, which is the trap the old argument rule guarded --
-                # and the decorator has no perpetual-miss guard to catch it.
+                # forever, and the decorator has no perpetual-miss guard to
+                # catch it.
                 continue
             v = g[name]
             # Skip modules, classes, and plain callables (helpers/deps handled
