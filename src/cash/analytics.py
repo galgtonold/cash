@@ -208,7 +208,7 @@ class AnalyticsManager:
         if self._disabled:
             return {}
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
 
@@ -247,7 +247,7 @@ class AnalyticsManager:
             return {}
         self.flush()  # Ensure buffered events are persisted before querying
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
 
@@ -282,7 +282,7 @@ class AnalyticsManager:
             return []
         self.flush()  # Ensure buffered events are persisted before querying
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
                 cursor = conn.cursor()
 
                 # SQLite doesn't have a simple date function for unix timestamps in all versions,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import logging
 import os
@@ -97,7 +98,7 @@ def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
     if not os.path.isfile(path):
         return None
     try:
-        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+        with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
             rows = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()
         return int(rows[0]), os.path.getsize(path)
     except Exception:  # noqa: BLE001 - not a cash database, or unreadable
