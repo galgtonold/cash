@@ -1,156 +1,62 @@
-# Cash Examples
+# cash examples
 
-This directory contains polished examples demonstrating cash's caching features for both **Jupyter notebooks** and **Python scripts**.
+Start with the live tour. It runs in your browser, with nothing to install:
+[open it in Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
+or [in Binder](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb).
 
-## Quick Start
+To run the others locally, install cash with pandas support:
 
-1. Install cash: `pip install -e .` (from project root)
-2. Open any `.ipynb` file in Jupyter or VS Code, or run a `.py` script
-3. Run the cells/script sequentially
+```bash
+pip install "cash-lib[pandas]"
+```
 
-## Example Notebooks
+In a notebook, judge each cell by its badge, not by the clock: CACHED means
+cash restored the result, EXECUTED means the code ran.
 
-### [`demo_cell_caching.ipynb`](demo_cell_caching.ipynb) - Statement-Level Caching
-**What it demonstrates:** Statement-level caching with `%cash_on`, one cell at a time.
+## Notebook examples
 
-**Key features shown:**
-- Basic cache hit/miss
-- Dependency tracking (changing `multiplier` invalidates downstream cache)
-- TTL (Time To Live) for cache expiration with `# @cash:ttl=N`
-- Cache explorer widget
+Each one starts with `import cash` then `%cash_on`, and has **Try this**
+steps that change one thing and show what runs again.
 
-**What to try:**
-1. Run all cells once — see "COMPUTED" for first run
-2. Run again — see "CACHED" (instant results)
-3. Change `multiplier = 10` to `multiplier = 20` and re-run dependent cell — auto-invalidation!
+| Notebook | Shows | Needs |
+|---|---|---|
+| [`try_cash_binder.ipynb`](try_cash_binder.ipynb) | The live tour: a Monte Carlo model, edits upstream and downstream, the decorator | numpy |
+| [`demo_cell_caching.ipynb`](demo_cell_caching.ipynb) | Statement caching, a changed input, `# @cash:ttl` | nothing |
+| [`cache_calls_demo.ipynb`](cache_calls_demo.ipynb) | Caching of the functions a cell calls | nothing |
+| [`file_caching_demo.ipynb`](file_caching_demo.ipynb) | A CSV read that runs again when the file changes | pandas |
+| [`file_tracking_demo.ipynb`](file_tracking_demo.ipynb) | File reads through `open`, pandas, `pathlib` and numpy | pandas, numpy |
+| [`demo_notebook_caching.ipynb`](demo_notebook_caching.ipynb) | A sales pipeline: joins, aggregates, a plot, `%cash_off` | pandas, numpy, matplotlib |
+| [`financial_analysis_demo.ipynb`](financial_analysis_demo.ipynb) | Rolling features, a loop cached per iteration, branches, provenance | pandas, numpy |
+| [`cfd_simulation_demo.ipynb`](cfd_simulation_demo.ipynb) | A Navier-Stokes solver, a grid study, saving and reloading results | numpy, scipy |
+| [`large_scale_projects/`](large_scale_projects/) | Ten analyses of real datasets: NYC taxi trips, Wikipedia pageviews, census data and others | pandas, numpy, matplotlib, scipy, scikit-learn, and hundreds of MB to several GB of downloads |
 
----
+The large-scale notebooks download or generate their data on the first run.
+Notebooks 02 to 07 expect the repository root as the working directory and
+write to `examples/large_scale_projects/data/`; the others write to `data/`
+under the working directory.
 
-### [`demo_notebook_caching.ipynb`](demo_notebook_caching.ipynb) - Automatic Notebook Caching
-**What it demonstrates:** The `%cash_on` magic for automatic transparent caching of all cells.
+## Script examples
 
-**Key features shown:**
-- Auto-caching mode (`%cash_on` / `%cash_off`)
-- Execution timing comparison (cached vs uncached)
-- Cache invalidation when upstream code changes
-- `%cash_stats` for session statistics
+| Script | Shows | Needs |
+|---|---|---|
+| [`script_caching_demo.py`](script_caching_demo.py) | `@cash.cache` in a plain script: repeated calls, arguments, a file the function reads, `ttl` | nothing |
 
-**What to try:**
-1. Run notebook once — observe execution times
-2. Restart kernel and run again — see instant restoration from cache
-3. Modify a data processing step — watch downstream invalidation cascade
+Run it twice from the repository root. The second run answers sections 1 and
+2 from the cache.
 
----
-
-### [`file_caching_demo.ipynb`](file_caching_demo.ipynb) - File Dependency Tracking
-**What it demonstrates:** How cash tracks file reads and invalidates caches when files change.
-
-**Key features shown:**
-- Pandas `read_csv` tracking — cache invalidates when CSV changes
-- Variable lineage across cells
-- Downstream cascade — changing raw data invalidates all derived variables
-
-**What to try:**
-1. Run all cells — data is loaded and processed
-2. Modify `sales_data.csv` externally
-3. Re-run the data loading cell — cash detects the file change and re-executes
-
----
-
-### [`file_tracking_demo.ipynb`](file_tracking_demo.ipynb) - Comprehensive File Tracking
-**What it demonstrates:** All supported file tracking methods (open, pandas, numpy, pathlib).
-
-**Key features shown:**
-- `open()` file reads tracked automatically
-- `pd.read_csv()` tracked
-- `Path.read_text()` tracked
-- `np.loadtxt()` tracked
-- Debug mode (`%cash_debug on`) showing internal cache decisions
-
-**What to try:**
-1. Enable debug mode to see file hashing in action
-2. Modify a tracked file between runs
-3. Watch cash detect the change and invalidate the correct cache entry
-
----
-
-### [`financial_analysis_demo.ipynb`](financial_analysis_demo.ipynb) - Real-World Data Pipeline
-**What it demonstrates:** A realistic financial analysis workflow with multiple caching features.
-
-**Key features shown:**
-- Data loading with file tracking
-- Multi-step preprocessing pipeline
-- Heavy computation caching (volatility metrics, RSI)
-- Loop caching (per-ticker iteration caching)
-- Conditional caching (branching logic)
-- Nested loop caching
-
-The first cell writes its dataset, `large_financial_data.csv` (about 20,000
-rows, from a fixed seed), next to the notebook if it is not there yet.
-
-**What to try:**
-1. Run the full pipeline — first run computes everything
-2. Re-run — cached results load instantly
-3. Add a new ticker or change a computation — only affected steps re-execute
-
----
-
-### [`script_caching_demo.py`](script_caching_demo.py) - Python Script Caching
-**What it demonstrates:** Using `@cash.cache` decorator in regular Python scripts (not notebooks).
-
-**Key features shown:**
-- `@cash.cache` decorator for function result caching
-- TTL (time-to-live) for automatic cache expiration
-- `FileDataSource` for file dependency tracking
-- Multiple arguments and keyword arguments
-- Cache persistence across script runs
-
-**Usage:**
 ```bash
 python examples/script_caching_demo.py
 ```
 
-**What to try:**
-1. Run the script once — see computations happen
-2. Run again immediately — see cached results load instantly
-3. Modify the temporary data file between runs — see file-dependent cache invalidate
+## Magics used in the notebooks
 
----
+| Magic | What it does |
+|---|---|
+| `%cash_on` / `%cash_off` | Start or stop caching |
+| `%cash_stats` | Hits, misses and time saved this session |
+| `%cash_provenance df` | How `df` was computed and what it depends on |
+| `%cash_provenance df --graph` | The same, as a dependency tree |
+| `%cash_provenance df --time` | The same, with a timeline of the computations |
 
-### [`large_scale_projects/`](large_scale_projects/) - Large Real-World Workloads
-Ten analysis notebooks over datasets of hundreds of MB to several GB (NYC taxi trips, Wikipedia pageviews, census microdata, and others). Each downloads or generates its data on first run, so expect that run to take a while and use real disk space. Notebooks 02–07 expect the repository root as working directory and write to `examples/large_scale_projects/data/` (gitignored); the others write to `data/` under the working directory. Three of them are reference workloads for the benchmarks (`benchmarks/ref_notebooks.txt`).
-
----
-
-## Common Patterns
-
-### Enable auto-caching
-```python
-import cash
-%cash_on
-```
-
-### Check cache status
-```python
-%cash_stats        # Session statistics
-%cash_stats json   # Machine-readable format
-```
-
-### Debug cache decisions
-```python
-%cash_debug on     # Verbose logging
-%cash_debug json   # JSON-formatted logs
-%cash_debug off    # Disable
-```
-
-### View variable provenance
-```python
-%cash_provenance df         # Show history of 'df'
-%cash_provenance df --graph # Show dependency tree
-%cash_provenance --time     # Timeline of all computations
-```
-
-### Clear the cache
-```python
-!cash clear --all  # Delete the cache in use, then restart the kernel
-```
+The [magics reference](https://cash-lib.readthedocs.io/en/latest/magics/)
+covers the rest.
