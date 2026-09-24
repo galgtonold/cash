@@ -1596,23 +1596,10 @@ class CellExecutor:
             if i in jump_runs:
                 plan = checker.plan_cell_run(tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts))
                 planned = {i + k: m for k, m in (plan or {}).items()}
-            try:
-                stmt_code = ast.unparse(node)
-            except (ValueError, TypeError):
+            texts = self._statement_texts(raw_cell, node)
+            if texts is None:
                 continue
-
-            # The badge shows the user's own layout; `stmt_code` above stays the
-            # keyed and executed text. See `_statement_source`.
-            stmt_display = _statement_source(raw_cell, node)
-            stmt_exec_source = _exec_source_for_node(raw_cell, node, stmt_display)
-
-            # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
-            # suppression (``df.head();`` shows no repr). Re-attach it so the
-            # suppression rides through the cache key AND the execution path
-            # (``CodeRunner`` skips the display), so a cached re-run
-            # doesn't emit a phantom repr.
-            if self.expr_has_trailing_semicolon(raw_cell, node):
-                stmt_code = stmt_code + ";"
+            stmt_code, stmt_display, stmt_exec_source = texts
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1
@@ -1636,83 +1623,26 @@ class CellExecutor:
             try:
                 try:
                     if is_control_structure(node):
-                        # ``raw_cell`` (not the annotation) is what goes down: the
-                        # structure's statements each resolve their OWN directive
-                        # against the original source, and ``ast.unparse`` has already
-                        # dropped the comments by the time they are dispatched. The
-                        # ``annotation`` computed above is the node's WHOLE-range
-                        # merge, which cannot tell a directive on the loop from one on
-                        # a single body statement — passing it would disable caching
-                        # for every sibling in the body.
-                        # Logged as ONE statement, as the upstream simulation
-                        # traces it, for the figure histories a writer records.
-                        control_log = self._statement_processor.begin_control_log(stmt_code)
-                        try:
-                            if awaitable and contains_top_level_await(node):
-                                # The sync ControlStructureProcessor cannot compile a
-                                # body that awaits (``'await' outside function``), so
-                                # the whole structure runs as one awaited unit.
-                                logger.debug("[CONTROL] Await inside control body, running as awaited single unit")
-                                ctrl_result = yield _Step(
-                                    {"ttl": cell.ttl, "silent": True, "raw_cell": raw_cell},
-                                    await_unit=node,
-                                )
-                            else:
-                                logger.debug(
-                                    "[CONTROL] Detected control structure, delegating to ControlStructureProcessor"
-                                )
-                                ctrl_result = self._control_structure_processor.process(
-                                    node,
-                                    ttl=cell.ttl,
-                                    silent=True,
-                                    raw_cell=raw_cell,
-                                    prev_node=tree.body[i - 1] if i > 0 else None,
-                                )
-                        finally:
-                            self._statement_processor.end_control_log(control_log)
-                        buffered_result_outputs = self._collect_ctrl_outputs(
-                            ctrl_result,
-                            is_last,
-                            all_metrics,
-                            buffered_result_outputs,
+                        buffered_result_outputs = yield from self._control_structure_steps(
+                            cell,
+                            i,
+                            stmt_code,
+                            is_last=is_last,
+                            buffered=buffered_result_outputs,
+                            awaitable=awaitable,
                         )
-                        logger.debug(
-                            "[CONTROL] Completed: %s iterations, %s cached, %s computed",
-                            ctrl_result.total_iterations,
-                            ctrl_result.cached_iterations,
-                            ctrl_result.computed_iterations,
-                        )
-                        if not ctrl_result.success:
-                            raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
-                        _set_written_later(self, written_later[i])
-                        try:
-                            # ``display_code`` and ``exec_source`` differ only for a
-                            # top-level ``def``/``class``: the badge withholds the
-                            # body, and the original text is executed only under an
-                            # ``# @cash:assume-safe`` waiver (``_exec_source_for_node``).
-                            metrics = yield _Step(
-                                {
-                                    "code": stmt_code,
-                                    "ttl": cell.ttl,
-                                    "silent": True,
-                                    "annotation": annotation,
-                                    "display_code": stmt_display,
-                                    "exec_source": stmt_exec_source,
-                                    "occurrence_index": occ,
-                                    # IPython echoes only the CELL's last expression;
-                                    # cash executes each statement as its own unit.
-                                    "is_last": is_last,
-                                }
-                            )
-                            buffered_result_outputs = self._handle_regular_stmt_metrics(
-                                metrics,
-                                is_last,
-                                all_metrics,
-                                buffered_result_outputs,
-                            )
-                        finally:
-                            _set_written_later(self, frozenset())
+                        buffered_result_outputs = yield from self._statement_steps(
+                            cell,
+                            stmt_code,
+                            annotation=annotation,
+                            display_code=stmt_display,
+                            exec_source=stmt_exec_source,
+                            occurrence_index=occ,
+                            is_last=is_last,
+                            written_later=written_later[i],
+                            buffered=buffered_result_outputs,
+                        )
 
                     self._badges.cancel_progress()
                     t_badge = time.time()
@@ -1742,3 +1672,124 @@ class CellExecutor:
                 self._badges.cancel_progress()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
+
+    def _statement_steps(
+        self,
+        cell: _CellRun,
+        stmt_code: str,
+        *,
+        annotation: Any,
+        display_code: str | None,
+        exec_source: str | None,
+        occurrence_index: int,
+        is_last: bool,
+        written_later: frozenset[str],
+        buffered: list,
+    ) -> Generator[_Step, Any, list]:
+        """Run one regular top-level statement; returns the buffered result
+        outputs with its own added.
+
+        ``display_code`` and ``exec_source`` differ only for a top-level
+        ``def``/``class``: the badge withholds the body, and the original text
+        is executed only under an ``# @cash:assume-safe`` waiver
+        (``_exec_source_for_node``).
+        """
+        _set_written_later(self, written_later)
+        try:
+            metrics = yield _Step(
+                {
+                    "code": stmt_code,
+                    "ttl": cell.ttl,
+                    "silent": True,
+                    "annotation": annotation,
+                    "display_code": display_code,
+                    "exec_source": exec_source,
+                    "occurrence_index": occurrence_index,
+                    # IPython echoes only the CELL's last expression;
+                    # cash executes each statement as its own unit.
+                    "is_last": is_last,
+                }
+            )
+            return self._handle_regular_stmt_metrics(metrics, is_last, cell.all_metrics, buffered)
+        finally:
+            _set_written_later(self, frozenset())
+
+    def _statement_texts(self, raw_cell: str, node: ast.stmt) -> tuple[str, str | None, str | None] | None:
+        """``(code, display_code, exec_source)`` for the top-level *node*, or
+        None when it cannot be unparsed.
+
+        ``code`` is the keyed and executed text; the badge shows the user's
+        own layout (see `_statement_source`).
+        """
+        try:
+            stmt_code = ast.unparse(node)
+        except (ValueError, TypeError):
+            return None
+        stmt_display = _statement_source(raw_cell, node)
+        stmt_exec_source = _exec_source_for_node(raw_cell, node, stmt_display)
+        # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
+        # suppression (``df.head();`` shows no repr). Re-attach it so the
+        # suppression rides through the cache key AND the execution path
+        # (``CodeRunner`` skips the display), so a cached re-run
+        # doesn't emit a phantom repr.
+        if self.expr_has_trailing_semicolon(raw_cell, node):
+            stmt_code = stmt_code + ";"
+        return stmt_code, stmt_display, stmt_exec_source
+
+    def _control_structure_steps(
+        self,
+        cell: _CellRun,
+        i: int,
+        stmt_code: str,
+        *,
+        is_last: bool,
+        buffered: list,
+        awaitable: bool,
+    ) -> Generator[_Step, Any, list]:
+        """Run the control structure at ``cell.tree.body[i]``; returns the
+        buffered result outputs with its own added.
+
+        ``raw_cell`` (not the node's annotation) is what goes down: the
+        structure's statements each resolve their OWN directive against the
+        original source, and ``ast.unparse`` has already dropped the comments
+        by the time they are dispatched. The node's annotation is its
+        WHOLE-range merge, which cannot tell a directive on the loop from one
+        on a single body statement -- passing it would disable caching for
+        every sibling in the body.
+        """
+        node = cell.tree.body[i]
+        raw_cell = cell.raw_cell
+        # Logged as ONE statement, as the upstream simulation traces it, for
+        # the figure histories a writer records.
+        control_log = self._statement_processor.begin_control_log(stmt_code)
+        try:
+            if awaitable and contains_top_level_await(node):
+                # The sync ControlStructureProcessor cannot compile a body that
+                # awaits (``'await' outside function``), so the whole structure
+                # runs as one awaited unit.
+                logger.debug("[CONTROL] Await inside control body, running as awaited single unit")
+                ctrl_result = yield _Step(
+                    {"ttl": cell.ttl, "silent": True, "raw_cell": raw_cell},
+                    await_unit=node,
+                )
+            else:
+                logger.debug("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                ctrl_result = self._control_structure_processor.process(
+                    node,
+                    ttl=cell.ttl,
+                    silent=True,
+                    raw_cell=raw_cell,
+                    prev_node=cell.tree.body[i - 1] if i > 0 else None,
+                )
+        finally:
+            self._statement_processor.end_control_log(control_log)
+        buffered = self._collect_ctrl_outputs(ctrl_result, is_last, cell.all_metrics, buffered)
+        logger.debug(
+            "[CONTROL] Completed: %s iterations, %s cached, %s computed",
+            ctrl_result.total_iterations,
+            ctrl_result.cached_iterations,
+            ctrl_result.computed_iterations,
+        )
+        if not ctrl_result.success:
+            raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
+        return buffered
