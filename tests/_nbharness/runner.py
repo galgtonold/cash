@@ -907,8 +907,12 @@ except Exception:
             # ipykernel exits via os._exit(), which skips the atexit hook that
             # coverage.process_startup() relies on to flush. So we explicitly
             # save the kernel's coverage data while the channels are still
-            # alive, before the kill.
-            if os.environ.get("COVERAGE_PROCESS_START") and self.client.kc:
+            # alive, before the kill. Not when the kernel has already exited
+            # (a test that shut it down through the kernel manager itself):
+            # there is nothing to save from, and the request would wait out
+            # _run_async's timeout for a reply that never comes.
+            kernel_running = getattr(self.client.km, "has_kernel", True)
+            if os.environ.get("COVERAGE_PROCESS_START") and self.client.kc and kernel_running:
 
                 async def _save_cov():
                     save_code = (

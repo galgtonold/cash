@@ -42,10 +42,11 @@ def started(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "_force_kill_kernel", killed.append)
     monkeypatch.setattr(runner_module, "_close_async_runner", lambda loop: None)
     runner = NotebookTestRunner(work_dir=tmp_path)
-    runner.client = SimpleNamespace(kc=_KernelClient(), km="km")
+    km = SimpleNamespace(has_kernel=True)
+    runner.client = SimpleNamespace(kc=_KernelClient(), km=km)
     runner._run_async = asyncio.run
     runner._kernel_started = True
-    return runner, killed
+    return runner, killed, km
 
 
 def _shutdown_recording_warnings(runner) -> list[str]:
@@ -57,24 +58,24 @@ def _shutdown_recording_warnings(runner) -> list[str]:
 
 
 def test_shutdown_saves_the_kernels_coverage_then_kills_it(started):
-    runner, killed = started
+    runner, killed, km = started
     kc = runner.client.kc
     assert _shutdown_recording_warnings(runner) == []
     assert any("_c.save()" in code for code in kc.executed), kc.executed
-    assert killed == ["km"]
+    assert killed == [km]
 
 
 def test_a_second_shutdown_does_nothing(started):
-    runner, killed = started
+    runner, killed, km = started
     runner.shutdown()
     kc = runner.client.kc
     kc.executed.clear()
     assert _shutdown_recording_warnings(runner) == []
-    assert kc.executed == [] and killed == ["km"], "the second shutdown acted on a kernel already gone"
+    assert kc.executed == [] and killed == [km], "the second shutdown acted on a kernel already gone"
 
 
 def test_a_coverage_save_that_cannot_run_says_so(started):
-    runner, killed = started
+    runner, killed, km = started
 
     def loop_closed(coro):
         raise RuntimeError("Event loop is closed")
@@ -85,4 +86,15 @@ def test_a_coverage_save_that_cannot_run_says_so(started):
     assert any("could not save the kernel's coverage data" in m and "Event loop is closed" in m for m in messages), (
         messages
     )
-    assert killed == ["km"], "the kernel must still be killed"
+    assert killed == [km], "the kernel must still be killed"
+
+
+def test_a_kernel_that_already_exited_is_not_asked_to_save(started):
+    """A test that shut the kernel down through its manager leaves no kernel
+    to answer: asking would wait out the whole run timeout for nothing."""
+    runner, killed, km = started
+    km.has_kernel = False
+    kc = runner.client.kc
+    assert _shutdown_recording_warnings(runner) == []
+    assert kc.executed == []
+    assert killed == [km]

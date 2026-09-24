@@ -13,6 +13,7 @@ Run with the ATOMIC write applied (git checkout 2fce7ea -- src/cash/backends/
 file_backend.py) — that is the configuration where loss is visible.
 """
 
+import asyncio
 import os
 
 import pytest
@@ -66,12 +67,16 @@ def test_probe_shutdown_path_durability(nb_runner, tmp_path, graceful):
     km = getattr(nb_runner.client, "km", None)
     assert km is not None, "could not reach the KernelManager"
 
-    if graceful:
-        # What JupyterLab's restart button does: ask the kernel to exit, let it
-        # run its own shutdown (and therefore atexit).
-        km.shutdown_kernel(now=False)
-    else:
-        km.shutdown_kernel(now=True)
+    # The fresh-boot kernel manager is jupyter_client's AsyncKernelManager, so
+    # shutdown_kernel() returns a coroutine: await it on the loop that drives
+    # this kernel, or nothing is shut down and the counts below measure a
+    # kernel still running. Bounded, since that await can hang on a wedged
+    # provisioner (see _force_kill_kernel).
+    #
+    # graceful: what JupyterLab's restart button does -- ask the kernel to
+    # exit and let it run its own shutdown (and therefore atexit).
+    nb_runner._run_async(asyncio.wait_for(km.shutdown_kernel(now=not graceful), timeout=60))
+    assert not km.has_kernel, "the kernel is still running"
 
     after = _counts(cache_dir)
     label = "GRACEFUL" if graceful else "HARD KILL"
