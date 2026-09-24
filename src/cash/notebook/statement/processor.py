@@ -34,11 +34,7 @@ from cash.notebook.statement.imports import (
     redundant_import_names,
 )
 from cash.notebook.statement.lineage import StatementLineageBuilder
-from cash.notebook.statement.miss_guard import (
-    GUARD_SKIP_REASON,
-    MissGuard,
-    resolve_cache_dir,
-)
+from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutations import MutationClassifier
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
@@ -47,6 +43,7 @@ from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
+from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 
 from ...analysis.annotations import CacheAnnotation

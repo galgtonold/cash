@@ -40,10 +40,8 @@ from cash.notebook.statement.miss_guard import (
 from cash.notebook.statement.miss_guard import (
     REPROBE_EVERY_N_RUNS as N_PROBE,
 )
-from cash.notebook.statement.miss_guard import (
-    MissGuard,
-    resolve_cache_dir,
-)
+from cash.notebook.statement.miss_guard import MissGuard
+from cash.notebook.versioned_json_store import resolve_cache_dir
 from tests._cell_driver import run_cash_cell
 from tests.conftest import MockShell
 

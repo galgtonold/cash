@@ -62,7 +62,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
 
 from cash.backends.cache_dir import MISS_GUARD_FILENAME
 from cash.backends.file_backend import recreate_cache_dir
@@ -106,20 +105,6 @@ GUARD_SKIP_REASON = (
     f"it up and re-probes every {REPROBE_EVERY_N_RUNS} runs in case the key "
     "stabilises."
 )
-
-
-def resolve_cache_dir(backend: Any) -> str | None:
-    """The on-disk cache directory behind *backend* (``local_dir``), or None.
-
-    None means there is nowhere to persist — a pure in-memory backend, which
-    has no restart to survive anyway, so the guard degrades to session-scoped.
-
-    The ``isinstance`` check is for the ``MagicMock`` backends a good number of
-    tests use: a mock answers any attribute with another mock, which must not
-    pass for a path.
-    """
-    cache_dir = backend.local_dir if backend is not None else None
-    return cache_dir if isinstance(cache_dir, str) and cache_dir else None
 
 
 @dataclass
