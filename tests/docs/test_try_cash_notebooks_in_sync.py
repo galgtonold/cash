@@ -1,9 +1,10 @@
 """The Binder and Colab feature-tour notebooks must stay in lock-step.
 
 ``examples/try_cash_binder.ipynb`` is the single source of truth; the Colab copy
-is generated from it by ``scripts/build_try_cash_colab.py`` (only the setup cell
-differs). These tests fail if the committed Colab notebook drifts from what the
-generator produces, or if the two notebooks diverge anywhere but the setup cell.
+is generated from it by ``scripts/build_try_cash_colab.py``, which adds one
+install cell. These tests fail if the committed Colab notebook drifts from what
+the generator produces, if the two notebooks diverge anywhere else, or if the
+version the tour installs drifts from the version this checkout describes.
 """
 
 from __future__ import annotations
@@ -33,27 +34,33 @@ def test_colab_notebook_matches_generator():
     )
 
 
-def test_notebooks_differ_only_in_setup_cell():
-    b = json.loads(BINDER.read_text(encoding="utf-8"))
-    c = json.loads(COLAB.read_text(encoding="utf-8"))
-    assert len(b["cells"]) == len(c["cells"])
-    diffs = [i for i in range(len(b["cells"])) if b["cells"][i]["source"] != c["cells"][i]["source"]]
-    assert diffs == [1], f"the notebooks should differ only in the setup cell, got {diffs}"
+def _sources(path: Path) -> list[str]:
+    nb = json.loads(path.read_text(encoding="utf-8"))
+    return ["".join(cell["source"]) for cell in nb["cells"]]
 
 
-def test_setup_cells_are_environment_appropriate():
-    b = json.loads(BINDER.read_text(encoding="utf-8"))
-    c = json.loads(COLAB.read_text(encoding="utf-8"))
-    binder_setup = "".join(b["cells"][1]["source"])
-    colab_setup = "".join(c["cells"][1]["source"])
-    assert "%pip" not in binder_setup, "Binder pre-installs cash; the setup cell must not pip-install"
-    assert "%pip install" in colab_setup, "Colab has no requirements.txt; it must pip-install cash"
-    # No indented magic (would false-trigger CashUpstreamSyntaxWarning); the only
-    # magics are top-level.
-    for setup in (binder_setup, colab_setup):
-        for line in setup.splitlines():
-            if line.lstrip().startswith(("%", "!")):
-                assert line == line.lstrip(), f"magic must be top-level, not indented: {line!r}"
+def test_notebooks_differ_only_by_the_install_cell():
+    binder, colab = _sources(BINDER), _sources(COLAB)
+    assert len(colab) == len(binder) + 1
+    assert colab[:1] + colab[2:] == binder, "the notebooks should differ only by Colab's install cell"
+    assert "%pip install" in colab[1], "Colab has no requirements.txt; it must pip-install cash"
+    assert not any("%pip" in src for src in binder), "Binder pre-installs cash; the tour must not pip-install"
+
+
+def test_setup_cell_is_import_and_cash_on_alone():
+    # Work in the %cash_on cell is never cached, so the setup cell holds nothing else.
+    assert _sources(BINDER)[1].split() == ["import", "cash", "%cash_on"]
+
+
+def test_install_pins_match_the_version():
+    pin = _generator().version_pin()
+    colab_install = _sources(COLAB)[1]
+    assert f'"cash-lib[pandas]{pin}"' in colab_install
+    requirements = (ROOT / "binder" / "requirements.txt").read_text(encoding="utf-8")
+    pinned = [line for line in requirements.splitlines() if line.startswith("cash-lib")]
+    assert pinned == [f"cash-lib[pandas]{pin}"], (
+        f"binder/requirements.txt should pin cash-lib[pandas]{pin}, the release this checkout describes"
+    )
 
 
 def test_committed_notebooks_have_no_outputs():
