@@ -1,7 +1,5 @@
 """Editing import statements and aliases."""
 
-import textwrap
-
 import pytest
 
 pytestmark = [pytest.mark.stress]
@@ -118,104 +116,6 @@ class TestImportAndCellEdits:
         assert "val = 4" in nb_runner.get_output(2)
 
 
-@pytest.mark.modules
-@pytest.mark.timeout(30)
-class TestMultipleImports:
-    """Multiple imports across cells."""
-
-    def test_two_imports_edit_one(self, nb_runner):
-        """Two import cells, edit one and re-run."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "import json",
-                "val = math.sqrt(json.loads('4'))\nprint(f'val = {val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 2.0" in nb_runner.get_output(3)
-
-        # Change from math to different usage
-        nb_runner.set_cell_source(3, "val = math.sqrt(json.loads('9'))\nprint(f'val = {val}')")
-        nb_runner.run_all()
-        assert "val = 3.0" in nb_runner.get_output(3)
-
-    def test_import_and_function_def(self, nb_runner):
-        """Import used inside a function definition."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "def circle_area(r):\n    return math.pi * r ** 2",
-                "area = circle_area(1)\nprint(f'area = {area:.4f}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "area = 3.1416" in nb_runner.get_output(3)
-
-        # Redefine function
-        nb_runner.set_cell_source(2, "def circle_area(r):\n    return math.pi * r ** 2 * 2")
-        nb_runner.run_all()
-        assert "area = 6.2832" in nb_runner.get_output(3)
-
-
-@pytest.mark.modules
-@pytest.mark.timeout(30)
-class TestCustomModuleReload:
-    """Custom module file changes + import."""
-
-    def test_custom_module_edit(self, nb_runner, tmp_path):
-        """Edit a custom module file, re-import should pick up changes."""
-        mod_path = tmp_path / "mymod.py"
-        mod_path.write_text("VALUE = 10\n", encoding="utf-8")
-        mod_path_str = str(mod_path.parent).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"import sys\nsys.path.insert(0, '{mod_path_str}')",
-                "import mymod\nval = mymod.VALUE\nprint(f'val = {val}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 10" in nb_runner.get_output(2)
-
-        # Edit the module
-        mod_path.write_text("VALUE = 99\n", encoding="utf-8")
-
-        # Restart for clean import
-        nb_runner.shutdown()
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 99" in nb_runner.get_output(2)
-
-    def test_custom_module_function_edit(self, nb_runner, tmp_path):
-        """Custom module with function, edit function body."""
-        mod_path = tmp_path / "helpers.py"
-        mod_path.write_text("def compute(x):\n    return x * 2\n", encoding="utf-8")
-        mod_path_str = str(mod_path.parent).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"import sys\nsys.path.insert(0, '{mod_path_str}')",
-                "from helpers import compute\nresult = compute(5)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 10" in nb_runner.get_output(2)
-
-        # Edit module function
-        mod_path.write_text("def compute(x):\n    return x * 3\n", encoding="utf-8")
-
-        # Restart for clean import
-        nb_runner.shutdown()
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 15" in nb_runner.get_output(2)
-
-
 # Import and module interaction tests.
 #
 # Tests where users import modules, edit imports, change which
@@ -281,78 +181,6 @@ class TestImportStatementEdits:
         assert '"b": 2' in output or '"b":2' in output
 
 
-@pytest.mark.modules
-@pytest.mark.timeout(45)
-class TestModuleReusePatterns:
-    """Tests for using modules across multiple cells."""
-
-    def test_use_module_in_two_cells_edit_one(self, nb_runner):
-        """Import module, use in 2 cells, edit one."""
-        nb_runner.create_notebook(
-            [
-                "import math",
-                "a = math.floor(3.7)\nprint(f'a = {a}')",
-                "b = math.ceil(3.2)\nprint(f'b = {b}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a = 3" in nb_runner.get_output(2)
-        assert "b = 4" in nb_runner.get_output(3)
-
-        # Edit cell 2 only
-        nb_runner.set_cell_source(2, "a = math.floor(9.9)\nprint(f'a = {a}')")
-        nb_runner.run_all()
-        assert "a = 9" in nb_runner.get_output(2)
-        assert "b = 4" in nb_runner.get_output(3)
-
-    def test_stdlib_to_custom_function(self, nb_runner):
-        """Replace stdlib call with custom function."""
-        nb_runner.create_notebook(
-            [
-                "import math\ndef my_sqrt(x):\n    return math.sqrt(x)",
-                "result = my_sqrt(25)\nprint(f'result = {result}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 5.0" in nb_runner.get_output(2)
-
-        # Replace with custom
-        nb_runner.set_cell_source(
-            1,
-            "def my_sqrt(x):\n    return x ** 0.5  # no math import",
-        )
-        nb_runner.run_all()
-        assert "result = 5.0" in nb_runner.get_output(2)
-
-
-@pytest.mark.modules
-@pytest.mark.timeout(45)
-class TestConditionalImportSwitching:
-    """Tests with conditional import patterns."""
-
-    def test_switch_between_json_modes(self, nb_runner):
-        """Switch between json and string formatting."""
-        nb_runner.create_notebook(
-            [
-                "import json\nuse_json = True",
-                "data = {'key': 'value', 'num': 42}",
-                "if use_json:\n    output = json.dumps(data)\nelse:\n    output = str(data)\nprint(f'output = {output}')",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "output = " in output
-
-        # Switch to non-json
-        nb_runner.set_cell_source(1, "import json\nuse_json = False")
-        nb_runner.run_all()
-        output = nb_runner.get_output(3)
-        assert "output = " in output
-
-
 # Import alias and module-level function interaction tests.
 #
 # Tests editing import aliases, switching between import styles,
@@ -398,6 +226,94 @@ class TestImportAliasEdits:
         nb_runner.run_all()
         out2 = nb_runner.get_output(2)
         assert "x" in out2 and "y" in out2 and "z" in out2
+
+
+@pytest.mark.modules
+@pytest.mark.timeout(30)
+class TestMultipleImports:
+    """Multiple imports across cells."""
+
+    def test_two_imports_edit_one(self, nb_runner):
+        """Two import cells, edit one and re-run."""
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "import json",
+                "val = math.sqrt(json.loads('4'))\nprint(f'val = {val}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "val = 2.0" in nb_runner.get_output(3)
+
+        # Change from math to different usage
+        nb_runner.set_cell_source(3, "val = math.sqrt(json.loads('9'))\nprint(f'val = {val}')")
+        nb_runner.run_all()
+        assert "val = 3.0" in nb_runner.get_output(3)
+
+    def test_import_and_function_def(self, nb_runner):
+        """Import used inside a function definition."""
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "def circle_area(r):\n    return math.pi * r ** 2",
+                "area = circle_area(1)\nprint(f'area = {area:.4f}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "area = 3.1416" in nb_runner.get_output(3)
+
+        # Redefine function
+        nb_runner.set_cell_source(2, "def circle_area(r):\n    return math.pi * r ** 2 * 2")
+        nb_runner.run_all()
+        assert "area = 6.2832" in nb_runner.get_output(3)
+
+
+@pytest.mark.modules
+@pytest.mark.timeout(45)
+class TestModuleReusePatterns:
+    """Tests for using modules across multiple cells."""
+
+    def test_use_module_in_two_cells_edit_one(self, nb_runner):
+        """Import module, use in 2 cells, edit one."""
+        nb_runner.create_notebook(
+            [
+                "import math",
+                "a = math.floor(3.7)\nprint(f'a = {a}')",
+                "b = math.ceil(3.2)\nprint(f'b = {b}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "a = 3" in nb_runner.get_output(2)
+        assert "b = 4" in nb_runner.get_output(3)
+
+        # Edit cell 2 only
+        nb_runner.set_cell_source(2, "a = math.floor(9.9)\nprint(f'a = {a}')")
+        nb_runner.run_all()
+        assert "a = 9" in nb_runner.get_output(2)
+        assert "b = 4" in nb_runner.get_output(3)
+
+    def test_stdlib_to_custom_function(self, nb_runner):
+        """Replace stdlib call with custom function."""
+        nb_runner.create_notebook(
+            [
+                "import math\ndef my_sqrt(x):\n    return math.sqrt(x)",
+                "result = my_sqrt(25)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 5.0" in nb_runner.get_output(2)
+
+        # Replace with custom
+        nb_runner.set_cell_source(
+            1,
+            "def my_sqrt(x):\n    return x ** 0.5  # no math import",
+        )
+        nb_runner.run_all()
+        assert "result = 5.0" in nb_runner.get_output(2)
 
 
 @pytest.mark.modules
@@ -461,6 +377,32 @@ class TestModuleFunctionEdits:
         nb_runner.set_cell_source(2, "result = list(repeat(42, 3))\nprint(f'result = {result}')")
         nb_runner.run_all()
         assert "result = [42, 42, 42]" in nb_runner.get_output(2)
+
+
+@pytest.mark.modules
+@pytest.mark.timeout(45)
+class TestConditionalImportSwitching:
+    """Tests with conditional import patterns."""
+
+    def test_switch_between_json_modes(self, nb_runner):
+        """Switch between json and string formatting."""
+        nb_runner.create_notebook(
+            [
+                "import json\nuse_json = True",
+                "data = {'key': 'value', 'num': 42}",
+                "if use_json:\n    output = json.dumps(data)\nelse:\n    output = str(data)\nprint(f'output = {output}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        output = nb_runner.get_output(3)
+        assert "output = " in output
+
+        # Switch to non-json
+        nb_runner.set_cell_source(1, "import json\nuse_json = False")
+        nb_runner.run_all()
+        output = nb_runner.get_output(3)
+        assert "output = " in output
 
 
 # Conditional import and lazy loading interaction tests.
@@ -546,62 +488,3 @@ class TestConditionalImportInteraction:
         nb_runner.run_all()
         out = nb_runner.get_output(4)
         assert "result=45" in out
-
-
-# Import patterns — dynamic imports, conditional imports, importlib,
-# sys.path manipulation, and star imports across cells.
-@pytest.mark.integration
-@pytest.mark.modules
-class TestDynamicImportPatterns:
-    """Test caching with dynamic import patterns."""
-
-    def test_reimport_after_change(self, nb_runner, tmp_path):
-        """Module reimported after source change."""
-        mod_file = tmp_path / "mymod.py"
-        mod_file.write_text("VALUE = 100\n", encoding="utf-8")
-        sys_path_str = str(tmp_path).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"import sys; sys.path.insert(0, '{sys_path_str}')",
-                "import mymod",
-                "print(mymod.VALUE)",
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "100" in nb_runner.get_output(3)
-
-        # Change module and restart
-        mod_file.write_text("VALUE = 999\n", encoding="utf-8")
-        nb_runner.shutdown()
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "999" in nb_runner.get_output(3)
-
-
-@pytest.mark.integration
-@pytest.mark.modules
-class TestMultiModuleImportInteraction:
-    """Test interactions between multiple imported modules."""
-
-    def test_two_modules_interact(self, nb_runner, tmp_path):
-        """Two custom modules interact across cells."""
-        (tmp_path / "mod_a.py").write_text("def double(x): return x * 2\n", encoding="utf-8")
-        (tmp_path / "mod_b.py").write_text("def format_result(val): return f'Result: {val}'\n", encoding="utf-8")
-        sys_path_str = str(tmp_path).replace("\\", "/")
-
-        nb_runner.create_notebook(
-            [
-                f"import sys; sys.path.insert(0, '{sys_path_str}')",
-                "import mod_a\nimport mod_b",
-                textwrap.dedent("""\
-                val = mod_a.double(21)
-                msg = mod_b.format_result(val)
-                print(msg)
-            """),
-            ]
-        )
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Result: 42" in nb_runner.get_output(3)

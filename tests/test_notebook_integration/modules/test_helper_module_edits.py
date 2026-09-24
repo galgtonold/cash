@@ -535,3 +535,121 @@ class TestModuleReloadChain:
         out = nb_runner.get_output(2)
         assert "area=78.540" in out
         assert "exp=" in out
+
+
+@pytest.mark.stress
+@pytest.mark.modules
+@pytest.mark.timeout(30)
+class TestCustomModuleReload:
+    """Custom module file changes + import."""
+
+    def test_custom_module_edit(self, nb_runner, tmp_path):
+        """Edit a custom module file, re-import should pick up changes."""
+        mod_path = tmp_path / "mymod.py"
+        mod_path.write_text("VALUE = 10\n", encoding="utf-8")
+        mod_path_str = str(mod_path.parent).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                f"import sys\nsys.path.insert(0, '{mod_path_str}')",
+                "import mymod\nval = mymod.VALUE\nprint(f'val = {val}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "val = 10" in nb_runner.get_output(2)
+
+        # Edit the module
+        mod_path.write_text("VALUE = 99\n", encoding="utf-8")
+
+        # Restart for clean import
+        nb_runner.shutdown()
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "val = 99" in nb_runner.get_output(2)
+
+    def test_custom_module_function_edit(self, nb_runner, tmp_path):
+        """Custom module with function, edit function body."""
+        mod_path = tmp_path / "helpers.py"
+        mod_path.write_text("def compute(x):\n    return x * 2\n", encoding="utf-8")
+        mod_path_str = str(mod_path.parent).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                f"import sys\nsys.path.insert(0, '{mod_path_str}')",
+                "from helpers import compute\nresult = compute(5)\nprint(f'result = {result}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 10" in nb_runner.get_output(2)
+
+        # Edit module function
+        mod_path.write_text("def compute(x):\n    return x * 3\n", encoding="utf-8")
+
+        # Restart for clean import
+        nb_runner.shutdown()
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "result = 15" in nb_runner.get_output(2)
+
+
+# Import patterns — dynamic imports, conditional imports, importlib,
+# sys.path manipulation, and star imports across cells.
+@pytest.mark.stress
+@pytest.mark.integration
+@pytest.mark.modules
+class TestDynamicImportPatterns:
+    """Test caching with dynamic import patterns."""
+
+    def test_reimport_after_change(self, nb_runner, tmp_path):
+        """Module reimported after source change."""
+        mod_file = tmp_path / "mymod.py"
+        mod_file.write_text("VALUE = 100\n", encoding="utf-8")
+        sys_path_str = str(tmp_path).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                f"import sys; sys.path.insert(0, '{sys_path_str}')",
+                "import mymod",
+                "print(mymod.VALUE)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "100" in nb_runner.get_output(3)
+
+        # Change module and restart
+        mod_file.write_text("VALUE = 999\n", encoding="utf-8")
+        nb_runner.shutdown()
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "999" in nb_runner.get_output(3)
+
+
+@pytest.mark.stress
+@pytest.mark.integration
+@pytest.mark.modules
+class TestMultiModuleImportInteraction:
+    """Test interactions between multiple imported modules."""
+
+    def test_two_modules_interact(self, nb_runner, tmp_path):
+        """Two custom modules interact across cells."""
+        (tmp_path / "mod_a.py").write_text("def double(x): return x * 2\n", encoding="utf-8")
+        (tmp_path / "mod_b.py").write_text("def format_result(val): return f'Result: {val}'\n", encoding="utf-8")
+        sys_path_str = str(tmp_path).replace("\\", "/")
+
+        nb_runner.create_notebook(
+            [
+                f"import sys; sys.path.insert(0, '{sys_path_str}')",
+                "import mod_a\nimport mod_b",
+                textwrap.dedent("""\
+                val = mod_a.double(21)
+                msg = mod_b.format_result(val)
+                print(msg)
+            """),
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "Result: 42" in nb_runner.get_output(3)
