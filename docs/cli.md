@@ -183,6 +183,11 @@ is computing while you clear its function still finishes and stores its
 result; stop the job first if you are clearing because the code or data
 changed.
 
+<!-- claim: cash/__main__.py:_rmtree_cache @1dca2a62 -->
+**A cache a notebook has open.** On Windows a file that a running kernel holds
+open cannot be deleted. `cash clear` then stops, names the file, and exits 1;
+close the notebook or stop its kernel, then run it again.
+
 `Nothing cleared: no cache at …` means the directory `cash info` reports has
 no cache. A script outside any project caches beside itself, and changing
 `cache_dir` leaves the old directory behind; pass either directory
@@ -222,5 +227,5 @@ existing hook with a different body.
 | Code | When |
 |---|---|
 | `0` | Success, including "nothing to clear" and "autoload not installed". |
-| `1` | A refusal or a missing target: `cash inspect` with no cache or an unknown or ambiguous `--function`; `cash clear` with a missing path, an unknown `--function` or `--entry`, a directory that is not a cash cache (without `--force`), or the current directory; `cash autoload` refusing to overwrite or remove a file (without `--force`). |
+| `1` | A refusal or a missing target: `cash inspect` with no cache or an unknown or ambiguous `--function`; `cash clear` with a missing path, an unknown `--function` or `--entry`, a directory that is not a cash cache (without `--force`), the current directory, or a file it cannot delete; `cash autoload` refusing to overwrite or remove a file (without `--force`). |
 | `2` | A bad `cash clear` invocation: none of `path`, `--all`, `--function`, `--entry`, `--expired` or `--tool`; `--all` or `--tool` together with a path; `--expired` with `--function` or `--entry`; `--function`, `--entry` or `--expired` on a SQLite cache. Nothing is touched. |

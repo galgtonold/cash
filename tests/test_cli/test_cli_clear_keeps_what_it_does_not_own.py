@@ -173,3 +173,31 @@ def test_temp_files_of_cash_writes_are_cash_files(name, cash_wrote_it):
     from cash.backends.cache_dir import is_cash_file
 
     assert is_cash_file(name) is cash_wrote_it
+
+
+def test_a_cache_a_running_kernel_holds_open_is_refused_in_one_line(tmp_path, monkeypatch, capsys):
+    """On Windows a kernel still using the cache holds ``cache.db`` open, and
+    deleting it fails with WinError 32. ``cash clear`` printed a traceback;
+    it names the file and what to do, and exits 1."""
+    import errno
+    import shutil
+
+    cache = _cache_with(tmp_path)
+    (cache / "raw").rmdir()
+    locked = str(cache / "cache.db")
+
+    def in_use(path, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "The process cannot access the file", locked)
+
+    monkeypatch.setattr(shutil, "rmtree", in_use)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["cash", "clear", str(cache)])
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    captured = capsys.readouterr()
+    assert exit_info.value.code == 1, captured.out
+    lines = captured.out.strip().splitlines()
+    assert len(lines) == 1, captured.out
+    assert locked in lines[0] and "stop the kernel" in lines[0], lines[0]
+    assert "Traceback" not in captured.out + captured.err
+    assert "Cleared" not in captured.out

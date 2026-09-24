@@ -687,7 +687,20 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
                 "anyway with --force (which removes everything in it)."
             )
             sys.exit(1)
-    shutil.rmtree(resolved)
+    try:
+        shutil.rmtree(resolved)
+    except OSError as exc:
+        # On Windows a file another process holds open cannot be deleted, so
+        # clearing the cache of a notebook whose kernel is still running
+        # stops at its `cache.db` (WinError 32). Say which file and what to
+        # do, not a traceback.
+        culprit = exc.filename or resolved
+        reason = exc.strerror or exc
+        print(
+            f"Could not clear {resolved}: cannot delete {culprit} ({reason}). "
+            f"Close the notebook or stop the kernel using this cache first, then run cash clear again."
+        )
+        sys.exit(1)
     print(f"Cleared: {resolved}")
 
 
