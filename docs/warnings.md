@@ -76,7 +76,7 @@ including code added to it later.
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | `CashWarning` | a `plt.savefig` was not re-run |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | `CashRandomnessWarning` | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `CashRandomnessWarning` | `seed(None)` cannot refresh cached values |
-| [RANDOM-UNSEEDED](#random-unseeded) | both | `CashRandomnessWarning` | an unseeded draw is cached and frozen |
+| [RANDOM-UNSEEDED](#random-unseeded) | both | `CashRandomnessWarning` | a draw from an unseeded source is not reproducible |
 | [REMOTE-FRESHNESS-COST](#remote-freshness-cost) | both | `CashCacheIneffectiveWarning` | checking remote files costs more than it protects |
 | [REMOTE-SIZE-ONLY](#remote-size-only) | both | `CashCacheIneffectiveWarning` | a remote file is tracked by size alone |
 | [REMOTE-STATE-UNREADABLE](#remote-state-unreadable) | both | `CashCacheIneffectiveWarning` | a remote file's state could not be read |
@@ -275,7 +275,7 @@ the lookup, storing the result) and compares it with the function's own run
 time. For this function, caching has lost more than two seconds in total so
 far. The message gives the numbers and names the costliest argument.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @f71a83d3 -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @0e2aaab4 -->
 **Why it matters.** The decorator makes your program slower. The usual cause
 is a large argument, such as a big DataFrame, being hashed on every call.
 The check also runs at exit, so a script that calls each function once is
@@ -1036,21 +1036,31 @@ reproducible, seed with a fixed number instead.
 
 *Both paths.*
 
-**What happened.** Cash is about to cache a draw from an unseeded random source.
-The first result is stored and returned from then on.
+**What happened.** A statement or a cached function draws from an unseeded
+random source.
 
-**Why it matters.** The value is frozen but not reproducible: clear the cache,
-or run on another machine, and you get a different frozen value.
+**Why it matters.** The value is not reproducible. A cached draw is frozen: the
+first result is returned from then on, and clearing the cache or running on
+another machine gives a different frozen value.
+
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @2471d11d -->
+In a notebook, a draw too cheap to cache is frozen too when it comes from the
+`random`, `numpy.random` or `torch` stream, because Cash rewinds those streams
+before a re-run. A cheap draw from a generator held in a variable
+(`rng = np.random.default_rng()`) is not rewound, so it changes on every run.
+The message for a generator draw says both.
 
 **What to do.** Seed the source (`random_state=42`, `np.random.default_rng(0)`)
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @bb37e3c0, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
 In a notebook: for a fresh draw every run, put `# @cash:no-cache` on a line of
-its own above the statement. On the same line as the code it turns caching off
-but not the random-state rewind, so you get the same number again. To keep the
-frozen value, add `# @cash:allow-random`.
+its own above the statement. Only that turns the rewind off. A statement marked
+`no-cache` never raises this warning, wherever the directive sits, so a
+directive at the end of the code line fails silently: it turns caching off but
+not the rewind, and the draw repeats with no warning. `# @cash:allow-random`
+only silences the warning.
 
 <!-- claim: cash/decorator/rng.py:RngMixin._warn_unseeded_randomness @2d41d2f7 -->
 With `@cash.cache`: the check runs when the decorator is applied, once per

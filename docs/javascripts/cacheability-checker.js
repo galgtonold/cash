@@ -40,7 +40,7 @@
       code: "x = np.random.randn(100)",
       verdict: "warn",
       title: "Cached + warning",
-      why: "Unseeded randomness. Cash still caches — and the badge marks the row 'unseeded', because the value is a frozen replay rather than a fresh draw. Seed the module first (np.random.seed(0)) for real reproducibility, use @cash:no-cache to redraw every run, or @cash:allow-random to silence the warning."
+      why: "Unseeded randomness. Cash still caches — and the badge marks the row 'unseeded', because the value is a frozen replay rather than a fresh draw. Seed the module first (np.random.seed(0)) for real reproducibility, put @cash:no-cache on its own line above to redraw every run, or @cash:allow-random to silence the warning."
     },
     {
       code: "model.fit(X, y)",

@@ -28,8 +28,8 @@ sending a request. The two engines handle this differently.
     of this page explains how Cash decides. The full list of what is cached,
     refused or keyed is in the [notebook guide](../notebook_caching_api.md#what-gets-cached).
 
-Unseeded randomness is the exception on both paths: it is cached, and the
-first value is kept.
+Unseeded randomness is the exception on both paths: it is cached, and a cached
+draw keeps its first value.
 
 ## In a notebook
 
@@ -160,12 +160,18 @@ draws are reproducible and do not warn. A generator object
 (`rng = np.random.default_rng()`) counts as seeded only if it was built with a
 seed; seeding `np.random` says nothing about it.
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @41fe639f -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
+A draw too cheap to cache is held too when it comes from the `random`,
+`numpy.random` or `torch` module stream: before a re-run, Cash rewinds those
+streams to where the cell started, so the draw repeats. Cash does not rewind a
+generator held in a variable, so a cheap draw from `rng` changes on every run.
+
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
 `# @cash:allow-random` silences the warning and changes nothing else.
-`# @cash:no-cache` draws fresh on every run. The badge marks the row `seed`,
-`random` (a seeded draw) or `unseeded`. A cached fit
-(`# @cash:cache-fit`) of an estimator with `random_state=None` warns the same
-way.
+`# @cash:no-cache` on a line of its own above the statement draws fresh on every
+run, with no warning. The badge marks the row `seed`, `random` (a seeded draw)
+or `unseeded`. A cached fit (`# @cash:cache-fit`) of an estimator with
+`random_state=None` warns the same way.
 
 ### Values that cannot survive a round trip
 

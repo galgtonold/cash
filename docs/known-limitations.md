@@ -29,21 +29,24 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @f9c1baa7, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @f9c1baa7, cash/tracking/randomness/state.py:restore_rng_state @3e10fc77, cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
-result. A cheap draw that is never cached is frozen too: before a cell re-runs,
-cash rewinds the random stream to where the cell started, so a re-run lands where
-a top-to-bottom run would. Cash warns `RANDOM-UNSEEDED` when an unseeded draw
-first runs, and `RANDOM-REPLAYED` when an unseeded value comes back from the
+result. A cheap draw that is never cached is frozen too if it comes from the
+`random`, `numpy.random` or `torch` stream: before a cell re-runs, cash rewinds
+those streams to where the cell started, so a re-run lands where a top-to-bottom
+run would. A generator held in a variable (`rng = np.random.default_rng()`) is
+not rewound, so a cheap draw from it changes on every run. Cash warns
+`RANDOM-UNSEEDED` when an unseeded draw first runs (not in a `no-cache`
+statement), and `RANDOM-REPLAYED` when an unseeded value comes back from the
 cache. An estimator fitted with `random_state=None` counts as an unseeded draw.
 
 | You want | Do this |
 |---|---|
-| A new draw every run | `# @cash:no-cache` **on a line of its own** above the statement. Written at the end of the code line it stops caching but not the rewind, and the draw repeats. |
+| A new draw every run | `# @cash:no-cache` **on a line of its own** above the statement. Only that turns the rewind off. Written at the end of the code line it stops caching but not the rewind: the draw repeats, and no warning says so. |
 | The same result every run | Seed it: `np.random.seed(0)`, `np.random.default_rng(0)`, `random_state=0`. |
-| The frozen value, without the warning | `# @cash:allow-random`. It changes the warning only, never what is cached. |
+| No warning | `# @cash:allow-random`. It changes the warning only, never what is cached or rewound. |
 
 <!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9, cash/tracking/randomness/state.py:capture_object_rng_states @d8dd9223 -->
 Seeding counts per source. `np.random.seed(0)` covers `np.random.*` draws for
@@ -215,7 +218,7 @@ An earlier cell re-run can see the changed data.
 
 ### A loop variable changed before it is read
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @ff4763c8 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @6a19a3f5 -->
 This one can give a wrong answer on the first Run All. Cash keys each iteration
 on the loop variable's value when the `for` binds it. A body that changes that
 value, or computes a new body-local variable, before the cached work is not seen:

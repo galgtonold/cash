@@ -164,8 +164,11 @@ Three rules keep random draws right when you edit a seed:
   ordinary input changed, Cash first puts the generator where it would be in a
   top-to-bottom run.
 
-!!! warning "An unseeded draw is frozen, not redrawn"
-    The first value of an unseeded draw is the value you keep: a re-run gives
-    the same number, whether or not it was stored. `# @cash:allow-random`
-    only silences the warning; `# @cash:no-cache` makes the statement draw
-    fresh every run.
+!!! warning "An unseeded draw is usually frozen, not redrawn"
+    A re-run of an unseeded draw gives the same number: a cached draw comes
+    back from the cache, and a cheap one from the `random`, `numpy.random` or
+    `torch` stream repeats because the stream is rewound. A cheap draw from a
+    generator held in a variable (`rng = np.random.default_rng()`) is not
+    rewound and changes on every run. `# @cash:allow-random` only silences the
+    warning; `# @cash:no-cache` on a line of its own makes the statement draw
+    fresh every run. See [Randomness](../known-limitations.md#randomness).
