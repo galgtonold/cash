@@ -178,7 +178,7 @@ from another module.
 | `CacheBackend.lock(key)` (base) | Per-key `threading.RLock` from a process-local registry — **in-process single-flight**. Inherited by every backend except Redis. |
 | `RedisBackend.lock(key)` | Returns `client.lock(f"{prefix}lock:{key}", timeout=60, blocking_timeout=10)` — a real **distributed** lock. The only backend that coordinates across processes. |
 | `SQLiteBackend.lock(key)`, `FileBackend.lock(key)`, `InMemoryBackend.lock(key)`, `S3Backend.lock(key)`, `TieredBackend.lock(key)` | Inherit the base in-process `RLock`. The default `Cash()` backend is `TieredBackend`. |
-| `CashCacheIneffectiveWarning` (lock failed) | Emitted once per `(func_name, "lock_failed")` when lock acquisition raises (`Notices.lock_failed`). The call proceeds without the lock. |
+| `CashCacheIneffectiveWarning` (lock failed) | Emitted once per `(func_name, "lock_failed")` when lock acquisition raises (`Cash._warn_lock_failed`). The call proceeds without the lock. |
 
 ## Related
 

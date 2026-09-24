@@ -145,7 +145,7 @@ flowchart TD
 ```
 
 <!-- claim: cash/decorator/reporting.py:CallLog.log @f23b179b -->
-Every `@cash.cache` call appends an entry to its instance's call log (`CallLog.entries`), which
+Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`, which
 keeps the most recent 10,000 (nothing drains it outside a notebook, so it must
 not keep every call of a long-running process). `cache_info()` counts each call
 from its own entry, not from this log:
