@@ -25,7 +25,7 @@ steps that change one thing and show what runs again.
 | [`cache_calls_demo.ipynb`](cache_calls_demo.ipynb) | Caching of the functions a cell calls | nothing |
 | [`file_caching_demo.ipynb`](file_caching_demo.ipynb) | A CSV read that runs again when the file changes | pandas |
 | [`file_tracking_demo.ipynb`](file_tracking_demo.ipynb) | File reads through `open`, pandas, `pathlib` and numpy | pandas, numpy |
-| [`demo_notebook_caching.ipynb`](demo_notebook_caching.ipynb) | A sales pipeline: joins, aggregates, a plot, `%cash_off` | pandas, numpy, matplotlib |
+| [`demo_notebook_caching.ipynb`](demo_notebook_caching.ipynb) | A sales pipeline: joins, aggregates, a plot, a seeded draw, `%cash_off` | pandas, numpy, matplotlib |
 | [`financial_analysis_demo.ipynb`](financial_analysis_demo.ipynb) | Rolling features, a loop cached per iteration, branches, provenance | pandas, numpy |
 | [`cfd_simulation_demo.ipynb`](cfd_simulation_demo.ipynb) | A Navier-Stokes solver, a grid study, saving and reloading results | numpy, scipy |
 | [`large_scale_projects/`](large_scale_projects/) | Ten analyses of real datasets: NYC taxi trips, Wikipedia pageviews, census data and others | pandas, numpy, matplotlib, scipy, scikit-learn, and hundreds of MB to several GB of downloads |
