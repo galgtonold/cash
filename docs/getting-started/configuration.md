@@ -26,7 +26,7 @@ max_cache_size = "5GB"
 `cash info` prints every setting in effect and the layer it came from
 ([CLI](../cli.md#cash-info)).
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @ae7a94f7 -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @fb2bceec -->
 ### What paths are relative to
 
 A relative `cache_dir` is resolved against whoever wrote it:

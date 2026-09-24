@@ -256,6 +256,21 @@ class TestSameAsTheConstructor:
         assert c.backend.backends[-1].cache_dir == expected
         assert not (tmp_path / "~").exists()
 
+    @pytest.mark.parametrize("from_a_file", [False, True])
+    def test_a_home_relative_cache_dir_has_one_separator_style_on_windows(self, tmp_path, monkeypatch, from_a_file):
+        # Windows' expanduser("~/b") is `C:\Users\me/b`: the home part in
+        # backslashes, the rest as typed. Simulated with ntpath on any OS.
+        import ntpath
+        import os
+
+        from cash import config as cash_config
+
+        monkeypatch.setenv("USERPROFILE", r"C:\Users\me")
+        for name in ("expanduser", "normpath", "isabs"):
+            monkeypatch.setattr(os.path, name, getattr(ntpath, name))
+        origin = tmp_path if from_a_file else cash_config._CALLER_RELATIVE
+        assert cash_config._anchor_cache_dir("~/b", origin) == r"C:\Users\me\b"
+
     def test_a_backend_the_caller_built_is_never_replaced(self, tmp_path):
         from cash import Cash
         from cash.backends.sqlite_backend import SQLiteBackend

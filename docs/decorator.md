@@ -66,7 +66,7 @@ The one exception is a value too big for every disk tier's size cap: it stays in
 RAM for this process, and
 [`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big) says so.
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @ae7a94f7 -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @fb2bceec -->
 **The folder is `.cash` at your project root.** Cash starts at the running
 script and walks up to the first directory that holds a `setup.py`, a
 `setup.cfg`, a `.git`, or a `pyproject.toml` that declares a project (a

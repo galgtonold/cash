@@ -738,7 +738,11 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
         return cache_dir
     # Before anchoring: `~/crunch-cache` in a shipped config file must not
     # become a directory named `~` beside that file, inside site-packages.
-    cache_dir = os.path.expanduser(cache_dir)
+    expanded = os.path.expanduser(cache_dir)
+    if expanded != cache_dir:
+        # Windows expands `~/b` to `C:\Users\me/b`; normalise it to one
+        # separator style so it compares equal to the same path built by hand.
+        cache_dir = os.path.normpath(expanded)
     if origin is _CALLER_RELATIVE or os.path.isabs(cache_dir):
         return cache_dir
     if not isinstance(origin, Path):
