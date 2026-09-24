@@ -92,6 +92,16 @@ def test_no_cache_redraws_every_run(nb_runner):
 
 
 @pytest.mark.timeout(180)
+def test_a_trailing_no_cache_redraws_every_run(nb_runner):
+    """The directive at the end of the code line is the same directive."""
+    first, second = _two_run_alls(
+        nb_runner,
+        "r = random.random()  # @cash:no-cache\nprint('r=', r)",
+    )
+    assert first != second, "a trailing # @cash:no-cache must switch the rewind off like an own-line one"
+
+
+@pytest.mark.timeout(180)
 def test_allow_random_stays_frozen_and_silent(nb_runner):
     """allow-random suppresses the warning; it does not change the value."""
     first, second = _two_run_alls(

@@ -13,9 +13,9 @@ import ast
 import hashlib
 import logging
 
-from ...analysis.annotations import parse_annotation_line
+from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...tracking.randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
@@ -307,7 +307,7 @@ class RngRewind:
 
     @staticmethod
     def _opts_out_of_rng_rewind(cell_code: str) -> bool:
-        """True if *cell_code* carries ``# @cash:no-cache``.
+        """True if a statement in *cell_code* carries ``# @cash:no-cache``.
 
         The rewind is what freezes an unseeded value: the statement re-executes
         but lands on the same stream position, so it redraws the same number.
@@ -319,14 +319,17 @@ class RngRewind:
         So it has to switch the REWIND off, not just caching; otherwise the
         statement dutifully re-executes, redraws the identical value, and the
         one escape hatch users are told to reach for silently does nothing.
+
+        Read the way the statement's own run reads it, so the directive counts
+        on a line of its own above the statement and at the end of its line.
         """
-        for lineno, line in enumerate(cell_code.splitlines(), 1):
-            if not line.strip().startswith("#"):
-                continue
-            ann = parse_annotation_line(line, lineno)
-            if ann is not None and ann.no_cache:
-                return True
-        return False
+        if "@cash:" not in cell_code:
+            return False
+        tree = parse_cell_source(cell_code)
+        if tree is None:
+            return False
+        clean = clean_cell_source(cell_code)
+        return any(get_statement_annotations(clean, node).no_cache for node in tree.body)
 
     def cell_touches_rng(self, src: str) -> bool:
         """True if *src* seeds or draws — statically or by prior observation."""

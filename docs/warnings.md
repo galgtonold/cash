@@ -998,7 +998,7 @@ file on disk is the one you want.
 
 *Notebook.*
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663 -->
 **What happened.** A restored value came from an unseeded random source (a
 named call such as `np.random.normal()`, or an estimator fitted with
 `random_state=None`). You are seeing an earlier draw.
@@ -1025,7 +1025,7 @@ below it cannot follow.
 **Why it matters.** New draws and restored values from the old stream appear
 side by side with nothing to tell them apart.
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663 -->
 **What to do.** If the values below must follow the new stream, put
 `# @cash:no-cache` on a line of its own above them. If you want them
 reproducible, seed with a fixed number instead.
@@ -1054,13 +1054,11 @@ The message for a generator draw says both.
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @bb37e3c0, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
-In a notebook: for a fresh draw every run, put `# @cash:no-cache` on a line of
-its own above the statement. Only that turns the rewind off. A statement marked
-`no-cache` never raises this warning, wherever the directive sits, so a
-directive at the end of the code line fails silently: it turns caching off but
-not the rewind, and the draw repeats with no warning. `# @cash:allow-random`
-only silences the warning.
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->
+In a notebook: for a fresh draw every run, put `# @cash:no-cache` on the
+statement, on the line above it or at the end of its line. It turns off the
+rewind as well as caching, and the statement no longer raises this warning.
+`# @cash:allow-random` only silences the warning.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @52f9e356 -->
 With `@cash.cache`: the check runs when the decorator is applied, once per

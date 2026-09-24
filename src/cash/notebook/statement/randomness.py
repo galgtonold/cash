@@ -112,9 +112,9 @@ class StatementRandomness:
         """Warn when *code* draws from an unseeded RNG.
 
         Silent for a ``# @cash:no-cache`` statement (*skip_cache*). The warning
-        is about caching a draw, and that statement is never cached: with the
-        directive on a line of its own the rewind is off too and every run
-        draws again, which is the remedy the warning itself recommends.
+        is about caching a draw, and that statement is never cached: the rewind
+        is off too and every run draws again, which is the remedy the warning
+        itself recommends.
 
         Called on the common path of both ``process_statement`` twins, BEFORE the
         cache lookup, for two reasons:

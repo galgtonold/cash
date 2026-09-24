@@ -166,11 +166,10 @@ A draw too cheap to cache is held too when it comes from the `random`,
 streams to where the cell started, so the draw repeats. Cash does not rewind a
 generator held in a variable, so a cheap draw from `rng` changes on every run.
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @71ddf96a -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->
 `# @cash:allow-random` silences the warning and changes nothing else.
-`# @cash:no-cache` on a line of its own above the statement draws fresh on every
-run, with no warning. The badge marks the row `seed`, `random` (a seeded draw)
-or `unseeded`. A cached fit (`# @cash:cache-fit`) of an estimator with
+`# @cash:no-cache` on the statement draws fresh on every run, with no warning.
+The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached fit (`# @cash:cache-fit`) of an estimator with
 `random_state=None` warns the same way.
 
 ### Values that cannot survive a round trip

@@ -15,8 +15,8 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 ## Checklist
 
-- Seed your random draws, or mark the ones that must change `# @cash:no-cache`
-  on a line of their own. See [Randomness](#randomness).
+- Seed your random draws, or mark the ones that must change `# @cash:no-cache`.
+  See [Randomness](#randomness).
 - Rebind instead of changing an earlier cell's object in place:
   `df = df.assign(...)`, not `df["c"] = ...`.
 - Pass the time into helpers instead of reading the clock inside them.
@@ -44,7 +44,7 @@ cache. An estimator fitted with `random_state=None` counts as an unseeded draw.
 
 | You want | Do this |
 |---|---|
-| A new draw every run | `# @cash:no-cache` **on a line of its own** above the statement. Only that turns the rewind off. Written at the end of the code line it stops caching but not the rewind: the draw repeats, and no warning says so. |
+| A new draw every run | `# @cash:no-cache` on the statement, on the line above it or at the end of its line. It turns off the rewind as well as caching. |
 | The same result every run | Seed it: `np.random.seed(0)`, `np.random.default_rng(0)`, `random_state=0`. |
 | No warning | `# @cash:allow-random`. It changes the warning only, never what is cached or rewound. |
 

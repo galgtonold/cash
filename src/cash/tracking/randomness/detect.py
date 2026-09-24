@@ -1128,16 +1128,6 @@ class RandomnessDetector:
 # restore-time twins address a value already on screen rather than the source.
 # ASCII only, like the messages they accompany: this lands in a kernel's stderr,
 # where a Windows console codepage mangles an em-dash.
-#
-# "on a line of its own above the statement", NOT "on the statement". The
-# spelling is load-bearing and the difference is silent:
-# ``RngRewind._opts_out_of_rng_rewind`` skips any line that does not
-# ``strip().startswith('#')``, so a TRAILING ``x = random.random()  #
-# @cash:no-cache`` turns caching off and leaves the RNG rewind ON -- the
-# statement re-executes and redraws the identical number, which is the exact
-# outcome these strings promise to prevent. Measured: own line ->
-# opts_out=True; trailing -> opts_out=False while the annotation itself still
-# parses as no_cache=True. Do not shorten this back.
 _UNSEEDED_FIX = (
     "seed the source (random.seed(0), np.random.default_rng(0)) to make it "
     "reproducible, put `# @cash:no-cache` on a line of its own above the "

@@ -89,8 +89,8 @@ a helper that reads the clock. You do not need it for file writes, POSTs,
 `datetime.now()` or plots written in the statement: cash already runs those every
 time. See [What gets cached](notebook_caching_api.md#what-gets-cached).
 
-On a line of its own, `no-cache` also gives a random draw a fresh value each run.
-At the end of the code line it does not; see [Randomness](known-limitations.md#randomness).
+`no-cache` also gives a random draw a fresh value each run; see
+[Randomness](known-limitations.md#randomness).
 
 ### `# @cash:ttl=N`
 
@@ -106,7 +106,7 @@ keeps its normal caching. Write `# @cash:ttl=300` for five minutes.
 
 Silences the `RANDOM-UNSEEDED` and `RANDOM-REPLAYED` warnings for the statement.
 The value is still cached and replayed. To get a new draw every run, use
-`no-cache` on its own line. See [Randomness](known-limitations.md#randomness).
+`no-cache`. See [Randomness](known-limitations.md#randomness).
 
 ### `# @cash:cache-fit`
 

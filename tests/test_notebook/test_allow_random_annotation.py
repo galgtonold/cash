@@ -195,8 +195,8 @@ class TestNoCacheStatement:
     """A ``# @cash:no-cache`` statement is never cached, so it gets no warning.
 
     ``RANDOM-UNSEEDED`` says the first result is cached and replayed. For a
-    no-cache statement that is false: it is never stored, and with the directive
-    on a line of its own the rewind is off too, so every run draws again. That
+    no-cache statement that is false: it is never stored, and the rewind is off
+    too, so every run draws again. That
     is the "genuinely fresh" outcome the warning itself recommends, so warning
     about it contradicts its own advice.
     """
