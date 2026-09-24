@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .._memo import RECORDS, LruMemo
 from .._paths import replace_with_retry
 from ..backends._writes import PendingWrites
 from ..backends.cache_dir import recreate_cache_dir
@@ -87,7 +88,6 @@ class StoredKeyRecord:
     #: States whose ledger a record keeps, most recent last.
     STATES_MAX = 8
     WARNED_MAX = 32
-    _MEMO_MAX = 256
 
     def __init__(self, local_dir: Callable[[], str | None]) -> None:
         """*local_dir* returns the built backend's local directory, or None
@@ -98,7 +98,7 @@ class StoredKeyRecord:
         self._lock = threading.Lock()
         # Serialises this process's rewrites of a record.
         self._io_lock = threading.Lock()
-        self._memo: dict[str, tuple[tuple[int, int], Doc]] = {}
+        self._memo: LruMemo[str, tuple[tuple[int, int], Doc]] = LruMemo(RECORDS)
         self._pending: dict[str, _Changes] = {}
         # Taken by a write in progress; still part of what `read` answers.
         self._writing: dict[str, _Changes] = {}
@@ -165,8 +165,6 @@ class StoredKeyRecord:
                 if isinstance(value, dict):
                     doc[kind] = value
         with self._lock:
-            if len(self._memo) >= self._MEMO_MAX:
-                self._memo.clear()
             self._memo[path] = ((st.st_mtime_ns, st.st_size), doc)
         return {kind: dict(value) for kind, value in doc.items()}
 

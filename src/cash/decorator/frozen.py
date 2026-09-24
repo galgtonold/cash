@@ -11,6 +11,7 @@ import weakref
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
+from .._memo import FROZEN_RESULTS, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..object_hashing import builtin_hash
@@ -79,7 +80,7 @@ class FrozenResults:
         #: (`remember_container`). Read by the argument hashers.
         self.containers: dict[int, list] = {}
         # id(obj) -> [weakref, uses, audit baseline or None, shape], see `audit`.
-        self._uses: dict[int, list] = {}
+        self._uses: LruMemo[int, list] = LruMemo(FROZEN_RESULTS)
 
     def arg_names(self, normalized_args: tuple[tuple, dict]) -> list[str]:
         """`explain()`'s list of arguments keyed by a frozen=True producer."""
@@ -254,8 +255,6 @@ class FrozenResults:
             except TypeError:
                 return True
             entry = [wref, 0, None, frozen_shape(obj)]
-            if len(self._uses) >= 4096:
-                self._uses.clear()
             self._uses[key] = entry
         entry[1] += 1
         uses = entry[1]

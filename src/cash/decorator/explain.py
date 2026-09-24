@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from .._memo import STATE_LEDGERS, LruMemo
 from ..backends import CacheMetadata
 from ..backends._base import ttl_expired
 from ..data_source import DataSource
@@ -392,7 +393,7 @@ class MissHistory:
         self._pending: dict[str, MissReason] = {}
         # (func_name, state segment) -> the ledger of the key build that first
         # produced it (`keep_state_ledger`).
-        self._ledgers: dict[tuple[str, str], dict] = {}
+        self._ledgers: LruMemo[tuple[str, str], dict] = LruMemo(STATE_LEDGERS)
 
     def note_miss(self, func_name: str, cache_key: str, reason: MissReason) -> None:
         """Hold *reason* for the `CallLog.log` that reports this miss."""
@@ -519,13 +520,7 @@ class MissHistory:
     def keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
         """Keep the ledger of the first key build that produced this
         ``(func_name, state)``."""
-        ledgers = self._ledgers
-        ledgers[slot] = ledger
-        if len(ledgers) > 512:
-            try:
-                ledgers.pop(next(iter(ledgers)))
-            except (RuntimeError, StopIteration, KeyError):
-                pass  # another thread trimmed it first
+        self._ledgers[slot] = ledger
 
     def has_ledger(self, slot: tuple[str, str]) -> bool:
         """Is a ledger kept for ``(func_name, state)``?"""

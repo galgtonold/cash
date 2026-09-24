@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
+from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
 from ..object_hashing import builtin_hash, stable_key_repr
@@ -144,12 +145,6 @@ def is_cow_pandas(value: Any) -> bool:
         except Exception:  # noqa: BLE001 - unknown pandas: no memo, hash every time
             _COW_PANDAS = False
     return _COW_PANDAS
-
-
-ARG_HASH_MEMO_CAP = 1024
-
-
-FRAME_MEMO_CAP = 256
 
 
 def frame_signature(obj: Any) -> tuple:
@@ -317,11 +312,11 @@ class ArgHasher:
         # id(arg) -> (weakref, lineage_hash, content_hash). Lets a repeated call
         # with the SAME unmutated argument skip re-hashing a possibly-huge
         # input; `hash_payload` validates each read (weakref identity +
-        # lineage). Bounded by ARG_HASH_MEMO_CAP.
-        self._memo: dict[int, tuple] = {}
+        # lineage).
+        self._memo: LruMemo[int, tuple] = LruMemo(ARGUMENTS)
         # id(frame) -> (weakref, shallow copy, signature, content hash): the
         # pandas copy-on-write memo, see `_frame_memo_store`.
-        self._frame_memo: dict[int, tuple] = {}
+        self._frame_memo: LruMemo[int, tuple] = LruMemo(FRAMES)
         #: type -> (callable(value) -> str, source hash), from
         #: ``cash.register_hasher``. The source hash is part of the argument
         #: hash, so editing a hasher's body invalidates what it keyed.
@@ -486,20 +481,15 @@ class ArgHasher:
         return tuple(canon_args), canon_kwargs
 
     def _memo_arg_hash(self, arg: Any, lineage: str, content_hash: str) -> None:
-        """Record ``id(arg) -> (weakref, lineage, content_hash)`` for the session,
-        bounded so a long session can't grow the memo without limit. When full,
-        drop it wholesale: the memo is a pure speedup, so an occasional cold
-        start just re-hashes. Values that cannot be weak-referenced are skipped
-        (they simply keep full-hashing).
+        """Record ``id(arg) -> (weakref, lineage, content_hash)`` for the session.
+        Values that cannot be weak-referenced are skipped (they simply keep
+        full-hashing).
         """
         try:
             wref = weakref.ref(arg)
         except TypeError:
             return
-        memo = self._memo
-        if len(memo) >= ARG_HASH_MEMO_CAP:
-            memo.clear()
-        memo[id(arg)] = (wref, lineage, content_hash)
+        self._memo[id(arg)] = (wref, lineage, content_hash)
 
     def _frame_memo_lookup(self, obj: Any) -> str | None:
         """The content hash recorded for *obj*, if *obj* has not changed since."""
@@ -525,7 +515,7 @@ class ArgHasher:
         exact: while cash references the blocks, pandas must copy before any
         write. Cost: the first in-place write to each block afterwards copies
         that block, once. The entry, copy included, goes when *obj* is
-        collected, or when the memo fills.
+        collected, or when the memo drops it to make room.
         """
         try:
             held = obj.copy(deep=False)
@@ -535,8 +525,6 @@ class ArgHasher:
             wref = weakref.ref(obj, lambda _ref, key=key, memo=memo: memo.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
-        if len(self._frame_memo) >= FRAME_MEMO_CAP:
-            self._frame_memo.clear()
         self._frame_memo[key] = (wref, held, signature, content_hash)
 
     def hash_payload(self, args: tuple, kwargs: dict) -> str:

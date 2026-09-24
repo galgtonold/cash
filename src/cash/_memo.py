@@ -16,14 +16,20 @@ from collections import OrderedDict
 from typing import Generic, TypeVar
 
 __all__ = [
+    "ARGUMENTS",
     "CODE_OBJECTS",
     "FILE_DIGESTS",
+    "FRAMES",
+    "FROZEN_RESULTS",
     "MODULE_ANALYSES",
     "MODULE_READ_DIGESTS",
     "NOTEBOOK_FUNCTIONS",
     "PATCH_SITES",
     "READ_PATHS",
+    "RECORDS",
+    "RESULT_TYPES",
     "SOURCE_FILES",
+    "STATE_LEDGERS",
     "LruMemo",
 ]
 
@@ -116,6 +122,28 @@ MODULE_READ_DIGESTS = 4096
 #: One content digest per file version: a folder read runs to tens of
 #: thousands of files, and an entry is a few hundred bytes.
 FILE_DIGESTS = 1 << 17
+
+#: One entry per argument object a cached call was given: a weakref and two
+#: digests.
+ARGUMENTS = 1024
+
+#: One entry per pandas frame argument, each holding a shallow copy of it:
+#: while it is held, pandas copies a block before writing to it in place.
+FRAMES = 256
+
+#: One entry per frozen=True result passed as an argument: its use count and
+#: audit baseline. One dropped starts its audit schedule over.
+FROZEN_RESULTS = 4096
+
+#: One per result type that refuses an attribute: a class made per call
+#: would otherwise be held for good.
+RESULT_TYPES = 256
+
+#: One stored-key record per cached function, as last read from disk.
+RECORDS = 256
+
+#: One key-build ledger per function and state, for `explain()`.
+STATE_LEDGERS = 512
 
 #: One source digest per function the notebook's cells reference.
 NOTEBOOK_FUNCTIONS = 500

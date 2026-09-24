@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
+from .._memo import RESULT_TYPES, LruMemo
 from ..backends import CacheMetadata
 from ..backends.serialization import get_serializer
 from ..effect_observer import EffectObserver
@@ -44,10 +45,8 @@ STORE_FAILED_FIX = (
 
 
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
-#: tried again (`ResultStore.attach_lineage`). At most `UNTAGGABLE_TYPES_MAX`: a
-#: class made per call would otherwise be held here for good.
-UNTAGGABLE_TYPES: set[type] = set()
-UNTAGGABLE_TYPES_MAX = 256
+#: tried again (`ResultStore.attach_lineage`).
+UNTAGGABLE_TYPES: LruMemo[type, bool] = LruMemo(RESULT_TYPES)
 
 
 def lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
@@ -210,7 +209,7 @@ class ResultStore:
             except (AttributeError, TypeError, ValueError):
                 pass
             return
-        if not frozen and type(result) in UNTAGGABLE_TYPES:
+        if not frozen and UNTAGGABLE_TYPES.get(type(result)):
             return
         lineage = lineage_hash(cache_key, auto_file_deps)
         try:
@@ -274,8 +273,7 @@ class ResultStore:
                 # Once per type, then never tried again: it logged on every
                 # call returning a dict or an array, and meant nothing to the
                 # user reading CASH_DEBUG.
-                if len(UNTAGGABLE_TYPES) < UNTAGGABLE_TYPES_MAX:
-                    UNTAGGABLE_TYPES.add(type(result))
+                UNTAGGABLE_TYPES[type(result)] = True
                 logger.debug(
                     "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
                     type_name,

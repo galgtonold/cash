@@ -9,6 +9,7 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data
+from .._memo import CODE_OBJECTS, LruMemo
 from ..dependency_state import EXPLAINING as _EXPLAINING
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
@@ -80,8 +81,8 @@ class CodeArgs:
         self._frozen = frozen
         # ``(class, is user code)`` per class id, for `_iter_attribute_carriers`:
         # a list of 50k instances must not pay the verdict per element. The
-        # class is kept so a recycled id is never trusted. Bounded there.
-        self._attribute_walk_verdicts: dict[tuple[str, int], tuple[type, bool]] = {}
+        # class is kept so a recycled id is never trusted.
+        self._attribute_walk_verdicts: LruMemo[tuple[str, int], tuple[type, bool]] = LruMemo(CODE_OBJECTS)
         # Code carriers already reported (`_warn_unhashable_code_once`,
         # `_warn_untrackable_in_carrier_once`): once per carrier and function.
         self._warned_unhashable_code: set[tuple] = set()
@@ -311,8 +312,7 @@ class CodeArgs:
         verdict = self._attribute_walk_verdicts.get(key)
         if verdict is None or verdict[0] is not cls:
             verdict = (cls, is_user_code_object(cls))
-            if len(self._attribute_walk_verdicts) < 4096:
-                self._attribute_walk_verdicts[key] = verdict
+            self._attribute_walk_verdicts[key] = verdict
         if not verdict[1]:
             return
         attrs = getattr(value, "__dict__", None)

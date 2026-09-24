@@ -14,6 +14,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from .._memo import CODE_OBJECTS, LruMemo
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..purity_analyzer import REPORTED_METHODS
@@ -221,13 +222,11 @@ class CaptureAnalysis:
 
     def __init__(self) -> None:
         # code object -> frozenset of reassigned freevars
-        self._deref_writes: dict = {}
-        # code object -> frozenset of free vars with capture-unsafe uses
-        self._use_cache: dict = {}
-        # code object -> closure free vars folded only provisionally: passed to
-        # a call, so folded and then confirmed by observation. Kept in
-        # lockstep with the cache above.
-        self._provisional: dict = {}
+        self._deref_writes: LruMemo[Any, frozenset] = LruMemo(CODE_OBJECTS)
+        # code object -> (free vars with capture-unsafe uses, free vars folded
+        # only provisionally: passed to a call, so folded and then confirmed
+        # by observation). One entry, so the two never disagree.
+        self._use_cache: LruMemo[Any, tuple[frozenset, frozenset]] = LruMemo(CODE_OBJECTS)
 
     def written_freevars(self, code: Any) -> frozenset:
         """Free-variable names the function reassigns (``STORE_DEREF`` /
@@ -241,8 +240,7 @@ class CaptureAnalysis:
         written = frozenset(
             instr.argval for instr in dis.get_instructions(code) if instr.opname in ("STORE_DEREF", "DELETE_DEREF")
         )
-        if len(cache) < 4096:
-            cache[code] = written
+        cache[code] = written
         return written
 
     def unsafe_uses(self, func: Callable) -> frozenset:
@@ -264,7 +262,7 @@ class CaptureAnalysis:
             return frozenset()
         cached = self._use_cache.get(code)
         if cached is not None:
-            return cached
+            return cached[0]
         freevars = set(code.co_freevars or ())
         provisional: frozenset = frozenset()
         try:
@@ -288,16 +286,13 @@ class CaptureAnalysis:
             provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
             # Only on waived lines: as for globals (`GlobalsFold.read_global_data_names`).
             result = result | (suspected - provisional)
-        if len(self._use_cache) < 4096:
-            self._use_cache[code] = result
-            # Kept in lockstep with the cache above so the two can never
-            # disagree about a code object.
-            self._provisional[code] = provisional
+        self._use_cache[code] = (result, provisional)
         return result
 
     def provisional(self, code: Any) -> frozenset | None:
         """The free vars of *code* folded only provisionally, or None if unknown."""
-        return self._provisional.get(code)
+        cached = self._use_cache.get(code)
+        return cached[1] if cached is not None else None
 
 
 class HelperIdentity:
@@ -310,7 +305,7 @@ class HelperIdentity:
         # id(helper) -> (helper, __defaults__, __kwdefaults__, identity); see
         # `identity`. Holding the helper keeps its id from being recycled while
         # the entry lives.
-        self._defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
+        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, str]] = LruMemo(CODE_OBJECTS)
 
     def _capture_part(self, fn: Callable) -> str:
         """Digest of the IMMUTABLE values a helper's closure captured, or "".
@@ -421,8 +416,6 @@ class HelperIdentity:
                     f"cash.register_hasher({bad_type}, ...).",
                 ) from e
         identity = f"{source}:defaults:{digest}"
-        if len(self._defaults_memo) >= 4096:
-            self._defaults_memo.clear()
         self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, identity)
         return identity
 

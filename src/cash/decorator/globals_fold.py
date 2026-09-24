@@ -14,6 +14,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .._memo import CODE_OBJECTS, LruMemo
 from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
@@ -152,6 +153,10 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
     return v
 
 
+#: A miss in `GlobalsFold._local_binding_cache`, whose entries may be None.
+_NO_PLAN = object()
+
+
 class GlobalsFold:
     """The module data a function and its helpers read, folded into the state
     segment: globals, ``module.ATTR`` reads, data reached through local
@@ -178,18 +183,17 @@ class GlobalsFold:
         # found inside data globals (`data_callable_identity`).
         self._data_helper_resolver = SysModulesHelperResolver(helpers.identity)
         # code object -> global names its decorator expressions read
-        self._decorator_names_cache: dict = {}
-        # code object -> tuple of global names it reads (global folding)
-        self._global_read_cache: dict = {}
-        # code object -> names folded only provisionally. See
-        # `read_global_data_names`. A missing entry means "unknown", which
+        self._decorator_names_cache: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
+        # code object -> (tuple of global names it reads, the names among them
+        # folded only provisionally). One entry, so the two never disagree.
+        # See `read_global_data_names`; a missing entry means "unknown", which
         # `fold_read_globals` treats as "watch everything".
-        self._provisional_global_cache: dict = {}
+        self._global_read_cache: LruMemo[Any, tuple[tuple[str, ...], frozenset]] = LruMemo(CODE_OBJECTS)
         # (module_global, attribute) read pairs per code object; see
         # `_read_module_attr_pairs`.
-        self._module_attr_cache: dict = {}
-        self._local_binding_cache: dict[Any, tuple | None] = {}
-        self._carrier_verdicts: dict[int, tuple[Any, bool]] = {}
+        self._module_attr_cache: LruMemo[Any, tuple[tuple[str, str], ...]] = LruMemo(CODE_OBJECTS)
+        self._local_binding_cache: LruMemo[Any, tuple | None] = LruMemo(CODE_OBJECTS)
+        self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str]] = LruMemo(CODE_OBJECTS)
 
     def fold_environment(self, func_name: str, state_hash: str) -> str:
         """Fold the current value of every environment read into the key.
@@ -249,7 +253,7 @@ class GlobalsFold:
             return ()
         cached = self._global_read_cache.get(code)
         if cached is not None:
-            return cached
+            return cached[0]
         g = getattr(func, "__globals__", {}) or {}
 
         scopes = tuple(iter_code_scopes(code))
@@ -311,14 +315,10 @@ class GlobalsFold:
                 # learn from.
                 candidates, provisional = set(), frozenset()
         names = tuple(sorted(candidates))
-        if len(self._global_read_cache) < 4096:
-            self._global_read_cache[code] = names
-            # Kept in lockstep with the names cache so the two can never
-            # disagree about a code object. A MISSING entry is not "nothing is
-            # provisional" -- `GlobalsFold.fold_read_globals` reads that as "watch every
-            # folded name", which costs an extra hash per miss and is the safe
-            # direction.
-            self._provisional_global_cache[code] = provisional
+        # A MISSING entry is not "nothing is provisional" --
+        # `GlobalsFold.fold_read_globals` reads that as "watch every folded
+        # name", which costs an extra hash per miss and is the safe direction.
+        self._global_read_cache[code] = (names, provisional)
         return names
 
     def data_callable_identity(self, fn: Any) -> str:
@@ -402,7 +402,8 @@ class GlobalsFold:
         code = getattr(func, "__code__", None)
         # A missing provisional entry means "unknown", not "none" -- watch every
         # folded name rather than fold one blind (see `GlobalsFold.read_global_data_names`).
-        provisional = self._provisional_global_cache.get(code)
+        cached = self._global_read_cache.get(code)
+        provisional = cached[1] if cached is not None else None
         learned_mutating = self._mutations.of(owner_code if owner_code is not None else code, "global")
         watch: dict[str, str] = {}
         for name in names:
@@ -714,8 +715,6 @@ class GlobalsFold:
 
     def _note_carrier_verdict(self, value: Any, keyable: bool | str) -> None:
         # Holds the object, so its id cannot be reused while the entry stands.
-        if len(self._carrier_verdicts) >= 4096:
-            self._carrier_verdicts.clear()
         self._carrier_verdicts[id(value)] = (value, keyable)
 
     def _decorator_global_names(self, fn: Callable) -> tuple[str, ...]:
@@ -749,8 +748,6 @@ class GlobalsFold:
                 )
         except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
             names = ()
-        if len(self._decorator_names_cache) >= 4096:
-            self._decorator_names_cache.clear()
         self._decorator_names_cache[code] = names
         return names
 
@@ -874,8 +871,7 @@ class GlobalsFold:
                     continue
                 pairs.add((name, attr))
         result = tuple(sorted(pairs))
-        if len(self._module_attr_cache) < 4096:
-            self._module_attr_cache[code] = result
+        self._module_attr_cache[code] = result
         return result
 
     def _local_binding_plan(self, func: Callable) -> tuple | None:
@@ -888,8 +884,9 @@ class GlobalsFold:
         code = getattr(func, "__code__", None)
         if code is None:
             return None
-        if code in self._local_binding_cache:
-            return self._local_binding_cache[code]
+        cached = self._local_binding_cache.get(code, _NO_PLAN)
+        if cached is not _NO_PLAN:
+            return cached
         plan = None
         try:
             tree = ast.parse(textwrap.dedent(own_source(func)))
@@ -915,8 +912,7 @@ class GlobalsFold:
                     plan = (imports, attr_reads, bare_reads)
         except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
             plan = None
-        if len(self._local_binding_cache) < 4096:
-            self._local_binding_cache[code] = plan
+        self._local_binding_cache[code] = plan
         return plan
 
     def _local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:

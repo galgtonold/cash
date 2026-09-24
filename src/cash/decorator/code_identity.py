@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._annotation_refs import annotation_referents
+from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
@@ -65,13 +66,12 @@ logger = logging.getLogger(__name__)
 #
 # Module-level rather than per-instance: the digest depends only on the code
 # object, so two Cash instances cannot legitimately disagree about it.
-SOURCE_HASH_MEMO: dict = {}
-SOURCE_HASH_MEMO_MAX = 4096
+SOURCE_HASH_MEMO: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
 #: ``id(code) -> (code, path, size, mtime_ns, text digest)``: the stat of the
 #: file whose text a function's key was read from, taken just before reading
 #: it, and that text's digest. The store compares both with the file now
 #: (`FileDeps.code_moved_since_keyed`).
-CODE_KEYED_STATS: dict[int, tuple[Any, str, int, int, str]] = {}
+CODE_KEYED_STATS: LruMemo[int, tuple[Any, str, int, int, str]] = LruMemo(CODE_OBJECTS)
 
 
 #: Source files already reported as edited-since-load, one notice per file.
@@ -224,7 +224,7 @@ def hash_callable_source(fn: Callable) -> str:
         digest = loaded_class_identity(fn) if isinstance(fn, type) else compiled_identity(fn)
         if digest is not None:
             warn_source_changed_since_load(fn)
-            if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
+            if memo_key is not None:
                 SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
             return digest
 
@@ -234,9 +234,9 @@ def hash_callable_source(fn: Callable) -> str:
     digest = source_digest(fn)
     if digest is None:
         return compiled_identity(fn)
-    if memo_key is not None and len(SOURCE_HASH_MEMO) < SOURCE_HASH_MEMO_MAX:
+    if memo_key is not None:
         SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
-    if keyed_stat is not None and len(CODE_KEYED_STATS) < SOURCE_HASH_MEMO_MAX:
+    if keyed_stat is not None:
         own = digest if memo_owner is not fn else own_source_digest(fn)
         if own is not None:
             CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, own)
@@ -466,6 +466,11 @@ class CodeIdentity:
     the code surface of classes, instances and functions reached through
     arguments and globals."""
 
+    #: Pins held at once. Not a memo: a pin is the text on disk when the
+    #: decorator ran and cannot be taken again later, so a full table keeps
+    #: the pins it has (see `pin_own_source`).
+    OWN_PINS_MAX = 4096
+
     def __init__(self, args: ArgHasher) -> None:
         self._args = args
         # id(func) -> (reference to func, decoration-pinned own-source
@@ -477,20 +482,20 @@ class CodeIdentity:
         self._own_pins_unverified: set[int] = set()
         # (first_param, self_attrs, uses_super) per code object; see
         # `_analyze_method_self_deps`.
-        self._method_self_dep_cache: dict = {}
+        self._method_self_dep_cache: LruMemo[Any, tuple[str | None, tuple[str, ...], bool]] = LruMemo(CODE_OBJECTS)
         # user class -> source hash. A class's source cannot change within a
         # running interpreter, so it is hashed once and reused; see
         # `user_class_source_hash` / `instance_class_source_parts`.
-        self._user_class_src_cache: dict = {}
+        self._user_class_src_cache: LruMemo[type, str] = LruMemo(CODE_OBJECTS)
         # user class or function -> code-surface digest (bytecode-based, class-
         # aware); see `code_surface_hash`. Keyed on the object itself, not
         # id(), so a redefinition (a new object) is a distinct memo entry.
-        self._code_surface_cache: dict = {}
+        self._code_surface_cache: LruMemo[Any, str] = LruMemo(CODE_OBJECTS)
         # object -> tuple of (code object, globals dict) it carries. Static for
         # as long as that object exists (a redefinition makes a new one), so it
         # is safe to memo; the NAMES those code objects reference are resolved
         # fresh per call, because what a name is bound to can change.
-        self._code_refs_cache: dict = {}
+        self._code_refs_cache: LruMemo[Any, tuple] = LruMemo(CODE_OBJECTS)
 
     def _analyze_method_self_deps(self, func: Callable) -> tuple[str | None, tuple[str, ...], bool]:
         """Attributes a method reads on its first parameter, and whether it calls super().
@@ -515,7 +520,7 @@ class CodeIdentity:
             src = textwrap.dedent(inspect.getsource(func))
             tree = ast.parse(src)
         except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
-            if code is not None and len(self._method_self_dep_cache) < 4096:
+            if code is not None:
                 self._method_self_dep_cache[code] = result
             return result
         func_def = None
@@ -524,7 +529,7 @@ class CodeIdentity:
                 func_def = node
                 break
         if func_def is None or not func_def.args.args:
-            if code is not None and len(self._method_self_dep_cache) < 4096:
+            if code is not None:
                 self._method_self_dep_cache[code] = result
             return result
         self_name = func_def.args.args[0].arg
@@ -560,7 +565,7 @@ class CodeIdentity:
                 ):
                     uses_super = True
         result = (self_name, tuple(sorted(attrs)), uses_super)
-        if code is not None and len(self._method_self_dep_cache) < 4096:
+        if code is not None:
             self._method_self_dep_cache[code] = result
         return result
 
@@ -720,11 +725,7 @@ class CodeIdentity:
                 source_hash = bytecode_identity(func) or callable_identity(func)
                 warn_source_changed_since_load(func)
                 keyed_stat = None  # keyed by what runs, not by the file
-        if (
-            keyed_stat is not None
-            and id(keyed_stat[0]) not in CODE_KEYED_STATS
-            and len(CODE_KEYED_STATS) < SOURCE_HASH_MEMO_MAX
-        ):
+        if keyed_stat is not None and id(keyed_stat[0]) not in CODE_KEYED_STATS:
             disk_digest = own_source_digest(func)
             if disk_digest is not None:
                 CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, disk_digest)
@@ -739,7 +740,7 @@ class CodeIdentity:
                 )
                 pin = hashlib.sha256(f"{pin}:{code.co_code.hex()}:{consts!r}".encode("utf-8")).hexdigest()
         self._own_pins_unverified.discard(key)
-        if key in self._own_pins or len(self._own_pins) < 4096:
+        if key in self._own_pins or len(self._own_pins) < self.OWN_PINS_MAX:
             self._own_pins[key] = (self._pin_owner_ref(owner, key), pin)
             if at_decoration:
                 self._own_pins_unverified.add(key)
@@ -974,8 +975,7 @@ class CodeIdentity:
             return None
         digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
         try:
-            if len(self._code_surface_cache) < 4096:
-                self._code_surface_cache[obj] = digest
+            self._code_surface_cache[obj] = digest
         except TypeError:
             pass  # unhashable object - skip the memo, keep the answer
         return digest
@@ -1038,8 +1038,7 @@ class CodeIdentity:
         if pairs is None:
             pairs = tuple(self._iter_code_and_globals(obj))
             try:
-                if len(self._code_refs_cache) < 4096:
-                    self._code_refs_cache[obj] = pairs
+                self._code_refs_cache[obj] = pairs
             except TypeError:
                 pass
 
@@ -1449,8 +1448,7 @@ class CodeIdentity:
             # __code__, so the callable fallback would key it on its name
             # alone; the class-aware surface sees its members.
             h = self.code_surface_hash(cls) or hash_callable_source(cls)
-        if len(self._user_class_src_cache) < 4096:
-            self._user_class_src_cache[cls] = h
+        self._user_class_src_cache[cls] = h
         return h
 
     def instance_class_source_parts(

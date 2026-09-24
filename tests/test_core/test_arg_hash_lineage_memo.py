@@ -13,7 +13,7 @@ from __future__ import annotations
 import pandas as pd
 
 import cash.decorator.arg_hashing as arg_hashing
-from cash import Cash, InMemoryBackend
+from cash import Cash, InMemoryBackend, _memo
 
 
 def _cash() -> Cash:
@@ -108,8 +108,8 @@ def test_two_objects_sharing_a_lineage_string_still_track_content():
 def test_memo_is_bounded():
     c = _cash()
     keep = []  # hold references so each df keeps a distinct id (forces growth)
-    for i in range(arg_hashing.ARG_HASH_MEMO_CAP + 50):
+    for i in range(_memo.ARGUMENTS + 50):
         df = _df(range(3), lineage=f"L{i}")
         keep.append(df)
         c._args.serialize_args("f", (df,), {})
-    assert len(c._args._memo) <= arg_hashing.ARG_HASH_MEMO_CAP
+    assert len(c._args._memo) <= _memo.ARGUMENTS
