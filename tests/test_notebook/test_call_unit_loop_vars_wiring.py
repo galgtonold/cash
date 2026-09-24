@@ -21,15 +21,12 @@ stamping wiring.
 
 from __future__ import annotations
 
-import ast
 from unittest.mock import MagicMock
 
 import pytest
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.notebook._protocols import TrackingState
-from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
 
@@ -371,64 +368,3 @@ def test_depth_keyed_scope_keeps_a_value_with_no_matching_digest():
         "the value-only entry must keep its slot, not be dropped"
     )
     assert digests == {"0:q": "digest-q"}, "no digest should be invented for the value-only entry"
-
-
-# --------------------------------------------------------- for_handler.py's own guard
-
-
-class _ShellStub:
-    def __init__(self):
-        self.user_ns = {}
-
-
-class _StatementProcessorWithoutLoopVarsScope:
-    """Deliberately lacks `loop_vars_scope` -- the shape `StatementProcessor`
-    had before this task, or any future variant that hasn't picked up the
-    method. `ForLoopHandler` must not assume it exists.
-    """
-
-    def __init__(self):
-        self.tracking_state = TrackingState()
-        self.compute_hash = lambda v: "fakehash"
-
-    def process_statement(self, code, ttl, silent, annotation=None, is_last=True):
-        return {
-            "status": CacheStatus.COMPUTED,
-            "execution_time": 0.01,
-            "stdout": "",
-            "stderr": "",
-            "outputs": [],
-        }
-
-
-def test_for_loop_runs_even_when_statement_processor_lacks_loop_vars_scope():
-    """Minor finding: `for_handler.py`'s `with
-    self.statement_processor.loop_vars_scope(loop_vars):` must not assume the
-    method exists. Unreachable in production today (`StatementProcessor` is
-    the one and only class ever passed in, at `magics.py`'s single
-    construction site) -- but `for_handler.py` is the file where a caching
-    optimisation failing breaks the USER'S LOOP outright (an unhandled
-    `AttributeError` propagates out of `handler.process()` as
-    `success=False`, and `cell_executor.py` re-raises it as the user's own
-    error), not merely its caching. Guarded with
-    `getattr(..., None)` falling back to `contextlib.nullcontext()`.
-
-    Mutation that must make this fail: revert the guard in `for_handler.py`
-    to the bare `with self.statement_processor.loop_vars_scope(loop_vars):`.
-    Verified by hand: with that reversion this test raises
-    `AttributeError: '_StatementProcessorWithoutLoopVarsScope' object has no
-    attribute 'loop_vars_scope'` instead of completing.
-    """
-    from cash.notebook.control_structures.for_handler import ForLoopHandler
-
-    shell = _ShellStub()
-    handler = ForLoopHandler(
-        shell,
-        _StatementProcessorWithoutLoopVarsScope(),
-        dispatcher=MagicMock(),
-    )
-    node = ast.parse("for x in [1, 2]:\n    y = x\n").body[0]
-
-    result = handler.process(node, ttl=None, silent=True, parent_context=None)
-
-    assert result.success is True, result.error

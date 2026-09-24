@@ -34,11 +34,7 @@ from cash.notebook.statement.imports import (
     redundant_import_names,
 )
 from cash.notebook.statement.lineage import StatementLineageBuilder
-from cash.notebook.statement.miss_guard import (
-    GUARD_SKIP_REASON,
-    MissGuard,
-    resolve_cache_dir,
-)
+from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutations import MutationClassifier
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
@@ -47,6 +43,7 @@ from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
+from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 
 from ...analysis.annotations import CacheAnnotation
@@ -371,6 +368,11 @@ class StatementProcessor:
         """Record what file(s) the writer statement *code* produced."""
         self._records.persist_write_provenance(code, inputs, tree, written)
 
+    def persist_metadata_only(self, key: str, metadata: dict[str, Any]) -> None:
+        """Write *metadata* under *key* with no value, for a later kernel to
+        read. Only a tier that keeps metadata alone (a file tier) stores it."""
+        self.cash_instance.backend.set_metadata_only(key, metadata)
+
     def user_written_paths(self, paths) -> frozenset[str]:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
@@ -511,7 +513,7 @@ class StatementProcessor:
             run.annotation, run.ttl
         )
         self._calls.begin_statement(run.effective_ttl, run.force_persist)
-        run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random)
+        run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random, skip_cache=run.skip_cache)
         self._randomness.warn_entropy_reseed(code)
         run.metrics = metrics = {
             "status": CacheStatus.UNKNOWN,
@@ -1213,7 +1215,8 @@ class StatementProcessor:
             code_hash=cache_key,
         )
 
-    def _resolve_live_function_source(self, name: str) -> str | None:
+    def resolve_live_function_source(self, name: str) -> str | None:
+        """The source of the function *name* is bound to in the user namespace now."""
         return live_function_source(name, self.shell.user_ns)
 
     def _check_callable_stateful(self, name: str) -> bool:
@@ -1355,7 +1358,7 @@ class StatementProcessor:
             code,
             tree,
             namespace=self.shell.user_ns,
-            resolve_source=self._resolve_live_function_source,
+            resolve_source=self.resolve_live_function_source,
             control_body=is_control_body(code),
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)

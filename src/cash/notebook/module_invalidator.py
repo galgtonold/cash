@@ -115,17 +115,13 @@ class ModuleInvalidator:
             # A cache key is built from the names a statement mentions, so
             # `parsed = tl.parse_headers(corpus)` asks for the lineage of
             # `tl` -- and `import tickets_lib as tl` is what most notebooks
-            # write. Updating only `tickets_lib` left `tl` holding the
-            # pre-edit hash forever, so the statement's key never moved: the
-            # module was reloaded, the badge said so, and the cell returned
-            # the pre-edit answer anyway until the kernel was restarted.
+            # write. An alias left on the pre-edit hash keeps the statement's
+            # key where it was, so the cell returns the pre-edit answer after
+            # the reload.
             #
             # It also feeds the propagation step below, which matches
             # downstream variables on the lineage they RECORDED for their
             # inputs -- again the alias, never the module's real name.
-            #
-            # Why three minimal repros missed it, and why this suite did:
-            # they all wrote `import mylib`, where the two names coincide.
             for name in self._names_bound_to(mod_name):
                 old_lineage = processor.tracking_state.variable_lineage.get(name)
                 if old_lineage:
@@ -148,12 +144,11 @@ class ModuleInvalidator:
         """The lineage the import that bound *name* gives it, run again now,
         or None when no import is known for it.
 
-        What a fresh kernel's import computes -- the reload's own file hash
-        was a different formula. A statement that reads the module whole (one
-        whose closure cannot be bounded: a helper that reads the clock) is
-        keyed on this lineage, so everything the session computed after an
-        edit was keyed apart from what the next morning looked up: nothing
-        restored until a second restart.
+        What a fresh kernel's import computes, which the reload's own file
+        hash is not. A statement that reads the module whole (one whose
+        closure cannot be bounded: a helper that reads the clock) is keyed on
+        this lineage, so it must match what the next kernel computes, or what
+        the session writes after an edit never restores after a restart.
         """
 
         code = processor.tracking_state.executed_cell_codes.get(name)
@@ -229,10 +224,9 @@ class ModuleInvalidator:
         source component -- what ``name`` reaches inside the module -- is the
         same against the reloaded file as the one its lineage was built with.
         Its code did not change, so neither does anything built on it: it is
-        refreshed to the reloaded object and keeps its lineage. Dropping it,
-        as every name used to be dropped, left `DATA = load(6)` refused as
-        "Input variable missing lineage" after an edit to an unrelated
-        function in the same file.
+        refreshed to the reloaded object and keeps its lineage, so an edit to
+        an unrelated function in the same file does not leave `DATA =
+        load(6)` refused as "Input variable missing lineage".
         """
         for var_name, var_value in list(self._shell.user_ns.items()):
             if var_name.startswith("_"):
@@ -383,9 +377,9 @@ class ModuleInvalidator:
         processor.forget_variable(var_name)
         # The value is still in memory, built by the pre-edit module. Dropping
         # its lineage makes a READER of it recompute, but a cell further down
-        # reading only something built from it compared lineages and saw
-        # nothing to compare, and exported the pre-edit numbers. Ask
-        # for its binding to be re-run instead -- TrackingState.rerun_bindings.
+        # reading only something built from it has no lineage to compare and
+        # would keep the pre-edit numbers. So its binding is re-run --
+        # TrackingState.rerun_bindings.
         if var_name in self._shell.user_ns:
             processor.tracking_state.rerun_bindings.add(var_name)
         logger.debug("[MODULE_INVALIDATE] Cleared lineage for dependent var %r", var_name)

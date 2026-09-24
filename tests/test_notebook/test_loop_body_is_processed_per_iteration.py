@@ -11,8 +11,8 @@ import ast
 import unittest
 from unittest.mock import MagicMock
 
-from cash.notebook.cache_status import CacheStatus
 from cash.notebook.control_structures import ControlStructureProcessor
+from tests.test_notebook._control_fakes import fake_statement_processor
 
 
 class TestLoopCodeCapture(unittest.TestCase):
@@ -21,19 +21,7 @@ class TestLoopCodeCapture(unittest.TestCase):
         shell = MagicMock()
         shell.user_ns = {"range": range}
 
-        sp = MagicMock()
-        sp.process_statement = MagicMock(
-            return_value={
-                "status": CacheStatus.COMPUTED,
-                "execution_time": 0.01,
-                "stdout": "",
-                "stderr": "",
-                "outputs": [],
-            }
-        )
-        sp.tracking_state.variable_lineage = {}
-        sp.tracking_state.vars_with_mutation_lineage = set()
-        sp.compute_hash = MagicMock(return_value="fakehash")
+        sp = fake_statement_processor()
 
         csp = ControlStructureProcessor(shell, sp)
 

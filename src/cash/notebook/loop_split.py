@@ -2,14 +2,13 @@
 
 A loop that neither caching mechanism covers -- too few iterations for the
 single-unit heuristic, too cheap per call for ``call_unit`` -- caches nothing
-while still paying per-iteration decomposition overhead on every pass. At
-n=124 that made cash SLOWER than not using cash (0.1ms body: 22ms off vs
-215ms on). Such a loop is learned on one run and thereafter executed as two
-statements: a short decomposed head and its remainder as one unit.
+while still paying per-iteration decomposition overhead on every pass, which
+can make cash slower than no cash at all. Such a loop is learned on one run
+and thereafter executed as two statements: a short decomposed head and its
+remainder as one unit.
 
 **The simulator is what makes that happen.** This is the single most
-important fact about this module, and three reverted attempts came from not
-knowing it. ``upstream/`` does not merely predict what the runtime will do
+important fact about this module. ``upstream/`` does not merely predict what the runtime will do
 for metrics or key parity -- the re-execution planner executes *the
 statements the simulator modelled*. Split the simulator's model and the
 runtime follows; split only the runtime and the planner re-runs the whole
@@ -103,21 +102,11 @@ def split_nodes(node: ast.For, k: int) -> tuple[ast.For, ast.For]:
     return _half(None, k), _half(k, None)
 
 
-def split_sources(node: ast.For, k: int) -> tuple[str, str]:
-    """:func:`split_nodes` unparsed -- what the simulator keys.
-
-    Routing both sides through one function is what makes them identical.
-    """
-    head, tail = split_nodes(node, k)
-    return ast.unparse(head), ast.unparse(tail)
-
-
 class LoopSplitStore(VersionedJsonStore[int]):
     """Persisted ``source_hash -> k`` verdicts, read by both sides.
 
-    Mirrors ``statement/miss_guard.py``: loaded lazily once per session,
-    written only when a verdict is added, and best-effort throughout (see
-    :mod:`.versioned_json_store`) -- a missing, unreadable, corrupt or
+    Loaded lazily once per session, written only when a verdict is added,
+    and best-effort throughout (see :mod:`.versioned_json_store`) -- a missing, unreadable, corrupt or
     future-versioned store leaves it empty, which means "no loop is split",
     which is exactly the pre-split behaviour. The failure mode must be "no
     optimisation", never "wrong answer".
@@ -174,8 +163,3 @@ def store_for_backend(backend) -> LoopSplitStore | None:
     which directory they are reading. ``None`` means "no loop is split".
     """
     return _STORES.for_backend(backend)
-
-
-def _reset_stores_for_tests() -> None:
-    """Drop cached stores. Tests only -- each tmp_path is a fresh session."""
-    _STORES.reset()

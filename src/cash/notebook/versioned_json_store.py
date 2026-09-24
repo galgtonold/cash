@@ -1,8 +1,9 @@
 """A small ``{key: value}`` map kept as a versioned JSON file in the cache dir.
 
-Shared by the loop-split verdicts (:mod:`.loop_split`) and the measured
-compute costs (:mod:`.compute_baselines`). Both follow the same rules, so
-they live here once:
+Shared by the loop-split verdicts (:mod:`.loop_split`), the measured
+compute costs (:mod:`.compute_baselines`) and the miss guard's verdicts
+(:mod:`.statement.miss_guard`). All follow the same rules, so they live here
+once:
 
 * **Lazy.** The file is read on first use, once per session.
 * **Best-effort.** A missing, unreadable, corrupt or future-versioned file
@@ -31,11 +32,23 @@ from typing import Any, ClassVar, Generic, TypeVar
 from cash._paths import replace_with_retry
 from cash.backends.file_backend import recreate_cache_dir
 
-from .statement.miss_guard import resolve_cache_dir
-
 logger = logging.getLogger(__name__)
 
 V = TypeVar("V")
+
+
+def resolve_cache_dir(backend: Any) -> str | None:
+    """The on-disk cache directory behind *backend* (``local_dir``), or None.
+
+    None means there is nowhere to persist — a pure in-memory backend, which
+    has no restart to survive anyway, so a store there is session-scoped.
+
+    The ``isinstance`` check is for the ``MagicMock`` backends a good number of
+    tests use: a mock answers any attribute with another mock, which must not
+    pass for a path.
+    """
+    cache_dir = backend.local_dir if backend is not None else None
+    return cache_dir if isinstance(cache_dir, str) and cache_dir else None
 
 
 class VersionedJsonStore(Generic[V]):
@@ -137,7 +150,3 @@ class StoreRegistry(Generic[S]):
         except Exception:  # noqa: BLE001 - every store here is an optimisation or a nicety
             logger.debug("could not resolve a store", exc_info=True)
             return None
-
-    def reset(self) -> None:
-        """Drop every store. Tests only -- each tmp_path is a fresh session."""
-        self._stores.clear()

@@ -5,9 +5,8 @@ an assumed per-statement cost times an iteration count, decided without
 seeing the loop run. That leaves a band where the guess says "decompose" and
 reality disagrees: n below the single-unit threshold, every call below
 ``call_unit._COST_FLOOR_S``, so neither mechanism caches anything while
-per-iteration machinery is charged on every pass. Measured at n=124 on a warm
-rerun against a cash-off arm, cash was SLOWER than not using cash: 0.1ms body
-22ms off vs 215ms on; 2.5ms body 320ms vs 617ms.
+per-iteration machinery is charged on every pass, and cash is slower than no
+cash at all.
 
 This policy MEASURES such a loop and records a verdict; the handler reads the
 verdict back on later runs. Executing a split is the handler's job and the
@@ -19,30 +18,21 @@ from __future__ import annotations
 
 import ast
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..loop_split import LoopSplitStore, is_split_half, loop_source_hash, store_for_backend
 from .single_unit_policy import has_file_io_calls, header_safe_to_reevaluate
+
+if TYPE_CHECKING:
+    from ..statement import StatementProcessor
 
 logger = logging.getLogger(__name__)
 
 # Iterations measured before judging, and the split point thereafter.
 # Small on purpose: the head re-runs on every warm pass and per-iteration
 # overhead is exactly what the split removes, so a long head keeps the
-# cost it is meant to eliminate (k=10 measured ~25ms warm on a 0.1ms body
-# against 22ms for cash-off -- no gain at all; k=5 roughly halves it).
+# cost it is meant to eliminate.
 PROBE_ITERS = 5
-
-# At or above this, a call clears ``call_unit._COST_FLOOR_S`` once the
-# ~2.2ms of measured decomposition overhead is subtracted, so per-call
-# caching already covers it -- and covers it BETTER, being incremental
-# (append one item, re-run one call) where a single unit is
-# all-or-nothing. Splitting such a loop trades a better mechanism for a
-# worse one.
-MAX_ITER_SEC = 0.006
-
-# Projected remaining cost below which a split is not worth a store.
-MIN_REMAINING_SEC = 0.1
 
 _UNSET = object()
 
@@ -51,18 +41,18 @@ class LoopSplitPolicy:
     """Judges loops for splitting and remembers the verdicts.
 
     Holds the statement processor only to reach the cash instance: its
-    backend picks the verdict store, its config the thresholds.
+    backend picks the verdict store, its config the thresholds
+    (``loop_split_max_iter_seconds``, ``loop_split_min_remaining_seconds``).
     """
 
-    def __init__(self, statement_processor: Any):
+    def __init__(self, statement_processor: StatementProcessor):
         self.statement_processor = statement_processor
         self._store: LoopSplitStore | None | object = _UNSET
 
     def store(self) -> LoopSplitStore | None:
         """Shared split store, or ``None`` if unresolvable (means: learn nothing)."""
         if self._store is _UNSET:
-            cash_instance = getattr(self.statement_processor, "cash_instance", None)
-            self._store = store_for_backend(getattr(cash_instance, "backend", None))
+            self._store = store_for_backend(self.statement_processor.cash_instance.backend)
         return self._store  # type: ignore[return-value]
 
     def eligible(self, node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> int | None:
@@ -107,32 +97,6 @@ class LoopSplitPolicy:
                 return None
         return n
 
-    def threshold(self, name: str, default: float) -> float:
-        """A split threshold, read from config on every decision.
-
-        Not captured at construction, so ``cash.configure(...)`` takes effect
-        immediately -- the contract ``min_execution_time_to_cache_seconds``
-        already has. The module constants stay as the defaults and as the
-        fallback when no config is reachable (the statement processor's
-        ``cash_instance`` is a MagicMock in a fair number of unit tests).
-
-        These are configurable because the judgement is a WALL-CLOCK
-        measurement of the first few iterations, and wall clock is not a
-        property of the code alone: a kernel descheduled mid-probe measures a
-        cheap body as an expensive one and silently declines to split. A test
-        cannot escape that by moving its workload, because the interesting
-        cases sit BELOW the ceiling and descheduling only pushes measurements
-        UP -- so the threshold is the only end that can be moved far enough.
-        """
-        cash_instance = getattr(self.statement_processor, "cash_instance", None)
-        value = getattr(getattr(cash_instance, "config", None), name, None)
-        # isinstance, NOT float(): a MagicMock's __float__ returns 1.0 rather
-        # than raising, so a try/except would hand back 1.0 for every mocked
-        # cash_instance -- a 1-second ceiling that silently changes the verdict.
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return float(value)
-        return default
-
     def should_split(self, elapsed: float, done: int, n: int) -> bool:
         """Judge from MEASURED cost whether the remainder is worth one unit.
 
@@ -142,8 +106,14 @@ class LoopSplitPolicy:
         """
         if done <= 0:
             return False
-        max_iter = self.threshold("loop_split_max_iter_seconds", MAX_ITER_SEC)
-        min_remaining = self.threshold("loop_split_min_remaining_seconds", MIN_REMAINING_SEC)
+        # Read on every decision, so ``cash.configure(...)`` takes effect at
+        # once. They are settings because the judgement is a wall-clock
+        # measurement: a kernel descheduled mid-probe measures a cheap body as
+        # an expensive one, and only the threshold can be moved far enough to
+        # absorb that.
+        config = self.statement_processor.cash_instance.config
+        max_iter = config.loop_split_max_iter_seconds
+        min_remaining = config.loop_split_min_remaining_seconds
         per_iter = elapsed / done
         if per_iter >= max_iter:
             return False

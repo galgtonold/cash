@@ -58,7 +58,7 @@ from .try_handler import TryHandler
 
 if TYPE_CHECKING:
     from ...analysis.annotations import CacheAnnotation
-    from ..statement import ProcessResult
+    from ..statement import ProcessResult, StatementProcessor
 
 __all__ = ["ControlStructureProcessor"]
 
@@ -118,13 +118,12 @@ class ControlStructureProcessor:
     executed as single cacheable units through the statement processor.
     """
 
-    def __init__(
-        self,
-        shell,
-        statement_processor,  # The StatementProcessor instance
-    ):
+    def __init__(self, shell, statement_processor: StatementProcessor):
         self.shell = shell
         self.statement_processor = statement_processor
+        # The control-outcome record last written (or ``None``: deleted) per
+        # key, so an unchanged loop does not rewrite it on every run.
+        self._outcomes_written: dict[str, dict[str, Any] | None] = {}
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
         self._for_handler = ForLoopHandler(shell, statement_processor, dispatcher=self)
@@ -165,39 +164,32 @@ class ControlStructureProcessor:
         Returns:
             ControlStructureResult with metrics
         """
-        state = getattr(self.statement_processor, "tracking_state", None)
-        outcomes = getattr(state, "control_outcomes", None)
-        if parent_context is not None or not isinstance(outcomes, dict):
+        if parent_context is not None:
             return self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
         # Record what this structure left behind, for the simulation -- see
         # TrackingState.control_outcomes.
+        sp = self.statement_processor
+        state = sp.tracking_state
         lineage = state.variable_lineage
         code = ast.unparse(node)
         try:
             reads, writes = CodeAnalyzer.analyze_code_block(code)
         except (SyntaxError, ValueError, TypeError):
             reads, writes = set(), set()
-        entry = _entry_lineages(reads, lineage, getattr(state, "simulated_lineage", None))
+        entry = _entry_lineages(reads, lineage, state.simulated_lineage)
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = capture_rng_state() if isinstance(node, ast.For) else None
 
-        sp = self.statement_processor
-        begin_cost = getattr(sp, "begin_structure_cost", None)
-        if begin_cost is not None:
-            begin_cost()
+        sp.begin_structure_cost()
         result = None
         try:
             with observe_writes() as written:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
         finally:
-            if begin_cost is not None:
-                changed = (
-                    {v for v, h in lineage.items() if before.get(v) != h} | set(writes)
-                    if result is not None and result.success
-                    else set()
-                )
-                sp.end_structure_cost(reads, changed, result is not None and result.success)
+            succeeded = result is not None and result.success
+            changed = {v for v, h in lineage.items() if before.get(v) != h} | set(writes) if succeeded else set()
+            sp.end_structure_cost(reads, changed, succeeded)
         if result.success:
             self._record_writes(code, reads, written)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
@@ -211,7 +203,7 @@ class ControlStructureProcessor:
                     files.update(local)
 
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
-            outcomes[hashlib.sha256(code.encode("utf-8")).hexdigest()] = outcome
+            state.control_outcomes[hashlib.sha256(code.encode("utf-8")).hexdigest()] = outcome
             # Judged only on a run that restored nothing: a restored statement
             # puts back the RNG state it was stored with, so a loop that draws
             # nothing still moves the generators when it hits in a new kernel.
@@ -221,11 +213,11 @@ class ControlStructureProcessor:
                 # statement's reads are kept (``persist_read_provenance``). A
                 # restored iteration records no read, hence the same condition.
                 # ``for f in files: pd.read_csv(f)`` names no path a reader can
-                # resolve, so without it the read set of every cell below was
-                # unknown after a restart, no writer could be ruled out as
-                # unread, and a table cell under a chart cell re-drew the charts
-                # with everything they read.
-                self.statement_processor.persist_read_provenance(code, files)
+                # resolve, so without it the read set of every cell below is
+                # unknown after a restart and no writer can be ruled out as
+                # unread: a table cell under a chart cell would re-draw the
+                # charts with everything they read.
+                sp.persist_read_provenance(code, files)
         return result
 
     def _record_writes(self, code: str, reads, written: set[str]) -> None:
@@ -234,8 +226,9 @@ class ControlStructureProcessor:
         The simulation plans a loop as one statement, so that is where the
         planner looks for a writer's provenance. Each body statement ran on
         its own and knew its writes, but ``for kind in KINDS: save_chart(kind)``
-        as a whole had none, and after a restart it was re-fired -- with
-        everything it reads, to redraw charts already on disk.
+        as a whole has none unless recorded here, and after a restart the
+        planner would re-fire it, with everything it reads, to redraw charts
+        already on disk.
         """
         sp = self.statement_processor
         try:
@@ -251,28 +244,23 @@ class ControlStructureProcessor:
         """Keep a loop's outcome for the simulation of a later kernel.
 
         ``control_outcomes`` dies with the kernel, and without it the
-        simulation's lineages for what a loop built disagreed with the
+        simulation's lineages for what a loop built disagree with the
         entries written from them: after a restart nothing downstream of a
-        loop restored, and the loop ran again (see ``control_outcome_key``). A record is trusted instead of a replay, so
-        it is written only for a loop whose outcome is all it did
-        (``_persistable_callees``), together with the lineages of what its
-        callees read. A loop that no longer qualifies deletes its record.
-        Best-effort both ways: without a record the loop is replayed, as it
-        always was.
+        loop restores, and the loop runs again (see ``control_outcome_key``).
+        A record is trusted instead of a replay, so it is written only for a
+        loop whose outcome is all it did (``_persistable_callees``), together
+        with the lineages of what its callees read. A loop that no longer
+        qualifies deletes its record. Best-effort both ways: without a record
+        the loop is replayed.
         """
-
         sp = self.statement_processor
-        backend = getattr(getattr(sp, "cash_instance", None), "backend", None)
-        restorer = getattr(sp, "_stmt_restorer", None)
-        if backend is None or restorer is None:
-            return
         key = control_outcome_key(code)
-        written = self.__dict__.setdefault("_outcomes_written", {})
+        written = self._outcomes_written
         try:
             callees = self._persistable_callees(node, code, reads, before, rng_before)
             if callees is None:
                 if written.get(key, True) is not None:
-                    backend.delete(key)
+                    sp.cash_instance.backend.delete(key)
                     written[key] = None
                 return
             entry, left, files, file_component = outcome
@@ -285,7 +273,7 @@ class ControlStructureProcessor:
             }
             if written.get(key) == record:
                 return
-            restorer.persist_metadata_only(backend, key, {"control_outcome": True, "code": code, "ttl": None, **record})
+            sp.persist_metadata_only(key, {"control_outcome": True, "code": code, "ttl": None, **record})
             written[key] = record
         except Exception:  # noqa: BLE001 - never let bookkeeping break the user's loop
             logger.debug("[CONTROL] control-outcome persistence failed", exc_info=True)
@@ -324,9 +312,7 @@ class ControlStructureProcessor:
         if any(rng_carrier_kind(user_ns.get(name)) is not None for name in reads):
             return None
         callee_names = called_function_globals(reads, user_ns)
-        resolve = getattr(self.statement_processor, "_resolve_live_function_source", None)
-        if resolve is None:
-            return None
+        resolve = self.statement_processor.resolve_live_function_source
         for name in set(reads) | callee_names:
             if not isinstance(user_ns.get(name), types.FunctionType):
                 continue
@@ -514,8 +500,7 @@ class ControlStructureProcessor:
 
         Called by BOTH the sync (:meth:`execute_as_single_unit`) and awaited
         (:meth:`process_await_unit`) paths so their lineage update, badge
-        annotation, and clean-traceback line offset can never drift — the drift
-        between a flagged and an unflagged compile path is exactly what produced it.
+        annotation, and clean-traceback line offset can never drift apart.
         """
         # After execution, update lineage for mutated variables
         if metrics.get("status") in (CacheStatus.COMPUTED, CacheStatus.RESTORED):

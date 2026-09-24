@@ -39,12 +39,10 @@ logger = logging.getLogger(__name__)
 # Annotation resolution
 # ---------------------------------------------------------------------------
 #
-# ``@cash:`` directives were computed in ``cell_executor`` for each TOP-LEVEL
-# node and then dropped for anything nested: ``ControlStructureProcessor.process``
-# never took an annotation, so a ``# @cash:no-cache`` on a statement inside a
-# loop body was silently ignored. The parser was never the problem — the
-# directive binds to the body statement correctly — so these helpers only need
-# to resolve it at the right scope, and the handlers need to pass ``raw_cell``.
+# ``cell_executor`` resolves ``@cash:`` directives for each TOP-LEVEL node; a
+# directive on a statement nested in a control structure is resolved here, at
+# the right scope, from the ``raw_cell`` the handlers pass down (the parser
+# already binds it to the body statement).
 #
 # The governing rule is: **annotation granularity follows cache granularity.**
 #
@@ -302,16 +300,14 @@ def inherit_body_file_deps(
 ) -> None:
     """Give each variable the loop mutated the files its body read.
 
-    ``for f in files: d = pd.read_csv(f); parts.append(d)`` recorded each file
+    ``for f in files: d = pd.read_csv(f); parts.append(d)`` records each file
     against ``d`` and none against ``parts``: ``parts.append(d)`` is a method
-    call, and a loop body's calls are not classified. So ``raw =
-    pd.concat(parts)`` inherited no file, the next statement's key had no file
-    component, and after an existing file was rewritten ``sales`` was restored
-    from the old content -- visible once the list passed 200 frames and its
-    sampled hash stopped covering the middle. A
-    statement that reads files already hands them to its outputs
-    (``FileDepsTracker.inherit_from_inputs``); this is the same rule for the
-    loop's accumulators.
+    call, and a loop body's calls are not classified. Without this, ``raw =
+    pd.concat(parts)`` inherits no file, the next statement's key has no file
+    component, and after an existing file is rewritten its result is restored
+    from the old content. A statement that reads files already hands them to
+    its outputs (``FileDepsTracker.inherit_from_inputs``); this is the same
+    rule for the loop's accumulators.
 
     *body_files* is what a per-iteration loop gathered as it ran: a name the
     body rebinds holds only the last iteration's files by now.

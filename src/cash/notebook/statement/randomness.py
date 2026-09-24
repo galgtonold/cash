@@ -108,8 +108,13 @@ class StatementRandomness:
         for module in get_seeding_rng_modules(code):
             self.seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
 
-    def warn_unseeded(self, code: str, allow_random: bool) -> list:
+    def warn_unseeded(self, code: str, allow_random: bool, *, skip_cache: bool = False) -> list:
         """Warn when *code* draws from an unseeded RNG.
+
+        Silent for a ``# @cash:no-cache`` statement (*skip_cache*). The warning
+        is about caching a draw, and that statement is never cached: with the
+        directive on a line of its own the rewind is off too and every run
+        draws again, which is the remedy the warning itself recommends.
 
         Called on the common path of both ``process_statement`` twins, BEFORE the
         cache lookup, for two reasons:
@@ -132,7 +137,7 @@ class StatementRandomness:
             unseeded_calls, _has_seed = check_and_warn_randomness(
                 code,
                 self.detector,
-                suppress_warning=allow_random,
+                suppress_warning=allow_random or skip_cache,
             )
             return list(unseeded_calls)
         except (SyntaxError, ValueError, AttributeError, RecursionError):

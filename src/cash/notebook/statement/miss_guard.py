@@ -1,14 +1,12 @@
 """Perpetual-miss guard: stop serialising a statement that can never hit.
 
-**The shape this bounds.** Five independent rounds of user testing each surfaced a
-new instance of one recurring failure: some input hashes *unstably* across runs,
-so the statement's cache key differs every run, so it never hits — yet cash still
-pays the (large) serialisation on every run. The cache can never pay the user
-back, and the statement is net-negative forever. Known instances: a bare
-fit on a DataFrame (-25 s); sampled content-hashing of a large file, which
-destabilises keys across restarts; a ``make_classification``-derived frame that
-poisons downstream caching (-7.9 s). We have conceded we cannot enumerate the
-causes, so this module bounds the *consequence* regardless of cause.
+**The shape this bounds.** When some input hashes *unstably* across runs, the
+statement's cache key differs every run, so it never hits — yet cash still pays
+the (large) serialisation on every run. The cache can never pay the user back,
+and the statement is net-negative forever. Known causes include a bare fit on a
+DataFrame, sampled content-hashing of a large file (which destabilises keys
+across restarts) and a ``make_classification``-derived frame. The causes cannot
+be enumerated, so this module bounds the *consequence* regardless of cause.
 
 **What is and is not guarded.** The guard fires on the perpetual-MISS
 *signature* only: identical source, a cache key that keeps changing, zero hits.
@@ -19,8 +17,7 @@ once, on the run that matters. Net-negative-in-session is that statement's
 normal, healthy state. The discriminator is key CHURN, not cost.
 
 Churn alone over-reaches in one direction, though: five upstream edits in a
-row churn a key too, and that is an ordinary morning of model tuning.
-So the
+row churn a key too, and that is an ordinary morning of model tuning. So the
 processor applies the verdict only to a statement whose write is not cheap
 next to its compute (``StatementStore.write_is_cheap``): a small, slow
 value keeps being written, since its wasted writes cost next to nothing.
@@ -32,12 +29,10 @@ value keeps being written, since its wasted writes cost next to nothing.
   lets a statement recover on its own if its key later stabilises onto an entry
   that already exists.
 * Persists only the *verdict* (guarded / not), and only when it FLIPS. The hot
-  path never touches disk: an earlier change removed a per-cell fsync that cost 8-12 ms a
-  cell, and this must not reintroduce one under a new name. The churn counter is
-  in-memory-only for exactly that reason — persisting it would mean a write per
-  cell. The cost is that a session which accumulates fewer than
-  ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` misses before a restart starts over;
-  the cost of the alternative is the fsync we already paid once to delete.
+  path never touches disk: a write per cell costs milliseconds on every cell. The
+  churn counter is in-memory-only for exactly that reason — persisting it would
+  mean a write per cell. The cost is that a session which accumulates fewer than
+  ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` misses before a restart starts over.
 * Re-probes periodically (see ``REPROBE_EVERY_N_RUNS``). A guard with no escape
   hatch is a new bug, not a fix.
 
@@ -58,20 +53,14 @@ it hits, which un-guards the statement. Two triggers, both cheap:
 
 from __future__ import annotations
 
-import json
-import logging
-import os
 from dataclasses import dataclass
-from typing import Any
 
 from cash.backends.cache_dir import MISS_GUARD_FILENAME
-from cash.backends.file_backend import recreate_cache_dir
 
-logger = logging.getLogger(__name__)
+from ..versioned_json_store import VersionedJsonStore
 
-_STORE_FILENAME = MISS_GUARD_FILENAME
 # Bumping this invalidates every persisted verdict (they are re-learned).
-_STORE_VERSION = 1
+_STORE_VERSION = 2
 
 # Number of CONSECUTIVE key-churn misses (each run producing a cache key
 # different from the previous run's, with no hit in between) before we stop
@@ -108,18 +97,27 @@ GUARD_SKIP_REASON = (
 )
 
 
-def resolve_cache_dir(backend: Any) -> str | None:
-    """The on-disk cache directory behind *backend* (``local_dir``), or None.
+class _GuardedStore(VersionedJsonStore[bool]):
+    """The source hashes currently guarded: the only part of the guard kept
+    across kernels, as ``{source_hash: true}``."""
 
-    None means there is nowhere to persist — a pure in-memory backend, which
-    has no restart to survive anyway, so the guard degrades to session-scoped.
+    FILENAME = MISS_GUARD_FILENAME
+    VERSION = _STORE_VERSION
+    FIELD = "guarded"
+    LOG_TAG = "MISS_GUARD"
 
-    The ``isinstance`` check is for the ``MagicMock`` backends a good number of
-    tests use: a mock answers any attribute with another mock, which must not
-    pass for a path.
-    """
-    cache_dir = backend.local_dir if backend is not None else None
-    return cache_dir if isinstance(cache_dir, str) and cache_dir else None
+    def _load_value(self, value: object) -> bool | None:
+        return True if value is True else None
+
+    def guarded(self) -> list[str]:
+        self._ensure_loaded()
+        return list(self._items)
+
+    def replace(self, guarded: set[str]) -> None:
+        """Make *guarded* the whole persisted set."""
+        self._ensure_loaded()
+        self._items = dict.fromkeys(guarded, True)
+        self._write()
 
 
 @dataclass
@@ -148,70 +146,38 @@ class MissGuard:
     """
 
     def __init__(self, cache_dir: str | None) -> None:
-        self._path = os.path.join(cache_dir, _STORE_FILENAME) if cache_dir else None
+        self._store = _GuardedStore(cache_dir)
         self._records: dict[str, _Record] = {}
         self._loaded = False
 
     # -- persistence ----------------------------------------------------
 
     def _ensure_loaded(self) -> None:
-        """Read persisted verdicts once per session, lazily.
+        """Seed the guarded verdicts from disk once per session, lazily.
 
-        Best-effort by construction: a missing, unreadable, corrupt, or
-        future-versioned store leaves the guard empty, which means every
-        statement serialises — the pre-guard behaviour. The guard is a
-        performance optimisation, so its failure mode must be "no optimisation",
-        never "no cache".
+        Best-effort, like every :class:`VersionedJsonStore`: a missing,
+        unreadable, corrupt or future-versioned store leaves the guard empty,
+        so every statement serialises. The guard is a performance
+        optimisation, so its failure mode must be "no optimisation", never
+        "no cache".
         """
         if self._loaded:
             return
         self._loaded = True
-        if not self._path:
-            return
-        try:
-            with open(self._path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-        except (OSError, ValueError):
-            logger.debug("[MISS_GUARD] no readable verdict store at %s", self._path)
-            return
-        if not isinstance(doc, dict) or doc.get("version") != _STORE_VERSION:
-            return
-        guarded = doc.get("guarded")
-        if not isinstance(guarded, list):
-            return
-        for source_hash in guarded:
-            if isinstance(source_hash, str):
-                # ``last_key=""`` matches no real key, so the first run of the
-                # new session reads as churn rather than as a stabilised key.
-                self._records[source_hash] = _Record(last_key="", guarded=True)
+        for source_hash in self._store.guarded():
+            # ``last_key=""`` matches no real key, so the first run of the
+            # new session reads as churn rather than as a stabilised key.
+            self._records[source_hash] = _Record(last_key="", guarded=True)
 
     def _persist(self) -> None:
         """Write the guarded set. Called ONLY when a verdict flips.
 
-        Never per cell — that is the fsync-per-cell regression under a
-        new name. A flip happens a handful of times in a notebook's whole life.
-        Atomic via ``os.replace`` so a crashed write can't leave a torn file for
-        the next session to choke on; no ``fsync``, because losing the last
-        verdict to a hard kernel kill only costs re-learning it.
+        Never per cell: the hot path stays in memory. A flip happens a
+        handful of times in a notebook's whole life. No ``fsync``, because
+        losing the last verdict to a hard kernel kill only costs re-learning
+        it.
         """
-        if not self._path:
-            return
-        doc = {
-            "version": _STORE_VERSION,
-            "guarded": sorted(sh for sh, rec in self._records.items() if rec.guarded),
-        }
-        tmp_path = f"{self._path}.{os.getpid()}.tmp"
-        try:
-            recreate_cache_dir(os.path.dirname(self._path))
-            with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(doc, fh)
-            os.replace(tmp_path, self._path)
-        except OSError:
-            logger.debug("[MISS_GUARD] verdict persistence failed", exc_info=True)
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+        self._store.replace({sh for sh, rec in self._records.items() if rec.guarded})
 
     # -- the state machine ----------------------------------------------
 

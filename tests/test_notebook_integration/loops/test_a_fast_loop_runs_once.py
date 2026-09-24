@@ -165,7 +165,7 @@ def test_reiterable_list_still_single_unit_and_caches(nb_runner):
             # work was ~0.6s against ~0.4s of contended overhead -- a ratio of
             # ~0.45 against a 0.5 bound, which is why this failed under load.
             # At 50ms the same overhead yields ~0.14, roughly 3.5x of headroom.
-            # Still far above split_policy.MAX_ITER_SEC, so the loop stays on the
+            # Still far above loop_split_max_iter_seconds, so the loop stays on the
             # single-unit path this test is about.
             "    time.sleep(0.05)\n"
             "    t = x + 1\n"

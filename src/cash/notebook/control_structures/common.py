@@ -154,11 +154,9 @@ def build_iteration_context(
     Used to differentiate cache keys across loop iterations.
 
     *loop_var_digests* carries full-content digests the caller has ALREADY
-    computed for these same bindings. ``for_handler._process_one_iteration``
-    fills it a few lines before calling this, and without it this function
-    recomputed the identical ``compute_hash_full`` on the identical object --
-    measured at 164ms of a 328ms hashing bill on the demo tour's bootstrap
-    cell (five ~200k-row groups), on a re-run where nothing recomputed.
+    computed for these same bindings (``for_handler._process_one_iteration``
+    fills it), so a large loop value is not hashed a second time per
+    iteration.
 
     Primitive values go in by value. An unhashable value is replaced by its
     digest. A hashable, non-primitive value (a user object, a numpy scalar)
