@@ -1207,9 +1207,6 @@ class StatementProcessor:
         try:
             if written or any(e.kind == "file_write" for e in run.analysis.side_effects):
                 self.tracking_state.executed_write_stmt_codes.add(code)
-                # The upstream check's per-file answers for this cell run were
-                # taken before this write; nothing checked after it may use them.
-                forget_file_state_this_run()
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it): ``executed_write_stmt_codes`` is empty after
@@ -1359,11 +1356,14 @@ class StatementProcessor:
         return None
 
     def _forget_file_answers_if_it_wrote(self, code: str, execution: StatementExecution) -> None:
-        """Drop the cell's kept file answers (``CacheFreshnessChecker.
-        forget_file_answers``) when the statement that just ran may have
-        changed a file: it was seen writing one, cash's static writer check
-        says it writes (its own text, or a user function it calls -- which
-        covers writes made in C, like pyarrow's), or it failed part-way.
+        """Drop the cell's kept file answers, the freshness checker's
+        (``CacheFreshnessChecker.forget_file_answers``) and the upstream
+        check's (``forget_file_state_this_run``), when the statement that just
+        ran may have changed a file: it was seen writing one, cash's static
+        writer check says it writes (its own text, or a user function it
+        calls -- which covers writes made in C, like pyarrow's), or it failed
+        part-way. Answers taken before the write are not answers for what is
+        checked after it.
 
         Every executed statement dropped them at first, and a label loop
         (``ax.annotate`` per topic, reading a frame built from 10,000
@@ -1379,6 +1379,7 @@ class StatementProcessor:
                 wrote = True
         if wrote:
             self._freshness.forget_file_answers(file_state_epoch())
+            forget_file_state_this_run()
 
     def _update_state_tracking(
         self,

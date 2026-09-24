@@ -19,6 +19,7 @@ from cash.notebook.run_memo import forget_file_state_this_run
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
+from tests._cell_driver import run_cash_cell
 
 N = 30
 
@@ -127,3 +128,18 @@ def test_outside_a_run_nothing_is_kept(tmp_path, checks):
     assert VirtualLineage._validate_file_freshness(deps)
     assert len(checks) == 2 * N
     file_dep_snapshot.begin_file_state_epoch()
+
+
+def test_a_statement_that_wrote_and_then_failed_drops_the_answers(tmp_path, cash_magics):
+    """The runtime drops these answers under the rule it drops its own by: a
+    statement that may have changed a file, here one that wrote a file and
+    then raised."""
+    cash_magics.shell.user_ns["out_path"] = str(tmp_path / "out.txt")
+    run_cash_cell(cash_magics, "def f():\n    open(out_path, 'w').write('x')\n    raise ValueError('late')\n")
+    run_memo.file_state_this_run()["where"]["kept"] = (None, None)
+
+    with pytest.raises(ValueError, match="late"):
+        run_cash_cell(cash_magics, "f()\n")
+
+    assert (tmp_path / "out.txt").exists(), "fixture is wrong: the statement never wrote"
+    assert "kept" not in run_memo.file_state_this_run()["where"], "answers taken before the write survived it"
