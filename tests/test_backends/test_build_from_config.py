@@ -220,8 +220,7 @@ def test_default_stack_uses_the_tenth_of_a_second_compute_floor(tmp_path):
 
     backend = build_backend_from_config(_default_config(tmp_path))
     assert backend.policy.compute_floor_s == 0.1, (
-        "the documented persistence floor changed; docs/how-it-works/storage.md "
-        "quotes 0.1s"
+        "the documented persistence floor changed; docs/how-it-works/storage.md quotes 0.1s"
     )
 
 

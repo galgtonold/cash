@@ -370,7 +370,9 @@ value = square(3)
 
 def _badge_page(tmp_path, annotation: str) -> Path:
     page = tmp_path / "badges.md"
-    page.write_text(_BADGE_PAGE.replace("{annotation}", annotation).replace("{{", "{").replace("}}", "}"))
+    page.write_text(
+        _BADGE_PAGE.replace("{annotation}", annotation).replace("{{", "{").replace("}}", "}"), encoding="utf-8"
+    )
     return page
 
 
@@ -408,15 +410,16 @@ def test_rerun_mode_fails_a_cell_that_executes_again(tmp_path, monkeypatch):
     from tests.docs import _harness
 
     monkeypatch.setattr(_harness, "_RERUN_NB_CELLS", True)
-    cheap = _badge_page(tmp_path, "").read_text().replace("# @cash:persist\n", "")
+    cheap = _badge_page(tmp_path, "").read_text(encoding="utf-8").replace("# @cash:persist\n", "")
     page = tmp_path / "cheap.md"
-    page.write_text(cheap)
+    page.write_text(cheap, encoding="utf-8")
     with pytest.raises(_harness.PageBadgeError, match="rerun run: the badge reads EXECUTED"):
         _harness.run_page(page)
 
     page.write_text(
         cheap.replace(
             "```python { .nb-cell }\nvalue", "<!-- test:expect-badge rerun=EXECUTED -->\n```python { .nb-cell }\nvalue"
-        )
+        ),
+        encoding="utf-8",
     )
     assert _harness.run_page(page).tested_fences == 3

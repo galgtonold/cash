@@ -945,9 +945,7 @@ class StatementProcessor:
     ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
-            return self._freshness.check_cache(
-                self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch()
-            )
+            return self._freshness.check_cache(self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch())
         logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
 
