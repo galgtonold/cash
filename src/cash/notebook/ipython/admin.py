@@ -14,6 +14,7 @@ from IPython.core.magic import line_magic
 from cash._console import safe_text
 
 from ...backends._writes import discarded_writes
+from ..provenance import BADGE_WORDS
 from ._args import parse_mode, strip_inline_comment
 
 if TYPE_CHECKING:
@@ -310,10 +311,7 @@ class CashAdminMagicsMixin:
                 print(f"Tracked variables ({len(tracked)}):")
                 for var in tracked:
                     latest = self._session.provenance.get_latest(var)
-                    # The badge's words, so the two never disagree.
-                    status_word = {"computed": "EXECUTED", "restored": "CACHED", "skipped": "SKIPPED"}.get(
-                        latest.status if latest else "", "UNKNOWN"
-                    )
+                    status_word = BADGE_WORDS.get(latest.status if latest else "", "UNKNOWN")
                     history_count = len(self._session.provenance.get_history(var))
                     print(f"  {status_word:<8} {var} ({history_count} records)")
             return

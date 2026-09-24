@@ -101,7 +101,7 @@ class TestProvenanceTracker:
         tracker.record("result", "result = compute(data)", ["data"], status="computed", duration_ms=150.0)
         output = tracker.format_provenance("result")
         assert "result" in output
-        assert "computed" in output
+        assert "Status: EXECUTED" in output
         assert "150.0ms" in output
         assert "data" in output
 
@@ -124,7 +124,7 @@ class TestProvenanceTracker:
         tracker.record("x", "x = 2", [], status="restored")
         output = tracker.format_provenance("x", show_timeline=True)
         assert "Timeline" in output
-        assert "🔧" in output or "📦" in output
+        assert "EXECUTED" in output and "CACHED" in output
 
     def test_to_json(self):
         tracker = ProvenanceTracker()
@@ -183,7 +183,7 @@ class TestCashProvenanceMagic:
         cash_magics.cash_provenance("result")
         output = capsys.readouterr().out
         assert "result" in output
-        assert "computed" in output
+        assert "Status: EXECUTED" in output
 
     def test_clear(self, cash_magics, capsys):
         cash_magics._session.provenance.record("x", "x = 1", [])

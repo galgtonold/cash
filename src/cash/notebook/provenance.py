@@ -12,7 +12,11 @@ from ..tracking.file_dep_snapshot import existing_file_deps
 # rest. Applies to the human-readable view only, never the JSON output.
 _MAX_FILE_DEPS_SHOWN = 8
 
-__all__ = ["ProvenanceRecord", "ProvenanceTracker"]
+#: The badge's word for each recorded status, so ``%cash_provenance`` and the
+#: badge never disagree.
+BADGE_WORDS = {"computed": "EXECUTED", "restored": "CACHED", "skipped": "SKIPPED"}
+
+__all__ = ["BADGE_WORDS", "ProvenanceRecord", "ProvenanceTracker"]
 
 
 @dataclass
@@ -205,7 +209,8 @@ class ProvenanceTracker:
         for record in history[-10:]:
             ts = time.strftime("%H:%M:%S", time.localtime(record.timestamp))
             icon = {"computed": "🔧", "restored": "📦", "skipped": "⏭️"}.get(record.status, "❓")
-            lines.append(f"    {ts} {icon} {record.status} ({record.duration_ms:.1f}ms)")
+            word = BADGE_WORDS.get(record.status, record.status)
+            lines.append(f"    {ts} {icon} {word} ({record.duration_ms:.1f}ms)")
         return lines
 
     def format_provenance(self, variable: str, show_graph: bool = False, show_timeline: bool = False) -> str:
@@ -224,8 +229,8 @@ class ProvenanceTracker:
 
         latest = history[-1]
         lines.append(f"📋 Provenance for '{variable}':")
-        lines.append(f"  Last computed: {time.strftime('%H:%M:%S', time.localtime(latest.timestamp))}")
-        lines.append(f"  Status: {latest.status}")
+        lines.append(f"  Last recorded: {time.strftime('%H:%M:%S', time.localtime(latest.timestamp))}")
+        lines.append(f"  Status: {BADGE_WORDS.get(latest.status, latest.status)}")
         lines.append(f"  Code: {latest.code.strip()[:80]}")
         if latest.inputs:
             lines.append(f"  Inputs: {', '.join(latest.inputs)}")
