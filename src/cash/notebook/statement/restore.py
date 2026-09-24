@@ -20,28 +20,12 @@ small-but-cacheable case where only metadata gets persisted.
 Different unit of work, same backend.  Both can be safely active in
 the same session because their callers ensure they don't collide.
 
-**Anti-god-class rule (semi-load-bearing):** this module uses
-``IPython.display`` — replaying captured rich outputs is intrinsically
-an IPython operation.  Only ``processor.py`` does the same (its own
-replay + last-expression repr); keep it to those two.  If the codebase
-ever needs a non-IPython restore path, the right move is to factor
-*that* out as a non-replay sibling, not to spread the IPython imports
-further.
-
-That import is **function-local, not module-level**.  Base
-``cash`` declares ``dependencies = []`` — IPython lives in the
-``[notebook]`` extra — but this module sits on the ``import cash``
-chain (``core`` → ``notebook`` → ``upstream`` → ``statement``), so a
-module-level ``from IPython.display import ...`` made a bare
-``pip install cash-lib`` unimportable.  Keep the import inside
-:meth:`StatementRestorer._replay_cached_outputs`.
-
-**Do not "fix" this into a module-level try/except with no-op stubs.**
-That shape keeps the module importable but makes a real display call
-silently render nothing.  ``processor.py`` had exactly that and was
-brought in line with this module: import locally, let a
-genuine display attempt without IPython raise.  Both are pinned by
-``tests/test_notebook/test_display_without_ipython.py``.
+Replayed output goes through :func:`~cash.notebook.statement.capture.replay_outputs`,
+which imports ``IPython.display`` only when there is rich output to show.
+Base ``cash`` has no dependencies (IPython lives in the ``[notebook]`` extra)
+and this module is on the ``import cash`` chain, so it must import without
+IPython; a genuine display attempt without it raises rather than rendering
+nothing. Both are pinned by ``tests/test_notebook/test_display_without_ipython.py``.
 """
 
 from __future__ import annotations

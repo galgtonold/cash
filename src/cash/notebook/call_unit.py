@@ -322,12 +322,10 @@ def call_cache_key(
 
 #: Below this, a call is not worth a key, a store, or a timer.
 #:
-#: This started as a mirror of the statement path's
-#: ``min_execution_time_to_cache_seconds`` (``statement/processor.py:
-#: _store_in_cache``, default 0.01s) -- inherited, not measured. The two paths
-#: do not have the same overhead, and mirroring made this one over-conservative
-#: by ~3x: a whole band of loops cleared neither this floor nor the single-unit
-#: threshold and so cached nothing at all.
+#: Not the statement path's ``min_execution_time_to_cache_seconds`` (0.01s):
+#: the two paths do not have the same overhead, and that floor is ~3x too
+#: conservative here -- a whole band of loops would clear neither it nor the
+#: single-unit threshold and so cache nothing at all.
 #:
 #: 3ms is derived from measurement, not from the statement path. End-to-end,
 #: n=124 (the scripts in ``benchmarks/call_unit_cost/``): store ~0.7ms/call, hit ~1.2ms/call, so a
@@ -844,7 +842,7 @@ class CallUnit:
         costs a key, a lookup, a store and a file tracker of its own: ~14 ms a
         call around a function reading one small file, 5,030 of them in
         ``[read_doc(p) for p in paths]`` -- 8.4 s became 71.6 s. A
-        ``for`` loop has ``for_handler._should_execute_loop_as_single_unit``
+        ``for`` loop has ``single_unit_policy.should_run_as_single_unit``
         for exactly this; a comprehension is one statement, so it is decided
         here, by measurement, with the loop's own numbers: past
         ``_GUARD_AFTER_CALLS`` calls in one statement run, if the calls are
@@ -1751,7 +1749,7 @@ class CallUnit:
     ) -> None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
-        (``_store_in_cache``), not a merged single-dict entry.
+        (``StatementStore``), not a merged single-dict entry.
 
         ``file_deps``/``remote_deps`` are snapshotted (mtime/size/hash, or a
         remote validator token) into ONE ``auto_file_deps`` dict -- the exact

@@ -251,11 +251,9 @@ class StatementProcessor:
         Cheap by construction, and it must stay that way. ``TrackingState``
         already records, per output variable, the input lineages the statement
         last RAN with -- so the comparison is that record against the current
-        lineages, an O(inputs) dict walk. It never touches the backend. The
-        earlier ``_diagnose_miss`` fallback answered the same question by
-        scanning the cache, was O(N^2) in cache size, dominated cold-run wall
-        time, and was deleted for it in the 2026-05-18 overhead pass. Nothing
-        here may reintroduce that.
+        lineages, an O(inputs) dict walk. It never touches the backend:
+        answering the same question by scanning the cache is O(N^2) in cache
+        size over a run and dominates cold-run wall time.
 
         Ordering is load-bearing: ``executed_input_lineages`` is rewritten by
         ``_post_execute``, which runs AFTER this. Reading it here therefore

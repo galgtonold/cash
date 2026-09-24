@@ -78,21 +78,15 @@ def tee_output() -> Generator[Any, None, None]:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
-# ``capture_output`` is the ONLY IPython name imported at module scope, and it
-# keeps its try/except because the fallback below is a genuine working
-# equivalent (it really does capture stdout/stderr), not a silent drop.  The
-# module MUST stay importable without IPython: base ``cash`` declares
-# ``dependencies = []`` — IPython lives in the ``[notebook]`` extra — and this
-# module sits on the ``import cash`` chain, so a module-level unguarded IPython
-# import makes a bare ``pip install cash-lib`` unimportable.
+# ``capture_output`` (below) falls back to this when IPython is missing,
+# because it is a genuine working equivalent (it really does capture
+# stdout/stderr), not a silent drop.
 #
-# ``display`` / ``publish_display_data`` deliberately do NOT get the same
-# treatment: there is no honest fallback for "render rich output" without
-# IPython, and a no-op stub would make a display call silently vanish — the
-# cell appears to succeed while producing nothing.  They are imported
-# function-locally at each use site instead, so a genuine display attempt
-# fails loudly with a clear ImportError.  Same rule as
-# ``StatementRestorer._replay_cached_outputs``.
+# ``display`` / ``publish_display_data`` deliberately get no fallback: there is
+# no honest way to "render rich output" without IPython, and a no-op stub would
+# make a display call silently vanish -- the cell appears to succeed while
+# producing nothing. ``replay_outputs`` imports them when it needs them, so a
+# genuine display attempt fails loudly with a clear ImportError.
 @contextmanager
 def _fallback_capture_output(
     stdout: bool = True, stderr: bool = True, display: bool = True

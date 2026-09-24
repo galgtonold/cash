@@ -182,11 +182,9 @@ class StatementRow:
     # statement landed in the same cache slot.
     cache_key_short: str = ""
     # One-line attribution for COMPUTED rows, so the badge can answer "why did
-    # this re-run?". Only the reasons the runtime works out anyway are here --
-    # the earlier ``_diagnose_miss`` fallback that probed the backend to
-    # explain the rest was O(N^2) in cache size and was deleted in the
-    # 2026-05-18 overhead pass. Nothing may reintroduce a cache walk to fill a
-    # gap below.
+    # this re-run?". Only the reasons the runtime works out anyway are here.
+    # Nothing may walk the cache to fill a gap below: probing the backend to
+    # explain a miss is O(N^2) in cache size over a run.
     #
     # Populated, and by whom:
     #   "cache TTL expired (...)"      statement/freshness.py

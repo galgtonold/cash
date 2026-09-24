@@ -27,10 +27,10 @@ the live object is in hand, not here.
 
 **Caveat for large loops.** The ``out.append(compute(x))`` example above only
 reaches this module when the loop is decomposed per-iteration.
-``for_handler._should_execute_loop_as_single_unit`` routes a large-enough loop
+``single_unit_policy.should_run_as_single_unit`` routes a large-enough loop
 to the single-unit fast path instead, gated by
-``_MIN_ITERATIONS_FOR_SINGLE_UNIT``, ``_PER_STMT_OVERHEAD_SEC``, and
-``_MIN_OVERHEAD_SEC`` in that module. Calls inside a single-unit loop are
+``MIN_ITERATIONS_FOR_SINGLE_UNIT``, ``PER_STMT_OVERHEAD_SEC``, and
+``MIN_OVERHEAD_SEC`` in that module. Calls inside a single-unit loop are
 searched per body statement (``_eligible_calls_in_loop``) and cached only when
 keyed on the values they receive. For the precise threshold, see
 ``docs/known-limitations.md``'s "A long for-append loop can stop caching"
@@ -619,7 +619,7 @@ def _content_source(call: ast.Call, local: frozenset[str]) -> str:
     ``f(A, B)`` and ``f(B, A)`` share a key."""
     if _call_has_unpacking(call):
         # What arrives is only known at run time, and then every value is
-        # hashed with its keyword (`CallUnit._unpacked_site`): the spelling
+        # hashed with its keyword (`CallUnit._build_unpacked_key`): the spelling
         # of the arguments says nothing more.
         try:
             return f"{ast.unparse(call.func)}(*<received>)"
@@ -747,8 +747,8 @@ def _eligible_calls_in_loop(
 ) -> list[tuple[ast.Call, frozenset[str]]]:
     """The eligible calls of each simple statement in a loop cached as ONE unit.
 
-    A long loop runs as a single statement (``for_handler.
-    _should_execute_loop_as_single_unit``), and calls inside it never reached
+    A long loop runs as a single statement (``single_unit_policy.
+    should_run_as_single_unit``), and calls inside it never reached
     the interceptor: fixing one store's data in a 360-iteration fit loop
     re-fitted all 720 models. The free-variable rule stays per statement, as
     per-iteration decomposition applies it: each body statement is searched

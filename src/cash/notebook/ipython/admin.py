@@ -148,12 +148,9 @@ class CashAdminMagicsMixin:
         net_saved = verified_saved + measured_saved - overhead
         net_upper = gross_saved - overhead
 
-        # NOTE: We deliberately don't walk the backend here (no
-        # ``list_entries()``). On disk-backed caches with thousands of
-        # entries that's an O(N) scan that opens every metadata file --
-        # the same pathology we removed from ``_diagnose_miss`` in the
-        # 2026-05-18 overhead pass. Users who want a backend-wide view
-        # can run ``cash inspect`` from the command line.
+        # Deliberately no backend walk here (no ``list_entries()``): on a
+        # disk cache with thousands of entries that is an O(N) scan that opens
+        # every metadata file. ``cash inspect`` gives the backend-wide view.
 
         # Writes that failed and were thrown away. A silent loss: the entry is
         # absent, so that work recomputes every run, and none of the counters
