@@ -15,6 +15,11 @@ that reading where you know better:
 | `@cash.stateful` | a helper whose side effect matters | Warns about every call to it; `strict=True` raises |
 | `cash.opaque` | a class passed as an argument | Its code is left out of the key |
 
+<!-- claim: cash/purity_analyzer.py:PurityAnalyzer._analyze_uncached @4aae266b -->
+`@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
+marked helper's code is part of the key of every cached function that calls it,
+as an unmarked helper's is, so editing it recomputes them.
+
 To accept one side effect in one place, you don't need a marker: put
 `# @cash:assume-safe` on the line (see [Side effects](../../decorator.md#side-effects)).
 
@@ -23,7 +28,7 @@ it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what
 
 ## `@cash.pure`: trust this helper
 
-<!-- claim: cash/purity.py:pure @4b66a8c3, cash/purity_analyzer.py:PurityAnalyzer.analyze @d21035fe -->
+<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity_analyzer.py:PurityAnalyzer.analyze @f76c48ff -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. Cash then stops reporting it:
@@ -44,16 +49,14 @@ shares((1, 2, 5))   # first call: computes
 shares((1, 2, 5))   # cache hit
 ```
 
-!!! warning "Cash does not look inside a `@pure` helper"
-    Cash takes the marker at its word and does not read the helper at all. It
-    does not check your claim, and it does not track the helper's code: after
-    you edit a `@pure` helper, the cached functions that call it keep their
-    entries. Clear them (`cash clear --function NAME`) after such an edit. For a
+!!! warning "Cash does not check a `@pure` helper"
+    Cash takes the marker at its word: it reports nothing about the helper or
+    the functions it calls, even an effect it would otherwise warn about. For a
     helper in your own project you rarely need `@pure`: cash already reads it
     and reports only real findings.
 
 The marker earns its keep on **library** functions that cash reports but you
-have checked. Call it on the function; the returned wrapper can be ignored:
+have checked. Call it on the function; it marks the function itself:
 
 ```python
 import cash
@@ -67,7 +70,7 @@ A built-in or C function can't take the marker, so this raises
 
 ## `@cash.stateful`: this helper has an effect that matters
 
-<!-- claim: cash/purity.py:stateful @ee349167 -->
+<!-- claim: cash/purity.py:stateful @f86f4e92 -->
 Mark a helper `@cash.stateful` when calling it does something a cache hit must
 not skip silently: it posts a notification, writes to a database, updates a
 model registry. A cached function that calls it warns
