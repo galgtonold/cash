@@ -49,7 +49,7 @@ stored. This page lists what it tracks and how it checks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @959f01d6, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @56d3c684, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
 Cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -62,6 +62,7 @@ Cash records a file when your code reads it through one of these:
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
+| file metadata | `Path.stat`, and `os.stat`, `os.path.getsize`, `getmtime`, `getctime` called from your code: the file, by content |
 | existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`: a path that was not there counts once it appears, and one your code found (a flag file, an output folder) counts once it is gone |
 
 A reader counts however a script or a module of your code names it:

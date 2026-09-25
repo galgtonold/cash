@@ -283,7 +283,8 @@ def _patch_attribute(owner: Any, name: str, make: Callable[[Any], Any]) -> None:
 def _track_regular_file(path: Any) -> None:
     """Record *path* as read when a tracker is active and it is a regular file.
 
-    For the metadata calls (``Path.stat``, ``os.path.getsize`` ...): what they
+    For the metadata calls (``Path.stat``, ``os.path.getsize`` ...; ``os.stat``
+    records its own): what they
     report is the file's, so the file is a dependency -- a directory has no
     content to hash, and an absent path raised before this was reached.
     ``os.stat``, not ``os.path.isfile``: that one is patched to record a
@@ -717,6 +718,16 @@ class FileDependencyRegistry:
             self.register(module, "isfile", self._create_isfile_handler)
             self.register(module, "isdir", self._create_isdir_handler)
         self.register("os", "access", self._create_exists_handler)
+
+        # What a file's metadata says is the file's: ``max(files,
+        # key=os.path.getmtime)`` picks the newest export and
+        # ``os.path.getsize(p)`` reports it, and an in-place rewrite moves
+        # neither the directory's listing nor anything else recorded, so the
+        # old answer was served. ``Path.stat`` was watched; these were not.
+        for module in ("os.path", "genericpath"):
+            for name in ("getsize", "getmtime", "getctime"):
+                self.register(module, name, self._create_metadata_handler)
+        self.register("os", "stat", self._create_os_stat_handler)
         self._ready = True
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
@@ -815,6 +826,48 @@ class FileDependencyRegistry:
         """Record what an existence probe answered: a path that was not there
         (absent), or one that was (present, of any kind)."""
         return _probe_handler(original_func, "any")
+
+    @staticmethod
+    def _create_metadata_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """``os.path.getsize`` / ``getmtime`` / ``getctime``: the regular file
+        they describe is a dependency, when the user's code asked."""
+
+        @functools.wraps(original_func)
+        def tracked_metadata(path, *args, **kwargs):
+            result = original_func(path, *args, **kwargs)
+            if active_tracker.get() is not None and _asked_by_user_code(sys._getframe(1)):
+                _track_regular_file(path)
+            return result
+
+        return tracked_metadata
+
+    @staticmethod
+    def _create_os_stat_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """``os.stat(p).st_size`` in the user's own code: the regular file is a
+        dependency, as through ``Path.stat``.
+
+        Only when the user's code called it DIRECTLY. ``os.stat`` is what the
+        rest of the standard library, every library and cash itself stat with
+        -- ``shutil`` stats the file it is about to overwrite, and
+        ``os.path.exists`` stats what it probes, which is a question about
+        being there, not about content (`_probe_handler`).
+        """
+
+        @functools.wraps(original_func)
+        def tracked_os_stat(path, *args, **kwargs):
+            result = original_func(path, *args, **kwargs)
+            tracker = active_tracker.get()
+            if (
+                tracker is not None
+                and stat.S_ISREG(result.st_mode)
+                and isinstance(path, (str, bytes, os.PathLike))
+                and kwargs.get("dir_fd") is None
+                and _frame_kind(sys._getframe(1).f_code.co_filename) == "user"
+            ):
+                tracker.track_path(path)
+            return result
+
+        return tracked_os_stat
 
     @staticmethod
     def _create_isfile_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):

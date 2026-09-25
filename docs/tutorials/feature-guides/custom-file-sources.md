@@ -36,7 +36,7 @@ modification time must match too. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @959f01d6, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @56d3c684, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
 Cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks (the call recomputes
@@ -67,6 +67,8 @@ time zones). A library reading a file you named, such as `pd.read_csv(p)` or
   (`from polars import read_parquet`) or wrapped in `functools.partial`: call
   it through its module (`pl.read_parquet(...)`) instead.
 - `os.open`, and files a subprocess reads.
+- The size or time a directory listing reports (`entry.stat()` on an
+  `os.scandir` entry): use `os.stat(entry.path)` or `Path.stat()`.
 - Database engines other than `sqlite3.connect`, such as SQLAlchemy.
 
 Name such files with `file_depends_on=`, or teach cash the reader with
