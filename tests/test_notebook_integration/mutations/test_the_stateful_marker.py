@@ -73,9 +73,7 @@ def announce(text):
     ids=["module", "package", "package-dotted", "nested-in-expression", "from-import"],
 )
 def test_a_stateful_function_in_a_module_runs_every_time(nb_runner, imports, call):
-    """Nothing is edited; every run must call the function again. Three runs,
-    not two: the first key of a statement reading a package submodule differs
-    from the later ones, so the second run alone would miss either way."""
+    """Nothing is edited; the second run must call the function again."""
     work = nb_runner.work_dir
     (work / "helpers.py").write_text(HELPERS, encoding="utf-8")
     (work / "pkg").mkdir()
@@ -83,7 +81,7 @@ def test_a_stateful_function_in_a_module_runs_every_time(nb_runner, imports, cal
     (work / "pkg" / "helpers.py").write_text(HELPERS, encoding="utf-8")
     nb_runner.create_notebook(["import cash\n%cash_on", imports, call])
     nb_runner.start_kernel()
-    for _ in range(3):
-        nb_runner.run_all()
+    nb_runner.run_all()
+    nb_runner.run_all()
     sent = (work / "sent.log").read_text(encoding="utf-8").split()
-    assert sent == ["trained"] * 3, "the @stateful call was served from the cache"
+    assert sent == ["trained", "trained"], "the @stateful call was served from the cache"

@@ -48,7 +48,15 @@ def is_local_module(module: types.ModuleType) -> bool:
 
 
 def _collect_imported_names(tree: ast.AST) -> set[str]:
-    """Return all module names (top-level and dotted) referenced by import statements in *tree*."""
+    """Return all module names (top-level and dotted) referenced by import statements in *tree*.
+
+    ``from pkg import helpers`` names ``pkg.helpers`` too: it may be a
+    submodule, bound exactly as ``import pkg.helpers`` binds it. Callers look
+    each name up in ``sys.modules``, so for a function or a constant brought in
+    from the package the extra name matches nothing. Left out, the submodule
+    was tracked only once something else noticed it, and a statement reading
+    it was keyed one way on its first run and another way after.
+    """
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -58,6 +66,8 @@ def _collect_imported_names(tree: ast.AST) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
             names.add(node.module)
+            if node.level == 0:
+                names.update(f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*")
     return names
 
 

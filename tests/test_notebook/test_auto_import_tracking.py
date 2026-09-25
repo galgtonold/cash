@@ -240,6 +240,33 @@ class TestAutoTrackLocalImports:
                 if key.startswith(pkg_name):
                     del sys.modules[key]
 
+    def test_from_import_of_a_submodule_tracks_the_submodule(self, tracker, tmp_path):
+        """``from pkg import sub`` binds the module ``pkg.sub``; it is tracked
+        at the import, as ``import pkg.sub`` tracks it. Tracked only later, a
+        statement reading it got one key on the first run and another from
+        then on, so the second run missed."""
+        pkg_name = f"_test_pkg_from_{id(tmp_path)}"
+        pkg_dir = tmp_path / pkg_name
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("def top():\n    return 1\n", encoding="utf-8")
+        (pkg_dir / "sub.py").write_text("def sub_func():\n    return 42\n", encoding="utf-8")
+
+        sys.path.insert(0, str(tmp_path))
+        try:
+            importlib.import_module(f"{pkg_name}.sub")
+            tracker.auto_track_local_imports(f"from {pkg_name} import sub, top")
+
+            assert f"{pkg_name}.sub" in tracker.tracked_modules
+            assert pkg_name in tracker.tracked_modules
+            # A function bound from the package names no module.
+            assert f"{pkg_name}.top" not in tracker.tracked_modules
+        finally:
+            if str(tmp_path) in sys.path:
+                sys.path.remove(str(tmp_path))
+            for key in list(sys.modules.keys()):
+                if key.startswith(pkg_name):
+                    del sys.modules[key]
+
     def test_no_import_in_code(self, tracker):
         """Code without imports should return empty set."""
         code = "x = 42\ny = x * 2"
