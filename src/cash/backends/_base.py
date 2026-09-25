@@ -120,6 +120,8 @@ class EntryMetadata(TypedDict, total=False):
     version_slot: str
     #: The source the value came from, to name it in a notice.
     code: str
+    #: The function a call entry holds the result of, to name it by otherwise.
+    function: str
     #: The RAM tier must store a real copy, or refuse the value.
     copy_required: bool
     # Read by the persistence policy (`persistence_policy.PersistencePolicy`).

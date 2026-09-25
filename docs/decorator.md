@@ -59,7 +59,7 @@ keyword (`summary=True`, `max_cache_size="5GB"`, `disable=True`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5, cash/backends/tiered_backend.py:TieredBackend.set @0793133b -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5, cash/backends/tiered_backend.py:TieredBackend.set @4e1a354c -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
 The one exception is a value too big for every disk tier's size cap: it stays in

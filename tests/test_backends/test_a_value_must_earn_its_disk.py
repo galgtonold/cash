@@ -170,6 +170,21 @@ class TestThroughABackend:
         b.shutdown()
         assert not [w for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
 
+    def test_a_call_entry_nothing_refers_to_is_judged_and_named_by_its_function(self, tmp_path):
+        """Only the call a statement is nothing but is ``referenced``. Any
+        other call entry faces the ceiling itself, and the refusal names the
+        function, not an internal ``call:`` key."""
+        import warnings
+
+        b = self._tiered(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            meta = self._set(b, "call:efa280", 200 * MIB, 1.2, function="__main__.expand")
+        b.shutdown()
+        assert "DISK" not in (meta.get("storage") or []), meta
+        ours = [str(w.message) for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
+        assert len(ours) == 1 and "`__main__.expand(...)`" in ours[0] and "call:" not in ours[0], ours
+
     def test_the_refusal_says_so(self, tmp_path):
         """The complaint was silence, not size."""
         b = self._tiered(tmp_path)

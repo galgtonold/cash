@@ -328,7 +328,9 @@ avoid a paid API call or to hold a result steady.
 <!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/store_notices.py:StoreNotices.not_worth_bytes @bac7fc82 -->
 **What happened.** A value over 8 MiB was cheap enough to rebuild that storing
 it would cost more than 128 MiB of disk per second of compute saved, so it was
-not written to disk. The message names the size and compute time.
+not written to disk. The message names the size and compute time. A cached
+call's result faces the same rule unless a statement stores a reference to it
+(`b = load(p)`); the message then names the function, as in `load(...)`.
 
 **Why it matters.** A new kernel recomputes it, which is usually faster than
 you would notice. The rule keeps big, cheap values from filling the disk.

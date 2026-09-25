@@ -188,11 +188,12 @@ class PersistencePolicy:
 
         # An entry is weighed with the entries it refers to (``call_ref_bytes``):
         # its own may be a few KB while what it restores is hundreds of MB. A
-        # ``referenced`` entry is therefore not judged on its own, since
-        # refusing it would leave its referrer restoring a reference to
-        # nothing -- unless its size is only an estimate
-        # (``value_bytes_estimated``), when nothing else weighs it. Either way
-        # its referrer is the one that reports a refusal.
+        # ``referenced`` entry -- a call result its statement is nothing but,
+        # and refers to -- is therefore not judged on its own, since refusing
+        # it would leave its referrer restoring a reference to nothing --
+        # unless its size is only an estimate (``value_bytes_estimated``), when
+        # nothing else weighs it. Either way its referrer is the one that
+        # reports a refusal. Every other entry faces the ceiling itself.
         weight = cap_size + int(metadata.get("call_ref_bytes") or 0)
         referenced = bool(metadata.get("referenced"))
         if referenced and metadata.get("value_bytes_estimated"):

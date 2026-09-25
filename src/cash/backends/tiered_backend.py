@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 __all__ = ["TieredBackend"]
 
 
+def _named(metadata: MetadataDict) -> str | None:
+    """What a notice names an entry by: its code, or the function whose call
+    it holds."""
+    function = metadata.get("function")
+    return metadata.get("code") or (f"{function}(...)" if function else None)
+
+
 class _TierWrites(NamedTuple):
     """What one pass over the persistent tiers did (`_write_persistent_tiers`)."""
 
@@ -386,7 +393,7 @@ class TieredBackend(CacheBackend):
             stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
         )
         if decision.skipped == "bytes":
-            self.notices.not_worth_bytes(key, decision.weight, rebuild_seconds, code=stored_metadata.get("code"))
+            self.notices.not_worth_bytes(key, decision.weight, rebuild_seconds, code=_named(stored_metadata))
             self._drop_persisted_call_refs(stored_metadata.get("call_refs"))
             stored_metadata["persist_skipped"] = "bytes"
         if not decision.persist:
@@ -460,7 +467,7 @@ class TieredBackend(CacheBackend):
             if decision.skipped == "bytes":
                 exec_time = store_seconds(metadata)
                 if decision.report:
-                    self.notices.not_worth_bytes(key, decision.weight, exec_time, code=metadata.get("code"))
+                    self.notices.not_worth_bytes(key, decision.weight, exec_time, code=_named(metadata))
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
             writes = (
                 self._write_persistent_tiers(key, value, metadata, serializer, cap_size)

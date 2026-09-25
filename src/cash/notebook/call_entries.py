@@ -307,9 +307,14 @@ class CallEntries:
         Returns the ``(digest, size)`` a statement may refer to this entry by,
         for the caller to hold the result under, or ``None``.
         """
-        # `referenced`: the statement holding this result decides whether it
-        # is worth its disk, and says so (`PersistencePolicy.decide`).
-        metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time(), "referenced": True}
+        metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time()}
+        if plain_value:
+            # `referenced`: the statement this result is the plain value of
+            # refers to this entry, and decides whether it is worth its disk
+            # (`PersistencePolicy.decide`). Any other call entry stands on its
+            # own: nothing is known to refer to it, and a statement around it
+            # (`b = f(a) + 1`) may keep nothing at all.
+            metadata["referenced"] = True
         held: tuple[str, Any] | None = None
         if function:
             # What `cash inspect` names the entry by: a call key is `call:<sha>`,
