@@ -101,7 +101,7 @@ own; it is never split. To opt out of chunking, return a list.
   result is stored anyway, with a warning
   ([`CACHE-IF-BYPASSED`](../../warnings.md#cache-if-bypassed)). Raise the
   chunk limits if you need the predicate.
-- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @1b12e2a2 -->
+- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @744aeb1e -->
   **A chunk that fails to store** warns
   ([`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed)). The result is
   then incomplete, so the next call recomputes it rather than serving part of

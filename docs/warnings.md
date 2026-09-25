@@ -1203,9 +1203,10 @@ something is replacing files under a running job, such as a deploy.
 
 *Both paths.*
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @49caeff5 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @cc2d1ab2 -->
 **What happened.** The result was computed, but writing it to the cache
-failed. The message names the backend and the exception.
+failed. The message names the backend and the exception. Whatever the
+exception, the call returns its result; a failed write never fails the call.
 
 **Why it matters.** Your result is correct. If it happens every call, the cache
 does nothing.

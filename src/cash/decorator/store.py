@@ -6,7 +6,6 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
-import pickle
 import secrets
 import time
 from collections.abc import Callable
@@ -395,7 +394,11 @@ class ResultStore:
             else:
                 self._stored_keys.note_ram_only(func_name, cache_key, not_persisted, ledger)
             return True
-        except (OSError, TypeError, pickle.PicklingError, RuntimeError, CacheBackendError) as e:
+        except Exception as e:  # noqa: BLE001 - a failed store must never fail the call
+            # Not only I/O errors: a bare FileBackend or SQLiteBackend pickles
+            # on this thread, and pickle raises AttributeError for a local
+            # object and whatever a __reduce__ raises. The body has run; its
+            # result goes back to the caller whatever happens here.
             self._misses.note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self._backend_slot.backend).__name__
             self._notices.warn_once(
@@ -639,7 +642,12 @@ class ResultStore:
         ).to_dict()
         try:
             self._backend_slot.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
-        except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
+            # A tiered backend reports a tier's failure on the metadata
+            # instead of raising (`ResultStore.store`).
+            store_errors = chunk_metadata.get("store_errors")
+            if store_errors and not [t for t in (chunk_metadata.get("storage") or []) if t != "RAM"]:
+                raise CacheBackendError("; ".join(str(e) for e in store_errors))
+        except Exception as e:  # noqa: BLE001 - as in `ResultStore.store`: the stream goes on
             backend_name = type(self._backend_slot.backend).__name__
             self._notices.warn_once(
                 CashCacheStoreFailedWarning,
