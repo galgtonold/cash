@@ -98,15 +98,15 @@ def _audited_marker_then_audited_fetch(url):
 def test_a_network_read_is_reported_beside_a_static_finding(c, url):
     rec = _call(c.cache(_marker_then_fetch), url)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
-    observed = _message(rec, "IMPURE-OBSERVED-EFFECTS")
-    assert "network: socket connect" in observed, _codes(rec)
+    observed = _message(rec, "KEY-NETWORK-READ")
+    assert "socket connect" in observed, _codes(rec)
     assert "test_warning_noise.py:" in observed, "the line that led to it is not named"
     assert "# @cash:assume-safe" in observed, "the line-scoped waiver is not offered"
 
 
 def test_the_line_waiver_covers_an_observed_effect(c, url):
     rec = _call(c.cache(_audited_marker_then_audited_fetch), url)
-    assert "IMPURE-OBSERVED-EFFECTS" not in _codes(rec), _message(rec, "IMPURE-OBSERVED-EFFECTS")
+    assert "KEY-NETWORK-READ" not in _codes(rec), _message(rec, "KEY-NETWORK-READ")
 
 
 def test_an_effect_the_static_warning_named_is_not_repeated(c, tmp_path):

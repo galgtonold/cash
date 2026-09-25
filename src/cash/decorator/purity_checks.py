@@ -28,6 +28,7 @@ from ..analysis.purity_analyzer import (
     resolve_binding,
 )
 from ..effect_observer import EffectObserver, observed_label
+from ..effects import EffectKind
 from ..exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
     CashCacheIneffectiveWarning,
@@ -130,6 +131,10 @@ def static_effect_kinds(report: Any) -> set[str]:
         if label is not None:
             kinds.add(label)
     return kinds
+
+
+#: What the observer calls an outbound connection.
+_NETWORK_LABEL = observed_label(EffectKind.NETWORK)
 
 
 #: How deep into a returned container an argument is looked for.
@@ -645,6 +650,10 @@ class PurityChecks:
         if func_name in self._static_flagged:
             covered = static_effect_kinds(self._registry.purity_reports.get(func_name))
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
+        network = [detail for kind, detail in effects if kind == _NETWORK_LABEL]
+        if network:
+            effects = [(kind, detail) for kind, detail in effects if kind != _NETWORK_LABEL]
+            self._report_observed_network(func_name, network)
         if not effects:
             return
         summary = "\n".join(dict.fromkeys(f"  {kind}: {detail}" for kind, detail in effects))
@@ -663,6 +672,48 @@ class PurityChecks:
             "`# @cash:assume-safe` on the line named (any line of yours on "
             "the way to it counts); @cash.cache(assume_safe=True) waives "
             "the whole function instead, including effects added later.",
+        )
+
+    def _report_observed_network(self, func_name: str, connections: list[str]) -> None:
+        """A connection the static pass did not name: a network read.
+
+        ``requests.Session().get``, ``from requests import get``, a client
+        library -- the analyzer names only module-qualified calls, so these
+        were seen only as a connection and filed as an effect a hit does not
+        repeat. The hazard is the one KEY-NETWORK-READ names -- the answer is
+        an input the key cannot see -- and so is the fix: ``ttl=`` silences
+        it, and ``strict=True`` raises unless one is set. (A remote file a
+        reader opened by URL is tracked and does not get here: its fetch is
+        not observed, see ``reader_patches``.)
+        """
+        cf = self._registry.cached.get(func_name)
+        if self._registry.effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
+            return
+        summary = "\n".join(dict.fromkeys(f"  {detail}" for detail in connections))
+        if self._registry.purity_mode(func_name) == "strict":
+            raise CashImpureFunctionError(
+                f"@cash.cache(strict=True) on {func_name}: the first call "
+                f"connected to a server, so its result depends on an answer "
+                f"the cache key cannot see. Set ttl= to say how old a served "
+                f"answer may be, or put `# @cash:assume-safe` on the line of "
+                f"yours that led to it.\n{summary}"
+            )
+        self._notices.warn_once(
+            CashImpurityWarning,
+            func_name,
+            "observed_network_read",
+            f"@cash.cache on {func_name}: the first call connected to a "
+            f"server, so the result depends on what it returned, and that "
+            f"answer is not part of the cache key. The first call's answer is "
+            f"what every later call gets back -- in this process and in every "
+            f"process after it -- until something changes the key.\n{summary}",
+            code="KEY-NETWORK-READ",
+            fix="bound how old a served answer may be with ttl= -- "
+            "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
+            "(a date, a version) as an argument, so it reaches the key. If "
+            "the answer never changes, say so with `# @cash:assume-safe` on "
+            "the line of yours that led to the connection.",
+            once_per_version=True,
         )
 
     def _mutable_global_is_keyed(self, func_name: str, report: PurityReport, issue: Any) -> bool:

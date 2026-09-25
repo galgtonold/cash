@@ -364,13 +364,15 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @45e537a1 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @5af70afb -->
+<!-- claim: cash/effect_observer.py:EffectObserver @cbf80638 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @ba9eb2a8 -->
 Cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above. While a
 miss runs, cash records file writes, outbound connections and subprocesses, and
 warns once about any it had not already reported
 ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). A call to an
-LLM or HTTP SDK shows up this way. Two observations stop the result from being
+LLM or HTTP SDK shows up this way, as a network read
+([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and
+under `strict=True` it raises unless a `ttl=` is set. Two observations stop the result from being
 stored, because a hit could not reproduce them: the call changed an argument
 in place, or it called a `unittest.mock` object.
 

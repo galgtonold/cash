@@ -544,8 +544,9 @@ effect and where it came from.
 *Decorator.*
 
 **What happened.** Cash watched the first (missing) call and saw it reach
-outside its return value: a `file write`, a `network` connection, a
-`subprocess`, or an `argument mutation` (an object you passed in changed).
+outside its return value: a `file write`, a `subprocess`, or an `argument
+mutation` (an object you passed in changed). A connection to a server is a read
+the key cannot see, reported as [KEY-NETWORK-READ](#key-network-read).
 Each line names the path or address and the line of your code that led to it.
 
 **Why it matters.** A hit runs none of the body, so these effects happened
@@ -562,7 +563,7 @@ computation and do the writing in an uncached caller. For an argument
 mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @5af70afb -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @ba9eb2a8 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
 reads back. Only the path this call took was watched, so an empty report does
 not prove the function is pure.
@@ -861,6 +862,13 @@ depends on:
 ...")`, `pd.read_sql`). A query over a SQLite file the function opens itself
 is not reported: that file is tracked. Writes (`requests.post`, `INSERT`) are
 [IMPURE-SIDE-EFFECTS](#impure-side-effects) instead.
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_observed_network @649a7be9 -->
+A fetch the source does not name (`requests.Session().get(url)`, `from
+requests import get`, a client library) is caught when the first call runs:
+the message then lists the `socket connect` and the line of yours that led to
+it. A remote file a reader opened by URL (`pd.read_csv("s3://...")`) is not
+reported: it is tracked by its ETag.
 
 **Why it matters.** The answer is an input the key cannot see. The first
 answer is stored and served to every later call.

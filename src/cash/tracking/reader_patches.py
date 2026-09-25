@@ -31,6 +31,7 @@ from typing import Any
 
 from cash._memo import PATCH_SITES, LruMemo
 from cash._paths import is_remote_url
+from cash.effect_observer import active_observer as _active_effect_observer
 from cash.install_paths import is_user_path
 from cash.tracking import io_watch
 from cash.tracking.read_credit import _frame_kind, note_untracked_read
@@ -441,6 +442,10 @@ def _dataset_member(name: str) -> bool:
     return not name.startswith((".", "_"))
 
 
+def _is_remote_target(target: Any) -> bool:
+    return isinstance(target, str) and is_remote_url(target)
+
+
 def track_dataset(tracker: Any, target: Any) -> None:
     """Record what a reader given *target* reads: a file, or every file of a
     directory or glob.
@@ -774,10 +779,12 @@ class FileDependencyRegistry:
         @functools.wraps(original_func)
         def tracked_func(*args, **kwargs):
             target = args[0] if args else next((kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
+            remote = False
             if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = active_tracker.get()
                 if _tracker is not None:
                     track_dataset(_tracker, target)
+                    remote = _is_remote_target(target)
                 else:
                     note_untracked_read(target, sys._getframe(1))
             elif isinstance(target, (list, tuple)):
@@ -787,9 +794,19 @@ class FileDependencyRegistry:
                     if isinstance(item, (str, bytes, os.PathLike)):
                         if _tracker is not None:
                             track_dataset(_tracker, item)
+                            remote = remote or _is_remote_target(item)
                         else:
                             note_untracked_read(item, sys._getframe(1))
-            return original_func(*args, **kwargs)
+            if not remote:
+                return original_func(*args, **kwargs)
+            # The fetch of a remote file recorded above is a tracked read --
+            # its ETag is checked on every hit -- not a connection the key
+            # cannot see, so the effect observer does not report it.
+            token = _active_effect_observer.set(None)
+            try:
+                return original_func(*args, **kwargs)
+            finally:
+                _active_effect_observer.reset(token)
 
         return tracked_func
 
