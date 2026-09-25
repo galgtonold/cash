@@ -645,9 +645,11 @@ ABOVE_PERSISTENCE_FLOOR_S = 0.2
 # detector that would have caught it on the first run.
 #
 # Delta-snapshotted rather than absolute: a queue outlives the test that made
-# it, so an absolute check would blame whichever test ran next. Attribution can
-# still lag by one test when a write fails after its own test ended -- the
-# message says so rather than asserting a culprit.
+# it, so an absolute check would blame whichever test ran next. And drained
+# before the check: a write still in flight when its test ends would otherwise
+# fail, or log, during the NEXT test and be charged to it. The first disk store
+# logs the cache's size cap on cash.storage from the write worker, so without
+# the drain that line landed in the next test's caplog.
 #
 # Opt out with ``@pytest.mark.expects_failed_writes`` for tests that induce a
 # failure deliberately.
@@ -666,21 +668,32 @@ def _discarded_since(n):
     return discarded_writes()[n:]
 
 
+def _drain_pending_writes():
+    """Let every background write submitted so far finish, with whatever it
+    logs or fails with, before the next test starts."""
+    try:
+        from cash.backends._writes import all_pending_writes
+    except Exception:  # import cycles during collection
+        return
+    for queue in all_pending_writes():
+        try:
+            queue.wait_all()
+        except Exception:  # a dying queue is not a finding
+            continue
+
+
 @pytest.fixture(autouse=True)
 def _no_silently_discarded_cache_writes(request):
     before = _discarded_write_count()
     yield
+    # This test's writes land in this test: a failure is charged to it, and a
+    # record a write logs (the size cap on cash.storage) cannot reach the next
+    # test's caplog or handlers. test_label_consistency and a verbose-logging
+    # test each once caught the previous test's tail.
+    _drain_pending_writes()
     if request.node.get_closest_marker("expects_failed_writes"):
-        # Absorb this test's own failures, including the ones still in flight.
-        # Without the drain they land during the NEXT test and get charged to
-        # it -- which is exactly what happened to test_label_consistency.
-        from cash.backends._writes import all_pending_writes, reset_discarded_writes
+        from cash.backends._writes import reset_discarded_writes
 
-        for queue in all_pending_writes():
-            try:
-                queue.wait_all()
-            except Exception:  # a dying queue is not a finding
-                continue
         reset_discarded_writes(keep=before)
         return
     new = _discarded_since(before)
@@ -691,8 +704,7 @@ def _no_silently_discarded_cache_writes(request):
         f"{len(new)} cache write(s) failed and were silently discarded.\n"
         f"The entries are absent, so the work will be recomputed -- a cache "
         f"that has stopped caching without anything going red.\n"
-        f"(Writes are asynchronous, so a failure can be attributed to the "
-        f"test after the one that caused it.)\n{detail}",
+        f"(Each test's writes are drained when it ends, so these are its own.)\n{detail}",
         pytrace=False,
     )
 
