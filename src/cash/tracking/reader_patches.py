@@ -231,6 +231,29 @@ def _patch_thread_pool_submit() -> None:
     _patch_attribute(cf_thread.ThreadPoolExecutor, "submit", make)
 
 
+def _sqlite_uri_path(uri: str) -> str | None:
+    """The file a SQLite ``file:`` URI opens, or None for an in-memory one.
+
+    SQLite reads a URI that does not start with ``file:`` as a plain file
+    name, and one with an authority only when it is empty or ``localhost``.
+    """
+    if not uri.startswith("file:"):
+        return uri
+    import urllib.parse
+
+    parts = urllib.parse.urlsplit(uri)
+    if parts.netloc not in ("", "localhost"):
+        return None
+    if dict(urllib.parse.parse_qsl(parts.query)).get("mode") == "memory":
+        return None
+    path = urllib.parse.unquote(parts.path)
+    if not path or path == ":memory:":
+        return None
+    if os.name == "nt" and len(path) > 2 and path[0] == "/" and path[2] == ":":
+        path = path[1:]  # file:///C:/data/d.db
+    return path
+
+
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
 
@@ -411,10 +434,11 @@ class FileDependencyRegistry:
         # reader: a cached `select sum(x)` returned 1 where an uncached run
         # returned 101 after an INSERT, and `pd.read_sql_query` over the same
         # connection did too.
-        # The connection's path is the dependency; a URI or ":memory:" has no
-        # file behind it and `track_path` drops what it cannot resolve.
-        self.register("sqlite3", "connect", self._create_path_arg_handler)
-        self.register("sqlite3.dbapi2", "connect", self._create_path_arg_handler)
+        # The connection's path is the dependency, also when it is given as a
+        # ``file:`` URI (``uri=True``); ":memory:" has no file behind it and
+        # `track_path` drops what it cannot resolve.
+        self.register("sqlite3", "connect", self._create_sqlite_connect_handler)
+        self.register("sqlite3.dbapi2", "connect", self._create_sqlite_connect_handler)
 
         # Existence probes: "is there a config here?" The ABSENCE of a file is
         # an input -- it selects the defaults branch -- and it was the only
@@ -484,6 +508,34 @@ class FileDependencyRegistry:
             return original_func(*args, **kwargs)
 
         return tracked_func
+
+    @staticmethod
+    def _create_sqlite_connect_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """``sqlite3.connect``: the database file, also when named by a URI.
+
+        With ``uri=True`` the database is a ``file:`` URI --
+        ``file:d.db?mode=ro`` for a read-only connection -- and recorded as it
+        was written it named no file, so the query was served stale after an
+        INSERT. The URI's path is the file; an in-memory database has none.
+        """
+        path_handler = FileDependencyRegistry._create_path_arg_handler(original_func, track_callback)
+
+        @functools.wraps(original_func)
+        def tracked_connect(*args, **kwargs):
+            uri = kwargs.get("uri", args[7] if len(args) > 7 else False)
+            target = args[0] if args else kwargs.get("database")
+            if not uri or not isinstance(target, (str, bytes)):
+                return path_handler(*args, **kwargs)
+            path = _sqlite_uri_path(os.fsdecode(target) if isinstance(target, bytes) else target)
+            if path is not None:
+                _tracker = active_tracker.get()
+                if _tracker is not None:
+                    _tracker.track_path(path)
+                else:
+                    note_untracked_read(path, sys._getframe(1))
+            return original_func(*args, **kwargs)
+
+        return tracked_connect
 
     @staticmethod
     def _create_exists_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):

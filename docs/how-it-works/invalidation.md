@@ -49,7 +49,7 @@ stored. This page lists what it tracks and how it checks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @caa8d35e, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @dbee3164, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
 Cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -59,7 +59,7 @@ Cash records a file when your code reads it through one of these:
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `feather.read_table`, `feather.read_feather`, `json.read_json` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
-| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` |
+| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
 | missing files | `os.path.exists` and `os.path.isfile` when they return `False`, so a file that appears counts |
 
