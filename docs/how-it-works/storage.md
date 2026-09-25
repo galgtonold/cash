@@ -48,6 +48,29 @@ Each tier has a size cap, sized to the machine unless you set one:
 | Disk | A quarter of the room on the cache's volume (free space plus what the cache already holds), at least 8 GiB and at most 100 GiB, and never more than 80% of that room. Set `max_cache_size` to fix it. |
 | Memory | A fifth of the memory the process may use (the machine's RAM, or a container's limit if lower), at least 512 MiB and at most 4 GiB. |
 
+<!-- claim: cash/backends/budget_notices.py:describe_budget @663afadf, cash/backends/adaptive_caps.py:disk_cap_reason @988059b0, cash/backends/file_eviction.py:FileEvictor.budget @9ff2d2c0 -->
+Cash says how big the disk cache may grow when caching starts, once per
+process and cache folder. The line names the folder, the cap and the rule that
+set it, so a cache of many GiB is never a surprise:
+
+    caching in /work/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
+
+When the 8 GiB floor or the 100 GiB ceiling decided, it says that instead, and
+a cap you set reads `(set by max_cache_size)`.
+
+=== "Decorator"
+
+    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/core.py:Cash._summary_budget @187bcd8a -->
+    The first result a process writes to disk logs the line on the
+    `cash.storage` logger. `verbose=True`, `debug=True` (or `CASH_VERBOSE=1`,
+    `CASH_DEBUG=1`) or your own `logging` at INFO shows it; otherwise it stays
+    quiet. `summary=True` names the cap on the summary's `cache:` line.
+
+=== "Notebook"
+
+    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_disk_budget @e5d4f9bb -->
+    `%cash_on` prints it, capitalised, under `Cash enabled.`.
+
 <!-- claim: cash/__main__.py:cmd_info @f8794ec8, cash/__main__.py:cmd_clear @a08b9044 -->
 `cash info` prints the folder in use, where that setting came from, and both
 caps. `cash clear` deletes a cache folder: `cash clear analysis.ipynb` clears
@@ -102,7 +125,7 @@ keeps it in memory if it fits and warns once
 
 ## When the disk fills up
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @8d0ef9e7 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @d859ee8a -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -115,6 +138,23 @@ result that took 30 seconds outlives a newer one that took 50 ms, and one huge
 cheap value goes before many small expensive ones. Entries nobody reads lose
 their standing over time. An entry read since the ranking was made, or one
 about to be rewritten, is skipped in that round.
+
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.report_eviction @aa4b93be, cash/backends/budget_notices.py:eviction_text @172c867a -->
+The first time the cap makes Cash remove entries, it says how much it removed
+and that those were the entries worth least per byte. It says so once per
+process and cache folder; later removals only reach the debug log. It is a
+notice, not a warning: a cache at its cap is doing its job.
+
+=== "Decorator"
+
+    A `cash.storage` log record, shown the same way as the cap above.
+
+=== "Notebook"
+
+    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._flush_pending_writes @52688dae -->
+    A line at the end of the cell whose results filled the cache:
+
+        [cash] The cache in /work/.cash reached its 26.0 GiB cap, so cash removed 41 entries (2.6 GiB), ...
 
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.touched_since @1e44fa35 -->
 The value just written is not protected. If it is the least valuable entry, it

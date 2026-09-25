@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "adaptive_disk_cap",
+    "disk_cap_reason",
     "adaptive_ram_cap",
     "resolve_disk_cap",
     "adaptive_disk_cap_for",
@@ -85,6 +86,35 @@ def adaptive_disk_cap(free_bytes: int) -> int:
         return DISK_FLOOR
     cap = min(DISK_CEILING, max(DISK_FLOOR, int(DISK_FRACTION * free_bytes)))
     return min(cap, int(DISK_SAFETY * free_bytes))
+
+
+def disk_cap_reason(free_bytes: int, own_bytes: int = 0) -> str:
+    """Where ``adaptive_disk_cap(free_bytes + own_bytes)`` comes from, in words.
+
+    Pure, like the cap itself, so every branch is testable with made-up
+    numbers. *own_bytes* is what the cache already holds, which the cap counts
+    as free. The words name the rule that decided -- the quarter, the floor,
+    the ceiling or the safety margin -- because "why 8 GiB on a 2 TB disk?"
+    is exactly what a user shown the number asks next.
+    """
+    room = free_bytes + max(0, own_bytes)
+    if room <= 0:
+        return f"the {_gib(DISK_FLOOR)} default, as the free disk space could not be measured"
+    # "Free" counts what the cache holds (`adaptive_disk_cap_for`); saying so
+    # in every notice made it twice as long, and the storage page says it.
+    space = "the free disk space"
+    cap = adaptive_disk_cap(room)
+    if cap < min(DISK_CEILING, max(DISK_FLOOR, int(DISK_FRACTION * room))):
+        return f"80% of {space}, as that is less than the usual {_gib(DISK_FLOOR)} minimum"
+    if cap == DISK_CEILING and int(DISK_FRACTION * room) > DISK_CEILING:
+        return f"the {_gib(DISK_CEILING)} maximum; a quarter of {space} would be more"
+    if cap == DISK_FLOOR and int(DISK_FRACTION * room) < DISK_FLOOR:
+        return f"the {_gib(DISK_FLOOR)} minimum; a quarter of {space} would be less"
+    return f"a quarter of {space}"
+
+
+def _gib(n: int) -> str:
+    return f"{n / _GIB:g} GiB"
 
 
 def adaptive_ram_cap(total_ram_bytes: int | None) -> int:

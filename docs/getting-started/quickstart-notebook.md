@@ -18,7 +18,7 @@ import cash
 %cash_on
 ```
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @503eaf12 -->
 This is the setup cell: `import cash`, then any `cash.configure(...)` call, then
 `%cash_on`. cash starts tracking after this cell, so work you put in it is never
 cached. Do your work in the cells below. To skip this cell in every new kernel,

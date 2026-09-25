@@ -220,6 +220,13 @@ class TieredBackend(CacheBackend):
                 except Exception:  # reclaiming disk never fails a write
                     logger.debug("Could not drop call ref %r", ref, exc_info=True)
 
+    def disk_budget(self) -> Any:
+        """The first tier's that has one."""
+        return next((b for b in (t.disk_budget() for t in self.backends) if b is not None), None)
+
+    def take_storage_notices(self) -> list[str]:
+        return [n for t in self.backends for n in t.take_storage_notices()]
+
     def hold_notices(self) -> None:
         self.notices.hold()
 

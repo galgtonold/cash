@@ -97,6 +97,15 @@ recompute, large, and rarely read. Set `max_cache_size` (or
 `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size such as `"20GB"` to pin
 the disk cap.
 
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/backends/file_eviction.py:FileEvictor.report_eviction @aa4b93be -->
+With `CASH_VERBOSE=1` or `CASH_DEBUG=1`, the first result a run writes to disk
+logs the folder and the cap, and the first time the cap makes cash remove
+entries it logs how much it removed:
+
+```text
+cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
+```
+
 <!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @a08b9044 -->
 **Clearing.** Pick the narrowest tool that does the job:
 
@@ -119,7 +128,7 @@ cache. Give it its own; see [Testing your code](tutorials/feature-guides/testing
 
 A script shows nothing by default. Use these to check that caching works.
 
-<!-- claim: cash/core.py:Cash.run_summary @340f2eac, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/core.py:Cash.run_summary @1b06ce83, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
 process ends: hits and misses per function, the time saved, and why calls
 missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
@@ -130,7 +139,7 @@ CASH_SUMMARY=1 python model.py
 
 ```text
 cash: 4 of 7 calls restored, 0.3s saved
-  cache: /srv/proj/.cash
+  cache: /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space)
   model.load_prices  1 hit,    1 miss      0.3s saved
       missed: 1 file changed
   model.build_grid   3 hits,   0 misses    0.0s saved

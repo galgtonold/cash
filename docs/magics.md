@@ -25,7 +25,7 @@ lists them in the notebook, and `%cash_help NAME` prints one magic's usage.
 ## Turning caching on and off
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @8cbb17b4 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @503eaf12 -->
 
 **Usage:** `%cash_on [ttl=N]`
 
@@ -37,7 +37,14 @@ Caches every cell run after this one. It goes in the first cell, after
   number, prints an error and leaves caching off.
 
 It prints `Cash enabled.`, and `Found existing cache with N entries.` when the
-cache already holds results. Without a live reader for unsaved edits (see
+cache already holds results.
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_disk_budget @e5d4f9bb, cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad -->
+The first time in a kernel, it also names the cache folder and how big the
+disk cache may grow: `Caching in /work/.cash, up to 26.0 GiB (a quarter of the
+free disk space; set max_cache_size to change it).` When a cell's results
+later take the cache over that cap, that cell ends with one `[cash] The cache
+in ... reached its ... cap` line saying what was removed
+([Where your cache lives](how-it-works/storage.md#when-the-disk-fills-up)). Without a live reader for unsaved edits (see
 [Editing without saving](known-limitations.md#editing-without-saving)), it also
 prints a one-time tip to save before running. With `CASH_DISABLE=1` set, it says
 so and does nothing.

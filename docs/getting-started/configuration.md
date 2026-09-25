@@ -70,7 +70,7 @@ an unknown key in a file warns
 |---|---|---|---|---|
 | `cache_dir` | `CASH_CACHE_DIR` | `".cash"` | both | Where the disk tier writes. Add it to `.gitignore`. |
 | `compress` | `CASH_COMPRESS` | `false` | both | gzip each entry on disk. Worth it mainly for text-like values. |
-| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (auto) | both | Disk cap in bytes or a size such as `"5GB"`. At the cap, the entries worth least per byte (compute time per byte, raised by hits) are evicted first. A single value bigger than the cap is not written ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)). Each process enforces the cap on its own writes. |
+| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (auto) | both | Disk cap in bytes or a size such as `"5GB"`. At the cap, the entries worth least per byte (compute time per byte, raised by hits) are evicted first. A single value bigger than the cap is not written ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)). Each process enforces the cap on its own writes. Cash shows the cap, and where it comes from, when caching starts ([Where your cache lives](../how-it-works/storage.md#where-the-cache-folder-is)). |
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` | both | Entry-count cap for the RAM tier, evicting least recently used. `null` means no count limit; the RAM tier is still capped in bytes. |
 | `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | both | Seconds between the disk tier's metadata flushes. `0` flushes after every write. |
 | `file_hash_full_max_bytes` | `CASH_FILE_HASH_FULL_MAX_BYTES` | `268435456` (256 MiB) | both | Tracked files up to this size are hashed in full to check freshness. Larger files hash three sampled regions plus the timestamps, which misses a same-size edit outside those regions that keeps the modification time. |
@@ -110,7 +110,7 @@ These decide which notebook statements are cached and written to disk. A
 | Field | Env var | Default | Path | Description |
 |---|---|---|---|---|
 | `debug` | `CASH_DEBUG` | `false` | both | Log every cache decision, including one line per decorated call. The lines go to stderr unless your program configures `logging`. `%cash_debug on` in a notebook sets this field and also shows the notebook's debug lines. |
-| `verbose` | `CASH_VERBOSE` | `false` | decorator | Only the one line per decorated call, without the other debug records. |
+| `verbose` | `CASH_VERBOSE` | `false` | decorator | Only the one line per decorated call, and the disk cache's cap and first eviction, without the other debug records. |
 | `disable` | `CASH_DISABLE` | `false` | both | Run every `@cash.cache` call uncached, and make `%cash_on` decline. `CASH_DISABLE=1 pytest` checks your tests pass without the cache ([Testing your code](../tutorials/feature-guides/testing-your-code.md)). |
 | `summary` | `CASH_SUMMARY` | `false` | decorator | At exit, print a per-function hit/miss table to stderr, with why each function missed: `CASH_SUMMARY=1 python model.py`. |
 | `analytics` | `CASH_ANALYTICS` | `true` | notebook | Record each statement's hit, miss and timing in `analytics.db` under the per-user cache root, for the `cash.show_stats()` dashboard. `false` creates no file. |

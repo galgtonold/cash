@@ -25,6 +25,7 @@ from .analytics import AnalyticsManager
 from .backends import CacheBackend
 from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
+from .backends.budget_notices import DiskBudget, cap_text
 from .backends.factory import build_tiered
 from .config import CashConfig, get_config
 from .data_source import DataSource
@@ -1017,7 +1018,7 @@ class Cash:
             # scheduled job's cwd-relative cache, a path typed with one
             # backslash too few, a container volume that is not the one they
             # meant.
-            lines.append(f"  cache: {where}")
+            lines.append(f"  cache: {where}{self._summary_budget()}")
         for name, stat in rows:
             # Pad the whole "N hits," token, not the word: padding the word
             # puts the space before the comma ("1 hit ,").
@@ -1068,6 +1069,18 @@ class Cash:
             return path
         configured = getattr(self.config, "cache_dir", None)
         return configured if isinstance(configured, str) and configured else None
+
+    def _summary_budget(self) -> str:
+        """``", up to 26.0 GiB (a quarter of the free disk space)"`` for the
+        summary's cache line, or ``""``. From the built backend only."""
+        backend = self._backend_slot.built
+        try:
+            budget = backend.disk_budget() if backend is not None else None
+        except Exception:  # noqa: BLE001 - the summary runs at exit and must not fail
+            return ""
+        if not isinstance(budget, DiskBudget):
+            return ""
+        return f", up to {cap_text(budget.cap, budget.why is not None)} ({budget.why or 'set by max_cache_size'})"
 
     def _print_run_summary(self) -> None:
         """``atexit`` hook for ``summary=True``. Must never raise.

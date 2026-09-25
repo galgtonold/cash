@@ -752,6 +752,15 @@ class FileBackend(CacheBackend):
         self._writes.drain(key)
         self.evictor.remove_path(self._get_path(key), key)
 
+    def disk_budget(self) -> Any:
+        """This folder's cap and where it comes from (`FileEvictor.budget`)."""
+        if self._unusable:
+            return None
+        return self.evictor.budget()
+
+    def take_storage_notices(self) -> list[str]:
+        return self.evictor.take_notices()
+
     def promotion_size_cap(self) -> int | None:
         """Refuse (skip) only an object larger than this tier's WHOLE cap.
 

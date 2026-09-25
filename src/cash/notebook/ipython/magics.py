@@ -20,6 +20,7 @@ from IPython.core.magic import Magics, line_magic, magics_class
 from ... import _log
 from ..._console import safe_text
 from ...backends._writes import all_pending_writes
+from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
 from ...object_hashing import compute_hash
 from ...tracking import io_watch
@@ -419,6 +420,7 @@ class CashMagics(InspectionMagicsMixin, Magics):
                 print(f"   Found existing cache with {count} entries.")
         except (OSError, AttributeError, TypeError):
             pass
+        self._show_disk_budget()
         # One-time hint: with no live reader, cash reads upstream cells from the
         # .ipynb file on disk, so an upstream edit that has not been saved is
         # invisible until it is — hence the save advice. Skipped wherever a LIVE
@@ -444,6 +446,35 @@ class CashMagics(InspectionMagicsMixin, Magics):
                 print("   and you get the previous answer for the new code.")
                 print('   JupyterLab autosaves on a timer; VS Code: "files.autoSave".')
         logger.debug("TTL: %s", ttl)
+
+    def _show_disk_budget(self) -> None:
+        """Say how big the disk cache may grow, once per kernel and folder.
+
+        The cap is sized to the machine unless set, and eviction at it is
+        otherwise silent: a cache that reached 26 GiB, or lost entries, with
+        nothing on screen to say why. Said here, where caching starts, so
+        neither is a surprise later.
+        """
+        try:
+            budget = self._cash_instance.backend.disk_budget()
+        except (OSError, AttributeError, TypeError):
+            return
+        if not isinstance(budget, DiskBudget) or not claim_budget_notice(budget.cache_dir):
+            return
+        text = describe_budget(budget)
+        print(safe_text(f"   {text[0].upper()}{text[1:]}."))
+
+    def _show_storage_notices(self) -> None:
+        """Print what the disk tier has to say since the last cell (its first
+        eviction). Only from a backend already built: never build one here."""
+        backend = self._cash_instance.backend_if_built
+        if backend is None:
+            return
+        notices = backend.take_storage_notices()
+        if not isinstance(notices, list):
+            return
+        for text in notices:
+            print(safe_text(f"[cash] {text[0].upper()}{text[1:]}"))
 
     @line_magic
     def cash_off(self, line: str) -> None:
@@ -708,6 +739,12 @@ class CashMagics(InspectionMagicsMixin, Magics):
                 queue.wait_all()
         except Exception:  # best-effort, must not break the cell
             logger.debug("Flushing pending cache writes failed", exc_info=True)
+        # The writes just drained are what evicts, so the cell that caused the
+        # first eviction is the one that reports it.
+        try:
+            self._show_storage_notices()
+        except Exception:  # cosmetic, must not break the cell
+            logger.debug("Showing storage notices failed", exc_info=True)
 
     def _capture_cell_id(self, info: Any) -> None:
         """Capture cell_id from IPython's pre_run_cell event.

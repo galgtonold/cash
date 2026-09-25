@@ -255,6 +255,16 @@ class CacheBackend(ABC):
         Only a tiered backend has tiers to move a value between."""
         return False
 
+    def disk_budget(self) -> Any:
+        """The disk cap to tell the user about, as a `budget_notices.DiskBudget`,
+        or None: only a tier that keeps entries on local disk has one."""
+        return None
+
+    def take_storage_notices(self) -> list[str]:
+        """Notices about the disk cap not yet shown (the first eviction),
+        removed, for a front end that prints them. The default has none."""
+        return []
+
     def hold_notices(self) -> None:  # intentional no-op default
         """Hold notices about values not persisted until `release_notices`,
         to say them once for a batch of stores. The default holds nothing."""

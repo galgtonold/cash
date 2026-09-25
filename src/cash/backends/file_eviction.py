@@ -2,8 +2,9 @@
 
 `FileEvictor` owns everything `FileBackend` needs to stay under
 ``max_size_bytes``: the running byte total, the adaptive cap, the
-GreedyDual-Size-Frequency ranking of what to evict, and the warning when the
-cache evicts what it has only just written.
+GreedyDual-Size-Frequency ranking of what to evict, and what the user is told
+about it -- the cap when the first write sizes it, the first eviction, and the
+warning when the cache evicts what it has only just written.
 """
 
 from __future__ import annotations
@@ -19,8 +20,10 @@ from typing import TYPE_CHECKING, Any
 from ..config import human_bytes
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
+from . import adaptive_caps as _caps
 from ._base import gdsf_value
 from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume
+from .budget_notices import DiskBudget, announce_budget, cap_text, claim_eviction_notice, eviction_text, storage_logger
 from .cache_dir import entry_totals
 from .entry_format import ENTRY_SUFFIX
 from .rank_index import RankIndex
@@ -94,6 +97,8 @@ class FileEvictor:
         self.write_seq = 0
         self.write_seq_by_key: dict[str, int] = {}
         self.warned_thrash = False
+        #: Notices for the front end to show (`take_notices`).
+        self._notices: list[str] = []
         # Candidates, least valuable per byte first, as (path, size, ranked_at),
         # consumed across passes and rebuilt when empty; priorities in rank_h.
         self.queue: deque[tuple[str, int, float]] = deque()
@@ -172,6 +177,30 @@ class FileEvictor:
             self.size_scanned = True
         # The footprint is what the cap was missing; size it now.
         self.refresh_adaptive_cap(force=True)
+        # The first write of the process: say how big the cache may grow.
+        announce_budget(self.cache_dir, self.budget)
+
+    def budget(self) -> DiskBudget | None:
+        """The cap as the user should read it, or None when there is none.
+
+        An adaptive cap is sized here the way `refresh_adaptive_cap` sizes it
+        -- free space plus what the cache holds -- so the number shown is the
+        number kept to, with the rule that decided it. Counting the cache's
+        bytes walks the directory when no write has done so yet.
+        """
+        if not self.max_size_bytes:
+            return None
+        if not self.adaptive:
+            return DiskBudget(self.cache_dir, self.max_size_bytes, None)
+        own = self.current_bytes if self.size_scanned else self.scan_size_bytes()
+        free = _caps.free_bytes_on_volume(self.cache_dir)
+        return DiskBudget(self.cache_dir, _caps.adaptive_disk_cap(free + own), _caps.disk_cap_reason(free, own))
+
+    def take_notices(self) -> list[str]:
+        """The notices not yet shown, removed: for a front end that prints them."""
+        with self._lock:
+            notices, self._notices = self._notices, []
+        return notices
 
     def refresh_adaptive_cap(self, force: bool = False) -> None:
         """Re-size an adaptive cap from the volume as it is now.
@@ -402,6 +431,7 @@ class FileEvictor:
         target = self.max_size_bytes * 0.9
         evicted_recent = False
         n_evicted = 0
+        freed_bytes = 0
         rebuilt = False
         own_key = self._writes.current_worker_key()
 
@@ -435,16 +465,36 @@ class FileEvictor:
             if written_at is not None and self.write_seq - written_at <= self.EVICT_WARN_RECENT_OPS:
                 evicted_recent = True
 
-            if self.remove_path(path):
+            freed = self.remove_path(path)
+            if freed:
                 n_evicted += 1
+                freed_bytes += freed
                 with self._lock:
                     self.clock = max(self.clock, priority)
 
         if n_evicted:
             # The clock lets the next process resume the ranking.
             self.rank_index.append([], clock=self.clock)
+            self.report_eviction(freed_bytes, n_evicted)
         if evicted_recent:
             self.warn_thrash()
+
+    def report_eviction(self, freed: int, count: int) -> None:
+        """Say that the cap removed entries: the first time per cache folder
+        in this process as a notice, after that only in the debug log."""
+        if not claim_eviction_notice(self.cache_dir):
+            storage_logger.debug(
+                "evicted %d entries (%s) from %s to stay under its %s cap",
+                count,
+                human_bytes(freed),
+                self.cache_dir,
+                cap_text(self.max_size_bytes or 0, self.adaptive),
+            )
+            return
+        text = eviction_text(self.cache_dir, cap_text(self.max_size_bytes or 0, self.adaptive), freed, count)
+        storage_logger.info("%s", text)
+        with self._lock:
+            self._notices.append(text)
 
     def dominant_entry_size(self) -> int | None:
         """The size at which cumulative bytes cross half the ranked cache.
