@@ -2020,6 +2020,14 @@ class PurityAnalyzer:
                 if getattr(callee, "_cash_cached", False):
                     _note_binding(callee, path)
                     return
+                # A classmethod reached as `module.Model.run`, or bound to a
+                # name (`run = Model.run`), is a method bound to the CLASS.
+                # Its function is walked below; the class it reads through
+                # `cls` is not named anywhere in the body, so its constants
+                # (`factor = 2`) reached no channel and an edit was served
+                # the old result. Key the class, as a class read by name is.
+                if isinstance(callee, types.MethodType) and isinstance(callee.__self__, type):
+                    _queue_hash_only(callee.__self__, func, depth)  # loop var, used within iteration
                 # A ``@pure`` or ``@stateful`` callee settles what the helper
                 # may DO, not what it computes: it is walked below like any
                 # helper, so an edit to it moves its callers' keys, and only
