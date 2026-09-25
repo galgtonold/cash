@@ -141,3 +141,29 @@ def test_a_tier_left_out_of_the_stack_is_named(monkeypatch):
     assert [t.type for t in cfg.tiers] == ["memory"]
     said = [str(w.message) for w in rec if "[CONFIG-INVALID]" in str(w.message)]
     assert said and "tiers[1]" in said[0] and "CASH_TIER_<N>_TYPE" in said[0], [str(w.message) for w in rec]
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"max_cache_szie": "1MB"}, r"`max_cache_szie` is not a cash setting\. Did you mean `max_cache_size`\?"),
+        ({"ttl": 60}, r"`ttl` is not a cash setting\. ttl is set per function"),
+        ({"tiers": [{"type": "file", "nonsense": 1}]}, r"`tiers\[0\]\.nonsense` is not a cash setting"),
+        ({"tiers": "memory"}, r"expected a list of tier tables"),
+    ],
+)
+def test_a_keyword_that_is_not_a_setting_raises_in_code(tmp_path, kwargs, match):
+    """`Cash(ttl=60)` and typos were dropped without a word, while
+    `cash.configure()` raised on the same keys: the user believed entries
+    expired after a minute, and the same stale value was served forever.
+    `tiers="memory"` was split into one CONFIG-INVALID per character."""
+    with pytest.raises(ValueError, match=match):
+        Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, **kwargs)
+    with pytest.raises(ValueError, match=match):
+        cash.configure(**kwargs)
+
+
+def test_use_locking_takes_only_a_flag(tmp_path):
+    with pytest.raises(ValueError, match="use_locking"):
+        Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking="no")
+    assert Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking=1).use_locking is True

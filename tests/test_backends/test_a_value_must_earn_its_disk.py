@@ -262,10 +262,10 @@ class TestTheDecoratorIsNotReJudged:
     """
 
     def _cash(self, tmp_path, frozen):
-        from cash import Cash, CashConfig
+        from cash import Cash
 
         backend = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path), flush_interval=0)])
-        cash_obj = Cash(backend=backend, config=CashConfig(cache_dir=str(tmp_path)), register_magic=False)
+        cash_obj = Cash(backend=backend, cache_dir=str(tmp_path), register_magic=False)
 
         @cash_obj.cache(frozen=frozen)
         def build(n):

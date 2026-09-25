@@ -220,6 +220,10 @@ class Cash:
             ``Cash(max_cache_size="2GB")``. These win over every config file
             and environment variable.
 
+    Raises:
+        ValueError: a keyword that is not a setting, or a value the setting
+            cannot take, as ``cash.configure`` raises for the same.
+
     Example:
 
         from cash import Cash
@@ -303,6 +307,9 @@ class Cash:
                 f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
                 f"not {type(backend).__name__}"
             )
+        if not isinstance(use_locking, bool) and use_locking not in (0, 1):
+            raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
+        use_locking = bool(use_locking)
         # Map the explicit convenience kwargs (cache_dir, compress, debug)
         # into the overrides dict so the config layer treats them with the
         # same priority as any other constructor-supplied override (highest).

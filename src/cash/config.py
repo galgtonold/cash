@@ -961,24 +961,33 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_
 
     With *unknown_keys* -- a ``[tool.cash]`` table or a cash config file, where
     every key is meant to be cash's -- a key that is not a setting is reported
-    (CONFIG-UNKNOWN-KEY, with the nearest real name), as ``cash.configure()``
-    raises on the same typo.
+    (CONFIG-UNKNOWN-KEY, with the nearest real name). Under *strict* it
+    raises, as a bad value does: ``Cash(ttl=60)`` or a misspelt
+    ``Cash(max_cache_szie=...)`` would otherwise be dropped without a word.
     """
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     tier_valid = {f.name for f in fields(TierConfig)}
     out: dict[str, Any] = {}
     for key, value in data.items():
         try:
-            if key == "tiers" and isinstance(value, list):
+            if key == "tiers" and strict and not isinstance(value, (list, tuple)):
+                raise ValueError(
+                    f"tiers={value!r}: expected a list of tier tables, such as "
+                    '[{"type": "memory"}, {"type": "file"}], or backend="memory" for a single tier'
+                )
+            if key == "tiers" and isinstance(value, (list, tuple)):
                 tiers = []
                 for i, t in enumerate(value):
                     if not isinstance(t, dict):
                         tiers.append(t)
                         continue
-                    if unknown_keys:
-                        for k in t:
-                            if k not in tier_valid:
-                                _unknown_key(label, f"tiers[{i}].{k}", k, tier_valid)
+                    for k in t:
+                        if k in tier_valid:
+                            continue
+                        if strict:
+                            raise ValueError(_not_a_setting(f"tiers[{i}].{k}", k, tier_valid))
+                        if unknown_keys:
+                            _unknown_key(label, f"tiers[{i}].{k}", k, tier_valid)
                     tiers.append(
                         {k: (validate_value(k, v, TierConfig) if k in tier_valid else v) for k, v in t.items()}
                     )
@@ -989,6 +998,8 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_
                 out[key] = tiers
             elif key in valid:
                 out[key] = validate_value(key, value)
+            elif strict:
+                raise ValueError(_not_a_setting(key, key, valid))
             elif unknown_keys:
                 _unknown_key(label, key, key, valid)
             else:
@@ -1002,6 +1013,16 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_
                 "correct the value; `cash info` shows every setting in effect and where it came from.",
             )
     return out
+
+
+#: Names people pass as settings that belong somewhere else.
+_NOT_SETTINGS = {
+    "ttl": " ttl is set per function, @cash.cache(ttl=...), or as default_ttl on a file tier.",
+}
+
+
+def _not_a_setting(shown: str, key: str, valid: Any) -> str:
+    return f"`{shown}` is not a cash setting.{_NOT_SETTINGS.get(key) or _did_you_mean(key, valid)}"
 
 
 def _unknown_key(label: str, shown: str, key: str, valid: Any) -> None:

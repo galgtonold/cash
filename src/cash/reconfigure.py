@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from dataclasses import fields
 from typing import TYPE_CHECKING, Any
 
 from . import _active, _log
 from .backends.factory import apply_persistence_settings, build_backend_from_config, built_from_config, tier_specs
-from .config import CashConfig, validated_overrides
+from .config import validated_overrides
 
 if TYPE_CHECKING:
     from .core import Cash
@@ -39,10 +38,6 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
     tier without a bucket, a Redis tier without the ``redis`` package) raises
     and leaves the old settings and the old backend working.
     """
-    valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
-    unknown = set(overrides) - valid
-    if unknown:
-        raise ValueError(f"{sorted(unknown)!r} is not a configurable field. Valid keys: {sorted(valid)!r}")
     checked = validated_overrides(overrides)
 
     proposed = dataclasses.replace(cash.config, **checked)

@@ -55,14 +55,15 @@ Every setting below has a `CASH_<FIELD>` environment variable, and its TOML key
 is the field name. **Path** says whether it affects `@cash.cache` (decorator),
 notebook caching (notebook), or both.
 
-<!-- claim: cash/config.py:validate_value @78aa44f0, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @84048bbe -->
+<!-- claim: cash/config.py:validate_value @78aa44f0, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @0460d759 -->
 Values are checked whichever layer they come from. Strings are read as an
 environment variable would be (`"true"`, `"8"`). Byte sizes also take units:
 `"2GB"`, `"500MB"`, `"512MiB"` (KB/MB/GB are powers of 1000, KiB/MiB/GiB of
-1024). A bad value in code raises `ValueError`. A bad value in a file or
-variable is skipped with [`CONFIG-INVALID`](../warnings.md#config-invalid), and
-an unknown key in a file warns
-[`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key).
+1024). A bad value in code raises `ValueError`, and so does a keyword that is
+not a setting (`Cash(ttl=60)`, a misspelt name, an unknown key in a tier
+table), with the closest real name. A bad value in a file or variable is
+skipped with [`CONFIG-INVALID`](../warnings.md#config-invalid), and an unknown
+key in a file warns [`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key).
 
 ### Storage
 
@@ -251,7 +252,7 @@ An instance of your own is built again in each worker by your code, so its
 `reconfigure(...)` stays in the process that called it. See
 [Threads and processes](../tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 
-<!-- claim: cash/reconfigure.py:apply_overrides @1f893dbd, cash/config.py:validated_overrides @db2d884f -->
+<!-- claim: cash/reconfigure.py:apply_overrides @b8ecc0a2, cash/config.py:validated_overrides @db2d884f -->
 Values are checked exactly as `Cash(...)` checks them, before anything
 changes: a bad value raises `ValueError` and leaves the old settings in place.
 So does a backend that cannot be built (`backend="s3"` without `s3_bucket`,

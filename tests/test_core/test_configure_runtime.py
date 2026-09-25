@@ -176,7 +176,7 @@ class TestArgumentValidation:
     def test_unknown_field_raises(self):
         import cash
 
-        with pytest.raises(ValueError, match="not a configurable field"):
+        with pytest.raises(ValueError, match="not a cash setting"):
             cash.configure(this_field_does_not_exist=True)
 
     def test_empty_call_is_noop(self):
