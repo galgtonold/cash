@@ -303,18 +303,64 @@ def strip_docstrings(source: str) -> str:
 def normalize_source_for_hash(source: str) -> str:
     """Return a canonical form of *source* for hashing.
 
-    Falls back to the raw text when *source* does not tokenize -- a
-    fragment, a syntax error mid-edit, an unterminated string. A coarse
-    but never-wrong digest beats raising from inside a hasher, and the
-    raw text still distinguishes different broken sources from each other.
+    The code as ``ast.unparse`` renders it, docstrings dropped, followed by
+    the ``# @cash:`` directives in order. Everything a formatter decides is
+    gone that way, not only comments, blank lines and indentation: quote
+    style, escapes and string prefixes, implicit string concatenation, a
+    trailing comma, grouping parentheses, line breaks and backslash
+    continuations, how a number is spelled (``0.50``, ``1_000``, ``0x3e8``).
+    The first ``ruff format`` of a single-quoted codebase threw away every
+    cached result whose helpers held a string literal. What the parser keeps
+    stays: a one-element tuple's comma, parentheses that group, ``1`` against
+    ``1.0``, ``str`` against ``bytes``.
 
-    MEMOIZED, and load-bearingly so: tokenizing costs ~47us against the
-    ~0.5us of hashing raw text, and this runs once per transitive helper
-    per cached call -- a loop cached per statement pays it thousands of
-    times, which showed up as a measurable CPU-overhead regression in
-    ``test_cfd_loop_overhead`` before the cache went in. Keying on the
-    source text is safe because the transform is pure: identical text
-    always normalizes identically, and edited text is a different key.
+    Falls back to the token stream (`_normalize_tokens`) when *source* does
+    not parse -- a fragment, a syntax error mid-edit -- and to the raw text
+    when it does not even tokenize. A coarse but never-wrong digest beats
+    raising from inside a hasher, and the raw text still distinguishes
+    different broken sources from each other.
+
+    MEMOIZED, and load-bearingly so: parsing and rendering cost tens of
+    microseconds against the ~0.5us of hashing raw text, and this runs once
+    per transitive helper per cached call -- a loop cached per statement pays
+    it thousands of times, which showed up as a measurable CPU-overhead
+    regression in ``test_cfd_loop_overhead`` before the cache went in. Keying
+    on the source text is safe because the transform is pure: identical
+    text always normalizes identically, and edited text is a different key.
+    """
+    text = textwrap.dedent(source)
+    try:
+        tree = ast.parse(text)
+        drop_docstrings(tree)
+        code = ast.unparse(tree)
+    except Exception:  # noqa: BLE001 - never raise from inside a hasher
+        return _normalize_tokens(source)
+    return _SEP.join([code, *_directive_atoms(text)])
+
+
+def _directive_atoms(source: str) -> list[str]:
+    """The normalized ``# @cash:`` directives in *source*, in order (`_annotation_atom`)."""
+    if "@cash:" not in source:
+        return []
+    atoms: list[str] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                atom = _annotation_atom(tok.string)
+                if atom is not None:
+                    atoms.append(atom)
+    except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
+        pass
+    return atoms
+
+
+def _normalize_tokens(source: str) -> str:
+    """The token-stream form of *source*, for text that does not parse.
+
+    Comments go (a ``# @cash:`` directive is kept as an atom), and so do
+    blank lines, line breaks inside brackets, indentation width and a
+    number's spelling. Falls back to the raw text when *source* does not
+    tokenize either.
     """
     try:
         readline = io.StringIO(strip_docstrings(textwrap.dedent(source))).readline

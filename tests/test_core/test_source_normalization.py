@@ -200,6 +200,53 @@ def test_indentation_that_changes_structure_breaks_identity():
     assert not _same(a, b)
 
 
+# --- what a formatter changes ------------------------------------------
+#
+# ``ruff format`` / ``black`` rewrite quotes, add a trailing comma to a call
+# they split over lines, and add or drop grouping parentheses. None of that
+# changes the compiled function, and each one threw the cache away.
+
+FORMATTED = [
+    ("quotes", "return {'a': 'b'}[k]", 'return {"a": "b"}[k]'),
+    ("string prefix and escape", "return 'it\\'s'", 'return "it\'s"'),
+    ("implicit concatenation", "return 'ab' 'cd'", "return 'abcd'"),
+    ("trailing comma in a split call", "return max(k, 1)", "return max(\n        k,\n        1,\n    )"),
+    ("grouping parentheses", "return k * 2 + 1", "return (k * 2) + 1"),
+    ("parenthesised return", "return k", "return (\n        k\n    )"),
+    ("backslash continuation", "return k + 1", "return k \\\n        + 1"),
+]
+
+
+@pytest.mark.parametrize("label, before, after", FORMATTED, ids=[c[0] for c in FORMATTED])
+def test_a_formatter_s_rewrite_keeps_identity(label, before, after):
+    a = f"def f(k):\n    {before}\n"
+    b = f"def f(k):\n    {after}\n"
+    assert normalize_source_for_hash(a) == normalize_source_for_hash(b), label
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ("return (k,)", "return (k)"),  # a one-element tuple is not a grouping
+        ("return x[k,]", "return x[k]"),  # a tuple index
+        ("return 'a'", "return b'a'"),  # str vs bytes
+        ("return 1", "return 1.0"),
+        ("return (a + b) * c", "return a + b * c"),  # parentheses that group
+        ("return f'{k}'", "return '{k}'"),
+    ],
+)
+def test_what_changes_the_value_still_breaks_identity(a, b):
+    assert normalize_source_for_hash(f"def f(k):\n    {a}\n") != normalize_source_for_hash(f"def f(k):\n    {b}\n")
+
+
+def test_a_directive_still_counts_after_a_reformat():
+    a = "def f(k):\n    # @cash: ttl=300\n    return {'a': 1}[k]\n"
+    b = 'def f(k):\n    # @cash: ttl=300\n    return {"a": 1}[k]\n'
+    c = 'def f(k):\n    # @cash: ttl=600\n    return {"a": 1}[k]\n'
+    assert normalize_source_for_hash(a) == normalize_source_for_hash(b)
+    assert normalize_source_for_hash(b) != normalize_source_for_hash(c)
+
+
 # --- cash annotations stay load-bearing --------------------------------
 
 
