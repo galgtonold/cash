@@ -74,6 +74,9 @@ __all__ = [
     "pack_entry",
     "packed_size",
     "read_entry",
+    "read_entry_and_checksum",
+    "entry_identity",
+    "payload_checksum",
     "unpack_entry",
     "metadata_span",
     "update_metadata_in_place",
@@ -100,6 +103,23 @@ def _checksum(payload: bytes) -> bytes:
     return zlib.crc32(payload).to_bytes(4, "big")
 
 
+def payload_checksum(payload: bytes) -> bytes:
+    """The checksum `pack_entry` stamps for *payload*."""
+    return _checksum(payload)
+
+
+def entry_identity(metadata: dict[str, Any], checksum: bytes | None) -> tuple:
+    """Which write of an entry *metadata* came from.
+
+    Every write stamps a payload checksum and a ``created_at``; a flush of
+    access stamps changes neither. Two reads with one identity read the same
+    stored result, so metadata a process remembered may stand in for the
+    entry's; with another identity, some process has replaced the entry since,
+    and what was remembered describes a value that is no longer there.
+    """
+    return (checksum, metadata.get("created_at"))
+
+
 class CorruptEntry(ValueError):
     """The bytes at this path are not a readable cache entry.
 
@@ -124,9 +144,13 @@ def _load_metadata(meta_bytes: bytes, where: str) -> dict[str, Any]:
     return metadata
 
 
-def pack_entry(metadata: dict[str, Any], payload: bytes) -> bytes:
-    """Serialize one entry. *payload* is stored verbatim -- compress before."""
-    meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: _checksum(payload)})
+def pack_entry(metadata: dict[str, Any], payload: bytes, checksum: bytes | None = None) -> bytes:
+    """Serialize one entry. *payload* is stored verbatim -- compress before.
+
+    *checksum*: `payload_checksum` of *payload*, when the caller has it already."""
+    if checksum is None:
+        checksum = _checksum(payload)
+    meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: checksum})
     cap = len(meta_bytes) + META_SLACK
     return b"".join(
         (
@@ -199,6 +223,13 @@ def read_entry(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes 
     and reads only what it needs, so it costs the same for a 200MB entry as
     for a 200-byte one.
     """
+    metadata, payload, _ = read_entry_and_checksum(path, with_payload=with_payload)
+    return metadata, payload
+
+
+def read_entry_and_checksum(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes | None, bytes | None]:
+    """`read_entry`, plus the payload checksum the entry was stamped with, for
+    `entry_identity`."""
     with open(path, "rb") as fh:
         head = fh.read(HEADER_SIZE)
         if len(head) < HEADER_SIZE:
@@ -214,11 +245,11 @@ def read_entry(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes 
         metadata = _load_metadata(meta_bytes, path)
         expected = metadata.pop(CHECKSUM_FIELD, None)
         if not with_payload:
-            return metadata, None
+            return metadata, None, expected
         fh.seek(HEADER_SIZE + meta_cap)
         payload = fh.read()
     _verify(payload, expected, path)
-    return metadata, payload
+    return metadata, payload, expected
 
 
 def _verify(payload: bytes, expected: bytes | None, where: str) -> None:
@@ -233,14 +264,23 @@ def _verify(payload: bytes, expected: bytes | None, where: str) -> None:
         )
 
 
-def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:
-    """Rewrite only the metadata region. False if it no longer fits.
+def update_metadata_in_place(path: str, metadata: dict[str, Any], expected: tuple | None = None) -> bool:
+    """Rewrite only the metadata region. False if it no longer fits, or if
+    the entry at *path* is not the one *metadata* was read from.
+
+    *expected* is the `entry_identity` of the entry *metadata* came from.
+    Another process may have replaced the entry since; its payload must not
+    end up under this process's metadata (old file dependencies, an old
+    ``created_at``), where it would validate against the wrong inputs.
 
     The header and the metadata go out in ONE ``write`` so a tear cannot leave
     a header pointing past the metadata it describes. This is not atomic
     against a crash -- neither was the separate ``.meta`` file it replaces --
     and the failure mode is identical: the metadata no longer unpickles, the
-    entry reads as absent, and the value is recomputed.
+    entry reads as absent, and the value is recomputed. Nor is the check
+    against *expected* atomic with the write, and need not be: a replacement
+    is renamed into place as a new file, so a write through this handle after
+    one lands goes to the file it replaced.
     """
     with open(path, "r+b") as fh:
         head = fh.read(HEADER_SIZE)
@@ -253,15 +293,16 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any]) -> bool:
         # and the caller never saw it, because every read strips it. Reading it
         # back off the entry costs one unpickle of ~280 bytes, measured at
         # 0.6us against the ~150us the write itself takes.
-        if CHECKSUM_FIELD not in metadata:
-            try:
-                previous = _load_metadata(fh.read(meta_len), path)
-            except CorruptEntry:
-                return False
-            if CHECKSUM_FIELD not in previous:
-                return False
-            metadata = {**metadata, CHECKSUM_FIELD: previous[CHECKSUM_FIELD]}
-        meta_bytes = pickle.dumps(metadata)
+        try:
+            previous = _load_metadata(fh.read(meta_len), path)
+        except CorruptEntry:
+            return False
+        checksum = previous.pop(CHECKSUM_FIELD, None)
+        if checksum is None:
+            return False
+        if expected is not None and entry_identity(previous, checksum) != expected:
+            return False
+        meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: checksum})
         if len(meta_bytes) > cap:
             return False
         fh.seek(0)

@@ -203,7 +203,9 @@ def test_the_access_stamp_of_a_hot_entry_is_not_rewritten_on_every_flush(tmp_pat
     import cash.backends.file_backend as fb
 
     real = fb.update_metadata_in_place
-    monkeypatch.setattr(fb, "update_metadata_in_place", lambda path, meta: (writes.append(path), real(path, meta))[1])
+    monkeypatch.setattr(
+        fb, "update_metadata_in_place", lambda path, meta, *rest: (writes.append(path), real(path, meta, *rest))[1]
+    )
     for _ in range(3):
         backend.get("k")
         backend._flush_metadata(periodic=True)

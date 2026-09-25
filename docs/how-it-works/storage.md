@@ -192,11 +192,18 @@ Parquet engine, is pickled.
 
 ## Damaged entries and format changes
 
-<!-- claim: cash/backends/entry_format.py:pack_entry @f6d2f3e2, cash/backends/entry_format.py:_verify @8a91dffb -->
+<!-- claim: cash/backends/entry_format.py:pack_entry @2b6c17f2, cash/backends/entry_format.py:_verify @8a91dffb -->
 Every entry carries a checksum of its payload, checked on every read. An entry
 that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
+
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @c3a588dc, cash/backends/file_backend.py:FileBackend.get @0f0d5cd5 -->
+Several processes can share one folder. Each one counts the reads of the
+entries it used and writes those counts back later. When another process has
+stored a new result under the same entry meanwhile, the next read takes the
+new entry as it is on disk, and the counts are dropped rather than written over
+it.
 
 <!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 2, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
 The cache folder records the storage format it was written in. When Cash opens

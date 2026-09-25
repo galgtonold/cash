@@ -28,10 +28,20 @@ from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
 from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, write_all
-from .entry_format import ENTRY_SUFFIX, CorruptEntry, metadata_span, pack_entry, read_entry, update_metadata_in_place
+from .entry_format import (
+    ENTRY_SUFFIX,
+    CorruptEntry,
+    entry_identity,
+    metadata_span,
+    pack_entry,
+    payload_checksum,
+    read_entry,
+    read_entry_and_checksum,
+    update_metadata_in_place,
+)
 from .file_eviction import FileEvictor
 from .serialization import PickleSerializer, Serializer
-from .touched_entries import TouchedEntries
+from .touched_entries import TouchedEntries, stat_signature
 from .versions import VersionIndex, superseded_to_drop
 
 logger = logging.getLogger(__name__)
@@ -288,11 +298,13 @@ class FileBackend(CacheBackend):
             try:
                 meta = self._touched.metadata(key)
                 path = self._get_path(key)
-                if meta and not update_metadata_in_place(path, meta):
-                    logger.debug(
-                        "Metadata for %r no longer fits its reserved region; access stats not flushed",
-                        key,
-                    )
+                if meta and not update_metadata_in_place(path, meta, self._touched.identity(key)):
+                    # Replaced by another process since it was read, or grown
+                    # past its reserved region. Either way what is held here
+                    # is not what the file holds: read it afresh next time.
+                    logger.debug("Access stats for %r not flushed: the entry changed or outgrew its region", key)
+                    self._touched.drop_metadata(key)
+                    continue
                 self._access_flushed[key] = now
                 if meta and meta.get("version_slot"):
                     self._versions.touch(key, meta.get("last_access", now))
@@ -302,9 +314,12 @@ class FileBackend(CacheBackend):
                 logger.debug("Failed to flush metadata for key %r: %s", key, exc)
         self.evictor.rank_index.append(records)
 
-    def _remember(self, key: str, metadata: dict) -> None:
-        """Hold one entry's metadata, and the way back from its filename."""
-        self._touched.remember(key, self._get_path(key), metadata)
+    def _remember(self, key: str, metadata: dict, checksum: bytes | None, stat: tuple | None = None) -> None:
+        """Hold one entry's metadata, and the way back from its filename.
+
+        *checksum* is the payload checksum of the write *metadata* belongs to,
+        *stat* the file's `stat_signature` when it was read, if known."""
+        self._touched.remember(key, self._get_path(key), metadata, entry_identity(metadata, checksum), stat)
 
     @staticmethod
     def _stem(key: str) -> str:
@@ -345,16 +360,24 @@ class FileBackend(CacheBackend):
         path = self._get_path(key)
 
         try:
+            metadata = None
             if cached_meta is not None:
-                # Cheaper than reopening, but it still has to exist: a delete
-                # by another process must read as absent, not as this
+                # Cheaper than reopening, but the file must still be the one
+                # it was read from: a delete by another process must read as
+                # absent, and a rewrite as the new entry, never as this
                 # process's stale copy.
-                if not os.path.exists(path):
-                    return None
-                metadata = cached_meta
-            else:
-                metadata, _ = read_entry(path, with_payload=False)
-                self._remember(key, metadata)
+                st = stat_signature(os.stat(path))
+                if self._touched.stat_matches(key, st):
+                    metadata = cached_meta
+            if metadata is None:
+                on_disk, _, checksum = read_entry_and_checksum(path, with_payload=False)
+                if cached_meta is not None and entry_identity(on_disk, checksum) == self._touched.identity(key):
+                    # The same write, touched since (an access stamp flushed).
+                    metadata = cached_meta
+                    self._touched.note_stat(key, st)
+                else:
+                    metadata = on_disk
+                    self._remember(key, metadata, checksum, st if cached_meta is not None else None)
 
             if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
                 return None
@@ -377,13 +400,16 @@ class FileBackend(CacheBackend):
         # over the one on disk even though we are about to read the file
         # anyway: callers hold it, `get` mutates it in place, and the flusher
         # writes THAT object back. Replacing it with a fresh dict per read
-        # would drop every unflushed access update on the floor.
+        # would drop every unflushed access update on the floor. Only while
+        # the file still holds the write it was read from, though: another
+        # process may have replaced the entry, and its payload paired with
+        # the old metadata (the old inputs' file hashes) is a wrong value.
         cached_meta = self._touched.metadata(key)
 
         path = self._get_path(key)
 
         try:
-            on_disk, payload = read_entry(path, with_payload=True)
+            on_disk, payload, checksum = read_entry_and_checksum(path, with_payload=True)
         except FileNotFoundError:
             self._touched.drop_metadata(key)
             return None, None
@@ -392,11 +418,11 @@ class FileBackend(CacheBackend):
             return None, None
 
         try:
-            if cached_meta is not None:
+            if cached_meta is not None and entry_identity(on_disk, checksum) == self._touched.identity(key):
                 metadata = cached_meta
             else:
                 metadata = on_disk
-                self._remember(key, metadata)
+                self._remember(key, metadata, checksum)
 
             # A metadata-only entry (the value was too large to persist) has
             # no payload. It is a HIT for `get_metadata`, which wants the
@@ -556,7 +582,8 @@ class FileBackend(CacheBackend):
         payload = gzip.compress(serialized_value) if self.compress else serialized_value
         # The bytes the value occupies on disk, after compression.
         metadata["size"] = len(payload)
-        blob = pack_entry(metadata, payload)
+        checksum = payload_checksum(payload)
+        blob = pack_entry(metadata, payload, checksum)
 
         # What this entry occupies now, so a rewrite subtracts what was there.
         try:
@@ -584,7 +611,7 @@ class FileBackend(CacheBackend):
                 self._atomic_write(path, blob)
 
         with self._touched.lock:
-            self._remember(key, metadata)
+            self._remember(key, metadata, checksum)
             self.evictor.note_write(key, old_entry_bytes, len(blob))
 
         # Only a capped tier ranks, so only a capped tier keeps the rank index:
@@ -746,7 +773,7 @@ class FileBackend(CacheBackend):
             # A new key takes the cheaper in-place write, as a full entry does.
             if existing is not None or not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
-            self._remember(key, metadata)
+            self._remember(key, metadata, payload_checksum(b""))
         except OSError as exc:
             logger.debug("Failed to write metadata-only entry for key %r: %s", key, exc)
 
