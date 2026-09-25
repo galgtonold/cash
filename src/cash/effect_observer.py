@@ -78,6 +78,23 @@ active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.C
 )
 
 
+def reset_in_any_context(var: contextvars.ContextVar, token: contextvars.Token) -> None:
+    """``var.reset(token)``, also in a context other than the one that made *token*.
+
+    A cached generator keeps its tracker and observer across ``yield``, and
+    the caller may advance it from anywhere: another thread, or
+    ``asyncio.to_thread``, which runs each ``next()`` in a fresh copy of the
+    context. ``ContextVar.reset`` refuses a token from another context, and
+    that ValueError surfaced in the caller's loop. There, set the value the
+    token restores instead.
+    """
+    try:
+        var.reset(token)
+    except ValueError:
+        old = token.old_value
+        var.set(None if old is contextvars.Token.MISSING else old)
+
+
 #: How each kind of effect the observer can see is named in its report. The
 #: static findings are matched against these names, so an effect the static
 #: warning already listed is not reported twice (see :func:`observed_label`).
@@ -242,7 +259,7 @@ class EffectObserver:
 
     def __exit__(self, *exc_info: Any) -> bool:
         if self._tokens:
-            active_observer.reset(self._tokens.pop())
+            reset_in_any_context(active_observer, self._tokens.pop())
             io_watch.release()
         if self._outer:
             self._outer.pop()  # a frame must not outlive its call
@@ -255,7 +272,7 @@ class EffectObserver:
         return active_observer.set(None)
 
     def resume(self, token) -> None:
-        active_observer.reset(token)
+        reset_in_any_context(active_observer, token)
 
     # -- recording ---------------------------------------------------------
     def record(self, kind: str, detail: str) -> None:

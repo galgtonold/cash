@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
+from cash.effect_observer import reset_in_any_context
 from cash.tracking import io_watch
 from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run
 from cash.tracking.read_classification import (
@@ -151,7 +152,7 @@ class FileAccessTracker:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._token_stack:
-            active_tracker.reset(self._token_stack.pop())
+            reset_in_any_context(active_tracker, self._token_stack.pop())
             io_watch.release()
         if self._parent_stack:
             self._parent_stack.pop()
@@ -176,8 +177,8 @@ class FileAccessTracker:
         return active_tracker.set(parent)
 
     def resume(self, token) -> None:
-        """Undo :meth:`suspend`."""
-        active_tracker.reset(token)
+        """Undo :meth:`suspend`, in whatever context the stream is advanced from."""
+        reset_in_any_context(active_tracker, token)
 
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
