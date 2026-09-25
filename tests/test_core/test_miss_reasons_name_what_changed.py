@@ -206,6 +206,12 @@ def test_the_summary_goes_through_the_applications_handler_at_any_level(tmp_path
         return n
 
     g(1)
+    # The first write logs the disk cap on cash.storage when the cash logger
+    # is at INFO; let it land before this handler is the one listening.
+    from cash.backends._writes import all_pending_writes
+
+    for queue in all_pending_writes():
+        queue.wait_all()
     root = logging.getLogger()
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
