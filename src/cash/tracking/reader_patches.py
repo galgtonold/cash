@@ -35,7 +35,7 @@ from cash.effect_observer import active_observer as _active_effect_observer
 from cash.install_paths import is_user_path
 from cash.remote_source import remember_read_options
 from cash.tracking import io_watch
-from cash.tracking.read_credit import _frame_kind, note_untracked_read
+from cash.tracking.read_credit import frame_kind, note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "file_registry", "install_patches", "remove_patches"]
@@ -420,7 +420,7 @@ def _asked_by_user_code(frame: Any) -> bool:
     """
     while frame is not None and frame.f_globals.get("__name__") in _PATH_MACHINERY:
         frame = frame.f_back
-    return frame is not None and _frame_kind(frame.f_code.co_filename) == "user"
+    return frame is not None and frame_kind(frame.f_code.co_filename) == "user"
 
 
 def _record_negative_probe(tracker: Any, path: Any) -> None:
@@ -1015,7 +1015,7 @@ class FileDependencyRegistry:
                 and stat.S_ISREG(result.st_mode)
                 and isinstance(path, (str, bytes, os.PathLike))
                 and kwargs.get("dir_fd") is None
-                and _frame_kind(sys._getframe(1).f_code.co_filename) == "user"
+                and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
             ):
                 tracker.track_path(path)
             return result

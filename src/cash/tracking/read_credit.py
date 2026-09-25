@@ -82,7 +82,7 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
     depth = 0
     while frame is not None and depth < 64:
         code = frame.f_code
-        kind = _frame_kind(code.co_filename)
+        kind = frame_kind(code.co_filename)
         if kind == "wrapper":
             break  # the cached call's own wrapper: the walk ends
         if kind == "user":
@@ -91,11 +91,11 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
         frame, depth = frame.f_back, depth + 1
 
 
-#: code filename -> ``wrapper``/``cash``/``user``/``other``; `_frame_kind`.
+#: code filename -> ``wrapper``/``cash``/``user``/``other``; `frame_kind`.
 _frame_kinds: LruMemo[str, str] = LruMemo(SOURCE_FILES)
 
 
-def _frame_kind(filename: str) -> str:
+def frame_kind(filename: str) -> str:
     """``wrapper`` (the cached call's own), ``cash``, ``user`` or ``other``,
     remembered per filename: every read walks the stack."""
     kind = _frame_kinds.get(filename)
@@ -131,7 +131,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
         codes = []
         depth = 0
         while frame is not None and depth < 64:
-            kind = _frame_kind(frame.f_code.co_filename)
+            kind = frame_kind(frame.f_code.co_filename)
             if kind == "wrapper":
                 break
             if kind == "cash" and not codes:
