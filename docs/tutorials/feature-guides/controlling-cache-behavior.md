@@ -145,15 +145,17 @@ def announce(text):
 receipt = announce("model trained")    # badge: NOT CACHED - Calls @stateful function
 ```
 
-<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @7601d168 -->
+<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @9d937d1c -->
 Without the marker, a slow `announce` call is cached and a re-run skips the
 message: cash does not look inside `announce` for a chat client. Three things to
 know:
 
-- **Only direct calls count.** Cash checks the functions a statement calls by
-  name, such as `announce(...)`. A method call such as `bot.announce(...)` is not
-  checked, so marking a method does nothing. Call a module-level function
-  instead, or put `# @cash:no-cache` on the statement.
+- **Functions count, methods do not.** Cash checks the functions a statement
+  calls, by name (`announce(...)`) or through a module (`helpers.announce(...)`,
+  `pkg.helpers.announce(...)`), anywhere in the statement. A method called on an
+  object, such as `bot.announce(...)`, is not checked, so marking a method does
+  nothing. Call a module-level function instead, or put `# @cash:no-cache` on
+  the statement.
 - **It does not spread to callers.** A function that calls `announce` is not
   stateful itself, so a statement calling that wrapper is cached. Mark the
   wrapper too.

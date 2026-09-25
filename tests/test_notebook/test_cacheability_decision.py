@@ -165,6 +165,22 @@ class TestStatefulCall:
         )
         assert seen == ["step"]
 
+    @pytest.mark.parametrize(
+        ("code", "spelling"),
+        [
+            ("receipt = helpers.announce('x')", "helpers.announce"),
+            ("receipt = pkg.helpers.announce('x')", "pkg.helpers.announce"),
+            ("receipt = str(helpers.announce('x'))", "helpers.announce"),
+        ],
+    )
+    def test_a_call_through_a_module_is_offered_as_spelled(self, code, spelling):
+        """``helpers.announce()`` is how a function is called once it moves
+        into a module; the lookup is asked about that spelling, not only about
+        bare names."""
+        cacheable, reasons = _decide(code, outputs={"receipt"}, is_stateful_call=lambda name: name == spelling)
+        assert cacheable is False
+        assert reasons == ["Calls @stateful function"]
+
     def test_stateful_lookup_exception_does_not_crash(self):
         def bad_lookup(_name):
             raise AttributeError("boom")

@@ -41,3 +41,49 @@ def test_stateful_marker_forces_reexecution(nb_runner):
     assert "nid= 1" in out, f"stateful rerun output wrong: {out!r}"
     raw = nb_runner.get_raw_output(2)
     assert MISS in raw, "@stateful call cell was served from cache / skipped on rerun (marker promises re-execution)"
+
+
+# A @stateful helper in the user's own module, as after "Moving to a module".
+# It counts its calls with os.open/os.write, which a cache hit does not replay
+# and cash does not take for a file write, and sleeps past the store floor so
+# an unrefused statement would really be stored.
+HELPERS = """import os
+import time
+from cash import stateful
+
+@stateful
+def announce(text):
+    time.sleep(0.2)
+    fd = os.open("sent.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    os.write(fd, (text + "\\n").encode())
+    os.close(fd)
+    return 1
+"""
+
+
+@pytest.mark.parametrize(
+    ("imports", "call"),
+    [
+        ("import helpers", 'receipt = helpers.announce("trained")'),
+        ("from pkg import helpers", 'receipt = helpers.announce("trained")'),
+        ("import pkg.helpers", 'receipt = pkg.helpers.announce("trained")'),
+        ("import helpers", 'receipt = str(helpers.announce("trained"))'),
+        ("from helpers import announce", 'receipt = announce("trained")'),
+    ],
+    ids=["module", "package", "package-dotted", "nested-in-expression", "from-import"],
+)
+def test_a_stateful_function_in_a_module_runs_every_time(nb_runner, imports, call):
+    """Nothing is edited; every run must call the function again. Three runs,
+    not two: the first key of a statement reading a package submodule differs
+    from the later ones, so the second run alone would miss either way."""
+    work = nb_runner.work_dir
+    (work / "helpers.py").write_text(HELPERS, encoding="utf-8")
+    (work / "pkg").mkdir()
+    (work / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (work / "pkg" / "helpers.py").write_text(HELPERS, encoding="utf-8")
+    nb_runner.create_notebook(["import cash\n%cash_on", imports, call])
+    nb_runner.start_kernel()
+    for _ in range(3):
+        nb_runner.run_all()
+    sent = (work / "sent.log").read_text(encoding="utf-8").split()
+    assert sent == ["trained"] * 3, "the @stateful call was served from the cache"

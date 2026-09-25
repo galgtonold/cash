@@ -4,7 +4,8 @@ cacheability scan and the upstream simulation.
 :func:`resolve_callee` names the object a call expression refers to without
 running the user's code: an attribute is read with ``getattr`` only on a
 module; on anything else it is looked up statically, or not at all.
-:func:`called_names` lists the bare names a tree calls. :func:`parse_cached`
+:func:`called_names` lists the bare names a tree calls, and
+:func:`called_dotted_names` the ``module.func`` spellings. :func:`parse_cached`
 is the one bounded parse memo for statement and cell text.
 """
 
@@ -19,7 +20,14 @@ import types
 from collections.abc import Mapping
 from typing import Any, Literal
 
-__all__ = ["CallScope", "called_names", "parse_cached", "resolve_callee"]
+__all__ = [
+    "CallScope",
+    "called_dotted_names",
+    "called_names",
+    "parse_cached",
+    "resolve_callee",
+    "resolve_dotted_name",
+]
 
 #: Descriptors implemented in C that bind a method and run nothing else.
 _C_METHOD_DESCRIPTORS = (
@@ -93,6 +101,18 @@ def resolve_callee(
     return obj
 
 
+def resolve_dotted_name(name: str, namespace: Mapping[str, Any]) -> Any | None:
+    """The object ``a.b.c`` names in *namespace*, followed through modules only
+    (:func:`resolve_callee` with ``modules_only``), or None."""
+    parts = name.split(".")
+    if not all(part.isidentifier() for part in parts):
+        return None
+    node: ast.expr = ast.Name(id=parts[0], ctx=ast.Load())
+    for part in parts[1:]:
+        node = ast.Attribute(value=node, attr=part, ctx=ast.Load())
+    return resolve_callee(node, namespace)
+
+
 def _static_attribute(obj: Any, attr: str) -> Any | None:
     """``obj.attr`` as Python would bind it, when that runs no user code."""
     try:
@@ -147,6 +167,26 @@ _DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _DEFERRED = (*_DEFINITIONS, ast.Lambda)
 _CONTROL_STATEMENTS = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
 _CONTROL_BODY_FIELDS = frozenset({"body", "orelse", "finalbody", "handlers"})
+
+
+def called_dotted_names(tree: ast.AST | None) -> frozenset[str]:
+    """The dotted spellings called in *tree*: ``helpers.save(...)`` gives
+    ``"helpers.save"``, ``pkg.io.save(...)`` gives ``"pkg.io.save"``. Only a
+    chain of attributes on a bare name; ``make().save()`` has none."""
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        parts: list[str] = []
+        func: ast.expr = node.func
+        while isinstance(func, ast.Attribute):
+            parts.append(func.attr)
+            func = func.value
+        if isinstance(func, ast.Name):
+            out.add(".".join([func.id, *reversed(parts)]))
+    return frozenset(out)
 
 
 def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:

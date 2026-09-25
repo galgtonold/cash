@@ -49,6 +49,7 @@ from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 
 from ...analysis.annotations import CacheAnnotation
+from ...analysis.ast_util import resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     decide_cacheability,
@@ -1285,10 +1286,15 @@ class StatementProcessor:
         return live_function_source(name, self.shell.user_ns)
 
     def _check_callable_stateful(self, name: str) -> bool:
-        """Return True if *name* resolves to a @stateful callable; continue-safe for known-pure."""
+        """Return True if *name* resolves to a @stateful callable; continue-safe for known-pure.
+
+        A dotted *name* (``helpers.announce``) is followed through modules
+        only, never through an object: reading an attribute of an object could
+        run a property.
+        """
         if is_known_pure(name):
             return False
-        func_obj = self.shell.user_ns.get(name)
+        func_obj = resolve_dotted_name(name, self.shell.user_ns) if "." in name else self.shell.user_ns.get(name)
         return func_obj is not None and is_stateful(func_obj)
 
     def _check_redundant_import(self, run: StatementRun) -> ProcessResult | None:

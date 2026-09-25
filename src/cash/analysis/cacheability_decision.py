@@ -42,6 +42,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash.analysis.annotations import CacheAnnotation
+from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
 from cash.analysis.namespace_effects import statement_user_writer_call
 from cash.value_types import BUILTIN_NAMES, mro_kind
@@ -219,7 +220,13 @@ def decide_cacheability(
         logger.debug("Error scanning for forbidden functions: %s", exc)
 
     try:
-        for name in analysis.called_names:
+        # Bare names first, then ``helpers.announce(...)`` -- how a @stateful
+        # function is called once it moves into a module; *is_stateful_call*
+        # resolves a dotted spelling through modules only.
+        for name in (
+            *analysis.called_names,
+            *sorted(called_dotted_names(tree if tree is not None else parse_cached(code))),
+        ):
             if is_stateful_call(name):
                 return False, ["Calls @stateful function"]
         # Every spelling of the call: ``save(...)``, and ``helpers.save(...)``
