@@ -945,7 +945,7 @@ and give the captured values as arguments
 
 *Decorator.*
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @b8565683 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @ea302891 -->
 **What happened.** A parameter default of the function, or of a helper it
 calls, could not be hashed, so the call was not cached. The message names the
 type.

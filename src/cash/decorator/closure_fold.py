@@ -360,16 +360,19 @@ class HelperIdentity:
         self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, str]] = LruMemo(CODE_OBJECTS)
 
     def _capture_part(self, fn: Callable) -> str:
-        """Digest of the IMMUTABLE values a helper's closure captured, or "".
+        """Digest of the values a helper's closure captured and only reads, or "".
 
         A decorator's arguments live there: ``@scale(10)`` builds a wrapper
         whose closure holds ``k=10``, so ``@scale(100)`` -- or ``@scale(K)``
         after ``K`` changed -- ran different code under an identical source and
-        was served stale. Immutable values only, and never a variable the
-        function reassigns (``nonlocal calls; calls += 1``): decorators often
-        keep caches, counters and registries in their closures, and folding
-        state that drifts on every call would make every call miss. Captured
-        FUNCTIONS are followed as helpers in their own right, not here.
+        was served stale. So does a factory's config: ``make_scorer(cfg)``
+        with ``cfg`` a dataclass, an ``argparse.Namespace`` or any instance.
+        Never a variable the function reassigns (``nonlocal calls; calls +=
+        1``), nor a mutable value it may write to: decorators often keep
+        caches, counters and registries in their closures, and folding state
+        that drifts on every call would make every call miss. Captured
+        FUNCTIONS are followed as helpers in their own right, not here. A
+        value that cannot be hashed is left out on its own.
         """
         closure = getattr(fn, "__closure__", None)
         code = getattr(fn, "__code__", None)
@@ -388,24 +391,32 @@ class HelperIdentity:
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
             if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
-                # A container the helper only READS is data like any other:
+                # A value the helper only READS is data like any other:
                 # `lambda: when` with `when` a list, a dict -- or a datetime
                 # before the type list above had it -- gave every value ONE
                 # entry, so the standard frozen-clock fixture served July's
-                # answer to a March test. What the body mutates
-                # (a decorator's cache dict, a counter list) stays out, as
-                # before: folding it would make every call miss.
+                # answer to a March test; `x * cfg.weight` with `cfg` a
+                # frozen dataclass served the old weight. What the body
+                # mutates (a decorator's cache dict, a counter list) stays
+                # out, as before: folding it would make every call miss. An
+                # object that is not a plain container is also left out when
+                # the body calls a method on it or passes it on, which may
+                # change it where the source does not show.
                 if unsafe is None:
                     unsafe = self._captures.unsafe_uses(fn)
-                if name in unsafe or not isinstance(value, (list, dict, set, tuple, frozenset)):
+                if name in unsafe:
                     continue
-            captures.append((name, value))
+                if not isinstance(value, (list, dict, set, tuple, frozenset)):
+                    provisional = self._captures.provisional(code) or frozenset()
+                    if name in provisional:
+                        continue
+            try:
+                captures.append((name, self._args.hash_payload((value,), {})))
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                continue
         if not captures:
             return ""
-        try:
-            return self._args.hash_payload(tuple(captures), {})
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-            return ""
+        return hashlib.sha256(repr(captures).encode("utf-8")).hexdigest()
 
     def identity(self, fn: Callable) -> str:
         """A helper's identity for the key: its code, AND its parameter defaults.
@@ -436,15 +447,18 @@ class HelperIdentity:
             ]
             if bases:
                 source = f"{source}:bases:{','.join(bases)}"
-        captured = self._capture_part(fn)
-        if captured:
-            source = f"{source}:captures:{captured}"
         defaults = getattr(fn, "__defaults__", None)
         kwdefaults = getattr(fn, "__kwdefaults__", None)
         memo_key = id(fn)
         cached = self._defaults_memo.get(memo_key)
         if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
             return cached[3]
+        # After the memo: its entry already holds the captures, and hashing
+        # a captured object on every call only to throw the digest away cost
+        # as much as the object is large.
+        captured = self._capture_part(fn)
+        if captured:
+            source = f"{source}:captures:{captured}"
         pos, kwd = defaults_of(fn)
         try:
             digest = self._args.hash_payload(pos, kwd)
