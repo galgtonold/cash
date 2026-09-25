@@ -119,6 +119,13 @@ class TestClearAll:
 # ---------------------------------------------------------------------------
 
 
+def _call_lines(caplog):
+    """The decorator's per-call lines. Other ``cash`` records, such as the
+    disk cap the first store logs on ``cash.storage``, name folders whose
+    path can hold any word, "hit" included."""
+    return [r.getMessage() for r in caplog.records if r.name == "cash.calls"]
+
+
 class TestVerboseLogging:
     def test_miss_logged_at_info_when_verbose(self, tmp_path, caplog):
         """A cache miss should emit an INFO log when verbose=True."""
@@ -131,7 +138,7 @@ class TestVerboseLogging:
         with caplog.at_level(logging.INFO, logger="cash"):
             work(42)
 
-        assert any("miss" in r.message.lower() and "work" in r.message for r in caplog.records)
+        assert any(m.startswith("MISS ") and "work" in m for m in _call_lines(caplog))
 
     def test_hit_logged_at_info_when_verbose(self, tmp_path, caplog):
         """A cache hit should emit an INFO log when verbose=True."""
@@ -147,7 +154,7 @@ class TestVerboseLogging:
         with caplog.at_level(logging.INFO, logger="cash"):
             work(42)  # hit
 
-        assert any("hit" in r.message.lower() and "work" in r.message for r in caplog.records)
+        assert any(m.startswith("HIT ") and "work" in m for m in _call_lines(caplog))
 
     def test_no_logging_when_not_verbose(self, tmp_path, caplog):
         """No hit/miss INFO logs should be emitted when verbose is not set."""
@@ -161,5 +168,4 @@ class TestVerboseLogging:
             work(42)
             work(42)
 
-        hit_miss_records = [r for r in caplog.records if "hit" in r.message.lower() or "miss" in r.message.lower()]
-        assert hit_miss_records == []
+        assert _call_lines(caplog) == []
