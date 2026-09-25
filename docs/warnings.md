@@ -565,10 +565,13 @@ not prove the function is pure.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @f11ee074 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @6045b36f -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
-line that changes it, which may be in a helper.
+line that changes it, which may be in a helper. A callable object that changes
+what it holds when called (an instance memoising into `self`, a library
+wrapper filling its cache) is not reported: cash just stops folding what it
+holds, after one extra miss.
 
 **Why it matters.** A hit skips the change, so a counter stops counting. Cash
 also stops folding that variable into the key, so a change you make to it
@@ -960,7 +963,7 @@ is the classic case.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3068be4c -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @890a1a88 -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 

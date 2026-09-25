@@ -135,21 +135,64 @@ MACHINERY_DUNDERS = frozenset(
 )
 
 
-def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
+def carried_payload(value: Any) -> Any:
+    """The data a callable carries besides its code, or None when it carries none.
+
+    A partial's function and arguments; a bound method's instance (any
+    class -- the same as that instance read as a global); a callable
+    instance's own attributes, for USER classes only: a library's callable
+    instance (`np.vectorize`) keeps lazy caches that change after its first
+    call, which would make every call miss -- of those, only the partials
+    they hold, which are data the user built them with. A function, a
+    class, a method of a class or module, a mock: None.
+    """
+    if isinstance(value, functools.partial):
+        return ("partial", value.func, value.args, dict(value.keywords))
+    if isinstance(value, types.MethodType):
+        owner = value.__self__
+        if isinstance(owner, (type, types.ModuleType)):
+            return None
+        return ("method", owner)
+    if isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType)) or is_mock(value):
+        return None
+    if not callable(value):
+        return None
+    if is_user_class(type(value), own_package(type(value))):
+        state = getattr(value, "__dict__", None)
+        if isinstance(state, dict):
+            return ("instance", dict(state))
+        return ("instance", reduced_state(value))
+    held = held_partials(value)
+    return ("wrapped partials", held) if held else None
+
+
+def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried: bool = True) -> Any:
     """Rewrite *v* so callables (incl. lambdas held in containers) are
-    replaced by their source hash, making a container of callables hashable
-    and content-sensitive (dict-dispatch channel)."""
+    replaced by their code identity, making a container of callables
+    hashable and content-sensitive (dict-dispatch channel).
+
+    A callable is its code AND what it carries (`carried_payload`): a
+    ``Scaler(10)`` with ``__call__`` became its class's code alone, so
+    ``Scaler(11)`` -- held in a dict, a list, or read as a global -- kept
+    the same key; so did ``{"scale": partial(mul, k=10)}`` after ``k=11``.
+    *carried* False keeps the code alone, the fallback for a carried state
+    that cannot be hashed.
+    """
     if _depth > 8:
         return v
     if callable(v) and not isinstance(v, type):
         try:
-            return ("__cash_callable__", hash_callable(v))
+            ident: Any = hash_callable(v)
         except (OSError, TypeError, ValueError):
-            return ("__cash_callable__", getattr(v, "__qualname__", repr(v)))
+            ident = getattr(v, "__qualname__", repr(v))
+        payload = carried_payload(v) if carried else None
+        if payload is None:
+            return ("__cash_callable__", ident)
+        return ("__cash_callable__", ident, stabilize_for_global_hash(payload, hash_callable, _depth + 1))
     if isinstance(v, dict):
-        return {k: stabilize_for_global_hash(val, hash_callable, _depth + 1) for k, val in v.items()}
+        return {k: stabilize_for_global_hash(val, hash_callable, _depth + 1, carried=carried) for k, val in v.items()}
     if isinstance(v, (list, tuple)):
-        return type(v)(stabilize_for_global_hash(x, hash_callable, _depth + 1) for x in v)
+        return type(v)(stabilize_for_global_hash(x, hash_callable, _depth + 1, carried=carried) for x in v)
     return v
 
 
@@ -455,14 +498,25 @@ class GlobalsFold:
                 if carried is not None:
                     parts.append((f"{name}#carried", carried))
                     watch[name] = (carried, "carrier", (g, name), None)
-                continue
+                    continue
+                # An instance of the user's own callable class is data as well
+                # as code: `x * SCALE.k` reads its attributes without calling
+                # it, so no helper binding keys them. Folded like any data
+                # global; plain callables are the helper walk's.
+                payload = carried_payload(v)
+                if payload is None or payload[0] != "instance":
+                    continue
             try:
                 stabilized = stabilize_for_global_hash(v, self.data_callable_identity)
                 h = self._args.hash_payload((stabilized,), {})
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
                 # what makes the post-call check cost one hash instead of two.
-                if provisional is None or name in provisional:
+                if callable(v) and not isinstance(v, (dict, list, tuple, set)):
+                    # Calling it may move what it holds (a memo in `self`):
+                    # always watched, and dropped quietly, like a carrier.
+                    watch[name] = (h, "instance", g, func)
+                elif provisional is None or name in provisional:
                     # `g`, not the decorated function's globals: this may be a
                     # helper's module (see `GlobalsFold.fold_helper_read_globals`).
                     watch[name] = (h, "global", g, func)
@@ -584,15 +638,27 @@ class GlobalsFold:
         # rest (`F = partial(base, k=2)` -> `k=3`, and `F = S(2).f`, were both
         # served stale).
         carried: list[str] = []
+        # A callable that changes what it carries when called -- an instance
+        # memoising into its own dict -- would key each call on the last one's
+        # output: watched like a library carrier, and dropped once it moves.
+        learned = self._mutations.of(owner_code, "global")
+        watch: dict[str, tuple] = {}
         for module_name, chain, _ref in report.helper_bindings:
             if (module_name, chain) in report.waived_bindings:
+                continue
+            label = f"{module_name}.{'.'.join(chain)}"
+            if label in learned:
                 continue
             live = resolve_binding(module_name, chain)
             if live is func:
                 continue
-            digest = self._carried_state_digest(live)
+            digest = self.carried_state_digest(live)
             if digest is not None:
-                carried.append(f"{module_name}.{'.'.join(chain)}={digest}")
+                carried.append(f"{label}={digest}")
+                watch[label] = (digest, "binding", (module_name, chain), None)
+        pending = CAPTURE_WATCH.get()
+        if pending is not None and watch:
+            pending.update(watch)
         if carried:
             state_hash = hashlib.sha256(f"{state_hash}:carried:{':'.join(sorted(carried))}".encode("utf-8")).hexdigest()
         # Helpers with no path of their own -- the function inside a decorator,
@@ -615,37 +681,15 @@ class GlobalsFold:
             )
         return state_hash
 
-    def _carried_state_digest(self, value: Any) -> str | None:
+    def carried_state_digest(self, value: Any) -> str | None:
         """Digest of the data a callable carries besides its code, or None.
 
-        A partial's arguments; a bound method's instance (any class -- the
-        same as that instance read as a global); a callable instance's own
-        state, for USER classes only: a library's callable instance
-        (`np.vectorize`) keeps lazy caches that change after its first call,
-        which would make every call miss. Silent on failure: the code is
-        still keyed, and a warning here would fire on every class-based
-        decorator whose state is just the function it wraps.
+        See `carried_payload`. Silent on failure: the code is still keyed,
+        and a warning here would fire on every class-based decorator whose
+        state is just the function it wraps.
         """
-        if isinstance(value, functools.partial):
-            payload: Any = (value.args, dict(value.keywords))
-        elif isinstance(value, types.MethodType):
-            owner = value.__self__
-            if isinstance(owner, (type, types.ModuleType)):
-                return None
-            payload = owner
-        elif (
-            callable(value)
-            and not isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType))
-            and not is_mock(value)
-            and is_user_class(type(value), own_package(type(value)))
-        ):
-            payload = value
-        elif callable(value) and not is_mock(value) and held_partials(value):
-            # A LIBRARY wrapper around the user's code keeps its own caches,
-            # but the partials it holds are data the user built it with:
-            # `np.vectorize(partial(scale, k=K))` ran with the old K.
-            payload = ("wrapped partials", held_partials(value))
-        else:
+        payload = carried_payload(value)
+        if payload is None:
             return None
         try:
             stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
@@ -667,7 +711,7 @@ class GlobalsFold:
         function, a class, a module, a mock, a cached function, a method of a
         class or module, a C object without a ``__dict__`` (``np.add``), and
         any callable that runs USER code, whose binding the helper walk notes
-        and `_carried_state_digest` keys.
+        and `carried_state_digest` keys.
 
         Some of these change when called -- a bound ``rng.normal`` advances
         its generator, ``np.vectorize`` fills a cache -- so every one is

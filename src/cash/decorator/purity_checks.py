@@ -376,6 +376,8 @@ class PurityChecks:
                     if key not in mapping:
                         continue
                     after = self._globals.carried_global_hash(mapping[key], getattr(func, "__module__", None))
+                elif scope == "binding":
+                    after = self._globals.carried_state_digest(resolve_binding(*owner))
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.
@@ -389,9 +391,11 @@ class PurityChecks:
                 continue
             if after == before:
                 continue
-            if scope == "carrier":
-                # The library's own state (a generator advanced, a cache
-                # filled), not a mutation the user wrote: stop folding it.
+            if scope in ("carrier", "binding", "instance"):
+                # What a callable carries, moved by calling it: a library's
+                # own state (a generator advanced, a cache filled) or a memo
+                # a callable instance keeps in `self`. Not a result input the
+                # user rebinds: stop folding it.
                 self._mutations.learn(code, "global", name)
                 logger.debug("[CORE] %s: stopped keying what %s carries; calling it changes it", func_name, name)
                 continue
