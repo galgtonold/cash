@@ -27,7 +27,10 @@ import pytest
 
 pytestmark = pytest.mark.libraries
 
-COST = 2.0  # stands in for a slow fit, scaled for test speed
+# Stands in for a slow fit. Large enough that cash's own overhead in a loaded,
+# coverage-traced kernel (measured up to 2.4s for this notebook) stays well
+# below it, so the net headline is a win whatever the machine is doing.
+COST = 5.0
 
 SETUP = "import cash\n%cash_on"
 DEFINE = f"import time\n@cash.cache\ndef train(x):\n    time.sleep({COST})\n    return x * 3\nprint('defined')"
