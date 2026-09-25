@@ -5,7 +5,7 @@
 
 ## Asking a decorated function
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @7736721e -->
 `func.explain(*args, **kwargs)` answers "would a call with these arguments hit,
 and why?" without calling the function, changing its counters or writing
 anything:

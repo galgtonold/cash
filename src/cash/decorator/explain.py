@@ -4,6 +4,7 @@ descriptions of what changed."""
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import time
 from collections import OrderedDict
@@ -620,6 +621,74 @@ class MissHistory:
         self.remember_outcome(cache_key, {"not_stored": refusal})
 
 
+def _owner_class(func: Callable[..., Any]) -> type | None:
+    """The class a plain function was defined in, found through its
+    ``__qualname__`` from its module's globals; None for a module-level or
+    local function, or one whose class cannot be reached."""
+    parts = getattr(func, "__qualname__", "").split(".")
+    if len(parts) < 2 or "<locals>" in parts:
+        return None
+    owner: Any = getattr(func, "__globals__", {}).get(parts[0])
+    for part in parts[1:-1]:
+        owner = getattr(owner, part, None)
+    return owner if isinstance(owner, type) else None
+
+
+def check_explain_arguments(cf: CachedFunction, args: tuple, kwargs: dict) -> None:
+    """Refuse arguments no call of *cf* could be made with.
+
+    ``m.score.explain(2)`` for a cached method: the instance is not passed,
+    since ``explain`` is an attribute of the function, not of the bound
+    method, so ``2`` was taken as ``self`` and the answer (``no_entry``) was
+    for another call than ``m.score(2)``, which then hit. A method is
+    explained through its class, ``Model.score.explain(m, 2)``.
+
+    Raises:
+        TypeError: the arguments do not bind to the signature, or a method's
+            first argument is not an instance (or subclass, for ``cls``) of
+            the class it is defined in.
+    """
+    func = cf.func
+    signature = cf.signature
+    if signature is not None:
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError as exc:
+            raise TypeError(
+                f"{cf.name}.explain(...): these arguments cannot call it: {exc}.{_method_hint(cf)}"
+            ) from None
+    if not inspect.isfunction(func) or signature is None:
+        return
+    owner = _owner_class(func)
+    params = list(signature.parameters.values())
+    if owner is None or not params or not args or params[0].name not in ("self", "cls"):
+        return
+    first = args[0]
+    if params[0].name == "self" and isinstance(first, owner):
+        return
+    if params[0].name == "cls" and isinstance(first, type) and issubclass(first, owner):
+        return
+    raise TypeError(
+        f"{cf.name}.explain(...): the first argument is {type(first).__name__} {first!r}, "
+        f"not the {owner.__name__} {'class' if params[0].name == 'cls' else 'instance'} "
+        f"the method is called on.{_method_hint(cf)}"
+    )
+
+
+def _method_hint(cf: CachedFunction) -> str:
+    owner = _owner_class(cf.func) if inspect.isfunction(cf.func) else None
+    if owner is None:
+        return ""
+    name = cf.func.__name__
+    first = next(iter(cf.signature.parameters), None) if cf.signature is not None else None
+    if first == "cls":
+        return f" For a classmethod, pass the class: {owner.__name__}.{name}.__func__.explain({owner.__name__}, ...)."
+    return (
+        f" For a method, pass the instance: {owner.__name__}.{name}.explain(obj, ...). "
+        f"obj.{name}.explain(...) does not pass it."
+    )
+
+
 class Explainer:
     """``f.explain()``: why the next call with some arguments would hit or miss."""
 
@@ -654,6 +723,7 @@ class Explainer:
         See `CacheExplanation` for the return shape.
         """
         func, func_name, dynamic_depends_on, ttl = cf.func, cf.name, cf.dynamic_depends_on, cf.ttl
+        check_explain_arguments(cf, args, kwargs)
         if self._config.disable:
             return CacheExplanation(
                 would_hit=False,

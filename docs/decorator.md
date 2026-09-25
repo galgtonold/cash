@@ -419,7 +419,7 @@ double.cache_info()
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @7736721e -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 
@@ -442,6 +442,12 @@ double.explain(5)
 `key_uncomputable` or `disabled`. For `file_changed`, `details["changed_files"]`
 names each changed file. See
 [`CacheExplanation`](api/cash.md#cash.CacheExplanation).
+
+<!-- claim: cash/decorator/explain.py:check_explain_arguments @f3526db8 -->
+For a cached method, explain through the class and pass the instance:
+`Model.score.explain(m, 2)` explains `m.score(2)`. `m.score.explain(2)` cannot
+pass the instance, and raises `TypeError`, as do arguments the function
+cannot be called with.
 
 **`f.cache_clear()`** deletes the function's entries from every tier, including
 iterator chunks, and resets its counters and warning log.

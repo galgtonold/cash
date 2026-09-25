@@ -84,7 +84,7 @@ cash warns once per function
 value is never folded in as if there were no dependency. Wrap the value in a
 `DataSource`, as above.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @4c427520 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @7736721e -->
 `f.explain(...)` reports such a call as `key_uncomputable`, with the reason.
 
 ## Combining with other options
