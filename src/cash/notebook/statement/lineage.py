@@ -151,16 +151,23 @@ class StatementLineageBuilder:
             if var_name in user_ns and var_name not in inputs:
                 clear_edges_for(tracking_state.derivation_edges, var_name)
 
+        # The inputs as the statement read them, taken once before any output
+        # is recorded. Read inside the loop, an output that is also an input
+        # (``M = enc.fit_transform(data)`` writes ``enc`` too) would hand its
+        # NEW lineage to the outputs recorded after it, so each output's lineage
+        # hung on set iteration order -- which string hashing randomises per
+        # process. The simulation reads its inputs once, before the statement.
+        input_lineage_hashes, input_lineage_map = self._build_input_lineages(
+            tracking_state, lineage_inputs, user_ns, code
+        )
+
         for var_name in outputs:
             if var_name not in user_ns:
                 continue
             value = user_ns[var_name]
             captured_vars[var_name] = value
 
-            input_lineage_hashes, input_lineage_map = self._build_input_lineages(
-                tracking_state, lineage_inputs, user_ns, code
-            )
-            tracking_state.executed_input_lineages[var_name] = input_lineage_map
+            tracking_state.executed_input_lineages[var_name] = dict(input_lineage_map)
 
             # The formula and its ingredients are shared with the simulator
             # (lineage_formula), which must arrive at the same hash.
