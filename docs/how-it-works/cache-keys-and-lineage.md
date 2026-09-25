@@ -32,7 +32,7 @@ iteration's values and for the arguments of a cached call inside a statement.
 
 | Type | Library | What is hashed |
 |------|---------|----------------|
-| `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value (`pd.util.hash_pandas_object`) |
+| `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: Python objects and strings by their pickled form, so `1` and `'1'` differ |
 | `ndarray` | numpy | shape, dtype, memory order and every byte |
 | `DataFrame`, `Series` | polars | schema and every row |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, not the contents |

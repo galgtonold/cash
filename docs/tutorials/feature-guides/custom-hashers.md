@@ -69,7 +69,7 @@ your own `Cash(...)` instance, call `app.register_hasher(...)` instead.
   identity only if it really identifies the value, such as a version you
   control.
 
-<!-- claim: cash/object_hashing.py:hash_numpy @8f6f3203 -->
+<!-- claim: cash/object_hashing.py:hash_numpy @f6df9c37 -->
 To check a hasher, call it on two equal but separately built instances. The
 strings must match. `evaluate.explain(model, data).cache_key` shows the key a
 call would use.

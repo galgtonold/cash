@@ -298,6 +298,9 @@ def hash_pandas(value: Any) -> str | None:
     one's ``TypeError: Cannot convert tz-naive timestamps``; so did
     ``int64``/``Int64`` (pd.NA semantics), ``int64``/``int32`` and a
     categorical against an object column.
+
+    The values are hashed column by column and index level by index level
+    (`_fold_pandas_values`), each in the form that keeps it exact.
     """
     try:
         import pandas as pd
@@ -317,26 +320,100 @@ def hash_pandas(value: Any) -> str | None:
         h = hashlib.sha256(schema.encode("utf-8"))
         if value.attrs:
             h.update(pickle.dumps(stable_key_repr(value.attrs), protocol=4))
-        h.update(pd.util.hash_pandas_object(value).values.tobytes())
+        _fold_pandas_values(h, value, pd)
         return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, pickle.PicklingError):
         logger.debug("Failed to hash pandas %s via hash_pandas_object", type(value).__name__)
         return None
 
 
+def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
+    """Fold a frame's or series' values, then its index's, into *h*.
+
+    ``hash_pandas_object`` keys an array of Python objects by ``str()`` of
+    each: when one value is not a string it stringifies the whole column, so
+    ``1`` and ``'1'``, ``True`` and ``'True'``, ``b'a'`` and ``'a'``, or a date
+    and its ISO string hashed alike, and ``s * 2`` was served ``2`` for
+    ``'11'``. The same held for an index of them. Such an array -- object
+    dtype, and pandas' string dtypes, whose values are Python strings -- is
+    keyed by its items' pickled form instead (`_object_items_bytes`), which is
+    also several times faster than ``hash_pandas_object`` on strings. A
+    categorical is keyed by its codes, the categories being in the schema.
+    Everything else keeps ``hash_pandas_object``'s per-value hash, which reads
+    the raw bits of numbers and dates.
+    """
+    if type(value).__name__ == "DataFrame":
+        rest = []
+        for pos, dtype in enumerate(value.dtypes):
+            if _pandas_value_route(dtype, pd) is None:
+                rest.append(pos)
+            else:
+                h.update(f"|{pos}|".encode())
+                _fold_pandas_array(h, value.iloc[:, pos], pd)
+        if rest:
+            others = value if len(rest) == value.shape[1] else value.iloc[:, rest]
+            h.update(pd.util.hash_pandas_object(others, index=False).to_numpy().tobytes())
+    else:
+        _fold_pandas_array(h, value, pd)
+    index = value.index
+    if isinstance(index, pd.MultiIndex):
+        # Each level's distinct values, then which one each row holds.
+        for level, codes in zip(index.levels, index.codes):
+            h.update(b"|level|")
+            _fold_pandas_array(h, level, pd)
+            h.update(codes.tobytes())
+    elif isinstance(index, pd.RangeIndex):
+        h.update(f"|range({index.start}, {index.stop}, {index.step})".encode())
+    else:
+        h.update(b"|index|")
+        _fold_pandas_array(h, index, pd)
+
+
+def _pandas_value_route(dtype: Any, pd: Any) -> str | None:
+    """How `_fold_pandas_array` keys values of *dtype*: ``"objects"``,
+    ``"codes"``, or None for ``hash_pandas_object``."""
+    if isinstance(dtype, pd.CategoricalDtype):
+        return "codes"
+    if str(dtype) == "object" or isinstance(dtype, pd.StringDtype):
+        return "objects"
+    return None
+
+
+def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
+    """Fold one Series' or Index's values into *h* (`_fold_pandas_values`)."""
+    route = _pandas_value_route(values.dtype, pd)
+    if route == "codes":
+        codes = values.codes if isinstance(values, pd.Index) else values.cat.codes.to_numpy()
+        h.update(codes.tobytes())
+    elif route == "objects":
+        h.update(_object_items_bytes(values.to_numpy(dtype=object).tolist()))
+    else:
+        h.update(pd.util.hash_pandas_object(values, index=False).to_numpy().tobytes())
+
+
+def _object_items_bytes(items: list) -> bytes:
+    """The bytes a list of Python objects keys on: plain data pickled as it
+    is (`_plain_data`, C speed), anything else in its canonical form
+    (`stable_key_repr`), so sets and dicts inside are in a stable order."""
+    if _plain_data.is_plain(items):
+        return b"P" + _plain_data.pickle_unshared(items)
+    return b"S" + pickle.dumps(stable_key_repr(items), protocol=4)
+
+
 def _pandas_dtype_key(dtype: Any) -> str:
     """A pandas dtype as a key reads it: ``repr``, and all of a categorical.
 
     ``str`` is ``'category'`` for every categorical, and ``repr`` elides
-    a long list of categories, so the categories and the ``ordered`` flag
-    are spelled out: ``get_dummies``, ``value_counts`` and ``cat.codes``
+    a long list of categories, so the categories (every one, by content) and
+    the ``ordered`` flag are spelled out: ``get_dummies``, ``value_counts`` and ``cat.codes``
     read them, and two series of the same values over different categories
     were served each other's columns.
     """
     categories = getattr(dtype, "categories", None)
     if categories is None or getattr(dtype, "name", None) != "category":
         return repr(dtype)
-    return f"category:{dtype.ordered!r}:{_pandas_dtype_key(categories.dtype)}:{categories.tolist()!r}"
+    listed = hashlib.sha256(_object_items_bytes(categories.tolist())).hexdigest()
+    return f"category:{dtype.ordered!r}:{_pandas_dtype_key(categories.dtype)}:{listed}"
 
 
 def array_layout(value: Any) -> str:
@@ -414,7 +491,7 @@ def hash_numpy(value: Any) -> str | None:
             # content onto one key. Hash the elements' stable representation
             # instead (canonicalising nested sets/dicts so the key is order-
             # and PYTHONHASHSEED-independent).
-            h.update(pickle.dumps(stable_key_repr(value.tolist()), protocol=4))
+            h.update(_object_items_bytes(value.tolist()))
             return h.hexdigest()
         try:
             h.update(memoryview(value).cast("B"))  # no copy if C-contiguous
