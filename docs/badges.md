@@ -129,6 +129,16 @@ has different contents. A new timestamp alone does not count for a file up to
 hashed in three sampled regions, so touching it or re-downloading an identical
 copy runs the statement once more.
 
+### Evicted to make room
+
+<!-- claim: cash/notebook/statement/evictions.py:EVICTED_MISS_REASON @ed666be3, cash/notebook/statement/evictions.py:EvictedRecomputes.attribute @c24d956b -->
+The row's reason reads `evicted to make room when the disk cache reached its
+size cap`: the value was on disk, and the cache's size cap removed it to make
+room for newer results. It shows after a restart, when only the disk copy could
+have restored it. A recompute of two seconds or more also warns once
+([`CACHE-EVICTED-RECOMPUTE`](warnings.md#cache-evicted-recompute)), naming the
+cap and how to raise it.
+
 ### Function source changed
 
 <iframe class="cash-badge" src="/_badges/miss_function_source_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>

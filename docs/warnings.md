@@ -3,7 +3,7 @@
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. The index says which path each code comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @008fc437 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @91940b7d -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -36,6 +36,7 @@ including code added to it later.
 | [ANNOT-UNKNOWN-DIRECTIVE](#annot-unknown-directive) | both | `CashCacheIneffectiveWarning` | `# @cash:<name>` is not a directive; ignored |
 | [CACHE-ASYNC-GENERATOR](#cache-async-generator) | decorator | `CashCacheIneffectiveWarning` | async generators are not cached |
 | [CACHE-DIR-UNWRITABLE](#cache-dir-unwritable) | both | `CashCacheStoreFailedWarning` | the cache directory cannot be written |
+| [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | `CashCacheIneffectiveWarning` | the size cap had evicted a costly result, so it was computed again |
 | [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | `CashCacheIneffectiveWarning` | checking tracked files costs much of what a hit saves |
 | [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | `CashCacheIneffectiveWarning` | a live matplotlib figure is never stored |
 | [CACHE-IF-BYPASSED](#cache-if-bypassed) | decorator | `CashCacheIneffectiveWarning` | a chunked result was stored without running `cache_if` |
@@ -170,6 +171,31 @@ In a container, check the cache path is on a writable volume.
 
 **When it is safe to ignore.** When the directory is read-only on purpose: a
 shared cache you only read from.
+
+## CACHE-EVICTED-RECOMPUTE {#cache-evicted-recompute}
+
+*Both paths.*
+
+<!-- claim: cash/backends/budget_notices.py:evicted_recompute_warning @0dd945bf, cash/effectiveness.py:CUMULATIVE_WASTE_SECONDS == 2.0, cash/decorator/reporting.py:Notices.evicted_recompute @94976b5e, cash/notebook/statement/evictions.py:EvictedRecomputes.attribute @c24d956b -->
+**What happened.** A result was stored on disk, then removed when the cache
+reached its size cap, and now it was needed again and had to be computed
+again. Recomputing it took at least two seconds. The message names the
+function or statement, the time it took and the cap.
+
+**Why it matters.** The cap removes the entries worth least per byte, but
+something was still lost: you waited for work the cache had once held. If it
+keeps happening, the cap is too small for what you use.
+
+**What to do.** Raise `max_cache_size` above the cap named, if the disk has
+room (the message says how much is free). If it does not, cache smaller
+results, or move `cache_dir` to a bigger volume.
+
+<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @de955740 -->
+**When it is safe to ignore.** When the result is rarely needed and a
+recompute now and then is cheaper than the disk it would take. It is said once
+per function or statement per process. Cheaper recomputes are not warned
+about, but `f.explain()`, the per-call log and a notebook badge still say
+"evicted to make room" for them.
 
 ## CACHE-FRESHNESS-COST {#cache-freshness-cost}
 

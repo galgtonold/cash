@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
+from ..backends import adaptive_caps, budget_notices
 from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_message
 from ..exceptions import CashCacheIneffectiveWarning
 from .cached_function import WARNINGS_MAX
@@ -257,6 +258,24 @@ class Notices:
             code="STORE-METADATA-INVALID",
             fix="nothing, for a one-off; if it keeps appearing, run "
             "f.cache_clear() so the unreadable records are replaced.",
+        )
+
+    def evicted_recompute(self, func_name: str, seconds: float) -> None:
+        """A result the disk cap had evicted was computed again, and it took
+        long enough to matter (CACHE-EVICTED-RECOMPUTE). Once per function."""
+        if seconds < budget_notices.EVICTED_RECOMPUTE_WARN_SECONDS:
+            return
+        backend = self._backend_slot.built
+        try:
+            budget = backend.disk_budget() if backend is not None else None
+        except Exception:  # noqa: BLE001 - the warning must not fail the call
+            budget = None
+        free = adaptive_caps.free_bytes_on_volume(budget.cache_dir) if budget is not None else 0
+        message, fix = budget_notices.evicted_recompute_warning(
+            f"@cash.cache on {func_name}: the result for these arguments", seconds, budget, free
+        )
+        self.warn_once(
+            CashCacheIneffectiveWarning, func_name, "evicted", message, code="CACHE-EVICTED-RECOMPUTE", fix=fix
         )
 
     def lock_failed(

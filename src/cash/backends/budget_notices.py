@@ -9,6 +9,10 @@ once per process per cache folder:
   where that number comes from and how to change it (`describe_budget`);
 * **the first eviction**: how much the cap made cash remove (`eviction_text`).
 
+And one warning, ``CACHE-EVICTED-RECOMPUTE``, when an entry the cap evicted is
+needed again and recomputing it took long enough to matter
+(`evicted_recompute_warning`).
+
 Quiet means not a warning: nothing is wrong. They are INFO records on the
 ``cash.storage`` logger, which ``verbose=True``, ``debug=True`` or an
 application logging at INFO shows, and the notebook prints them into the cell
@@ -23,14 +27,17 @@ import threading
 from typing import NamedTuple
 
 from ..config import format_size, human_bytes
+from ..effectiveness import CUMULATIVE_WASTE_SECONDS
 
 __all__ = [
+    "EVICTED_RECOMPUTE_WARN_SECONDS",
     "DiskBudget",
     "announce_budget",
     "cap_text",
     "claim_budget_notice",
     "claim_eviction_notice",
     "describe_budget",
+    "evicted_recompute_warning",
     "eviction_text",
     "storage_logger",
 ]
@@ -73,6 +80,40 @@ def eviction_text(cache_dir: str, cap: str, freed: int, count: int) -> str:
         f"time saved for the space they take. Later removals are not reported; set "
         f"max_cache_size to change the cap."
     )
+
+
+#: A recompute of an evicted result shorter than this is not worth a warning.
+#: The same floor the effectiveness ledger uses for "worth interrupting
+#: anyone": the user pays the seconds either way, and two of them lost to a
+#: too-small cap is when knowing pays for the noise. The persistence floor
+#: (0.1 s) would warn on nearly every entry a busy cache evicts.
+EVICTED_RECOMPUTE_WARN_SECONDS = CUMULATIVE_WASTE_SECONDS
+
+
+def evicted_recompute_warning(what: str, seconds: float, budget: DiskBudget | None, free: int) -> tuple[str, str]:
+    """``(what happened, fix)`` for CACHE-EVICTED-RECOMPUTE, both paths.
+
+    *what* names the result (a function's call, a statement's value). Keep it
+    and docs/warnings.md#cache-evicted-recompute saying the same thing.
+    """
+    cap = cap_text(budget.cap, budget.why is not None) if budget is not None else None
+    at = f"its {cap} cap" if cap else "its size cap"
+    message = (
+        f"{what} had been evicted from the disk cache to make room -- the cache is at {at} -- "
+        f"so it was computed again, which took {seconds:.1f}s."
+    )
+    above = f" above {cap}" if cap else ""
+    if budget is None or free >= budget.cap:
+        fix = (
+            f"raise max_cache_size{above} so results like this one stay cached "
+            f"(there is {human_bytes(free)} free on that volume), or cache smaller results."
+        )
+    else:
+        fix = (
+            f"cache smaller results, or point cache_dir at a roomier volume: only "
+            f"{human_bytes(free)} is free on this one, so raising max_cache_size may not help."
+        )
+    return message, fix
 
 
 _lock = threading.Lock()

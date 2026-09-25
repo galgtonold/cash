@@ -153,7 +153,7 @@ is the folder this run actually used. The summary also lists results that were
 computed but not stored. It prints on any normal exit or uncaught exception,
 not when the process is killed. `summary=True` in code or config does the same.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @d4759f47 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @de955740 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
@@ -169,7 +169,7 @@ The id in brackets is the one `cash inspect --function` lists and
 `cash clear --entry` takes. After `--`, a miss names what changed: `its own
 source changed`, `helper model._rank changed`, `environment variable TENANT
 changed`, and so on. This works across runs too, including `ttl expired` and
-evicted entries.
+entries the size cap evicted (`evicted to make room`).
 
 <!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a -->
 If your program configures `logging`, these lines go to your handlers in your

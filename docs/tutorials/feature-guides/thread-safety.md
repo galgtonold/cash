@@ -11,7 +11,7 @@ twice, which matters for a 30-second fit or a paid API call.
 
 ## `use_locking=True`: compute once
 
-<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @6199988d -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @7476abe8 -->
 Turn on locking on the `Cash` instance. It is not a decorator parameter, and it
 applies to every function registered through that instance:
 

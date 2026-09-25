@@ -639,6 +639,9 @@ class CallRunner:
                 saves_seconds=run.saves_seconds,
                 rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
             )
+        # A result the disk cap had evicted, computed again: say what that cost.
+        if self._misses.pending_eviction(call.cache_key) is not None:
+            self._notices.evicted_recompute(func_name, run.body_seconds)
         # Everything that was not the body: the key and lookup before it, the
         # checks and the store after it.
         miss_overhead = max(call.cash_overhead, _perf_counter() - call.call_start - run.body_seconds)

@@ -319,7 +319,7 @@ class Cash:
         # The keys earlier runs stored, recorded beside the cache.
         self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
         self._notices = Notices(self._registry.cached, self.functions, self._stored_keys, self._backend_slot)
-        self._misses = MissHistory(self._registry.cached, self._stored_keys)
+        self._misses = MissHistory(self._registry.cached, self._stored_keys, self._backend_slot)
         effectiveness = EffectivenessLedger()
         self._calls = CallLog(self.config, self._registry.cached, self._misses, effectiveness)
         self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)

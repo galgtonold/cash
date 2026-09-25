@@ -125,7 +125,7 @@ keeps it in memory if it fits and warns once
 
 ## When the disk fills up
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @d859ee8a -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @290394ae -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -155,6 +155,15 @@ notice, not a warning: a cache at its cap is doing its job.
     A line at the end of the cell whose results filled the cache:
 
         [cash] The cache in /work/.cash reached its 26.0 GiB cap, so cash removed 41 entries (2.6 GiB), ...
+
+<!-- claim: cash/backends/eviction_log.py:EvictionLog.record @cc6659e6, cash/backends/file_eviction.py:FileEvictor.clear @03ded076, cash/backends/eviction_log.py:EvictionLog.MAX_NOTES == 10000, cash/backends/file_backend.py:FileBackend.eviction_note @7f6d5fd0 -->
+Cash also notes each entry the cap removes: a hash of its key, when, how long
+it took to compute, and its size, never the arguments or the value. It keeps
+the newest 10,000 such notes, in `_evicted.log` inside the cache folder, and
+`cash clear` removes them with the rest. When a later run misses on a noted
+entry, the miss says "evicted to make room", and a recompute of two seconds or
+more warns once
+([`CACHE-EVICTED-RECOMPUTE`](../warnings.md#cache-evicted-recompute)).
 
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.touched_since @1e44fa35 -->
 The value just written is not protected. If it is the least valuable entry, it

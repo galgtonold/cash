@@ -260,6 +260,12 @@ class CacheBackend(ABC):
         or None: only a tier that keeps entries on local disk has one."""
         return None
 
+    def eviction_note(self, key: str) -> Any:
+        """The `eviction_log.EvictionNote` for *key* if a size cap evicted its
+        entry, else None. Asked on a miss, to say so; the default knows of
+        no evictions."""
+        return None
+
     def take_storage_notices(self) -> list[str]:
         """Notices about the disk cap not yet shown (the first eviction),
         removed, for a front end that prints them. The default has none."""

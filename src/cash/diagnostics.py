@@ -140,6 +140,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "ANNOT-UNKNOWN-DIRECTIVE",  # `# @cash:<name>` is not a directive; ignored
         # -- CACHE: caching happened, or refused to, and it is worth saying -----
         "CACHE-ASYNC-GENERATOR",  # async generators are returned unwrapped
+        "CACHE-EVICTED-RECOMPUTE",  # the cap had evicted a costly result, so it
+        # was computed again
         "CACHE-IDENTITY-COUPLED",  # result is a live Figure/Axes; storing it would
         # detach the library's copy from yours
         "CACHE-IF-BYPASSED",  # result outgrew a chunk, so cache_if never ran

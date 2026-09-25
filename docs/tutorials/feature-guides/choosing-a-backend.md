@@ -83,7 +83,7 @@ app = Cash(backend=FileBackend(
 ))
 ```
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.evict @d859ee8a, cash/backends/file_eviction.py:FileEvictor.rebuild_queue @a5ec5c6f -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.evict @290394ae, cash/backends/file_eviction.py:FileEvictor.rebuild_queue @a5ec5c6f -->
 One file per entry in `cache_dir`, which you can inspect and delete by hand.
 The disk write runs on a background thread. Reads and writes stay fast as the
 folder fills, because the file name comes from the key. When the folder passes

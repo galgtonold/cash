@@ -25,6 +25,7 @@ from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
+from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.hit import CacheHitServer
@@ -185,6 +186,7 @@ class StatementProcessor:
         except (AttributeError, TypeError):
             _guard_dir = None
         self._miss_guard = MissGuard(_guard_dir)
+        self._evicted = EvictedRecomputes()
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
         # receives it per call. ``executed_file_deps`` lives on TrackingState.
@@ -898,7 +900,9 @@ class StatementProcessor:
         # invalidations. Never a backend-wide scan for the empty-key path.
         if not run.skip_cache and self._freshness.last_miss_reason:
             metrics["miss_reason"] = self._freshness.last_miss_reason
-        elif not run.skip_cache:
+        elif not run.skip_cache and not self._evicted.attribute(
+            metrics, self.cash_instance.backend, run.cache_key, run.code, execution.cost
+        ):
             self._attribute_input_change(metrics, run.inputs, run.outputs)
 
         self._post_execute(run, execution)

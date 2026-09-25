@@ -32,6 +32,7 @@ __all__ = [
     "COMPUTE_BASELINES_FILENAME",
     "DB_FILENAME",
     "ENTRY_GLOB",
+    "EVICTIONS_FILENAME",
     "KEYS_DIRNAME",
     "LOOP_SPLIT_FILENAME",
     "MISS_GUARD_FILENAME",
@@ -69,6 +70,8 @@ DB_FILENAME = "cache.db"
 RANK_INDEX_FILENAME = "_rank.log"
 #: The file tier's superseded versions (`versions`).
 VERSIONS_INDEX_FILENAME = "_versions.log"
+#: The file tier's notes of what its cap evicted (`eviction_log`).
+EVICTIONS_FILENAME = "_evicted.log"
 #: The notebook's statement miss guard.
 MISS_GUARD_FILENAME = "_miss_guard.json"
 #: The notebook's loop-split verdicts.
@@ -89,6 +92,7 @@ _CASH_FILE_NAMES = frozenset(
         GITIGNORE_FILENAME,
         RANK_INDEX_FILENAME,
         VERSIONS_INDEX_FILENAME,
+        EVICTIONS_FILENAME,
         MISS_GUARD_FILENAME,
         LOOP_SPLIT_FILENAME,
         COMPUTE_BASELINES_FILENAME,

@@ -306,9 +306,13 @@ class FileBackend(CacheBackend):
         """Hold one entry's metadata, and the way back from its filename."""
         self._touched.remember(key, self._get_path(key), metadata)
 
+    @staticmethod
+    def _stem(key: str) -> str:
+        """*key*'s entry file name without the suffix: a SHA-256 of the key."""
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
     def _get_path(self, key: str) -> str:
-        safe_name = hashlib.sha256(key.encode("utf-8")).hexdigest()
-        return os.path.join(self.cache_dir, f"{safe_name}{ENTRY_SUFFIX}")
+        return os.path.join(self.cache_dir, f"{self._stem(key)}{ENTRY_SUFFIX}")
 
     @property
     def local_dir(self) -> str:
@@ -620,6 +624,9 @@ class FileBackend(CacheBackend):
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
+        # Stored again: a note that the cap evicted it no longer applies.
+        self.evictor.evictions.forget(self._stem(key))
+
         # Freeze a copy of metadata for the background write — the caller
         # can mutate the original after we return without affecting the
         # written entry.
@@ -757,6 +764,12 @@ class FileBackend(CacheBackend):
         if self._unusable:
             return None
         return self.evictor.budget()
+
+    def eviction_note(self, key: str) -> Any:
+        """Did this tier's cap evict *key*'s entry (`eviction_log`)?"""
+        if self._unusable:
+            return None
+        return self.evictor.evictions.lookup(self._stem(key))
 
     def take_storage_notices(self) -> list[str]:
         return self.evictor.take_notices()

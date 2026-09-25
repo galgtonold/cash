@@ -145,6 +145,9 @@ class MissKind(str, Enum):
 
 _CODE_CHANGED = "the function's code, a helper it calls, or a value it reads changed"
 
+#: A GONE miss the size cap's notes account for (`eviction_log`).
+_EVICTED = "evicted to make room when the disk cache reached its size cap"
+
 
 class MissReason(NamedTuple):
     """One miss: its kind, the detail the per-call line and explain() give,
@@ -153,6 +156,8 @@ class MissReason(NamedTuple):
     kind: MissKind
     detail: str = ""
     changed: str | None = None
+    #: For an entry a size cap evicted, its `EvictionNote`.
+    evicted: Any = None
 
     @property
     def text(self) -> str:
@@ -383,9 +388,12 @@ class MissHistory:
     anything. (The last key per function is on its `CachedFunction`.)
     """
 
-    def __init__(self, cached: dict[str, CachedFunction], stored_keys: StoredKeyRecord) -> None:
+    def __init__(
+        self, cached: dict[str, CachedFunction], stored_keys: StoredKeyRecord, backend_slot: BackendSlot | None = None
+    ) -> None:
         self._cached = cached
         self._stored_keys = stored_keys
+        self._backend_slot = backend_slot
         #: cache_key -> what happened when it was last computed here.
         self.outcomes: OrderedDict[str, dict[str, Any]] = OrderedDict()
         # cache_key -> the reason for a lookup that just missed, taken by the
@@ -409,6 +417,23 @@ class MissHistory:
         """The reason `note_miss` held for *cache_key*, removed."""
         return self._pending.pop(cache_key, None)
 
+    def pending_eviction(self, cache_key: str) -> Any:
+        """The `EvictionNote` of the miss held for *cache_key*, if a size cap
+        had evicted its entry. Leaves the reason for `take_pending`."""
+        reason = self._pending.get(cache_key)
+        return reason.evicted if reason is not None else None
+
+    def _eviction_note(self, cache_key: str) -> Any:
+        """Did the backend's size cap evict *cache_key*'s entry? Only asks a
+        backend already built, and never fails a call over it."""
+        backend = self._backend_slot.built if self._backend_slot is not None else None
+        if backend is None:
+            return None
+        try:
+            return backend.eviction_note(cache_key)
+        except Exception:  # noqa: BLE001 - a miss reason is a diagnostic
+            return None
+
     def outcome(self, cache_key: str) -> dict[str, Any] | None:
         """What happened when *cache_key* was last computed here, if known."""
         return self.outcomes.get(cache_key)
@@ -431,6 +456,11 @@ class MissHistory:
             age = time.time() - outcome.get("stored_at", 0)
             if ttl_expired(outcome.get("stored_at", 0), written_ttl):
                 return MissReason(MissKind.TTL, f"written {age:.1f}s ago with ttl={written_ttl}s")
+            evicted = self._eviction_note(cache_key)
+            if evicted is not None:
+                return MissReason(
+                    MissKind.GONE, f"stored earlier in this process and since {_EVICTED}", evicted=evicted
+                )
             return MissReason(MissKind.GONE, "stored earlier in this process and since evicted or cleared")
         cf = self._cached.get(func_name)
         previous = cf.last_key if cf is not None else None
@@ -442,6 +472,9 @@ class MissHistory:
             age = time.time() - stored_at
             if ttl_expired(stored_at, written_ttl):
                 return MissReason(MissKind.TTL, f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
+            evicted = self._eviction_note(cache_key)
+            if evicted is not None:
+                return MissReason(MissKind.GONE, f"an earlier run stored it; it was {_EVICTED}", evicted=evicted)
             return MissReason(MissKind.GONE, "an earlier run stored it; it has since been evicted or cleared")
         if cache_key in doc["ram_only"]:
             why = doc["ram_only"][cache_key][1]
@@ -449,6 +482,11 @@ class MissHistory:
                 MissKind.NOT_STORED,
                 f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it",
             )
+        # Stored so long ago that the record has let it go, but the cap's own
+        # notes still know it.
+        evicted = self._eviction_note(cache_key)
+        if evicted is not None:
+            return MissReason(MissKind.GONE, f"an earlier run stored it; it was {_EVICTED}", evicted=evicted)
         # The same arguments stored under another state: the code or a value
         # it reads changed. Asked of the record BEFORE the call-to-call
         # comparison, which after a code edit blamed "new arguments" on every

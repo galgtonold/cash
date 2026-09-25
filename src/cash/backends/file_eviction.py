@@ -26,6 +26,7 @@ from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume
 from .budget_notices import DiskBudget, announce_budget, cap_text, claim_eviction_notice, eviction_text, storage_logger
 from .cache_dir import entry_totals
 from .entry_format import ENTRY_SUFFIX
+from .eviction_log import EvictionLog, EvictionNote
 from .rank_index import RankIndex
 
 if TYPE_CHECKING:
@@ -88,6 +89,8 @@ class FileEvictor:
         self.current_bytes = 0
         self.size_scanned = False
         self.rank_index = RankIndex(cache_dir, untracked)
+        #: What the cap removed, so a later miss can say so.
+        self.evictions = EvictionLog(cache_dir, untracked)
         self._touched = touched
         self._writes = writes
         self._lock = touched.lock
@@ -138,6 +141,7 @@ class FileEvictor:
     def clear(self) -> None:
         """The directory was emptied."""
         self.rank_index.remove()
+        self.evictions.remove()
         with self._lock:
             self.write_seq_by_key.clear()
             self.queue.clear()
@@ -432,6 +436,7 @@ class FileEvictor:
         evicted_recent = False
         n_evicted = 0
         freed_bytes = 0
+        notes: list[tuple[str, EvictionNote]] = []
         rebuilt = False
         own_key = self._writes.current_worker_key()
 
@@ -465,13 +470,22 @@ class FileEvictor:
             if written_at is not None and self.write_seq - written_at <= self.EVICT_WARN_RECENT_OPS:
                 evicted_recent = True
 
-            freed = self.remove_path(path)
+            # What it cost, while the bookkeeping still holds it: known only
+            # for an entry this process wrote or read. A metadata-only record
+            # held no value, so losing it cost no recompute worth a note.
+            meta = self._touched.metadata(key)
+            seconds = float(meta.get("execution_time") or 0.0) if meta is not None else -1.0
+            held_value = meta is None or not meta.get("metadata_only")
+            freed = self.remove_path(path, key)
             if freed:
                 n_evicted += 1
                 freed_bytes += freed
+                if held_value:
+                    notes.append((_stem(path), EvictionNote(time.time(), seconds, freed)))
                 with self._lock:
                     self.clock = max(self.clock, priority)
 
+        self.evictions.record(notes)
         if n_evicted:
             # The clock lets the next process resume the ranking.
             self.rank_index.append([], clock=self.clock)
