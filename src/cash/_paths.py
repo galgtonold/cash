@@ -24,7 +24,11 @@ __all__ = [
 ]
 
 # ``file://`` is excluded: it names a local path that can genuinely be stat'ed.
-_URL_SCHEME_RE = re.compile(r"^(?!file://)[a-zA-Z][a-zA-Z0-9+.\-]*://")
+# A scheme of two characters or more: a single letter is a Windows drive, and
+# ``f"{ROOT}/x.csv"`` with ``ROOT = "D:/"`` spells ``D://x.csv``, which Windows
+# opens as a local file. Read as a URL with scheme ``d``, the read needed
+# fsspec to be tracked at all, and raised without it.
+_URL_SCHEME_RE = re.compile(r"^(?!file://)[a-zA-Z][a-zA-Z0-9+.\-]+://")
 
 
 def is_remote_url(path: str) -> bool:
