@@ -506,9 +506,14 @@ with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decora
 
 ### Reads cash cannot see
 
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @a7a12595, cash/tracking/reader_patches.py:_patch_process_pool_submit @56972fff -->
 Cash does not record a file opened by a C extension, `os.open`, a subprocess,
-a `threading.Thread` you start, or a `multiprocessing.Pool` worker. Reads in a
-`ThreadPoolExecutor` or `ProcessPoolExecutor` the function starts are recorded.
+or a `threading.Thread` you start. Reads in work the function hands to a
+`ThreadPoolExecutor`, `ProcessPoolExecutor`, `multiprocessing.Pool` (or
+`ThreadPool`), or joblib's default backend (`Parallel(n_jobs=...)`, a
+scikit-learn `n_jobs=`) are recorded. Each task then runs under a tracker of
+its own in the worker: about 20 µs a task, which only shows for tiny tasks
+sent one at a time (`pool.imap` with the default `chunksize=1`).
 A polars `LazyFrame` argument from `scan_csv` is keyed by its path, not the
 file's content; collect it first. Name any file cash misses with
 `file_depends_on=`.

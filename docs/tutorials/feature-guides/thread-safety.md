@@ -94,6 +94,11 @@ between `Parallel` calls, so a `with cash.disabled():` around the second call
 does not reach them. Create the pool inside the block, or set `CASH_DISABLE=1`
 for the whole run.
 
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @a7a12595 -->
+A file a worker reads for a cached call in the parent is a dependency of that
+call, as if the parent had read it: editing it recomputes the call. This holds
+for `ProcessPoolExecutor`, `multiprocessing.Pool` and joblib's workers.
+
 Each process keeps some things to itself:
 
 - **RAM.** Each process has its own memory tier; only the disk is shared.

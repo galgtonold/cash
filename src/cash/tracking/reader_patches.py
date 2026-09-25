@@ -524,15 +524,37 @@ def _sqlite_uri_path(uri: str) -> str | None:
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
 
-    __slots__ = ("value", "files", "absent", "unresolved", "present")
+    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote")
 
     def __init__(
-        self, value: Any, files: list[str], absent: list[str], unresolved: list[str], present: dict[str, str]
+        self,
+        value: Any,
+        files: list[str],
+        absent: list[str],
+        unresolved: list[str],
+        present: dict[str, str],
+        remote: list[str],
     ) -> None:
-        self.value, self.files, self.absent, self.unresolved, self.present = value, files, absent, unresolved, present
+        self.value, self.files, self.absent, self.unresolved = value, files, absent, unresolved
+        self.present, self.remote = present, remote
 
     def __reduce__(self):
-        return (_WorkerReads, (self.value, self.files, self.absent, self.unresolved, self.present))
+        return (_WorkerReads, (self.value, self.files, self.absent, self.unresolved, self.present, self.remote))
+
+    def relay_to(self, tracker: Any) -> Any:
+        """Credit what the worker read to *tracker*; the task's own value."""
+        if tracker is not None:
+            for path in self.files:
+                tracker.add_tracked(path)
+            for path in self.absent:
+                tracker.add_tracked_absent(path)
+            for path in self.unresolved:
+                tracker.add_tracked_unresolved(path)
+            for path, kind in self.present.items():
+                tracker.add_tracked_present(path, kind)
+            for url in self.remote:
+                tracker.add_tracked_remote(url)
+        return self.value
 
 
 class _ReadsInWorker:
@@ -555,6 +577,7 @@ class _ReadsInWorker:
         return (_ReadsInWorker, (self.fn, self.tracker_type))
 
     def __call__(self, *args: Any, **kwargs: Any) -> _WorkerReads:
+        _hold_for_worker_life()
         tracker = self.tracker_type()
         with tracker:
             value = self.fn(*args, **kwargs)
@@ -564,7 +587,30 @@ class _ReadsInWorker:
             sorted(tracker.get_absent_files()),
             sorted(tracker.get_unresolved_files()),
             dict(tracker.get_present_files()),
+            sorted(tracker.get_accessed_remote_urls()),
         )
+
+
+_held_for_worker = False
+
+
+def _hold_for_worker_life() -> None:
+    """In a worker process, keep cash's I/O watch installed between tasks.
+
+    A tracker installs it on entry and removes it on exit, 20 us a task; a
+    ``pool.imap`` of small items runs one task per item. A worker process
+    exists to run tasks, so it is installed once and left. Not in the
+    submitting process: a ``ThreadPool`` task runs there, and that process's
+    reads outside a cached call must stay unwatched.
+    """
+    global _held_for_worker
+    if _held_for_worker:
+        return
+    import multiprocessing
+
+    if multiprocessing.parent_process() is not None:
+        io_watch.hold()
+        _held_for_worker = True
 
 
 class _RelayFuture(concurrent.futures.Future):
@@ -579,58 +625,131 @@ class _RelayFuture(concurrent.futures.Future):
         return self._inner.cancel() and super().cancel()
 
 
+def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
+    """A process-pool ``submit`` that brings back what the task read.
+
+    With a tracker active it sends a `_ReadsInWorker` instead of the bare
+    function, and credits what it read to the submitting call when the result
+    comes back -- before the caller can see the result, so before the call
+    that waits on it is stored.
+    """
+
+    @functools.wraps(original)
+    def submit(self, fn, /, *args, **kwargs):
+        tracker = active_tracker.get()
+        if tracker is None or getattr(self, "_cash_internal", False):
+            return original(self, fn, *args, **kwargs)
+        inner = original(self, _ReadsInWorker(fn, type(tracker)), *args, **kwargs)
+        outer = _RelayFuture(inner)
+
+        def relay(done: concurrent.futures.Future) -> None:
+            if done.cancelled():
+                outer.cancel()
+                return
+            error = done.exception()
+            if error is not None:
+                outer.set_exception(error)
+                return
+            result = done.result()
+            if isinstance(result, _WorkerReads):
+                result = result.relay_to(tracker)
+            outer.set_result(result)
+
+        inner.add_done_callback(relay)
+        return outer
+
+    return submit
+
+
 def _patch_process_pool_submit() -> None:
     """Bring the files a ``ProcessPoolExecutor`` task read back to the submitter.
 
     A cached orchestrator that fans work out to a process pool read its data in
     the workers, where no tracker of the parent's can see: after a data fix in
     one input it served the pre-fix report, while the thread-pool version beside
-    it invalidated. With a tracker active, ``submit`` (which
-    ``Executor.map`` calls, chunked or not) sends a `_ReadsInWorker` instead of
-    the bare function, and credits what it read to the submitting call when the
-    result comes back -- before the caller can see the result, so before the
-    call that waits on it is stored. ``multiprocessing.Pool`` and joblib are
-    not wrapped: their reads stay unseen, and ``file_depends_on=`` names them.
+    it invalidated. ``submit`` is what ``Executor.map`` calls, chunked or not.
+    joblib's default backend (loky, behind ``Parallel(n_jobs=...)`` and every
+    scikit-learn ``n_jobs=``) runs on an executor of the same shape and is
+    wrapped the same way, as is ``multiprocessing.Pool``
+    (`_patch_multiprocessing_pool`).
     """
     # Local: this loads multiprocessing, which `import cash` must not pay for.
     import concurrent.futures.process as cf_process
 
-    def make(original):
+    _patch_attribute(cf_process.ProcessPoolExecutor, "submit", _make_relaying_submit)
+    # joblib vendors loky; loky also ships on its own. Only once imported: a
+    # program that never imported joblib has no loky workers to hear from.
+    for name in ("joblib.externals.loky.process_executor", "loky.process_executor"):
+        module = sys.modules.get(name)
+        executor = getattr(module, "ProcessPoolExecutor", None)
+        if executor is not None:
+            _patch_attribute(executor, "submit", _make_relaying_submit)
+
+
+def _patch_multiprocessing_pool() -> None:
+    """Bring the files a ``multiprocessing.Pool`` task read back to the submitter.
+
+    Every ``Pool`` method hands its work to one of two places:
+    ``_guarded_task_generation`` (``map``, ``starmap``, ``imap`` and their
+    async forms, once per chunk) and ``apply_async``. With a tracker active,
+    both send a `_ReadsInWorker`, so a tracker runs once per chunk in the
+    worker, not once per item. What comes back is unwrapped by the result
+    object, which learns its tracker when it is made -- before its task is
+    queued, so no result can arrive first -- and keeps it on itself, so a
+    result that arrives after the cached call has returned is still
+    unwrapped. ``ThreadPool`` is a ``Pool`` and is covered alike.
+    """
+    # `multiprocessing.Pool()` imports the module only when called -- inside
+    # the cached call, after this ran. 0.4 ms, once: multiprocessing itself is
+    # loaded already, by `_patch_process_pool_submit`.
+    import multiprocessing.pool as module
+
+    def wrap_task(original):
         @functools.wraps(original)
-        def submit(self, fn, /, *args, **kwargs):
+        def guarded_task_generation(self, result_job, func, iterable):
             tracker = active_tracker.get()
-            if tracker is None or getattr(self, "_cash_internal", False):
-                return original(self, fn, *args, **kwargs)
-            inner = original(self, _ReadsInWorker(fn, type(tracker)), *args, **kwargs)
-            outer = _RelayFuture(inner)
+            if tracker is not None:
+                func = _ReadsInWorker(func, type(tracker))
+            return original(self, result_job, func, iterable)
 
-            def relay(done: concurrent.futures.Future) -> None:
-                if done.cancelled():
-                    outer.cancel()
-                    return
-                error = done.exception()
-                if error is not None:
-                    outer.set_exception(error)
-                    return
-                result = done.result()
-                if isinstance(result, _WorkerReads):
-                    for path in result.files:
-                        tracker.add_tracked(path)
-                    for path in result.absent:
-                        tracker.add_tracked_absent(path)
-                    for path in result.unresolved:
-                        tracker.add_tracked_unresolved(path)
-                    for path, kind in result.present.items():
-                        tracker.add_tracked_present(path, kind)
-                    result = result.value
-                outer.set_result(result)
+        return guarded_task_generation
 
-            inner.add_done_callback(relay)
-            return outer
+    def wrap_apply(original):
+        @functools.wraps(original)
+        def apply_async(self, func, *args, **kwargs):
+            tracker = active_tracker.get()
+            if tracker is not None:
+                func = _ReadsInWorker(func, type(tracker))
+            return original(self, func, *args, **kwargs)
 
-        return submit
+        return apply_async
 
-    _patch_attribute(cf_process.ProcessPoolExecutor, "submit", make)
+    def wrap_init(original):
+        @functools.wraps(original)
+        def __init__(self, *args, **kwargs):
+            original(self, *args, **kwargs)
+            tracker = active_tracker.get()
+            if tracker is not None:
+                self._set = _unwrapping_set(self._set, tracker)
+
+        return __init__
+
+    _patch_attribute(module.Pool, "_guarded_task_generation", wrap_task)
+    _patch_attribute(module.Pool, "apply_async", wrap_apply)
+    _patch_attribute(module.ApplyResult, "__init__", wrap_init)
+    _patch_attribute(module.IMapIterator, "__init__", wrap_init)
+
+
+def _unwrapping_set(original_set: Callable[..., Any], tracker: Any) -> Callable[..., Any]:
+    """A result object's ``_set(i, (success, value))`` that relays a worker's
+    reads to *tracker* and passes the task's own value on."""
+
+    def _set(i: Any, obj: Any) -> Any:
+        if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[1], _WorkerReads):
+            obj = (obj[0], obj[1].relay_to(tracker))
+        return original_set(i, obj)
+
+    return _set
 
 
 class FileDependencyRegistry:
@@ -1049,6 +1168,7 @@ def install_patches() -> None:
             # work handed to a process pool reports what it read back to it.
             _patch_thread_pool_submit()
             _patch_process_pool_submit()
+            _patch_multiprocessing_pool()
             _patch_user_module_aliases()
             _installed_for = basis
         if _shared_import_hook not in sys.meta_path:
