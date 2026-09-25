@@ -275,7 +275,8 @@ def test_a_same_size_edit_in_the_second_of_the_import_reaches_a_restart(nb_runne
     the ``.pyc`` of the first save -- Python checks only whole-second mtime
     and size. Cash keyed the helper's readers by the edited file while the
     old code ran, and persisted the old value under the new key. Here the
-    edit keeps the first save's mtime outright, so it is not left to timing.
+    edit keeps the first save's mtime outright, and the ``.pyc`` is dated to
+    that same instant, so it is not left to how fast the kernel started.
     """
     mod = tmp_path / "helpersamesec.py"
     mod.write_text(_module("sum"), encoding="utf-8")
@@ -299,6 +300,12 @@ def test_a_same_size_edit_in_the_second_of_the_import_reaches_a_restart(nb_runne
 
     mod.write_text(_module("max"), encoding="utf-8")
     os.utime(mod, ns=(first.st_atime_ns, first.st_mtime_ns))
+    # The first import compiled the .pyc in the same instant as the first save.
+    # A slow kernel start (coverage, a loaded machine) would otherwise date it
+    # seconds later, and a .pyc written well after its source is trusted.
+    for p in pyc.iterdir():
+        if p.name.startswith("helpersamesec."):
+            os.utime(p, ns=(first.st_atime_ns, first.st_mtime_ns))
     nb_runner.restart()
     nb_runner.run_all()
     assert "R total 4 0" in nb_runner.get_output(5), (
