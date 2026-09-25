@@ -734,15 +734,17 @@ tells two such functions apart.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/registry.py:FunctionRegistry._register_declared_callable_dep @3a83d666, cash/decorator/registry.py:warn_inert_dependency @6242cef6 -->
+<!-- claim: cash/decorator/registry.py:FunctionRegistry._register_declared_callable_dep @cdef7cb8, cash/decorator/registry.py:warn_inert_dependency @6242cef6 -->
 **What happened.** A callable in `depends_on=` has no source and no Python
-bytecode (a builtin, a NumPy ufunc, or a compiled extension). Cash can key it
-only by its name, so the declaration does next to nothing.
+bytecode (a builtin, a NumPy ufunc, or an installed compiled extension). Cash
+can key it only by its name, so the declaration does next to nothing. An
+extension built inside your project (`build_ext --inplace`, an editable
+install) does not warn: it is keyed by the content of its built file.
 
 **Why it matters.** Changing that callable will not invalidate the entry.
 
-**What to do.** For an extension you build yourself, pass its version as an
-argument, or use a `DataSource` whose token is the build id.
+**What to do.** For an extension you build and install yourself, pass its
+version as an argument, or use a `DataSource` whose token is the build id.
 
 **When it is safe to ignore.** Usually: a stdlib or pinned third-party builtin,
 such as `depends_on=[math.sqrt]`, will not change between runs.

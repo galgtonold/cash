@@ -15,7 +15,7 @@ that reading where you know better:
 | `@cash.stateful` | a helper whose side effect matters | Warns about every call to it; `strict=True` raises |
 | `cash.opaque` | a class passed as an argument | Its code is left out of the key |
 
-<!-- claim: cash/analysis/purity_analyzer.py:PurityAnalyzer._analyze_uncached @a6857568 -->
+<!-- claim: cash/analysis/purity_analyzer.py:PurityAnalyzer._analyze_uncached @889571da -->
 `@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
 marked helper's code is part of the key of every cached function that calls it,
 as an unmarked helper's is, so editing it recomputes them.

@@ -77,6 +77,7 @@ from ..purity import (
 from ..source_norm import (
     callable_identity,
     compiled_identity,
+    extension_file_digest,
     normalize_source_for_hash,
     own_source,
 )
@@ -2080,7 +2081,10 @@ class PurityAnalyzer:
                     for layer in callable_layers(callee)
                     if own_code_is_user(layer, root_module) and not getattr(layer, "_cash_cached", False)
                 ]
-                own = _is_user_code(callee, root_module)
+                # A function of a compiled extension built in the project
+                # (`build_ext --inplace`) is no Python source, but it is the
+                # user's code: keyed by its built file (`compiled_identity`).
+                own = _is_user_code(callee, root_module) or extension_file_digest(callee) is not None
                 if not own and not layers:
                     # A library function the call site names by a module
                     # attribute (`requests.get`, `pd.read_csv`): not walked,

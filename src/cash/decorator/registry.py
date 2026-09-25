@@ -16,7 +16,7 @@ from ..analysis.purity_analyzer import PurityReport, bindings_changed, get_analy
 from ..data_source import DataSource, state_token_of
 from ..exceptions import CashCacheIneffectiveWarning
 from ..graph import DependencyGraph
-from ..source_norm import bytecode_identity, callable_identity, compiled_identity
+from ..source_norm import bytecode_identity, callable_identity, compiled_identity, extension_file_digest
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .code_identity import func_key, hash_callable_source
@@ -311,7 +311,7 @@ class FunctionRegistry:
         dependency is inert, for the caller to warn about.
         """
         snapshot = hash_callable_source(dep)
-        if bytecode_identity(dep) is None and snapshot == compiled_identity(dep):
+        if bytecode_identity(dep) is None and snapshot == compiled_identity(dep) and extension_file_digest(dep) is None:
             return False
         self.declared_dep_snapshots[dep_key] = snapshot
         module = getattr(dep, "__module__", None)

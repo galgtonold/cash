@@ -35,6 +35,7 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import importlib.machinery
 import importlib.util
 import inspect
 import io
@@ -62,6 +63,7 @@ __all__ = [
     "own_source_digest",
     "source_digest",
     "code_consts_without_docstring",
+    "extension_file_digest",
     "normalize_source_for_hash",
     "source_identity_digest",
     "stat_has_settled",
@@ -726,9 +728,52 @@ def compiled_identity(fn: object) -> str:
 
 def _compiled_identity(fn: object, depth: int) -> str:
     own = bytecode_identity(fn)
+    built = extension_file_digest(fn)
     if own is None:
-        return hashlib.sha256(f"__cash_opaque__:{opaque_identity(fn)}".encode("utf-8")).hexdigest()
+        opaque = f"__cash_opaque__:{opaque_identity(fn)}"
+        if built is not None:
+            opaque = f"{opaque}:built:{built}"
+        return hashlib.sha256(opaque.encode("utf-8")).hexdigest()
+    if built is not None:
+        own = hashlib.sha256(f"{own}:built:{built}".encode()).hexdigest()
     return _with_wrapped(own, fn, depth)
+
+
+#: extension file path -> (the module loaded from it, its content digest).
+_EXTENSION_DIGESTS: dict[str, tuple[types.ModuleType, str]] = {}
+
+
+def extension_file_digest(fn: object) -> str | None:
+    """Digest of the compiled extension *fn* was loaded from, when that file is the user's.
+
+    A C or Cython function has no source, and a C one no bytecode either,
+    so it was keyed by its name: ``fastops.scale`` built in place (``build_ext
+    --inplace``, an editable install) and rebuilt to compute something else
+    was served the old result. The built file stands for its code. Read once
+    per loaded module: a process cannot load a rebuilt file in place of the
+    one it runs, so the first digest is the one that matches the code.
+    None for a library's extension, which is fixed for an environment.
+    """
+    while isinstance(fn, functools.partial):
+        fn = fn.func
+    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    path = getattr(module, "__file__", None)
+    if not isinstance(path, str) or not path.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES)):
+        return None
+    cached = _EXTENSION_DIGESTS.get(path)
+    if cached is not None and cached[0] is module:
+        return cached[1]
+    from .install_paths import is_user_path
+
+    if not is_user_path(path):
+        return None
+    try:
+        with untracked(), open(path, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return None
+    _EXTENSION_DIGESTS[path] = (module, digest)
+    return digest
 
 
 def callable_identity(fn: object) -> str:
