@@ -1209,6 +1209,15 @@ no later call can reach. It warns once per URL and error type.
 change, or network trouble. A 404 means the URL is wrong or the object was
 removed. Caching resumes by itself once access works.
 
+<!-- claim: cash/remote_source.py:addressing_options @3d914602, cash/remote_source.py:read_options @269a4b73 -->
+The check goes to the store the read did: a reader's `storage_options=` (or
+an fsspec `filesystem=`) is used for it. Only the part that names the store
+(endpoint, region, profile, `anon`) is written into the entry; credentials are
+kept in memory. So in a later process whose credentials come only from
+`storage_options`, the first check can fail with this warning, and the call
+recomputes once in each new process. Put the credentials in the environment or
+a profile to avoid that.
+
 **When it is safe to ignore.** For a short blip on a cheap function.
 
 ## STORE-CHUNK-FAILED {#store-chunk-failed}

@@ -33,6 +33,7 @@ from cash._memo import PATCH_SITES, LruMemo
 from cash._paths import is_remote_url
 from cash.effect_observer import active_observer as _active_effect_observer
 from cash.install_paths import is_user_path
+from cash.remote_source import remember_read_options
 from cash.tracking import io_watch
 from cash.tracking.read_credit import _frame_kind, note_untracked_read
 from cash.tracking.tracker_context import active_tracker
@@ -446,6 +447,16 @@ def _is_remote_target(target: Any) -> bool:
     return isinstance(target, str) and is_remote_url(target)
 
 
+def _storage_options(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    """The fsspec options a reader was given: ``storage_options=`` (pandas,
+    polars), or those of an fsspec filesystem passed as ``filesystem=``."""
+    options = kwargs.get("storage_options")
+    if isinstance(options, dict):
+        return options
+    options = getattr(kwargs.get("filesystem"), "storage_options", None)
+    return options if isinstance(options, dict) else None
+
+
 def track_dataset(tracker: Any, target: Any) -> None:
     """Record what a reader given *target* reads: a file, or every file of a
     directory or glob.
@@ -799,6 +810,12 @@ class FileDependencyRegistry:
                             note_untracked_read(item, sys._getframe(1))
             if not remote:
                 return original_func(*args, **kwargs)
+            options = _storage_options(kwargs)
+            if options:
+                # The freshness check must reach the store this read did.
+                for item in target if isinstance(target, (list, tuple)) else (target,):
+                    if _is_remote_target(item):
+                        remember_read_options(item, options)
             # The fetch of a remote file recorded above is a tracked read --
             # its ETag is checked on every hit -- not a connection the key
             # cannot see, so the effect observer does not report it.

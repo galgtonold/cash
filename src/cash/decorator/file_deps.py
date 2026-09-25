@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING, Any
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
-from ..remote_source import measured_validation, validation_is_expensive, warn_validation_cost_once
+from ..remote_source import (
+    measured_validation,
+    remember_read_options,
+    validation_is_expensive,
+    warn_validation_cost_once,
+)
 from ..source_norm import own_source_digest
 from ..tracking.file_dep_snapshot import (
     attach_code_relative,
@@ -84,6 +89,9 @@ def propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
         # ``add_tracked`` it would enter the file set, be stat'ed, and be
         # dropped - so the outer entry would silently lose the dependency.
         if isinstance(recorded, dict) and recorded.get("remote"):
+            if recorded.get("options"):
+                # The store this entry's read went to, for the outer entry's check.
+                remember_read_options(path, recorded["options"])
             tracker.add_tracked_remote(path)
         elif isinstance(recorded, dict) and recorded.get("absent"):
             # Looked for and missing: still an absence, not a file to stat.

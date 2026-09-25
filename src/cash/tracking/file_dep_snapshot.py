@@ -51,7 +51,7 @@ from typing import Any, NamedTuple
 from cash._active import active_config
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
-from cash.remote_source import RemoteFileDataSource
+from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
 from cash.tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -516,7 +516,14 @@ def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
     snapshot: dict[str, dict[str, Any]] = {}
     for url in urls:
         entry: dict[str, Any] = {_REMOTE_MARKER: True}
-        token = RemoteFileDataSource(url).state_token()
+        # Checked against the store the read went to: the reader's
+        # ``storage_options``, of which the part that names the store is
+        # written into the entry and the credentials are not.
+        options = read_options(url)
+        named = addressing_options(options)
+        if named:
+            entry["options"] = named
+        token = RemoteFileDataSource(url, storage_options=options).state_token()
         if token.startswith("unresolved:"):
             entry["unresolved"] = True
         else:
@@ -576,7 +583,8 @@ def remote_dep_is_fresh(url: str, stored: dict[str, Any]) -> tuple[bool, str | N
     stored_token = stored.get("hash")
     if stored_token is None:
         return False, "remote-unresolved"
-    current = RemoteFileDataSource(url).state_token()
+    options = read_options(url, stored.get("options") or {})
+    current = RemoteFileDataSource(url, storage_options=options).state_token()
     if current != stored_token:
         return False, "remote-changed"
     return True, None

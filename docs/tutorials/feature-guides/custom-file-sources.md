@@ -130,6 +130,11 @@ A prefix or a glob (`pd.read_parquet("s3://bucket/events/")`) is tracked by
 its listing: every object's name and validator, read with one LIST request
 per check. A new, removed or rewritten partition recomputes the next call.
 
+<!-- claim: cash/remote_source.py:read_options @269a4b73 -->
+A read given `storage_options=` (a MinIO or on-prem endpoint, a profile) is
+checked against that same store. The endpoint, region and profile are stored
+with the entry; keys and secrets are not written anywhere.
+
 Overwriting the object recomputes the next call; re-uploading identical bytes
 does not. One exception: S3's ETag for a multipart upload also depends on the
 part size, so re-uploading the same data with a different tool can cost one

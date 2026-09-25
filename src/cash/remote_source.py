@@ -122,9 +122,93 @@ class RemoteLedger:
         self.warned_weak_tokens.clear()
         self.warned_validation_cost.clear()
         self.tokens.clear()
+        _READ_OPTIONS.clear()
 
 
 REMOTE_LEDGER = RemoteLedger()
+
+
+# ---------------------------------------------------------------------------
+# The options a read was made with
+#
+# `pd.read_parquet("s3://b/k", storage_options={"client_kwargs": {"endpoint_url":
+# ...}})` -- MinIO, an on-prem store, a named profile. The freshness check must
+# ask the same store the read did: asked without the options it went to AWS
+# with the ambient credentials, failed, and the call never cached, with a
+# warning that blamed the user's access. (Had a bucket of the same name
+# existed there, its ETag would have vouched for the wrong object.)
+#
+# Two halves. What names the store (endpoint, region, profile, anonymous
+# access) is written into the entry, so a later process asks the same store.
+# Credentials are not: they are kept in this process only, by URL, and used
+# while what the entry names still matches them.
+# ---------------------------------------------------------------------------
+
+#: The options that say WHICH store and how to address it, as a tree of the
+#: keys fsspec filesystems take. Only these are written to disk; a key not
+#: listed here (``key``, ``secret``, ``token``, ``account_key``, ``headers``,
+#: ...) never leaves the process.
+_ADDRESSING_OPTIONS: dict[str, Any] = {
+    "anon": None,
+    "profile": None,
+    "endpoint_url": None,
+    "region_name": None,
+    "requester_pays": None,
+    "version_aware": None,
+    "use_ssl": None,
+    "project": None,
+    "account_name": None,
+    "client_kwargs": {"endpoint_url": None, "region_name": None},
+    "config_kwargs": {"signature_version": None, "s3": {"addressing_style": None}},
+}
+
+_SCALARS = (str, int, float, bool, type(None))
+
+#: The full options of the last tracked read of each URL, credentials included.
+_READ_OPTIONS: LruMemo[str, dict[str, Any]] = LruMemo(REMOTE_URLS)
+
+
+def addressing_options(options: Any, shape: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The part of *options* that names the store, safe to write to disk."""
+    shape = _ADDRESSING_OPTIONS if shape is None else shape
+    kept: dict[str, Any] = {}
+    if not isinstance(options, dict):
+        return kept
+    for key, sub in shape.items():
+        if key not in options:
+            continue
+        value = options[key]
+        if sub is None:
+            if isinstance(value, _SCALARS):
+                kept[key] = value
+        else:
+            nested = addressing_options(value, sub)
+            if nested:
+                kept[key] = nested
+    return kept
+
+
+def remember_read_options(url: str, options: dict[str, Any]) -> None:
+    """Record the options a tracked read of *url* was made with.
+
+    An entry already held keeps its credentials when *options* names the same
+    store: a cache hit replays only what the entry wrote down.
+    """
+    held = _READ_OPTIONS.get(url)
+    if held is not None and addressing_options(held) == addressing_options(options):
+        if len(held) >= len(options):
+            return
+    _READ_OPTIONS[url] = dict(options)
+
+
+def read_options(url: str, recorded: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The options to check *url* with: those this process read it with,
+    while they name the store the entry *recorded*; else what it recorded."""
+    held = _READ_OPTIONS.get(url)
+    if held is not None and (recorded is None or addressing_options(held) == recorded):
+        return held
+    return dict(recorded or {})
+
 
 # Distinguishes one failed resolution from the next so the key genuinely moves.
 # See ``_unresolved_token`` for why that is the failure behaviour.
