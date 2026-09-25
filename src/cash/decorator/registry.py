@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sys
 import threading
 import weakref
@@ -81,6 +82,40 @@ def resolve_dynamic_dependencies(
         # Sort to ensure deterministic order if multiple sources
         return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
     return ""
+
+
+def checked_depends_on(depends_on: Any) -> list[Callable[..., Any] | DataSource]:
+    """``depends_on=`` as a list of callables and `DataSource` objects.
+
+    One callable or source on its own is taken as a list of one. Anything
+    else raises: an entry that is neither was skipped, so
+    ``depends_on=["data.txt"]`` -- meant as ``file_depends_on`` -- added
+    nothing to the key and the result went stale when the file changed.
+
+    Raises:
+        TypeError: *depends_on* or one of its entries is neither a callable
+            nor a `DataSource`.
+    """
+    if depends_on is None:
+        return []
+    if isinstance(depends_on, DataSource) or callable(depends_on):
+        return [depends_on]
+    if isinstance(depends_on, (str, bytes, os.PathLike)) or not isinstance(depends_on, (list, tuple, set, frozenset)):
+        entries = [depends_on]
+    else:
+        entries = list(depends_on)
+    for dep in entries:
+        if isinstance(dep, DataSource) or callable(dep):
+            continue
+        hint = (
+            f" For a file, use file_depends_on={dep!r}."
+            if isinstance(dep, (str, bytes, os.PathLike))
+            else " Pass the function itself, or wrap the value in a DataSource."
+        )
+        raise TypeError(
+            f"@cash.cache: depends_on takes callables and DataSource objects, not {type(dep).__name__} {dep!r}.{hint}"
+        )
+    return entries
 
 
 def warn_inert_dependency(notices: Notices, func_name: str, dep: Callable[..., Any]) -> None:

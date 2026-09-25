@@ -216,14 +216,14 @@ see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @12aa31ff -->
+<!-- claim: cash/core.py:Cash.cache @2d082328 -->
 All parameters are keyword-only and optional:
 
 | Parameter | What it does |
 |---|---|
 | `ttl=` | Seconds an entry stays valid, or a `datetime.timedelta`. `None` (default): no expiry |
 | `cache_if=` | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
-| `depends_on=` | List of callables or `DataSource` objects to add to the key |
+| `depends_on=` | A callable or `DataSource` object, or a list of them, to add to the key. Anything else (a path: use `file_depends_on=`) raises `TypeError` |
 | `file_depends_on=` | A path or list of paths, tracked by content as if the body read them |
 | `dynamic_depends_on=` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
 | `frozen=` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |

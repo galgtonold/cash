@@ -61,7 +61,7 @@ from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
 from .decorator.globals_fold import GlobalsFold
 from .decorator.purity_checks import LearnedMutations, PurityChecks
-from .decorator.registry import FunctionRegistry, warn_inert_dependency
+from .decorator.registry import FunctionRegistry, checked_depends_on, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngWatch
 from .decorator.runtime import CallRunner, KeyBuilder
@@ -137,7 +137,7 @@ def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str,
     the paths as written are in the key (`FileDeps.fold_declared_files`)."""
     if not file_depends_on:
         return ()
-    paths = [file_depends_on] if isinstance(file_depends_on, str) else file_depends_on
+    paths = [file_depends_on] if isinstance(file_depends_on, (str, os.PathLike)) else file_depends_on
     return tuple((str(p), os.path.abspath(p)) for p in paths)
 
 
@@ -506,7 +506,7 @@ class Cash:
         self,
         func: None = None,
         *,
-        depends_on: list[Callable[..., Any] | DataSource] | None = ...,
+        depends_on: Callable[..., Any] | DataSource | list[Callable[..., Any] | DataSource] | None = ...,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = ...,
         file_depends_on: str | list[str] | None = ...,
         ttl: float | datetime.timedelta | None = ...,
@@ -523,7 +523,7 @@ class Cash:
         self,
         func: Callable[P, T] | None = None,
         *,
-        depends_on: list[Callable[..., Any] | DataSource] | None = None,
+        depends_on: Callable[..., Any] | DataSource | list[Callable[..., Any] | DataSource] | None = None,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = None,
         file_depends_on: str | list[str] | None = None,
         ttl: float | datetime.timedelta | None = None,
@@ -544,7 +544,7 @@ class Cash:
         Args:
             func: The function; set for you when used without parentheses.
             depends_on: Functions or `DataSource` objects whose changes
-                invalidate the entry.
+                invalidate the entry: a list, or one on its own.
             dynamic_depends_on: Callable(s) that receive the call's arguments
                 and return the `DataSource` (or a list, or ``None``) that
                 call depends on.
@@ -571,9 +571,11 @@ class Cash:
         Raises:
             ValueError: ``strict`` and ``assume_safe`` are both set, or
                 ``ttl`` is negative, NaN or infinite.
-            TypeError: ``ttl`` is not a number, timedelta or ``None``.
+            TypeError: ``ttl`` is not a number, timedelta or ``None``, or a
+                ``depends_on`` entry is neither a callable nor a `DataSource`.
         """
         ttl = checked_ttl(ttl)
+        depends_on = checked_depends_on(depends_on)
         if strict and assume_safe:
             raise ValueError(
                 "@cash.cache: strict=True and assume_safe=True are mutually "
