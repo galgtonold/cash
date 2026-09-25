@@ -171,9 +171,10 @@ class StatementProcessor:
         )
 
         # Cache-freshness checker (TTL / file-dep / input-file invalidation).
-        # Stateless w.r.t. tracking state — receives it per call.
+        # Stateless w.r.t. tracking state — receives it per call. It reads the
+        # backend statements are stored in, which `cash.configure` may replace.
         self._freshness = CacheFreshnessChecker(
-            backend=cash_instance.backend if cash_instance is not None else None,
+            backend_of=(lambda: self.cash_instance.backend) if cash_instance is not None else None,
         )
 
         # Perpetual-miss guard: learns which statements can never hit

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...backends._base import ttl_expired
@@ -51,23 +52,35 @@ _SET_MEMO_MIN = 64
 class CacheFreshnessChecker:
     """Decide whether a cache entry is still fresh.
 
-    Holds the cache backend by reference and a transient
-    ``last_miss_reason`` for badge attribution.  All :class:`TrackingState`
-    access happens through the ``tracking_state`` method parameter — no
-    aliased dict references on this instance.
+    Reads the cache backend through *backend_of* on every lookup, and holds
+    a transient ``last_miss_reason`` for badge attribution. All
+    :class:`TrackingState` access happens through the ``tracking_state``
+    method parameter — no aliased dict references on this instance.
+
+    *backend_of* returns the backend to read: the instance's current one.
+    Holding the backend the processor was built with sent every lookup to
+    the old cache after ``cash.configure(cache_dir=...)`` built a new one,
+    while statements were stored in the new one, so nothing restored until
+    a restart. A fixed *backend* is for callers that have no instance.
     """
 
     def __init__(
         self,
-        backend: Any,
+        backend: Any = None,
+        *,
+        backend_of: Callable[[], Any] | None = None,
     ) -> None:
-        self._backend = backend
+        self._backend_of = backend_of if backend_of is not None else (lambda: backend)
         self.last_miss_reason: str | None = None
         self._memo = FreshnessMemo()
         #: Dependency sets verified fresh whole, while the answers above last.
         self._fresh_sets: list[dict] = []
         self._epoch: Any = None
         self._answered_at = 0.0
+
+    @property
+    def _backend(self) -> Any:
+        return self._backend_of()
 
     def forget_file_answers(self, epoch: Any = None) -> None:
         """Check files afresh from here on.
