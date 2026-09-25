@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -192,16 +193,36 @@ def disabled(on: bool = True) -> Iterator[None]:
 
     ``disabled(False)`` is the reverse: force caching on for the block.
 
+    The setting is process-wide: while a block is open, every thread's cached
+    calls follow it, not only the calls made inside the block. Blocks that
+    overlap in several threads each keep their setting until they exit; the
+    latest block still open decides, and when the last one exits the setting
+    returns to what it was before the first one.
+
     Worker processes started inside the block run uncached too, and keep that
     setting for as long as they run.
     """
     c = _get_global_cash()
-    previous = bool(c.config.disable)
-    configure(disable=bool(on))
+    token = object()
+    with _disabled_lock:
+        if not _disabled_blocks:
+            _disabled_base[0] = bool(c.config.disable)
+        _disabled_blocks.append((token, bool(on)))
+        configure(disable=bool(on))
     try:
         yield
     finally:
-        configure(disable=previous)
+        with _disabled_lock:
+            _disabled_blocks[:] = [block for block in _disabled_blocks if block[0] is not token]
+            configure(disable=_disabled_blocks[-1][1] if _disabled_blocks else _disabled_base[0])
+
+
+#: The ``disabled()`` blocks open now, oldest first, as ``(token, on)``, and
+#: the setting from before the first of them. A block that exits while
+#: another thread's block is still open must not end that block early.
+_disabled_lock = threading.Lock()
+_disabled_blocks: list[tuple[object, bool]] = []
+_disabled_base = [False]
 
 
 def cleanup(max_age: int | None = None) -> int:

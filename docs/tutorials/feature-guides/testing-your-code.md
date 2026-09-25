@@ -70,7 +70,7 @@ process (every xdist worker is one) starts empty.
 To keep the cache for most tests and switch it off only for those that must
 not see it, use a fixture:
 
-<!-- claim: cash/__init__.py:disabled @2658321b -->
+<!-- claim: cash/__init__.py:disabled @b31f5ba3 -->
 <!-- test:skip reason="a conftest.py fixture, not a standalone script" -->
 ```python
 # conftest.py
@@ -91,6 +91,12 @@ def test_training_really_trains(no_cache):
 started with `CASH_DISABLE=1` stays uncached. Don't end the fixture with
 `cash.configure(disable=False)`: that switches caching **on** for the rest of
 the run.
+
+The block is process-wide, not per thread: while it is open, cached calls in
+every thread run uncached, not only the ones inside it. So under a threaded
+test runner, or in a web server where one request opens the block, the other
+threads run uncached too for that time. Blocks that overlap in several threads
+each hold until they exit, and caching comes back when the last one does.
 
 ### Code that starts worker processes
 

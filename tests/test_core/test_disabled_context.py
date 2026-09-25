@@ -48,6 +48,52 @@ def test_it_is_restored_when_the_block_raises(restore_disable):
     assert c.config.disable is False
 
 
+def test_blocks_overlapping_in_two_threads_each_hold_until_they_exit(restore_disable):
+    """Thread A enters, thread B enters, A exits, B exits. Each block saved
+    the setting it found and put it back on exit: A's exit switched caching
+    on while B was still inside, and B's exit restored the ``True`` it had
+    found, which left caching off for the rest of the process."""
+    import threading
+
+    c = restore_disable
+    cash.configure(disable=False)
+    a_in, b_in, a_out, b_checked = (threading.Event() for _ in range(4))
+    seen = {}
+
+    def a():
+        with cash.disabled():
+            a_in.set()
+            b_in.wait(10)
+        a_out.set()
+
+    def b():
+        a_in.wait(10)
+        with cash.disabled():
+            b_in.set()
+            a_out.wait(10)
+            seen["b_after_a_left"] = c.config.disable
+        b_checked.set()
+
+    threads = [threading.Thread(target=a), threading.Thread(target=b)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    assert b_checked.is_set()
+    assert seen["b_after_a_left"] is True, "A's exit ended B's block early"
+    assert c.config.disable is False, "caching stayed off after both blocks ended"
+
+
+def test_nested_blocks_of_both_kinds_unwind_in_order(restore_disable):
+    c = restore_disable
+    cash.configure(disable=False)
+    with cash.disabled():
+        with cash.disabled(False):
+            assert c.config.disable is False
+        assert c.config.disable is True
+    assert c.config.disable is False
+
+
 CONFTEST = """\
 import cash
 import pytest
