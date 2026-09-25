@@ -42,7 +42,8 @@ CASH_DISABLE=1 pytest
 Every cached function then calls straight through: no key, no lookup, no store,
 and nothing read from or written to the cache folder. `f.explain(...)` reports
 `disabled`. The same switch is `Cash(disable=True)`,
-`cash.configure(disable=True)` (it takes effect on the next call), or
+`cash.configure(disable=True)` (it takes effect on the next call, and in
+worker processes started after it), or
 `disable = true` under `[tool.cash]`.
 
 ## Isolating the suite's cache
@@ -69,7 +70,7 @@ process (every xdist worker is one) starts empty.
 To keep the cache for most tests and switch it off only for those that must
 not see it, use a fixture:
 
-<!-- claim: cash/__init__.py:disabled @c23cd1a2 -->
+<!-- claim: cash/__init__.py:disabled @2658321b -->
 <!-- test:skip reason="a conftest.py fixture, not a standalone script" -->
 ```python
 # conftest.py
@@ -90,6 +91,20 @@ def test_training_really_trains(no_cache):
 started with `CASH_DISABLE=1` stays uncached. Don't end the fixture with
 `cash.configure(disable=False)`: that switches caching **on** for the rest of
 the run.
+
+### Code that starts worker processes
+
+<!-- claim: cash/_active.py:publish_settings @035400df, cash/_active.py:_arrive @ea2f94f8 -->
+Both fixtures reach the worker processes the code under test starts while they
+are in force: a `ProcessPoolExecutor`, a `multiprocessing` pool or joblib, on
+every start method. The workers cache in the suite's folder, and under
+`no_cache` they run every cached call's body.
+
+A worker keeps the settings it started with. A pool that outlives one test (a
+module-level executor, or joblib, which reuses its workers between `Parallel`
+calls) goes on with the settings of the test that started it. For such code,
+use the environment: `CASH_DISABLE=1 pytest` for the uncached run and
+`CASH_CACHE_DIR` for isolation reach every process of the run.
 
 ## Mocking and monkeypatching
 

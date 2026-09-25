@@ -16,7 +16,7 @@ import logging
 from dataclasses import fields
 from typing import TYPE_CHECKING, Any
 
-from . import _log
+from . import _active, _log
 from .backends.factory import apply_persistence_settings, build_backend_from_config, built_from_config, tier_specs
 from .config import CashConfig, validated_overrides
 
@@ -54,6 +54,8 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
 
     for key, val in checked.items():
         setattr(cash.config, key, val)
+    if cash is _active.default_cash():
+        _active.publish_settings(cash.config, checked)
     if "debug" in checked or "verbose" in checked:
         debug, verbose = cash.config.debug, cash.config.verbose
         _log.follow(logging.DEBUG if debug else logging.INFO if verbose else None)

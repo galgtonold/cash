@@ -76,7 +76,25 @@ duplicate computation costs less than the lock.
 <!-- claim: cash/_paths.py:resolve_main_module @fd6aef0f, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 Worker processes use the cache folder of the process that started them, so what
 one worker computes is a hit for the other workers, for the parent, and for the
-next run. Each process keeps some things to itself:
+next run.
+
+<!-- claim: cash/_active.py:publish_settings @035400df, cash/_active.py:_arrive @ea2f94f8 -->
+That holds for settings changed in code, too. A worker started after
+`cash.configure(...)`, or inside `with cash.disabled():`, runs with those
+settings: `configure(cache_dir=...)` moves the workers' cache with the
+parent's, and under `cash.disabled()` every cached call in a worker runs its
+body. This works for every start method: fork, spawn (the default on Windows
+and macOS), forkserver (the default on Linux from Python 3.14) and joblib's
+workers. `CASH_*` variables set before the run reach them as well.
+
+A worker keeps the settings it started with. A pool created before the change
+keeps its workers' old settings, and so does a pool whose workers started
+inside a `disabled()` block and are used after it. joblib keeps its workers
+between `Parallel` calls, so a `with cash.disabled():` around the second call
+does not reach them. Create the pool inside the block, or set `CASH_DISABLE=1`
+for the whole run.
+
+Each process keeps some things to itself:
 
 - **RAM.** Each process has its own memory tier; only the disk is shared.
 - **Writes.** A worker writes each result before its task returns, so a pool

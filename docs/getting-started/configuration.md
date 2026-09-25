@@ -222,7 +222,7 @@ file, and `~` is your home directory.
 A missing file warns [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing).
 `cash info --config path/to/cash.toml` shows what a file resolves to.
 
-<!-- claim: cash/__init__.py:configure @945b5c80 -->
+<!-- claim: cash/__init__.py:configure @9f9c6e1a -->
 ## Changing settings at runtime
 
 `cash.configure(...)` changes the settings of the default instance used by
@@ -243,7 +243,15 @@ build a new one. All other settings take effect on the next operation. A
 connection detail for a backend not in use is kept for later.
 `configure(debug=False)` also stops the log output `debug=True` started.
 
-<!-- claim: cash/reconfigure.py:apply_overrides @3b83cdfd, cash/config.py:validated_overrides @db2d884f -->
+<!-- claim: cash/_active.py:publish_settings @035400df -->
+Worker processes started afterwards (`multiprocessing`, `ProcessPoolExecutor`,
+joblib) run with what `cash.configure(...)` and `cash.disabled()` set, whatever
+the start method. A worker already running keeps the settings it started with.
+An instance of your own is built again in each worker by your code, so its
+`reconfigure(...)` stays in the process that called it. See
+[Threads and processes](../tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
+
+<!-- claim: cash/reconfigure.py:apply_overrides @87ef96b0, cash/config.py:validated_overrides @db2d884f -->
 Values are checked exactly as `Cash(...)` checks them, before anything
 changes: a bad value raises `ValueError` and leaves the old settings in place.
 `~` is expanded, and a relative `cache_dir` is relative to the current

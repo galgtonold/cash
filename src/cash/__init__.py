@@ -140,6 +140,10 @@ def configure(**overrides: Any) -> None:
     backend's persistence policy without a rebuild; every other setting
     is read by the next operation.
 
+    Worker processes started afterwards (``multiprocessing``,
+    ``concurrent.futures``, joblib) run with the same settings, whatever the
+    start method; a worker already running keeps the ones it started with.
+
     This function never writes to disk. To persist changes across
     process invocations, edit ``pyproject.toml`` ``[tool.cash]`` or the
     XDG user config file directly.
@@ -159,6 +163,9 @@ def disabled(on: bool = True) -> Iterator[None]:
     on the way out would switch back on.
 
     ``disabled(False)`` is the reverse: force caching on for the block.
+
+    Worker processes started inside the block run uncached too, and keep that
+    setting for as long as they run.
     """
     c = _get_global_cash()
     previous = bool(c.config.disable)
