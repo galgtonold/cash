@@ -130,14 +130,15 @@ def test_a_heredoc_script_recomputes_after_an_edit(tmp_path):
 def test_what_the_bytecode_plainly_writes_is_left_out():
     """Without source the bytecode decides what is a write: `G.append(v)` and
     `G[k] = v` are kept out of the key (they would move it on every call),
-    and a global only read, or stored as a value (`d[k] = G`), stays in."""
+    and a global only read, or stored as a value (`d[k] = G`), stays in.
+    `G9[0] = v` has a constant key, which 3.14 loads with its own opcode."""
     from cash.decorator.globals_fold import _bytecode_mutated_globals
 
     ns: dict = {}
     src = (
         "def f(k, v, d):\n    G1.append(v)\n    G2[k] = v\n    d[k] = G3\n"
-        "    G4.x = v\n    d.y = G5\n    del G6[k]\n    return G7[k] + len(G8)\n"
+        "    G4.x = v\n    d.y = G5\n    del G6[k]\n    G9[0] = v\n    return G7[k] + len(G8)\n"
     )
     exec(compile(src, "<stdin>", "exec"), ns)
-    names = {f"G{i}" for i in range(1, 9)}
-    assert _bytecode_mutated_globals((ns["f"].__code__,), names) == {"G1", "G2", "G4", "G6"}
+    names = {f"G{i}" for i in range(1, 10)}
+    assert _bytecode_mutated_globals((ns["f"].__code__,), names) == {"G1", "G2", "G4", "G6", "G9"}

@@ -198,7 +198,12 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried
 
 
 #: A plain operand load: the key between a global's load and a subscript store.
-_OPERAND_LOADS = frozenset({"LOAD_FAST", "LOAD_CONST", "LOAD_DEREF", "LOAD_NAME"})
+#: 3.12 adds LOAD_FAST_CHECK (a local that may be unbound); 3.14 loads most
+#: locals with LOAD_FAST_BORROW and small int constants with LOAD_SMALL_INT, so
+#: without them `G[k] = v` and `del G[0]` read as plain reads there.
+_OPERAND_LOADS = frozenset(
+    {"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW", "LOAD_CONST", "LOAD_SMALL_INT", "LOAD_DEREF", "LOAD_NAME"}
+)
 
 
 def _bytecode_mutated_globals(scopes: tuple, names: set[str]) -> set[str]:
