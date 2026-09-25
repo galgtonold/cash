@@ -54,7 +54,8 @@ slow_cube(1000)   # cache hit, from ./my_app_cache
 
 `Cash(...)` takes `cache_dir`, `backend` or `backends`, `use_locking`, `debug`,
 `verbose`, `register_magic`, `config_path`, and any configuration field as a
-keyword (`summary=True`, `max_cache_size="5GB"`, `disable=True`). See the
+keyword (`summary=True`, `max_cache_size="5GB"`, `disable=True`). `backend`
+takes a backend instance or a backend type name (`backend="sqlite"`). See the
 [`Cash` reference](api/cash.md) and [Configuration](getting-started/configuration.md).
 
 ## Where results are stored

@@ -200,7 +200,9 @@ class Cash:
     front of a disk tier in ``.cash``.
 
     Args:
-        backend: A backend instance to use as is.
+        backend: A backend instance to use as is, or the name of a backend
+            type (``"file"``, ``"sqlite"``, ...: the ``backend`` setting) to
+            build from the configuration.
         cache_dir: Directory for the disk tier (the ``cache_dir`` setting).
         backends: Backends to stack as tiers, fastest first; two or more are
             combined into a `TieredBackend`.
@@ -276,7 +278,7 @@ class Cash:
 
     def __init__(
         self,
-        backend: CacheBackend | None = None,
+        backend: CacheBackend | str | None = None,
         cache_dir: str | None = None,
         backends: list[CacheBackend] | None = None,
         compress: bool | None = None,
@@ -287,6 +289,18 @@ class Cash:
         verbose: bool | None = None,
         **config_overrides: Any,
     ) -> None:
+        # ``backend`` is also the name of a setting ("tiered", "file",
+        # "sqlite", ...), and a setting may be passed by name. A string here
+        # used to reach the backend slot as if it were a backend, and every
+        # cached call then failed with an AttributeError.
+        if isinstance(backend, str):
+            config_overrides.setdefault("backend", backend)
+            backend = None
+        elif backend is not None and not isinstance(backend, CacheBackend):
+            raise TypeError(
+                f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
+                f"not {type(backend).__name__}"
+            )
         # Map the explicit convenience kwargs (cache_dir, compress, debug)
         # into the overrides dict so the config layer treats them with the
         # same priority as any other constructor-supplied override (highest).
