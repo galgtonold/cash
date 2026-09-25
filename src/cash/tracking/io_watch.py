@@ -143,6 +143,13 @@ def release() -> None:
         _holds -= 1
         if _holds == 0:
             _switch()
+            if sys.is_finalizing():
+                # A scope left open until exit -- a cached generator still
+                # suspended mid-stream -- closes while the interpreter tears
+                # its modules down (``sys.meta_path`` is already None). Nothing
+                # runs afterwards that the patches could mislead, and putting
+                # the originals back printed a traceback at exit.
+                return
             for _install, remove in reversed(_patchers):
                 remove()
 
