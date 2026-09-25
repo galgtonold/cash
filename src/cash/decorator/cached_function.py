@@ -26,6 +26,36 @@ PurityMode = Literal["warn", "strict", "silent"]
 _UNREAD: Any = object()
 
 
+_PASS_THROUGH = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
+
+
+def call_signature(func: Callable[..., Any]) -> inspect.Signature:
+    """The signature a call to *func* binds to, for canonicalising its arguments.
+
+    ``inspect.signature`` follows ``__wrapped__`` to the innermost function,
+    which is right for a ``functools.wraps`` wrapper that passes
+    ``*args, **kwargs`` straight through, and wrong for one with parameters
+    of its own: ``def wrapper(x, factor=1)`` over ``def price(x,
+    currency=3)`` bound ``price(10, 3)`` as ``currency=3`` -- the default --
+    so it shared ``price(10)``'s entry. Follow a wrapper only while it
+    takes nothing but ``*args``/``**kwargs``; a ``__signature__`` set on
+    the way is honoured, as ``inspect.signature`` does.
+    """
+    for _ in range(32):
+        own = inspect.signature(func, follow_wrapped=False)
+        wrapped = getattr(func, "__wrapped__", None)
+        kinds = {p.kind for p in own.parameters.values()}
+        if (
+            wrapped is None
+            or "__signature__" in getattr(func, "__dict__", {})
+            or not kinds
+            or not kinds <= _PASS_THROUGH
+        ):
+            return own
+        func = wrapped
+    return inspect.signature(func)
+
+
 def new_stats() -> dict[str, Any]:
     """The counters `cache_info()` and the run summary read."""
     return {
@@ -87,10 +117,10 @@ class CachedFunction:
 
     @property
     def signature(self) -> inspect.Signature | None:
-        """``inspect.signature(func)``, read once; None when it has none."""
+        """`call_signature` of the function, read once; None when it has none."""
         if self._signature is _UNREAD:
             try:
-                self._signature = inspect.signature(self.func)
+                self._signature = call_signature(self.func)
             except (ValueError, TypeError):
                 self._signature = None
         return self._signature

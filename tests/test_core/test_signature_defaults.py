@@ -325,3 +325,56 @@ def test_assorted_default_types_hit_on_repeat(default):
     assert wrapped(1) == (1, default)
     assert wrapped(1) == (1, default)
     assert len(_RUNS) == 1, f"default {default!r} drifted its key"
+
+
+def test_a_wrapper_with_parameters_of_its_own_binds_to_them():
+    """``inspect.signature`` follows ``__wrapped__`` to the inner function.
+
+    Binding the wrapper's call to ``price(x, currency=3)`` read ``price(10, 3)``
+    as the default and served it ``price(10)``'s entry, though the ``3`` was the
+    wrapper's ``factor``.
+    """
+    import functools
+
+    c = _cash()
+
+    def scaled(fn):
+        @functools.wraps(fn)
+        def wrapper(x, factor=1):
+            return fn(x) * factor
+
+        return wrapper
+
+    @c.cache
+    @scaled
+    def price(x, currency=3):
+        return x
+
+    assert price(10) == 10
+    assert price(10, 3) == 30, "the wrapper's own argument was bound to the inner default"
+
+
+def test_a_pass_through_wrapper_still_canonicalises_by_the_inner_signature():
+    """``f(1)`` and ``f(1, n=5)`` through ``*args, **kwargs`` are one call."""
+    import functools
+
+    c = _cash()
+    _RUNS.clear()
+
+    def logged(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    @c.cache
+    @logged
+    def f(x, n=5):
+        _RUNS.append("f")
+        return x * n
+
+    assert f(1) == 5
+    assert f(1, n=5) == 5
+    assert f(x=1) == 5
+    assert len(_RUNS) == 1, "a pass-through wrapper stopped normalising its calls"
