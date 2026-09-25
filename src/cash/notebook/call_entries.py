@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["CallEntries"]
 
-#: A call cheaper than this gets no content digest, so no statement refers to it.
+#: A call cheaper than this gets no content digest, so a statement refers to it
+#: only when it is that statement's plain value (``b = f(a)``), which needs none.
 _REF_MIN_COMPUTE_S = 0.1
 
 #: Result types whose identity no program can rely on -- see
@@ -341,8 +342,10 @@ class CallEntries:
         # Nor for the call a statement is nothing but (``a, b = build()``,
         # `plain_value`): that statement's reference is trusted without a
         # digest, so a token serves -- a 402 MiB result was worth
-        # keeping, and pickling it for a digest took 2.6 s of 3.7.
-        if elapsed >= _REF_MIN_COMPUTE_S and not callee_globals:
+        # keeping, and pickling it for a digest took 2.6 s of 3.7. Whatever
+        # the call took: its statement stores the reference instead of a
+        # second copy of the value, which a token makes free.
+        if (plain_value or elapsed >= _REF_MIN_COMPUTE_S) and not callee_globals:
             estimate = self._too_big_to_digest(value, elapsed, plain_value)
             found = digest_and_size(value) if estimate is None else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate)
             if found:

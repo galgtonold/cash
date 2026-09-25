@@ -113,3 +113,21 @@ def test_a_value_used_elsewhere_is_still_digested(cash_magics, seen):
     run_cash_cell(cash_magics, "acc = []")
     run_cash_cell(cash_magics, "acc.append(small())")
     assert digests, "a call that is not its statement's plain value is digested as before"
+
+
+def test_a_quick_plain_value_is_referenced_too(cash_magics, seen):
+    """``b = shifted(a)`` over a call of 30 ms held the result twice, as the
+    call's entry and as the statement's: a call under 0.1 s got no digest, so
+    its statement could not refer to it. Its plain value needs no digest."""
+    stored, digests = seen
+    run_cash_cell(
+        cash_magics,
+        BUILD + "def quick():\n    time.sleep(0.03)\n    return pd.DataFrame({'x': np.arange(1000, dtype=float)})\n",
+    )
+    stored.clear()
+    run_cash_cell(cash_magics, "q = quick()")
+    assert isinstance(stored[-1]["q"], call_refs.CallRef)
+    assert digests == []
+    del cash_magics.shell.user_ns["q"]
+    run_cash_cell(cash_magics, "q = quick()")
+    assert float(cash_magics.shell.user_ns["q"]["x"].iloc[999]) == 999.0
