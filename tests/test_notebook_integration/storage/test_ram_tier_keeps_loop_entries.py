@@ -70,19 +70,30 @@ LOOP = (
     "raw = pd.concat(parts, ignore_index=True)\n"
     "print('rows', len(raw))"
 )
-#: Eight 8 MB frames at 50 ms each (~6 ms per MB, where a 10 ms read of a
-#: ~50 KB file is ~200): 64 MB of cheap-per-byte values, written after the
-#: loop, against a 40 MB cap. The sleep gives each a cost the cost model
-#: caches -- ``w + k`` alone took a few ms and was never stored.
+#: Two 24 MB frames, each cached twice (the ``shifted`` call and the
+#: statement): 96 MB of cheap-per-byte values written after the loop, against
+#: a 40 MB cap. Measured: ~130 ms per copy, most of it cash hashing and storing
+#: the frame, so ~5 ms per MB; a read takes ~1.5 ms for a 77 KB frame, ~20 ms
+#: per MB and twice that once the control arm has hit it.
+#:
+#: Keep the gap wide and the copies few. Each eviction raises the byte cap's
+#: clock to the victim's value, so every copy that passes through the cap ages
+#: the loop's entries by about one copy's value per byte. Eight 8 MB copies at
+#: 50 ms (~10 ms per MB, 128 MB through the cap) raised the clock to within
+#: 10% of the cheapest reads, and a CI runner's timings closed the rest: 28 of
+#: 40 recomputed. Here it stays under a quarter of them, and passes with the
+#: sleep at 0.6 s. The sleep puts the copies above the cost model's floor.
 BIG = (
     "import time\n"
     "def shifted(frame, k):\n"
-    "    time.sleep(0.05)\n"
+    "    time.sleep(0.02)\n"
     "    return frame + k\n"
-    "w = pd.DataFrame(np.zeros((250_000, 4)))\n"
-    + "\n".join(f"w{k} = shifted(w, {k})" for k in range(1, 9))
-    + "\nprint('w', len(w8))"
+    "w = pd.DataFrame(np.zeros((750_000, 4)))\n"
+    + "\n".join(f"w{k} = shifted(w, {k})" for k in range(1, 3))
+    + "\nprint('w', len(w2))"
 )
+#: The byte cap's clock: above zero once the cap has evicted something.
+_CLOCK = f"{_RAM}._gdsf_clock"
 
 
 @pytest.fixture
@@ -128,7 +139,9 @@ def test_a_later_cell_overflowing_the_ram_tier_leaves_the_loop_cached(nb_runner,
     assert before.get("RESTORED", 0) == N, f"unchanged re-run: {before}"
 
     nb_runner.run_cell(4)
-    assert "w 250000" in nb_runner.get_output(4)
+    assert "w 750000" in nb_runner.get_output(4)
+    # The copies overflowed the cap: without that, a pass below says nothing.
+    assert float(nb_runner.peek(_CLOCK)) > 0, "the copies never reached the RAM tier's cap"
     after = _loop_reads(nb_runner)
     # Measured on plain LRU: {'COMPUTED': 40} -- every read evicted.
     assert after.get("RESTORED", 0) == N, f"re-run after an overflowing cell: {after}"
