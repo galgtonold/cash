@@ -504,9 +504,26 @@ class PendingWrites:
             self._report_failed_writes()
 
     def _warn_abandoned_writes(self, timeout: float) -> None:
-        """Say that the exit deadline expired with writes still running."""
+        """Say that the exit deadline expired with writes still running.
+
+        Nothing to say when every write had finished: a worker thread still
+        alive at the deadline may just not have picked up its stop signal
+        yet, which with ``shutdown_write_timeout=0`` is every exit. And no
+        warning for a deadline of 0, which asks not to wait: a write still
+        running then is what was asked for, not a stalled disk, and it may
+        well land before the process ends.
+        """
         with self._lock:
             unfinished = sum(1 for f in self._pending.values() if not f.done())
+        if unfinished == 0:
+            return
+        if timeout <= 0:
+            logger.info(
+                "Cash exited without waiting for %d cache write(s) (shutdown_write_timeout=0); "
+                "an entry whose write had not finished is not stored.",
+                unfinished,
+            )
+            return
 
         try:
             warn_diagnostic(

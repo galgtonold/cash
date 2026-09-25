@@ -258,6 +258,38 @@ def test_shutdown_still_waits_for_a_write_that_finishes():
     assert done == ["written"]
 
 
+def test_a_zero_deadline_with_every_write_done_says_nothing():
+    """``shutdown_write_timeout=0`` ("do not wait") warned
+    CACHE-WRITE-ABANDONED at every exit -- "gave up waiting for 0 cache
+    write(s) ... not stored" -- because the idle writer thread had not yet
+    picked up its stop signal when the zero deadline was checked."""
+    writes = PendingWrites()
+    writes.submit("quick", lambda: None)
+    writes.wait_all()
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        writes.shutdown(wait=True, timeout=0)
+    assert not [w for w in rec if "CACHE-WRITE-ABANDONED" in str(w.message)]
+
+
+def test_a_zero_deadline_logs_a_running_write_instead_of_warning(caplog):
+    """0 asks not to wait, so a write still running is what was asked for:
+    logged, not warned as a stalled disk."""
+    import logging
+
+    release = threading.Event()
+    writes = PendingWrites()
+    writes.submit("stuck", release.wait)
+    try:
+        with warnings.catch_warnings(record=True) as rec, caplog.at_level(logging.INFO, logger="cash"):
+            warnings.simplefilter("always")
+            writes.shutdown(wait=True, timeout=0)
+        assert not [w for w in rec if "CACHE-WRITE-ABANDONED" in str(w.message)]
+        assert "without waiting for 1 cache write(s)" in caplog.text
+    finally:
+        release.set()
+
+
 def test_the_writer_threads_are_daemons():
     """Structural, because the property is only observable at interpreter exit.
 

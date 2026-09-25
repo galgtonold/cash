@@ -79,7 +79,7 @@ set to the empty string (`CASH_CACHE_DIR=${X:-}`) counts as unset.
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` | both | Entry-count cap for the RAM tier, evicting least recently used. `null` means no count limit; the RAM tier is still capped in bytes. |
 | `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | both | Seconds between the disk tier's metadata flushes. `0` flushes after every write. |
 | `file_hash_full_max_bytes` | `CASH_FILE_HASH_FULL_MAX_BYTES` | `268435456` (256 MiB) | both | Tracked files up to this size are hashed in full to check freshness. Larger files hash three sampled regions plus the timestamps, which misses a same-size edit outside those regions that keeps the modification time. |
-| `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | both | Seconds a finishing process waits for its background writes before exiting without them ([`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned)). |
+| `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | both | Seconds a finishing process waits for its background writes before exiting without them ([`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned)). `0` does not wait, and does not warn. |
 
 <!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @b30940d8 -->
 **What "auto" resolves to.** The disk cap is a quarter of the room on the cache
