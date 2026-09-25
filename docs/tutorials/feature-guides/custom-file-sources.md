@@ -125,6 +125,11 @@ load_events("s3://bucket/events.parquet")   # first call: downloads, records the
 load_events("s3://bucket/events.parquet")   # cache hit: one metadata request
 ```
 
+<!-- claim: cash/remote_source.py:_fsspec_token @e1bf519f, cash/remote_source.py:_listing_token @fe6b3d29 -->
+A prefix or a glob (`pd.read_parquet("s3://bucket/events/")`) is tracked by
+its listing: every object's name and validator, read with one LIST request
+per check. A new, removed or rewritten partition recomputes the next call.
+
 Overwriting the object recomputes the next call; re-uploading identical bytes
 does not. One exception: S3's ETag for a multipart upload also depends on the
 part size, so re-uploading the same data with a different tool can cost one

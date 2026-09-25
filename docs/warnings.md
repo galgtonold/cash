@@ -1177,7 +1177,8 @@ would hurt: then the check is what you pay for.
 
 <!-- claim: cash/remote_source.py:_warn_weak_token @d860c31b -->
 **What happened.** The store gave no ETag, version id or last-modified time
-for a remote file, so cash tracks it by size alone.
+for a remote file, or for some of the objects under a prefix or glob you read,
+so cash tracks them by size alone.
 
 **Why it matters.** A same-size edit does not change the key, so the old
 result is served.
@@ -1186,8 +1187,11 @@ result is served.
 `#generation=...`), or write a `DataSource` whose token you control (see
 [Data sources](api/data_sources.md)).
 
-**When it is safe to ignore.** When the object is append-only or written once,
-such as dated partitions.
+<!-- claim: cash/remote_source.py:_listing_token @fe6b3d29 -->
+**When it is safe to ignore.** When each object is written once and never
+rewritten in place. For a prefix or a glob, such as a folder of dated
+partitions, the objects' names are tracked too, so a new or removed partition
+still changes the key.
 
 ## REMOTE-STATE-UNREADABLE {#remote-state-unreadable}
 

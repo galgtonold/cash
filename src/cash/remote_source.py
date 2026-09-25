@@ -35,6 +35,7 @@ on); a missing one raises :class:`~cash.exceptions.DependencyNotFoundError`.
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import itertools
 import logging
 import time
@@ -330,19 +331,66 @@ def _fsspec_token(url: str, storage_options: dict[str, Any]) -> str:
         ) from exc
 
     fs, path = fsspec.core.url_to_fs(url, **storage_options)
+    # s3fs answers `info` from a listing it cached earlier -- the reader's own,
+    # made moments ago -- and would report the ETag the object had then.
+    invalidate = getattr(fs, "invalidate_cache", None)
+    if invalidate is not None:
+        invalidate(path)
+    if any(char in path for char in "*?["):
+        return _listing_token(url, fs.glob(path, detail=True))
     info = fs.info(path)
+    if info.get("type") == "directory":
+        # A prefix (`pd.read_parquet("s3://b/p/")`) reads every object under
+        # it. The prefix itself carries nothing: s3fs reports it as size 0
+        # with no ETag, so a new partition never moved the token and the old
+        # total was served for good.
+        return _listing_token(url, fs.find(path, detail=True))
+    token, weak = _info_token(info)
+    if token is None:
+        raise _NoTokenError("the filesystem reported no ETag, version, mtime or size")
+    if weak:
+        _warn_weak_token(url, "the filesystem reports no ETag, version or mtime")
+    return token
+
+
+def _info_token(info: dict[str, Any]) -> tuple[str | None, bool]:
+    """``(token, size_only)`` for one object's fsspec info, strongest first."""
     for key in _STRONG_INFO_KEYS:
         value = info.get(key)
         if value:
-            return f"{key.lower()}:{value}"
+            return f"{key.lower()}:{value}", False
     modified = info.get("LastModified") or info.get("last_modified") or info.get("mtime")
     size = info.get("size")
     if modified is not None:
-        return f"mtime:{modified}|size:{size}"
+        return f"mtime:{modified}|size:{size}", False
     if size is not None:
-        _warn_weak_token(url, "the filesystem reports no ETag, version or mtime")
-        return f"size:{size}"
-    raise _NoTokenError("the filesystem reported no ETag, version, mtime or size")
+        return f"size:{size}", True
+    return None, False
+
+
+def _listing_token(url: str, entries: dict[str, dict[str, Any]]) -> str:
+    """One token for every object under a prefix or matching a glob.
+
+    Each object's own validator, with its name, so a new object, a removed
+    one and an edited one all move it. One LIST request per check, however
+    many objects there are (a page per thousand on S3).
+    """
+    digest = hashlib.sha256()
+    count = 0
+    weak = False
+    for name in sorted(entries):
+        info = entries[name]
+        if info.get("type") == "directory":
+            continue
+        token, size_only = _info_token(info)
+        if token is None:
+            raise _NoTokenError(f"the filesystem reported no ETag, version, mtime or size for {name!r}")
+        weak = weak or size_only
+        digest.update(f"{name}\0{token}\n".encode())
+        count += 1
+    if weak:
+        _warn_weak_token(url, "some objects under it report no ETag, version or mtime")
+    return f"listing:{count}:{digest.hexdigest()}"
 
 
 class RemoteFileDataSource(DataSource):
