@@ -1168,7 +1168,7 @@ removed. Caching resumes by itself once access works.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @62041ef1 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2 -->
 **What happened.** A chunk of a large iterator result failed to write. The
 message names the chunk, the backend and the exception.

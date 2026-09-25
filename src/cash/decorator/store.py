@@ -7,6 +7,7 @@ import functools
 import hashlib
 import logging
 import pickle
+import secrets
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -24,6 +25,7 @@ from .cached_function import CachedFunction
 from .call_state import NO_WATCH
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
+from .iterators import chunk_prefix
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -459,6 +461,15 @@ class ResultStore:
         **Time is the producer's, not the wall clock.** Only the spans inside
         `next()` are summed, so a slow consumer cannot inflate the number the
         persistence decision reads.
+
+        **Each stream writes its own chunks.** Two streams of one key overlap
+        whenever two callers miss before either finishes (two threads, two
+        requests, ``zip(gen(6), gen(6))``). Under shared chunk names the one
+        that stopped early deleted chunks the finished one had stored, and two
+        finished ones stored a result mixing chunks of both runs. So chunk
+        names carry a stream id the manifest records (`chunk_prefix`): the
+        manifest written last names a complete run of its own, and cleaning up
+        touches only what this stream wrote.
         """
         func_name, cache_if = spec.name, spec.cache_if
         chunk_max_items, chunk_max_bytes = spec.chunk_max_items, spec.chunk_max_bytes
@@ -469,6 +480,8 @@ class ResultStore:
         total_items = 0
         produced_seconds = 0.0
         committed = False
+        stream = secrets.token_hex(8)
+        prefix = chunk_prefix(cache_key, stream)
 
         try:
             # Entered ONCE. Per item we only suspend around the `yield`, which
@@ -490,7 +503,7 @@ class ResultStore:
                     if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
                         if chunk_index == 1 and cache_if is not None:
                             self._warn_cache_if_bypassed(spec)
-                        self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
+                        self._write_one_chunk(prefix, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
                         buffer = []
                         buffer_bytes = 0
                         chunk_index += 1
@@ -518,7 +531,7 @@ class ResultStore:
                     self._misses.note_not_stored(cache_key, refusal)
                 else:
                     if buffer:
-                        self._write_one_chunk(cache_key, 0, buffer, ttl=ttl, execution_time=produced_seconds)
+                        self._write_one_chunk(prefix, 0, buffer, ttl=ttl, execution_time=produced_seconds)
                     # An empty iterator still gets a zero-chunk manifest, so a
                     # hit returns empty instead of recomputing.
                     self._store_chunked_manifest(
@@ -530,12 +543,13 @@ class ResultStore:
                         args_hash,
                         produced_seconds,
                         auto_file_deps,
+                        stream,
                     )
             else:
                 if buffer:
                     if chunk_index == 1 and cache_if is not None:
                         self._warn_cache_if_bypassed(spec)
-                    self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
+                    self._write_one_chunk(prefix, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
                     chunk_index += 1
                 self._store_chunked_manifest(
                     cache_key,
@@ -546,6 +560,7 @@ class ResultStore:
                     args_hash,
                     produced_seconds,
                     auto_file_deps,
+                    stream,
                 )
 
             committed = True
@@ -556,13 +571,13 @@ class ResultStore:
                 # killed process can still leave some behind.
                 for index in range(chunk_index):
                     try:
-                        self._backend_slot.backend.delete(f"{cache_key}:chunk_{index}")
+                        self._backend_slot.backend.delete(f"{prefix}:chunk_{index}")
                     except Exception:  # noqa: BLE001 - cleanup must not raise
                         logger.debug("[CORE] could not drop orphan chunk %d", index)
 
     def _write_one_chunk(
         self,
-        cache_key: str,
+        prefix: str,
         chunk_index: int,
         chunk_buffer: list[Any],
         ttl: int | None = None,
@@ -576,8 +591,10 @@ class ResultStore:
         key are enough. We also propagate the manifest's ``ttl`` so
         ``Cash.cleanup()`` (without a ``max_age`` argument) can reclaim
         expired chunks alongside the expired manifest.
+
+        *prefix* is the stream's `chunk_prefix`.
         """
-        chunk_key = f"{cache_key}:chunk_{chunk_index}"
+        chunk_key = f"{prefix}:chunk_{chunk_index}"
         serializer = get_serializer(chunk_buffer)
         chunk_metadata = CacheMetadata(
             key=chunk_key,
@@ -601,14 +618,14 @@ class ResultStore:
             backend_name = type(self._backend_slot.backend).__name__
             self._notices.warn_once(
                 CashCacheStoreFailedWarning,
-                f"{cache_key}:chunk_{chunk_index}",
+                chunk_key,
                 "",
                 # NOT "you will get a truncated iterator". ``CallRunner._chunks_are_intact``
                 # probes every chunk and turns a manifest with a hole into a
                 # MISS, on both read paths, so the cost is a permanent recompute
                 # rather than a short answer.
                 f"@cash.cache: backend {backend_name} failed to store "
-                f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}), "
+                f"chunk {chunk_index} of {prefix} ({type(e).__name__}: {e}), "
                 f"so the entry can never be read back and every later call "
                 f"recomputes it.",
                 code="STORE-CHUNK-FAILED",
@@ -626,13 +643,17 @@ class ResultStore:
         args_hash: str,
         execution_time: float,
         auto_file_deps: dict[str, dict[str, float]] | None,
+        stream: str,
     ) -> None:
         """Write the manifest entry for a chunked iterator at *cache_key*.
 
         The value stored at the key is the manifest dict (``n_chunks``,
         ``total_items``). The metadata flags this entry as chunked so
-        the hit path knows to use ``ChunkedCachedIterator``.
+        the hit path knows to use ``ChunkedCachedIterator``, and names the
+        *stream* whose chunks it covers. The chunks of the manifest it
+        replaces are deleted once it is written: nothing names them any more.
         """
+        replaced = self._replaced_stream(cache_key, stream)
         try:
             serializer = get_serializer(manifest_data)
             metadata = CacheMetadata(
@@ -646,9 +667,12 @@ class ResultStore:
                 state_hash=state_hash,
                 iterator_storage="chunked",
                 n_chunks=manifest_data["n_chunks"],
+                chunk_stream=stream,
                 auto_file_deps=auto_file_deps or None,
             ).to_dict()
             self._backend_slot.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
+            if replaced is not None:
+                self._drop_chunks(*replaced)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
             backend_name = type(self._backend_slot.backend).__name__
             self._notices.warn_once(
@@ -662,3 +686,27 @@ class ResultStore:
                 code="STORE-FAILED",
                 fix=STORE_FAILED_FIX,
             )
+
+    def _replaced_stream(self, cache_key: str, stream: str) -> tuple[str, int] | None:
+        """The chunk prefix and count of the manifest at *cache_key* that a
+        manifest for *stream* is about to replace, if there is one."""
+        try:
+            previous = self._backend_slot.backend.get_metadata(cache_key)
+        except Exception:  # noqa: BLE001 - a lookup for cleanup must not fail a store
+            return None
+        if not previous or previous.get("iterator_storage") != "chunked":
+            return None
+        old = previous.get("chunk_stream")
+        if not old or old == stream:
+            return None
+        return chunk_prefix(cache_key, old), int(previous.get("n_chunks") or 0)
+
+    def _drop_chunks(self, prefix: str, n_chunks: int) -> None:
+        """Delete the chunks a replaced manifest named. Best effort: a chunk
+        left behind is unreferenced, and a reader still replaying it
+        recomputes the rest (`ChunkedCachedIterator`)."""
+        for index in range(n_chunks):
+            try:
+                self._backend_slot.backend.delete(f"{prefix}:chunk_{index}")
+            except Exception:  # noqa: BLE001 - cleanup must not raise
+                logger.debug("[CORE] could not drop replaced chunk %d of %s", index, prefix)

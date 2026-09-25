@@ -36,7 +36,7 @@ from .call_state import (
 from .code_identity import func_key
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
-from .iterators import ChunkedCachedIterator, StreamingCachedIterator, is_one_shot_iterator
+from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 
@@ -388,8 +388,9 @@ class CallRunner:
         if getattr(metadata, "iterator_storage", None) != "chunked":
             return True
         try:
+            prefix = chunk_prefix(cache_key, metadata.chunk_stream)
             for index in range(metadata.n_chunks or 0):
-                if self._backend_slot.backend.get_metadata(f"{cache_key}:chunk_{index}") is None:
+                if self._backend_slot.backend.get_metadata(f"{prefix}:chunk_{index}") is None:
                     logger.debug(
                         "[CORE] chunk %d of %s is missing; treating the entry "
                         "as a miss rather than serving a short result",
@@ -418,7 +419,8 @@ class CallRunner:
         """
         if metadata and metadata.iterator_storage == "chunked":
             n_chunks = metadata.n_chunks or 0
-            return ChunkedCachedIterator(self._backend_slot, call.cache_key, n_chunks, call.recompute)
+            prefix = chunk_prefix(call.cache_key, metadata.chunk_stream)
+            return ChunkedCachedIterator(self._backend_slot, prefix, n_chunks, call.recompute)
         return hit
 
     def _analyze_dependencies(self, func: Callable[..., Any]) -> None:

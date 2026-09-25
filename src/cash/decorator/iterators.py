@@ -10,6 +10,17 @@ from typing import Any
 from ..exceptions import CacheBackendError
 
 
+def chunk_prefix(cache_key: str, stream: str | None) -> str:
+    """What the chunk keys of one stored stream of *cache_key* start with.
+
+    Chunk *i* is ``f"{prefix}:chunk_{i}"``. *stream* is the id the writing
+    stream drew and its manifest records (``chunk_stream``), so two streams
+    of one key never write, or delete, each other's chunks. A manifest that
+    names no stream names no chunks that exist.
+    """
+    return f"{cache_key}:{stream}"
+
+
 class StreamingCachedIterator:
     """Passes the producer's items through as they arrive, caching at the end.
 
@@ -63,8 +74,8 @@ class ChunkedCachedIterator:
     Args:
         holder: What the chunks are read from: anything with a ``.backend``,
             the owning `Cash`'s `BackendSlot`.
-        cache_key: The canonical key under which the manifest is stored.
-            Chunk keys are derived as ``f"{cache_key}:chunk_{i}"``.
+        cache_key: The stored stream's `chunk_prefix`. Chunk keys are
+            derived as ``f"{cache_key}:chunk_{i}"``.
         n_chunks: Total chunk count, taken from the manifest at construction.
 
     A chunk can go while the caller is still reading: another process clears

@@ -61,6 +61,8 @@ class CacheMetadata:
     auto_file_deps: dict[str, dict[str, float]] | None = None
     iterator_storage: str | None = None
     n_chunks: int | None = None
+    #: The stream whose chunks a chunked manifest covers (`chunk_prefix`).
+    chunk_stream: str | None = None
     # Deserialization instruction; round-tripped so get() can rebuild the value.
     serializer_cls: type | None = None
     # Notebook-annotation flags consumed by TieredBackend / lineage.
