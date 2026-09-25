@@ -65,6 +65,18 @@ _DISCARDED_WRITES: list[tuple[str, str]] = []
 _DISCARDED_LOCK = threading.Lock()
 
 
+def _reset_after_fork_in_child() -> None:
+    """Make every write queue usable in a forked child (`PendingWrites._after_fork_in_child`)."""
+    global _DISCARDED_LOCK
+    _DISCARDED_LOCK = threading.Lock()
+    for pending in list(_LIVE_WRITE_QUEUES):
+        pending._after_fork_in_child()
+
+
+if hasattr(os, "register_at_fork"):  # not on Windows, which cannot fork
+    os.register_at_fork(after_in_child=_reset_after_fork_in_child)
+
+
 def _record_discarded(key: str, exc: BaseException) -> None:
     with _DISCARDED_LOCK:
         _DISCARDED_WRITES.append((key, f"{type(exc).__name__}: {exc}"))
@@ -235,6 +247,22 @@ class PendingWrites:
         # itself.
         self._tls = threading.local()
         _LIVE_WRITE_QUEUES.add(self)
+
+    def _after_fork_in_child(self) -> None:
+        """Start this queue afresh in a forked child.
+
+        A child inherits ``_pending`` with the parent's unfinished futures but
+        not the writer thread that would finish them, so waiting on one --
+        every read of the key, a second write of it, a listing, a clear --
+        blocked the child forever. Those writes are the parent's to finish;
+        the child reads what is on disk. The locks are new too: another thread
+        may have held one at the moment of the fork, and nothing in the child
+        would ever release it.
+        """
+        self._lock = threading.Lock()
+        self._executor = _DaemonWriterPool(max_workers=self._executor._max_workers)
+        self._pending = {}
+        self._tls = threading.local()
 
     def is_shutdown(self) -> bool:
         """True once ``shutdown()`` has been called; no further work accepted."""

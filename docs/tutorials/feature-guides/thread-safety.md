@@ -98,7 +98,9 @@ Each process keeps some things to itself:
 
 - **RAM.** Each process has its own memory tier; only the disk is shared.
 - **Writes.** A worker writes each result before its task returns, so a pool
-  that shuts its workers down loses nothing.
+  that shuts its workers down loses nothing. A worker forked while the parent
+  is still writing a result does not wait for that write: it reads what is on
+  disk, and recomputes if the entry is not there yet.
 - **The summary.** `CASH_SUMMARY` prints one table per process that exits
   normally, labelled with its pid. `multiprocessing.Pool` terminates its
   workers, so only the parent's table prints.

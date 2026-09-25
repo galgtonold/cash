@@ -70,6 +70,28 @@ _WRITERS_BY_DIR: dict[str, weakref.WeakSet] = {}
 _WRITERS_LOCK = threading.Lock()
 
 
+# Every FileBackend alive in the process, for `_reset_after_fork_in_child`.
+_LIVE_BACKENDS: weakref.WeakSet = weakref.WeakSet()
+
+
+def _reset_after_fork_in_child() -> None:
+    """New locks for this module and every live `FileBackend` in a forked child.
+
+    Only the forking thread survives a fork. A lock another thread held at
+    that moment -- the background writer recording an entry it had just
+    written -- stays held in the child forever. The queues themselves are
+    reset by ``_writes`` (`PendingWrites._after_fork_in_child`).
+    """
+    global _WRITERS_LOCK
+    _WRITERS_LOCK = threading.Lock()
+    for backend in list(_LIVE_BACKENDS):
+        backend._after_fork_in_child()
+
+
+if hasattr(os, "register_at_fork"):  # not on Windows, which cannot fork
+    os.register_at_fork(after_in_child=_reset_after_fork_in_child)
+
+
 def _writer_scope(cache_dir: str) -> str:
     """Normalized identity of a cache directory (symlinks and relative paths resolved)."""
     try:
@@ -184,6 +206,17 @@ class FileBackend(CacheBackend):
         #: Set when the cache directory turned out to be unusable. Every public
         #: operation then answers as an empty cache would: a miss, a no-op write.
         self._unusable = False
+        _LIVE_BACKENDS.add(self)
+
+    def _after_fork_in_child(self) -> None:
+        """Replace the locks a thread of the parent may have held at the fork."""
+        self._init_lock = threading.Lock()
+        self._touched.lock = threading.RLock()
+        # The evictor's accounting shares the touched-entries lock.
+        self.evictor._lock = self._touched.lock
+        self.evictor.rank_index._lock = threading.Lock()
+        self.evictor.evictions._lock = threading.Lock()
+        self._versions._lock = threading.Lock()
 
     @property
     def written_stamp(self) -> tuple | None:  # type: ignore[override]
