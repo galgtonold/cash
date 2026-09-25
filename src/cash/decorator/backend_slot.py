@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING, Any
 
+from ..backends._base import stored_ttl
 from ..backends.factory import build_backend_from_config
 
 if TYPE_CHECKING:
@@ -68,5 +69,5 @@ class BackendSlot:
         """
         if ttl is not None:
             return ttl
-        found = [t for t in (getattr(metadata, "ttl", None), self.tier_default_ttl()) if t is not None]
+        found = [t for t in (stored_ttl(getattr(metadata, "ttl", None)), self.tier_default_ttl()) if t is not None]
         return min(found) if found else None

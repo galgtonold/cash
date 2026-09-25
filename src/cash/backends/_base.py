@@ -21,6 +21,7 @@ __all__ = [
     "CacheBackend",
     "effective_ttl",
     "entry_expired",
+    "stored_ttl",
     "ttl_expired",
 ]
 
@@ -152,6 +153,21 @@ class EntryMetadata(TypedDict, total=False):
     store_errors: list[str]
 
 
+def stored_ttl(value: Any) -> float | None:
+    """A ttl read back from an entry, as a number of seconds or ``None``.
+
+    What is stored came from another process, possibly an older version of
+    the code: a value that is not a real number (a ``"300"`` str, NaN) reads
+    as ``0``, "never fresh", so the entry is recomputed and rewritten instead
+    of breaking the lookup that compares it.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or math.isnan(value):
+        return 0
+    return value
+
+
 def ttl_expired(timestamp: float | None, ttl: float | None, now: float | None = None) -> bool:
     """Has an entry written at *timestamp* outlived *ttl* seconds?
 
@@ -161,8 +177,10 @@ def ttl_expired(timestamp: float | None, ttl: float | None, now: float | None = 
     timer, and ``0.0 > 0`` would hand back the very entry ``ttl=0`` exists to
     reject. Otherwise an entry is expired once its age exceeds the ttl. An
     entry with no timestamp reads as written at the epoch, so it expires under
-    any ttl rather than being served forever.
+    any ttl rather than being served forever. A ttl that is not a number is
+    read through `stored_ttl`.
     """
+    ttl = stored_ttl(ttl)
     if ttl is None:
         return False
     if ttl <= 0:
@@ -179,7 +197,7 @@ def effective_ttl(metadata: Mapping[str, Any], tier_default: float | None) -> fl
     shortens entries already written. `TieredBackend.get`, `Cash.cleanup` and
     ``cash clear --expired`` all apply this.
     """
-    written = metadata.get("ttl")
+    written = stored_ttl(metadata.get("ttl"))
     if metadata.get("ttl_declared") or tier_default is None:
         return written
     return tier_default if written is None else min(written, tier_default)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import pickle
 from typing import Any
 
@@ -199,7 +200,7 @@ class RedisBackend(CacheBackend):
         )
 
     def _do_set_sync(
-        self, meta_key: str, data_key: str, meta_bytes: bytes, serialized_value: bytes, ttl: int | None, key: str
+        self, meta_key: str, data_key: str, meta_bytes: bytes, serialized_value: bytes, ttl: float | None, key: str
     ) -> None:
         """The actual Redis pipeline — runs in the PendingWrites worker."""
         try:
@@ -208,8 +209,10 @@ class RedisBackend(CacheBackend):
             pipe.set(data_key, serialized_value)
 
             if ttl:
-                pipe.expire(meta_key, ttl)
-                pipe.expire(data_key, ttl)
+                # Redis expires in whole seconds; round up so a fractional
+                # ttl never drops the entry before cash would.
+                pipe.expire(meta_key, math.ceil(ttl))
+                pipe.expire(data_key, math.ceil(ttl))
 
             pipe.execute()
         except (RedisError, OSError) as exc:

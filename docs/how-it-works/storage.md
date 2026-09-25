@@ -92,7 +92,7 @@ for the next read, unless it would take more than 90% of the memory cap.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0, cash/backends/_base.py:effective_ttl @7c55c336 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0, cash/backends/_base.py:effective_ttl @90a9b7b8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy. The ttl is the decorator's `ttl=`, or else
 the shorter of the ttl the entry was written with and the tier's current

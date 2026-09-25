@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import atexit
 import dataclasses
+import datetime
 import functools
 import inspect
 import logging
@@ -36,7 +37,7 @@ from .decorator.arg_hashing import (
 )
 from .decorator.backend_slot import BackendSlot
 from .decorator.cache_metadata import CacheMetadata
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, new_stats
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl, new_stats
 from .decorator.call_state import (
     CACHE_MISS,
     CALL_ENTRY,
@@ -501,7 +502,7 @@ class Cash:
         depends_on: list[Callable[..., Any] | DataSource] | None = ...,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = ...,
         file_depends_on: str | list[str] | None = ...,
-        ttl: int | None = ...,
+        ttl: float | datetime.timedelta | None = ...,
         cache_if: Callable[[Any], bool] | None = ...,
         chunk_max_items: int = ...,
         chunk_max_bytes: int = ...,
@@ -518,7 +519,7 @@ class Cash:
         depends_on: list[Callable[..., Any] | DataSource] | None = None,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = None,
         file_depends_on: str | list[str] | None = None,
-        ttl: int | None = None,
+        ttl: float | datetime.timedelta | None = None,
         cache_if: Callable[[Any], bool] | None = None,
         chunk_max_items: int = CHUNK_MAX_ITEMS,
         chunk_max_bytes: int = CHUNK_MAX_BYTES,
@@ -542,7 +543,9 @@ class Cash:
                 call depends on.
             file_depends_on: Path(s) treated as read by the function: their
                 content is checked on every lookup.
-            ttl: Seconds an entry stays valid. ``None``: no expiry.
+            ttl: Seconds an entry stays valid (a number ``>= 0`` or a
+                `datetime.timedelta`). ``None``: no expiry. ``0``: recompute
+                every call.
             cache_if: ``predicate(result) -> bool``. A result it rejects is
                 returned but not stored.
             chunk_max_items: For an iterator result, items per stored chunk.
@@ -559,8 +562,11 @@ class Cash:
             The wrapped function, or a decorator when called with options.
 
         Raises:
-            ValueError: ``strict`` and ``assume_safe`` are both set.
+            ValueError: ``strict`` and ``assume_safe`` are both set, or
+                ``ttl`` is negative, NaN or infinite.
+            TypeError: ``ttl`` is not a number, timedelta or ``None``.
         """
+        ttl = checked_ttl(ttl)
         if strict and assume_safe:
             raise ValueError(
                 "@cash.cache: strict=True and assume_safe=True are mutually "

@@ -3,13 +3,23 @@ has learned about its calls."""
 
 from __future__ import annotations
 
+import datetime
 import inspect
+import math
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-__all__ = ["CHUNK_MAX_BYTES", "CHUNK_MAX_ITEMS", "WARNINGS_MAX", "CachedFunction", "PurityMode", "new_stats"]
+__all__ = [
+    "CHUNK_MAX_BYTES",
+    "CHUNK_MAX_ITEMS",
+    "WARNINGS_MAX",
+    "CachedFunction",
+    "PurityMode",
+    "checked_ttl",
+    "new_stats",
+]
 
 #: A returned iterator's chunk closes at whichever of these it reaches first.
 CHUNK_MAX_ITEMS = 1_000_000
@@ -56,6 +66,37 @@ def call_signature(func: Callable[..., Any]) -> inspect.Signature:
     return inspect.signature(func)
 
 
+def checked_ttl(ttl: Any) -> float | None:
+    """``ttl=`` as the decorator stores it: ``None``, or a finite number of
+    seconds ``>= 0``. A `datetime.timedelta` becomes its seconds.
+
+    Checked when the function is decorated, because the value is written
+    into every entry's metadata: a ``ttl="300"`` read from a config file
+    used to be accepted and then break every later lookup of those entries.
+
+    Raises:
+        TypeError: not a number, ``None`` or a timedelta (a str, a bool).
+        ValueError: negative, NaN or infinite.
+    """
+    if ttl is None:
+        return None
+    if isinstance(ttl, datetime.timedelta):
+        seconds = ttl.total_seconds()
+        ttl = int(seconds) if seconds.is_integer() else seconds
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        hint = " Convert it with int(...) first." if isinstance(ttl, str) else ""
+        raise TypeError(
+            f"@cash.cache: ttl must be a number of seconds, a datetime.timedelta or None, "
+            f"not {type(ttl).__name__} {ttl!r}.{hint}"
+        )
+    if math.isnan(ttl) or math.isinf(ttl) or ttl < 0:
+        raise ValueError(
+            f"@cash.cache: ttl must be a finite number of seconds >= 0, not {ttl!r}. "
+            "Use ttl=None for entries that never expire, ttl=0 to recompute every call."
+        )
+    return ttl
+
+
 def new_stats() -> dict[str, Any]:
     """The counters `cache_info()` and the run summary read."""
     return {
@@ -88,7 +129,8 @@ class CachedFunction:
     func: Callable
     name: str
     dynamic_depends_on: Any = None
-    ttl: int | None = None
+    #: Seconds, as `checked_ttl` accepted it.
+    ttl: float | None = None
     cache_if: Callable[[Any], bool] | None = None
     chunk_max_items: int = CHUNK_MAX_ITEMS
     chunk_max_bytes: int = CHUNK_MAX_BYTES

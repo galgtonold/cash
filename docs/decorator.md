@@ -216,12 +216,12 @@ see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @df737927 -->
+<!-- claim: cash/core.py:Cash.cache @12aa31ff -->
 All parameters are keyword-only and optional:
 
 | Parameter | What it does |
 |---|---|
-| `ttl=` | Seconds an entry stays valid. `None` (default): no expiry |
+| `ttl=` | Seconds an entry stays valid, or a `datetime.timedelta`. `None` (default): no expiry |
 | `cache_if=` | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
 | `depends_on=` | List of callables or `DataSource` objects to add to the key |
 | `file_depends_on=` | A path or list of paths, tracked by content as if the body read them |
@@ -232,7 +232,10 @@ All parameters are keyword-only and optional:
 | `allow_random=` | Silence the unseeded-randomness warning |
 | `chunk_max_items=`, `chunk_max_bytes=` | Chunk size for iterator results (default 1,000,000 items, 1 GB) |
 
-`strict=True` with `assume_safe=True` raises `ValueError`. Changing a parameter
+`strict=True` with `assume_safe=True` raises `ValueError`, and so does a
+negative, NaN or infinite `ttl=`; a `ttl=` that is not a number (a `"300"`
+read from an environment variable) raises `TypeError`, when the function is
+decorated. Changing a parameter
 keeps the entries already stored; adding, removing or changing a declared
 dependency recomputes. Locking is not a decorator parameter: it is
 `Cash(use_locking=True)`, see [Threads and processes](tutorials/feature-guides/thread-safety.md).
@@ -245,7 +248,7 @@ def rates():
     return requests.get("https://api.example.com/rates").json()
 ```
 
-<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @2df81c87, cash/core.py:Cash.cleanup @b561dc3e -->
+<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @672c5d75, cash/core.py:Cash.cleanup @b561dc3e -->
 After the ttl, the next call recomputes and replaces the entry. An entry keeps
 the ttl it was written with, and the decorator's current ttl applies too: the
 shorter one wins. So lengthening `ttl=60` to `ttl=3600` does not rescue entries
@@ -253,7 +256,8 @@ written under 60 seconds. To give every function a lifetime from
 configuration, set `default_ttl` on the disk tier; see
 [Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).
 An expired entry stays on disk until it is called again or you run
-`cash clear --expired`.
+`cash clear --expired`. `ttl=0` recomputes on every call. An entry whose
+stored ttl cannot be read as a number counts as expired.
 
 ### `file_depends_on=` and `depends_on=`
 

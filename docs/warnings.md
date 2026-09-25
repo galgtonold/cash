@@ -132,7 +132,7 @@ directive. Reword it so it does not start `# @cash:`.
 
 *Decorator.*
 
-<!-- claim: cash/core.py:Cash.cache @df737927 -->
+<!-- claim: cash/core.py:Cash.cache @12aa31ff -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). Cash does not cache those, so it returned your
 function unwrapped.
