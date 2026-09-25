@@ -166,6 +166,48 @@ def test_the_env_var_switches_it_on_with_no_code_change(tmp_path):
     assert "calls restored" not in shown.stdout
 
 
+def _run_script(tmp_path, body, **env_extra):
+    script = tmp_path / "s.py"
+    script.write_text(textwrap.dedent(body), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "CASH_SUMMARY"}
+    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
+    env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=env,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
+_CONFIGURED = """
+import cash
+cash.configure(summary={on})
+
+@cash.cache(assume_safe=True)
+def work(n):
+    return n + 1
+
+work(1)
+work(1)
+"""
+
+
+def test_configure_switches_it_on_at_runtime(tmp_path):
+    """`cash.configure(summary=True)` printed nothing: the exit hook was
+    registered only when the setting was on as the default instance was
+    built, and `configure()` builds it first (with summary off)."""
+    assert "calls restored" in _run_script(tmp_path, _CONFIGURED.format(on=True)).stderr
+
+
+def test_configure_switches_an_env_var_summary_off(tmp_path):
+    shown = _run_script(tmp_path, _CONFIGURED.format(on=False), CASH_SUMMARY="1")
+    assert "calls restored" not in shown.stderr
+
+
 def test_the_summary_never_breaks_a_finished_run(tmp_path, monkeypatch):
     """It runs during interpreter shutdown; a traceback there helps nobody."""
     c = _cash(tmp_path)

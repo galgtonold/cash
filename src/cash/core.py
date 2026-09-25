@@ -179,8 +179,11 @@ class _ExitWork:
 
 
 def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
+    """Print the run summary if the ``summary`` setting is on NOW: read at
+    exit, so ``cash.configure(summary=...)`` after the instance was built
+    switches it either way."""
     cash = ref()
-    if cash is not None:
+    if cash is not None and cash.config.summary:
         cash._print_run_summary()
 
 
@@ -333,12 +336,12 @@ class Cash:
         self.functions = self._registry.functions
         self.data_sources = self._registry.data_sources
         self.source_hashes = self._registry.source_hashes
-        if self.config.summary:
-            # Per instance: two Cash instances are two independent caches, and
-            # each accounts for itself. Through a weakref, so the hook does
-            # not keep the instance alive; registered before the exit work,
-            # so it runs after it.
-            atexit.register(_summary_at_exit, weakref.ref(self))
+        # Per instance: two Cash instances are two independent caches, and
+        # each accounts for itself. Registered whatever ``summary`` says now,
+        # since ``configure(summary=True)`` may turn it on later. Through a
+        # weakref, so the hook does not keep the instance alive; registered
+        # before the exit work, so it runs after it.
+        atexit.register(_summary_at_exit, weakref.ref(self))
         # The keys earlier runs stored, recorded beside the cache.
         self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
         self._notices = Notices(self._registry.cached, self.functions, self._stored_keys, self._backend_slot)
