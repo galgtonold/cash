@@ -246,25 +246,53 @@ def recreate_cache_dir(cache_dir: str) -> bool:
     return True
 
 
-def warn_if_unwritable(cache_dir: str) -> None:
+#: An entry's file name: a SHA-256 in hex and the suffix. The longest name
+#: cash writes into the directory, so the probe below is as long.
+ENTRY_NAME_LENGTH = 64 + len(ENTRY_SUFFIX)
+
+#: Windows' MAX_PATH, which applies unless long paths are enabled.
+_WINDOWS_MAX_PATH = 260
+
+
+def warn_if_unwritable(cache_dir: str, *, windows: bool = os.name == "nt") -> None:
     """Say at once, naming the path, if *cache_dir* cannot be written.
 
     Writes are asynchronous and best effort, so an unwritable directory
     otherwise has no symptom but a cache that never hits. One create and
     delete, on the first cache operation.
+
+    The probe's name is as long as an entry's: on Windows without long
+    paths, a cache_dir of about 188 characters or more takes entry paths past
+    260 characters, and every entry write failed while a short probe passed,
+    so nothing was ever stored and nothing was said until exit.
     """
+    filler = ENTRY_NAME_LENGTH - len(".probe-") - 12 - len(".tmp")
     try:
-        fd, probe = create_temp_file(cache_dir, prefix=".probe-", suffix=".tmp")
+        fd, probe = create_temp_file(cache_dir, prefix=".probe-", suffix=f"{'-' * filler}.tmp")
     except OSError as exc:
+        entry_path = len(os.path.join(os.path.abspath(cache_dir), "x" * ENTRY_NAME_LENGTH))
+        too_long = windows and entry_path >= _WINDOWS_MAX_PATH
+        why = (
+            f" An entry's path there is {entry_path} characters, over Windows' {_WINDOWS_MAX_PATH}-character limit."
+            if too_long
+            else ""
+        )
+        fix = (
+            "use a cache_dir of at most "
+            f"{_WINDOWS_MAX_PATH - ENTRY_NAME_LENGTH - 2} characters, or enable long paths in Windows "
+            "(the LongPathsEnabled registry setting)."
+            if too_long
+            else "point cash somewhere writable -- cash.configure(cache_dir=...), "
+            "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
+            "user write permission on that path."
+        )
         warn_diagnostic(
             CashCacheStoreFailedWarning,
             "CACHE-DIR-UNWRITABLE",
             f"cash cannot write to its cache directory {cache_dir} "
-            f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
+            f"({type(exc).__name__}: {exc}).{why} Nothing will be cached to disk "
             f"this run, so every call recomputes.",
-            "point cash somewhere writable -- cash.configure(cache_dir=...), "
-            "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
-            "user write permission on that path.",
+            fix,
         )
         return
     os.close(fd)

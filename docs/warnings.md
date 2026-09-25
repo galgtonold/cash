@@ -169,10 +169,13 @@ result. For freeing space only, the entries go at the next clear.
 
 *Both paths.*
 
-<!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @ca7bc994 -->
+<!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @2d5dd9da -->
 **What happened.** Cash could not create a file in its cache directory: a
 read-only mount, missing permissions, or a path that no longer exists. The
-message names the directory and the OS error.
+message names the directory and the OS error. On Windows without long paths
+it is also a directory whose path is too long for an entry: entry names are
+70 characters, so a cache directory of about 188 characters or more takes
+entry paths past the 260-character limit, and the message says so.
 
 **Why it matters.** Nothing is written to disk for the rest of the run, so
 every new process recomputes. Results are still correct, and in-process repeats
@@ -186,7 +189,8 @@ permission on the one named:
 cash.configure(cache_dir="/var/tmp/cash")   # or CASH_CACHE_DIR=... in the env
 ```
 
-In a container, check the cache path is on a writable volume.
+In a container, check the cache path is on a writable volume. On Windows,
+use a shorter path or enable long paths (`LongPathsEnabled`).
 
 **When it is safe to ignore.** When the directory is read-only on purpose: a
 shared cache you only read from.

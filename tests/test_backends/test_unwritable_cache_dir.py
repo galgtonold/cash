@@ -210,6 +210,53 @@ def test_a_writable_directory_says_nothing(tmp_path):
     assert backend.get("k")[1] == b"payload", "and it still caches"
 
 
+def _path_limit(monkeypatch, limit):
+    """Refuse to create a file whose path is longer than *limit*, as Windows
+    without long paths refuses one of 260 characters or more."""
+    from cash.backends import cache_dir as cache_dir_module
+
+    real_open = os.open
+
+    def limited_open(path, *args, **kwargs):
+        if len(os.fspath(path)) >= limit:
+            raise FileNotFoundError(3, "The system cannot find the path specified", os.fspath(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(cache_dir_module.os, "open", limited_open)
+
+
+def test_a_directory_too_deep_for_an_entry_s_name_is_announced(tmp_path, monkeypatch):
+    """With a path limit, a directory whose entry paths are over it but a
+    short probe's is not: every entry write failed while the probe passed,
+    and nothing said so until exit."""
+    from cash.backends.cache_dir import ENTRY_NAME_LENGTH, warn_if_unwritable
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    entry_path = len(os.path.join(str(cache), "x" * ENTRY_NAME_LENGTH))
+    _path_limit(monkeypatch, entry_path - 10)  # a short name still fits
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        warn_if_unwritable(str(cache), windows=True)
+    text = "\n".join(str(w.message) for w in rec)
+    assert "CACHE-DIR-UNWRITABLE" in text, text
+    if entry_path >= 260:
+        assert "260-character limit" in text
+
+
+def test_the_path_length_advice_names_the_limit(tmp_path, monkeypatch):
+    from cash.backends.cache_dir import warn_if_unwritable
+
+    deep = tmp_path / ("d" * 200)
+    deep.mkdir()
+    _path_limit(monkeypatch, 260)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        warn_if_unwritable(str(deep), windows=True)
+    text = "\n".join(str(w.message) for w in rec)
+    assert "over Windows' 260-character limit" in text and "LongPathsEnabled" in text, text
+
+
 def test_the_probe_leaves_nothing_behind(tmp_path):
     """A writability probe that littered would be a new bug of its own."""
     cache_dir = tmp_path / "cache"
