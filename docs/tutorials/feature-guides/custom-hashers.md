@@ -40,8 +40,9 @@ def evaluate(model, data):
 ```
 
 <!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/source_norm.py:callable_identity @f9ec85f7 -->
-From now on, every `MyModel` argument is identified by `hash_model(model)`. On
-your own `Cash(...)` instance, call `app.register_hasher(...)` instead.
+From now on, every `MyModel` argument is identified by `hash_model(model)`,
+and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
+`Cash(...)` instance, call `app.register_hasher(...)` instead.
 
 - **Subclasses match.** Dispatch uses `isinstance`, so a hasher for a base class
   covers its subclasses. When several registrations match, the first one
@@ -141,7 +142,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @210f1e78 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result. Override only
 when you hold an identity the value itself does not show, such as a dataset

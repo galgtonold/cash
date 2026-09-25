@@ -52,7 +52,8 @@ For other types, register a hasher; see
 <!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/object_hashing.py:compute_hash @7aa554ba -->
 === "Decorator"
 
-    Registered hashers apply to call arguments. The order in which an argument
+    Registered hashers apply to call arguments and to the values inside a
+    list, tuple, set or dict argument. The order in which an argument
     is tried against them is under
     [how arguments are hashed](decorator-path.md#how-arguments-are-hashed).
 

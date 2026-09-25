@@ -19,7 +19,7 @@ from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
-from ..object_hashing import builtin_hash, is_native_panic, stable_key_repr
+from ..object_hashing import NOT_HOOKED, builtin_hash, is_native_panic, stable_key_repr
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, PLAIN_SEQS
 
 if TYPE_CHECKING:
@@ -552,6 +552,23 @@ class ArgHasher:
             return
         self._frame_memo[key] = (wref, held, signature, content_hash)
 
+    def _nested_hasher(self, value: Any) -> Any:
+        """A registered hasher's identity for a value inside an argument.
+
+        Registrations applied to the arguments themselves only: a
+        ``Store`` inside a list was pickled instead, which fails on the
+        lock it holds, and the call never cached while the warning told the
+        user to register the hasher they had registered. Both registries are
+        asked before the built-in content hashers (`stable_key_repr`), which
+        is the top level's order: a plain registration is never for a type a
+        built-in claims, since ``register_hasher`` refuses one.
+        """
+        for registry in (self.override_hashers, self.type_hashers):
+            for type_, (hasher_fn, src_hash) in registry.items():
+                if isinstance(value, type_):
+                    return ("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}")
+        return NOT_HOOKED
+
     def hash_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form.
@@ -718,7 +735,8 @@ class ArgHasher:
             shared = _shared_plain_args([*hashed_args, *hashed_kwargs.values()])
             if shared:
                 form += (("__cash_shared_args__", shared),)
-            payload = stable_key_repr(form)
+            hook = self._nested_hasher if (self.override_hashers or self.type_hashers) else None
+            payload = stable_key_repr(form, hook=hook)
             args_bytes = _plain_data.key_dumps(payload)
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)

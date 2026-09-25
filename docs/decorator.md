@@ -461,7 +461,7 @@ for example in a test.
 
 ### Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @210f1e78 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
 An argument that cannot be pickled (a lock, an open file, a live connection, a
 closure) cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while

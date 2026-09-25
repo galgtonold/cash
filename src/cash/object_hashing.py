@@ -40,6 +40,7 @@ import logging
 import pickle
 import random
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
@@ -89,7 +90,7 @@ def object_state(value: Any) -> dict:
 _BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
 
 
-def _typed(value: Any, canon: Any) -> tuple:
+def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None) -> tuple:
     """*canon*, a container's canonical items, tagged with the container's type.
 
     Every container carries its type, so containers holding equal items key
@@ -116,12 +117,19 @@ def _typed(value: Any, canon: Any) -> tuple:
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
-        state += tuple(sorted((k, stable_key_repr(v, 45)) for k, v in own.items()))
+        state += tuple(sorted((k, stable_key_repr(v, 45, hook=hook)) for k, v in own.items()))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
 
-def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None, _seen: dict | None = None) -> Any:
+def stable_key_repr(
+    value: Any,
+    _depth: int = 0,
+    _stack: set | None = None,
+    _seen: dict | None = None,
+    *,
+    hook: Callable[[Any], Any] | None = None,
+) -> Any:
     """The form a cache key hashes *value* in: equal values pickle to equal
     bytes, in any process.
 
@@ -139,6 +147,12 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None, _see
       that set is sorted too. Any other object is left to pickle, which stores it as it asks to
       be stored (its ``__reduce__``) and keeps the loops in its graph.
 
+    * A value a built-in content hasher claims (a frame, an array, a table)
+      becomes that hash (`builtin_hash`), wherever it sits, as it does as an
+      argument of its own. *hook*, when given, is asked first about every
+      value that is not a primitive: it returns the value's stand-in, or
+      `NOT_HOOKED` -- how ``cash.register_hasher`` reaches a value inside a
+      list or dict.
     * A list, dict or set met a second time in one walk becomes a marker
       naming where it was first met. Rebuilt as tuples, ``[[0] * 3] * 3``
       -- one row three times -- and three separate rows keyed alike, and a
@@ -155,6 +169,15 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None, _see
         return value
     if type(value) in CODELESS_PRIMS:
         return value
+    if hook is not None:
+        stand_in = hook(value)
+        if stand_in is not NOT_HOOKED:
+            return stand_in
+    family = _builtin_family_of(type(value))
+    if family is not None:
+        digest = builtin_hash(value)
+        if digest is not None:
+            return ("__cash_content__", family, digest)
     if _stack is None:
         _stack = set()
     if _seen is None:
@@ -170,7 +193,7 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None, _see
         _seen[id(value)] = (len(_seen), value)
     _stack.add(id(value))
     try:
-        return _stable_key_repr_of(value, _depth, _stack, _seen)
+        return _stable_key_repr_of(value, _depth, _stack, _seen, hook)
     finally:
         _stack.discard(id(value))
 
@@ -180,20 +203,39 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None, _see
 _MUTABLE_CONTAINERS = (list, dict, set)
 
 
-def _stable_key_repr_of(value: Any, _depth: int, _stack: set, _seen: dict) -> Any:
+#: What a `stable_key_repr` hook returns for a value it has no stand-in for.
+NOT_HOOKED = object()
+
+
+def _builtin_family_of(type_: type) -> str | None:
+    """`builtin_hash_family`, remembered per type: asked of every value a
+    key walks."""
+    try:
+        return _FAMILIES[type_]
+    except KeyError:
+        family = _FAMILIES[type_] = builtin_hash_family(type_)
+        return family
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return builtin_hash_family(type_)
+
+
+_FAMILIES: dict[type, str | None] = {}
+
+
+def _stable_key_repr_of(value: Any, _depth: int, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None) -> Any:
     """`stable_key_repr` of one object, with the path walked so far."""
 
     def sub(v: Any) -> Any:
-        return stable_key_repr(v, _depth + 1, _stack, _seen)
+        return stable_key_repr(v, _depth + 1, _stack, _seen, hook=hook)
 
     if isinstance(value, (set, frozenset)):
         items = [sub(v) for v in value]
         items.sort(key=_plain_data.key_dumps)
-        return _typed(value, tuple(items))
+        return _typed(value, tuple(items), hook)
     if isinstance(value, dict):
-        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()))
+        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), hook)
     if isinstance(value, (list, tuple)):
-        return _typed(value, tuple(sub(v) for v in value))
+        return _typed(value, tuple(sub(v) for v in value), hook)
     if not contains_set(value):
         return value
     t = type(value)

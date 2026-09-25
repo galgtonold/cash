@@ -66,7 +66,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @210f1e78 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -77,6 +77,10 @@ Each argument is fingerprinted by the first rule that applies:
 4. A hasher you registered without `override=True`.
 5. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type.
+
+Inside a list, tuple, set or dict argument, a value a registered hasher or a
+built-in content hasher covers is hashed by it too; everything else is
+pickled.
 
 Content comes before any in-memory tag, so a stored entry is still found after
 a restart. Equal values share a key, but the type counts: `[1, 2]` and
