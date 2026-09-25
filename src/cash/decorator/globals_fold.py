@@ -157,6 +157,25 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
 _NO_PLAN = object()
 
 
+def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
+    """Whether the decorator expression *deco* is cash's own ``@app.cache``.
+
+    Its names configure the caching, not the result, and the ``Cash``
+    instance they reach cannot be hashed: ``@app.cache`` over a
+    ``functools.wraps`` decorator warned that the function read the
+    unhashable global ``app``.
+    """
+    from ..core import Cash  # deferred: core builds this module
+
+    root = deco
+    while isinstance(root, (ast.Call, ast.Attribute)):
+        root = root.func if isinstance(root, ast.Call) else root.value
+    if not isinstance(root, ast.Name):
+        return False
+    value = module_globals.get(root.id)
+    return isinstance(value, Cash) or value is sys.modules.get("cash")
+
+
 class GlobalsFold:
     """The module data a function and its helpers read, folded into the state
     segment: globals, ``module.ATTR`` reads, data reached through local
@@ -744,10 +763,12 @@ class GlobalsFold:
             tree = ast.parse(textwrap.dedent(inspect.getsource(code)))
             node = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
             if node is not None and node.decorator_list:
+                g = getattr(fn, "__globals__", None) or {}
                 names = tuple(
                     dict.fromkeys(
                         n.id
                         for deco in node.decorator_list
+                        if not _is_cash_decorator(deco, g)
                         for n in ast.walk(deco)
                         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
                     )

@@ -8,6 +8,8 @@
 * KEY-UNHASHABLE-GLOBAL for ``Model.fit.ACTIVE_CONFIG`` on any class with a
   cached method: the class walk read cash's own wrapper.
 * ``mutable_global`` on the loader of a lazily filled settings dict.
+* KEY-UNHASHABLE-GLOBAL for the ``Cash`` instance in ``@app.cache`` stacked
+  over a ``functools.wraps`` decorator: the decorator line was read as data.
 """
 
 from __future__ import annotations
@@ -231,3 +233,38 @@ def test_the_loader_of_a_settings_dict_is_not_a_stale_read(tmp_path, monkeypatch
     mods["settings"].load()
     text = _messages(tmp_path, mods["settings"].work)
     assert "mutable_global" not in text, text
+
+
+def test_the_cash_instance_on_the_decorator_line_is_not_a_read_global(tmp_path, monkeypatch):
+    mods = _module(
+        tmp_path,
+        monkeypatch,
+        {
+            "stacked": """
+        import functools
+        from cash import Cash
+
+        app = Cash(cache_dir=CACHE_DIR)
+        SCALE = 3
+
+        def logged(fn):
+            @functools.wraps(fn)
+            def wrapper(*a, **k):
+                return fn(*a, **k)
+            return wrapper
+
+        @app.cache
+        @logged
+        def price(x):
+            return x * SCALE
+    """.replace("CACHE_DIR", repr(str(tmp_path / "cache")))
+        },
+    )
+    m = mods["stacked"]
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        assert m.price(10) == 30
+        m.SCALE = 4
+        assert m.price(10) == 40, "the helper's own read global stopped keying"
+    text = "\n".join(str(w.message) for w in rec)
+    assert "KEY-UNHASHABLE-GLOBAL" not in text, text
