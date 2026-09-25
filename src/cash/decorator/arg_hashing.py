@@ -161,13 +161,22 @@ def frame_signature(obj: Any) -> tuple:
     So the identities of the block arrays, the manager and the axes are an
     exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
     axis NAMES are compared by value, because ``df.index.name = ...``
-    renames the same Index object and the content hash includes them.
+    renames the same Index object and the content hash includes them; so
+    are the index ``freq`` and ``attrs``, which the hash also holds.
+
+    Two ways around copy-on-write are closed separately. An Arrow-backed
+    array (pandas 3's strings) is written by swapping the Arrow array it
+    holds, so that array's identity is in the signature. Every other array
+    is written in place through ``s.array``, which is recorded, or is not
+    memoised at all (`_blocks_outside_the_memo`).
     """
     mgr = obj._mgr
-    blocks = tuple(id(block.values) for block in mgr.blocks)
+    blocks = tuple((id(block.values), id(getattr(block.values, "_pa_array", None))) for block in mgr.blocks)
+    attrs = pickle.dumps(stable_key_repr(obj.attrs), protocol=4) if obj.attrs else None
+    index = (id(obj.index), tuple(obj.index.names), repr(getattr(obj.index, "freq", None)), attrs)
     if hasattr(obj, "columns"):
-        return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names), id(obj.index), tuple(obj.index.names))
-    return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
+        return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names), *index)
+    return (id(mgr), blocks, *index, obj.name)
 
 
 def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
@@ -185,6 +194,8 @@ def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
     the baseline; counting them made every memoised frame look borrowed,
     and it was re-hashed on every call.
     """
+    if _blocks_outside_the_memo(obj):
+        return True
     try:
         ours = _held_block_refs(held) if held is not None else {}
         for block in obj._mgr.blocks:
@@ -205,6 +216,108 @@ def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
             del values, base
     except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
         return True
+    return False
+
+
+#: ``id -> weak reference`` for every array ``Series.array`` has handed out
+#: since the frame memo started (`watch_array_handles`).
+_EXPOSED: dict[int, Any] = {}
+
+
+def watch_array_handles() -> None:
+    """Wrap ``pd.Series.array`` so each handle it gives out is recorded.
+    Done once, when the frame memo first stores a frame: until then nothing
+    relies on a frame staying unwritten.
+
+    ``s.array`` is the one public handle to a numpy-backed block's own
+    array: ``s.array[0] = 100.0`` writes into the block while its identity
+    stays, and the memo served the old content hash, a stale result. The
+    handle is usually gone by the next call, so the only trace is the one
+    left here. pandas does not call ``Series.array`` itself, so an ordinary
+    workload records nothing.
+    """
+    global _WATCHING
+    if _WATCHING:
+        return
+    import pandas as pd
+
+    original = pd.Series.__dict__.get("array")
+    if isinstance(original, property) and original.fget is not None:
+        pd.Series.array = property(_noting(original.fget), original.fset, original.fdel, original.__doc__)
+    _WATCHING = True
+
+
+_WATCHING = False
+
+
+def _noting(accessor: Callable) -> Callable:
+    @functools.wraps(accessor)
+    def noting(*args: Any, **kwargs: Any) -> Any:
+        handle = accessor(*args, **kwargs)
+        try:
+            _note_exposed(handle)
+        except Exception:  # noqa: BLE001 - recording must never break the user's read
+            _EXPOSED[-1] = None  # unknown: treat every memoised frame as written
+        return handle
+
+    return noting
+
+
+def _note_exposed(handle: Any) -> None:
+    """Record the arrays a writable *handle* reaches (`_memory_of`)."""
+    for part in _memory_of(handle):
+        key = id(part)
+        if key in _EXPOSED:
+            continue
+        try:
+            _EXPOSED[key] = weakref.ref(part, lambda _ref, key=key: _EXPOSED.pop(key, None))
+        except TypeError:
+            _EXPOSED[key] = part
+
+
+def _memory_of(value: Any) -> list:
+    """*value*, the array inside an extension array, and every array those
+    are views of: whatever a write through *value* can land in."""
+    found = [value]
+    inner = getattr(value, "_ndarray", None)
+    if inner is not None:
+        found.append(inner)
+    views = []
+    for part in found:
+        base = getattr(part, "base", None)
+        while base is not None and len(views) < 64:
+            views.append(base)
+            base = getattr(base, "base", None)
+    return found + views
+
+
+def _blocks_outside_the_memo(obj: Any) -> bool:
+    """Could a block of *obj* change in place with its identity kept?
+
+    Copy-on-write governs numpy blocks, and dates and durations over numpy:
+    ``.values`` and ``to_numpy()`` give read-only views of them, and
+    ``.array`` is recorded (`watch_array_handles`). An Arrow-backed block is
+    written by swapping the Arrow array it holds, which `frame_signature`
+    sees. Any other extension array -- nullable ``Int64``, a categorical,
+    Python-backed strings -- is handed out writable by ``.values`` itself,
+    which pandas calls internally (the ``.cat`` accessor does), and an
+    object block holds Python objects that change in place (``s[0].append``).
+    Those frames are hashed on every call.
+    """
+    if -1 in _EXPOSED:
+        return True
+    import numpy as np
+    import pandas as pd
+
+    date_arrays = (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray)
+    for block in obj._mgr.blocks:
+        values = block.values
+        if getattr(values, "_pa_array", None) is not None:
+            continue
+        if not (type(values) is np.ndarray and values.dtype != object) and not isinstance(values, date_arrays):
+            return True
+        if _EXPOSED and any(id(part) in _EXPOSED for part in _memory_of(values)):
+            return True
     return False
 
 
@@ -543,6 +656,7 @@ class ArgHasher:
         collected, or when the memo drops it to make room.
         """
         try:
+            watch_array_handles()
             held = obj.copy(deep=False)
             signature = frame_signature(obj)
             memo = self._frame_memo

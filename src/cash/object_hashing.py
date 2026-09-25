@@ -454,7 +454,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
                 _fold_pandas_array(h, value.iloc[:, pos], pd)
         if rest:
             others = value if len(rest) == value.shape[1] else value.iloc[:, rest]
-            h.update(pd.util.hash_pandas_object(others, index=False).to_numpy().tobytes())
+            h.update(_np_bytes(pd.util.hash_pandas_object(others, index=False)))
     else:
         _fold_pandas_array(h, value, pd)
     index = value.index
@@ -485,12 +485,24 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     """Fold one Series' or Index's values into *h* (`_fold_pandas_values`)."""
     route = _pandas_value_route(values.dtype, pd)
     if route == "codes":
-        codes = values.codes if isinstance(values, pd.Index) else values.cat.codes.to_numpy()
-        h.update(codes.tobytes())
+        h.update(_np_bytes(values.codes if isinstance(values, pd.Index) else values.cat.codes))
     elif route == "objects":
-        h.update(_object_items_bytes(values.to_numpy(dtype=object).tolist()))
+        h.update(_object_items_bytes(_np_array(values, object).tolist()))
     else:
-        h.update(pd.util.hash_pandas_object(values, index=False).to_numpy().tobytes())
+        h.update(_np_bytes(pd.util.hash_pandas_object(values, index=False)))
+
+
+def _np_array(values: Any, dtype: Any = None) -> Any:
+    """``np.asarray(values)``: a pandas value's array through ``__array__``,
+    not ``to_numpy()``, which the decorator's frame memo watches for handles
+    a caller could write through (`arg_hashing.watch_writable_handles`)."""
+    import numpy as np
+
+    return np.asarray(values, dtype=dtype)
+
+
+def _np_bytes(values: Any) -> bytes:
+    return _np_array(values).tobytes()
 
 
 def _object_items_bytes(items: list) -> bytes:

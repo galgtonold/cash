@@ -136,7 +136,11 @@ def test_an_unchanged_frame_is_not_re_hashed(c, monkeypatch):
     def mean_a(df):
         return float(df["a"].mean())
 
-    df = _frame()
+    # Numbers, dates and strings; a categorical or nullable column is hashed
+    # on every call (see test_a_write_through_a_pandas_handle_rehashes).
+    df = pd.DataFrame(
+        {"a": [1.0, 2.0, 3.0], "b": [4, 5, 6], "s": ["x", "y", "z"], "d": pd.date_range("2020-01-01", periods=3)}
+    )
     for _ in range(5):
         mean_a(df)
     assert len(calls) == 1, calls
