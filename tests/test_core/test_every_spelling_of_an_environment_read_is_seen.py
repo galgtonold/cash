@@ -67,7 +67,14 @@ def writes_and_reads_by_name():
     return os.environ.get("CASH_TEST_FLAG")
 
 
-@pytest.mark.parametrize("fn", [by_membership, by_non_membership, by_bytes_subscript], ids=lambda f: f.__name__)
+_POSIX_ONLY = pytest.mark.skipif(not hasattr(os, "environb"), reason="os.environb is POSIX-only")
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [by_membership, by_non_membership, pytest.param(by_bytes_subscript, marks=_POSIX_ONLY)],
+    ids=lambda f: f.__name__,
+)
 def test_a_read_by_name_is_keyed(c, monkeypatch, fn):
     cached = c.cache(fn)
     monkeypatch.delenv(_VAR, raising=False)

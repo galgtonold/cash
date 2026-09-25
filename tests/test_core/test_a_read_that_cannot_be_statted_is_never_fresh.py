@@ -63,8 +63,9 @@ def test_a_read_recorded_under_a_spelling_that_cannot_be_statted_recomputes(tmp_
 
 def test_a_path_that_exists_but_cannot_be_statted_is_never_fresh(tmp_path):
     """Snapshot time: an error other than "not there" (here a name too long
-    for the file system) is recorded, not dropped."""
-    too_long = str(tmp_path / ("x" * 300))
+    for the file system, or on Windows a name it refuses as malformed) is
+    recorded, not dropped. Windows reports a too-long name as not there."""
+    too_long = str(tmp_path / ("a<b.txt" if os.name == "nt" else "x" * 300))
     snap = snapshot_dependencies({too_long})
     assert snap == {too_long: {"unresolved": True}}
     _, fresh, reason = dep_is_fresh(too_long, snap[too_long])

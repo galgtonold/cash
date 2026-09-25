@@ -56,8 +56,11 @@ def test_a_rewrite_recomputes(c, tmp_path, name):
     assert size(str(target)) == first
     assert len(runs) == 1
     _write(target, "333", 1)
-    assert size(str(target)) != first
+    second = size(str(target))
     assert len(runs) == 2
+    # Windows' ctime is the creation time, which a rewrite keeps.
+    if not (name == "os.path.getctime" and os.name == "nt"):
+        assert second != first
 
 
 def test_the_newest_file_is_found_again_after_an_edit(c, tmp_path):

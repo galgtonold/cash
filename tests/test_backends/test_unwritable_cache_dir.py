@@ -247,7 +247,9 @@ def test_a_directory_too_deep_for_an_entry_s_name_is_announced(tmp_path, monkeyp
 def test_the_path_length_advice_names_the_limit(tmp_path, monkeypatch):
     from cash.backends.cache_dir import warn_if_unwritable
 
-    deep = tmp_path / ("d" * 200)
+    # The folder itself must stay creatable on Windows (under 248 characters)
+    # while an entry inside it crosses 260.
+    deep = tmp_path / ("d" * max(1, 240 - len(str(tmp_path))))
     deep.mkdir()
     _path_limit(monkeypatch, 260)
     with warnings.catch_warnings(record=True) as rec:
