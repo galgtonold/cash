@@ -137,6 +137,13 @@ def reset_session() -> None:
     restarting Python. Under IPython the magics are re-registered on the
     new instance. The cache on disk is kept; ``cash clear --all`` deletes
     it.
+
+    The settings start over too: the new instance reads the environment and
+    the config files again, so what ``cash.configure(...)`` changed is
+    dropped, and so is, in a worker process, what the parent process had
+    configured. Worker processes started afterwards no longer receive those
+    settings either. Call ``cash.configure(...)`` again after it to keep
+    them.
     """
     _active.set_default_cash(None)
     # If IPython is active, re-register magics on a fresh instance so

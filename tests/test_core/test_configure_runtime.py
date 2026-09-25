@@ -334,3 +334,42 @@ class TestSameAsTheConstructor:
         assert cash_logger.isEnabledFor(logging.INFO) and not cash_logger.isEnabledFor(logging.DEBUG)
         c.reconfigure(verbose=False)
         assert not cash_logger.isEnabledFor(logging.INFO)
+
+
+class TestResetSessionStartsTheSettingsOver:
+    """`reset_session()` drops what `configure()` set, in this process and for
+    the workers it starts, as its docstring says."""
+
+    def test_configure_settings_are_dropped(self):
+        import cash
+
+        default = cash._get_global_cash().config.flush_interval
+        cash.configure(flush_interval=default + 7)
+        cash.reset_session()
+        assert cash._get_global_cash().config.flush_interval == default
+
+    def test_new_workers_no_longer_receive_them(self):
+        import multiprocessing
+
+        import cash
+        from cash import _active
+
+        cash.configure(flush_interval=17)
+        store = multiprocessing.current_process()._config
+        assert store[_active._SETTINGS_KEY]["flush_interval"] == 17
+        cash.reset_session()
+        cash._get_global_cash()
+        assert _active._SETTINGS_KEY not in store
+
+    def test_settings_inherited_from_the_parent_are_dropped(self):
+        import cash
+        from cash import _active
+
+        cash.reset_session()
+        _active._arrive({"flush_interval": 13})  # as a worker receives them
+        try:
+            assert cash._get_global_cash().config.flush_interval == 13
+            cash.reset_session()
+            assert cash._get_global_cash().config.flush_interval != 13
+        finally:
+            _active._inherited = None
