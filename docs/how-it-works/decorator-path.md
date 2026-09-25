@@ -100,7 +100,7 @@ It never caches under a partial key. The usual causes:
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @5d8d7594, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @3dd62608 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @5d8d7594, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @0f17a917 -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one

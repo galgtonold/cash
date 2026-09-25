@@ -198,6 +198,7 @@ STALE_REASON_TEXT = {
         "it could not be compared -- the file itself may be unchanged"
     ),
     "appeared": "a file the call looked for and did not find now exists",
+    "unresolved": "the file was read but could not be stat'ed, so it is never proven fresh",
     "remote-changed": "remote object changed",
     "remote-unresolved": "remote object could not be checked",
 }
@@ -232,6 +233,9 @@ def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
             continue
         if rec.get("absent"):
             out[path] = "absent when read"
+            continue
+        if rec.get("unresolved") and not rec.get("remote"):
+            out[path] = "could not be stat'ed; never fresh"
             continue
         parts = ["remote"] if rec.get("remote") else []
         if rec.get("size") is not None:

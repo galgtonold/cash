@@ -234,13 +234,13 @@ def _patch_thread_pool_submit() -> None:
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
 
-    __slots__ = ("value", "files", "absent")
+    __slots__ = ("value", "files", "absent", "unresolved")
 
-    def __init__(self, value: Any, files: list[str], absent: list[str]) -> None:
-        self.value, self.files, self.absent = value, files, absent
+    def __init__(self, value: Any, files: list[str], absent: list[str], unresolved: list[str]) -> None:
+        self.value, self.files, self.absent, self.unresolved = value, files, absent, unresolved
 
     def __reduce__(self):
-        return (_WorkerReads, (self.value, self.files, self.absent))
+        return (_WorkerReads, (self.value, self.files, self.absent, self.unresolved))
 
 
 class _ReadsInWorker:
@@ -266,7 +266,12 @@ class _ReadsInWorker:
         tracker = self.tracker_type()
         with tracker:
             value = self.fn(*args, **kwargs)
-        return _WorkerReads(value, sorted(tracker.get_accessed_files()), sorted(tracker.get_absent_files()))
+        return _WorkerReads(
+            value,
+            sorted(tracker.get_accessed_files()),
+            sorted(tracker.get_absent_files()),
+            sorted(tracker.get_unresolved_files()),
+        )
 
 
 class _RelayFuture(concurrent.futures.Future):
@@ -318,7 +323,10 @@ def _patch_process_pool_submit() -> None:
                 if isinstance(result, _WorkerReads):
                     for path in result.files:
                         tracker.add_tracked(path)
-                    tracker.absent_files.update(result.absent)
+                    for path in result.absent:
+                        tracker.add_tracked_absent(path)
+                    for path in result.unresolved:
+                        tracker.add_tracked_unresolved(path)
                     result = result.value
                 outer.set_result(result)
 

@@ -87,6 +87,11 @@ _REMOTE_MARKER = "remote"
 # everywhere.
 _ABSENT_MARKER = "absent"
 
+# Marks a snapshot entry for a file that was read but could not be stat'ed as
+# recorded. Such an entry is never fresh: failing closed costs a recompute,
+# failing open (dropping the dependency) served every later edit stale.
+_UNRESOLVED_MARKER = "unresolved"
+
 # Files up to this size are hashed in full; larger files are sampled
 # deterministically (head / middle / tail) so hashing a multi-GB parquet on
 # every freshness check stays cheap. The sample is a function of the file size
@@ -399,7 +404,15 @@ def snapshot_file_deps(
     for f in paths:
         try:
             st = os.stat(f)
+        except (FileNotFoundError, NotADirectoryError):
+            # Not there: a file the call deleted, or a read that failed (the
+            # absence is recorded on its own channel).
+            continue
         except OSError:
+            # There, but it cannot be stat'ed (permissions, a path too long):
+            # a dependency nobody can check is never fresh. Dropping it would
+            # leave the entry with no dependency on the file at all.
+            snapshot[f] = {_UNRESOLVED_MARKER: True}
             continue
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
         read = known.get(f) if known else None
@@ -488,8 +501,13 @@ def snapshot_dependencies(
     absent: Iterable[str] | None = None,
     known: dict[str, tuple[Any, str]] | None = None,
     full_hash_max: int | None = None,
+    unresolved: Iterable[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
+
+    *unresolved* are paths the call read that cannot be stat'ed as recorded
+    (``FileAccessTracker.get_unresolved_files``): each is recorded as never
+    fresh.
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -506,6 +524,8 @@ def snapshot_dependencies(
         # read is present, and the read is the stronger record.
         for path, entry in snapshot_absent_deps(absent).items():
             snapshot.setdefault(path, entry)
+    for path in unresolved or ():
+        snapshot[path] = {_UNRESOLVED_MARKER: True}
     return snapshot
 
 
@@ -686,7 +706,7 @@ def file_dep_is_fresh(
 
     ``stale_reason`` is ``None`` when fresh, else one of
     ``'unreadable' | 'size' | 'content' | 'hash-mode' | 'mtime' |
-    'mtime-sampled' | 'ctime-sampled' | 'remote-changed' |
+    'mtime-sampled' | 'ctime-sampled' | 'unresolved' | 'remote-changed' |
     'remote-unresolved'`` for debug attribution.
 
     **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
@@ -704,6 +724,8 @@ def file_dep_is_fresh(
             return (not os.path.exists(resolved_path)), "appeared"
         except (OSError, ValueError):
             return False, "appeared"
+    if stored.get(_UNRESOLVED_MARKER):
+        return False, "unresolved"
     stored_size = stored.get("size")
     stored_hash = stored.get("hash")
     if full_hash_max is None and listed is not None:
@@ -855,7 +877,7 @@ def dep_path_for_this_process(path: str, recorded: Any) -> str:
     root = code_root_of(recorded.get(_CODE_MOD))
     if not root:
         return path
-    return os.path.join(root, *rel.split("/")).replace(os.sep, "/")
+    return normalize_path(os.path.join(root, *rel.split("/")))
 
 
 # ---------------------------------------------------------------------------

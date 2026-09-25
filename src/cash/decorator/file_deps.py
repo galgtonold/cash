@@ -56,6 +56,7 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         tracker.get_accessed_remote_urls(),
         tracker.get_absent_files(),
         known=known,
+        unresolved=getattr(tracker, "unresolved_files", None),
     )
     # A file beside the function's own code is part of this INSTALL, not a
     # fixed location: record where it sits relative to the code, so another

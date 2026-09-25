@@ -42,19 +42,41 @@ def is_remote_url(path: str) -> bool:
     return bool(_URL_SCHEME_RE.match(path))
 
 
+#: Windows' verbatim (``\\\\?\\``) and device (``\\\\.\\``) prefixes, in either
+#: spelling of the separator.
+_DEVICE_PREFIXES = ("\\\\?\\", "\\\\.\\", "//?/", "//./")
+
+
 def normalize_path(path: str) -> str:
     """Return *path* with all OS-native separators replaced by forward slashes.
 
     Used to produce portable, platform-independent path strings for cache keys
     and dependency tracking.  On POSIX systems this is a no-op; on Windows it
-    converts backslashes to forward slashes.
+    converts backslashes to forward slashes -- except under a verbatim or
+    device prefix (``\\\\?\\C:\\...``), which is kept in backslashes.
 
     Examples::
 
         normalize_path("C:\\\\Users\\\\foo\\\\bar.csv")  # → "C:/Users/foo/bar.csv"
         normalize_path("/home/foo/bar.csv")              # → "/home/foo/bar.csv"
     """
-    return path.replace(os.path.sep, "/")
+    return _normalize_for(path, os.path.sep)
+
+
+def _normalize_for(path: str, sep: str) -> str:
+    """`normalize_path` for a platform whose separator is *sep*.
+
+    Windows reads ``\\\\?\\`` only with backslashes: that prefix is how a path
+    longer than 260 characters is opened at all, and it passes the rest to the
+    file system as written. Rewritten as ``//?/C:/...``, the 260-character
+    limit applied again, the recorded dependency could not be stat'ed, and
+    the entry was stored without it -- an edit was then served stale.
+    """
+    if sep == "/":
+        return path
+    if path.startswith(_DEVICE_PREFIXES):
+        return path.replace("/", sep)
+    return path.replace(sep, "/")
 
 
 def _basename_candidates(stored_path: str) -> list[str]:

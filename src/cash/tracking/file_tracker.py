@@ -114,6 +114,11 @@ class FileAccessTracker:
         # including when the same relative name resolves into a directory that
         # has one. See ``track_absent``.
         self.absent_files: set[str] = set()
+        # Paths the block read that cash cannot stat under the spelling it
+        # records (see ``_note_if_unstatable``). Each is stored as a dependency
+        # that is never fresh: dropped, the entry would have no dependency on
+        # the file at all, and every edit to it would be served stale.
+        self.unresolved_files: set[str] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
         # so a file that changed in between was fingerprinted as if it were
@@ -206,6 +211,10 @@ class FileAccessTracker:
         """Paths this block looked for and did not find."""
         return self.absent_files
 
+    def get_unresolved_files(self) -> set[str]:
+        """Paths this block read that cannot be stat'ed as recorded."""
+        return self.unresolved_files
+
     # The three methods below are what the feeders (`read_events`,
     # `reader_patches`, `read_credit`) call when they see a read.
 
@@ -274,6 +283,8 @@ class FileAccessTracker:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
             return
         self.add_tracked(abs_path, lstat=read_lstat)
+        if abs_path not in self.read_stats and os.path.isabs(abs_path):
+            self._note_if_unstatable(raw_path, abs_path)
         try:
             credit_read_to_stack(abs_path, self)
         except Exception:  # attribution is an aid; the read counts regardless
@@ -305,6 +316,35 @@ class FileAccessTracker:
                     self.add_tracked(link)
         except (TypeError, ValueError, OSError):
             logger.debug("[TRACKER] Could not record unresolved path for %r", path)
+
+    def _note_if_unstatable(self, raw_path: str, abs_path: str) -> None:
+        """Fail closed when the recorded spelling of a read cannot be stat'ed.
+
+        Reached for a path that gave no regular-file stat: a directory, a file
+        that is not there (the read failed, and the absence is recorded on its
+        own), or a spelling cash cannot stat although the reader opened it --
+        a long Windows path whose ``\\\\?\\`` prefix was lost, say. The last
+        is the one that matters: the snapshot drops a path it cannot stat, so
+        the entry would be stored with no dependency on the file.
+        """
+        try:
+            os.stat(abs_path)
+            return
+        except (OSError, ValueError):
+            pass
+        try:
+            os.stat(raw_path)
+        except (OSError, ValueError):
+            return  # not there under either spelling: nothing was read
+        logger.debug("[TRACKER] %r was read but %r cannot be stat'ed; never fresh", raw_path, abs_path)
+        self.add_tracked_unresolved(abs_path)
+
+    def add_tracked_unresolved(self, path: str) -> None:
+        """Record a read that cannot be checked, here and on the parents."""
+        self.unresolved_files.add(path)
+        parent = self._propagation_parent()
+        if parent is not None:
+            parent.add_tracked_unresolved(path)
 
     def add_tracked(self, abs_path: str, digest: str | None = None, lstat: Any = None) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,
