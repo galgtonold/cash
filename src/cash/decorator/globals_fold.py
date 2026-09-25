@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from ..dependency_state import DependencyStateHasher
     from .arg_hashing import ArgHasher
     from .closure_fold import HelperIdentity
+    from .code_args import CodeArgs
     from .code_identity import CodeIdentity
     from .purity_checks import LearnedMutations
     from .registry import FunctionRegistry
@@ -256,6 +257,9 @@ class GlobalsFold:
         self._module_attr_cache: LruMemo[Any, tuple[tuple[str, str], ...]] = LruMemo(CODE_OBJECTS)
         self._local_binding_cache: LruMemo[Any, tuple | None] = LruMemo(CODE_OBJECTS)
         self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str]] = LruMemo(CODE_OBJECTS)
+        #: The argument walk, which a data global's code goes through too;
+        #: set by `CodeArgs`, which is built after this.
+        self.code_args: CodeArgs | None = None
 
     def fold_environment(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold the current value of every environment read into the key.
@@ -548,6 +552,16 @@ class GlobalsFold:
                     surface = self._code.code_surface_hash(item)
                     if surface is not None:
                         parts.append((f"{name}#cls:{item.__qualname__}", surface))
+            # Code deeper in: an instance held in a tuple in a list, a
+            # function an instance holds (`Runner(scale)`), a user transformer
+            # inside a library pipeline. The pickle above has them by name
+            # only, and the one-level look above does not reach them; the
+            # argument walk does, so a global goes through it too.
+            if self.code_args is not None:
+                code_parts = self.code_args.carrier_parts(v, func_name)
+                if code_parts:
+                    digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
+                    parts.append((f"{name}#code", digest))
         parts.extend(self.module_attr_parts(func, func_name, g, learned=learned_mutating, watch=watch))
         pending = CAPTURE_WATCH.get()
         if pending is not None:

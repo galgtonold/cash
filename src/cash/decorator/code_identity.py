@@ -1471,8 +1471,9 @@ class CodeIdentity:
         The walk recurses only into user-class instances: a third-party object
         (a fitted sklearn estimator, a numpy array) is not user-editable and its
         internals must not churn the key, and stopping there also bounds the cost
-        on real pipelines. Consequence (documented limitation): a user class
-        reachable only through a third-party container is not folded here.
+        on real pipelines. A user class reachable only through a third-party
+        container is not folded here; `CodeArgs.carrier_parts`, which a data
+        global also goes through, searches library objects for it.
         """
         if _depth > 4:
             return []

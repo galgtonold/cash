@@ -3,6 +3,7 @@ is part of the key, not their pickled bytes."""
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import types
@@ -25,6 +26,10 @@ if TYPE_CHECKING:
     from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
+
+#: How many values `CodeArgs._iter_library_held` looks at inside one library
+#: object before it gives up looking for user code there.
+LIBRARY_WALK_BUDGET = 2000
 
 
 def carrier_name(carrier: Any) -> str:
@@ -79,6 +84,9 @@ class CodeArgs:
         self._code = code
         self._globals = globals_fold
         self._frozen = frozen
+        # A data global carries code the same way an argument does
+        # (`GlobalsFold.fold_read_globals`), and folds it through this walk.
+        globals_fold.code_args = self
         # ``(class, is user code)`` per class id, for `_iter_attribute_carriers`:
         # a list of 50k instances must not pay the verdict per element. The
         # class is kept so a recycled id is never trusted.
@@ -314,6 +322,7 @@ class CodeArgs:
             verdict = (cls, is_user_code_object(cls))
             self._attribute_walk_verdicts[key] = verdict
         if not verdict[1]:
+            yield from self._iter_library_held(value, _depth, _seen)
             return
         attrs = getattr(value, "__dict__", None)
         values: list[Any] = list(attrs.values()) if isinstance(attrs, dict) else []
@@ -332,6 +341,65 @@ class CodeArgs:
         _seen.add(id(value))
         for v in held:
             yield from self.iter_code_carriers(v, _depth + 1, _seen)
+
+    def _iter_library_held(self, value: Any, _depth: int, _seen: set):
+        """User code a LIBRARY object holds: looked for, not keyed on the way.
+
+        ``make_pipeline(Scale(), FunctionTransformer(double))`` is sklearn's,
+        so the walk stopped at it, and an edit to ``Scale.transform`` or
+        ``double`` was served the old result -- as an argument and as a global.
+        The library's own attributes are only searched: what is found and is
+        user code (a function, a class, an instance of one) is walked like an
+        argument, and nothing of the library's own reaches the key, so its
+        caches and fitted state cannot churn it. Bounded by
+        `LIBRARY_WALK_BUDGET` values per object.
+        """
+        attrs = getattr(value, "__dict__", None)
+        if not isinstance(attrs, dict) or not attrs or id(value) in _seen:
+            return
+        _seen.add(id(value))
+        budget = [LIBRARY_WALK_BUDGET]
+        yield from self._find_user_code(attrs.values(), _depth + 1, _seen, budget)
+
+    def _find_user_code(self, values: Any, _depth: int, _seen: set, budget: list[int]):
+        """The user code among *values*, searched through library objects."""
+        if _depth > 8:
+            return
+        for v in values:
+            if budget[0] <= 0:
+                return
+            budget[0] -= 1
+            if type(v) in CODELESS_PRIMS or id(v) in _seen or isinstance(v, types.ModuleType):
+                continue
+            if type(v) in BUILTIN_CONTAINERS:
+                _seen.add(id(v))
+                yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen, budget)
+            elif isinstance(v, (types.FunctionType, type)):
+                if is_user_code_carrier(v):
+                    yield from self.iter_code_carriers(v, _depth, _seen)
+            elif isinstance(v, types.MethodType):
+                _seen.add(id(v))
+                yield from self._find_user_code((v.__func__, v.__self__), _depth + 1, _seen, budget)
+            elif isinstance(v, functools.partial):
+                _seen.add(id(v))
+                yield from self._find_user_code((v.func, *v.args, *v.keywords.values()), _depth + 1, _seen, budget)
+            elif self._is_user_instance(v):
+                yield from self.iter_code_carriers(v, _depth, _seen)
+            else:
+                attrs = getattr(v, "__dict__", None)
+                if isinstance(attrs, dict) and attrs:
+                    _seen.add(id(v))
+                    yield from self._find_user_code(attrs.values(), _depth + 1, _seen, budget)
+
+    def _is_user_instance(self, value: Any) -> bool:
+        """Is *value*'s class user code? Memoized per class, as for the attribute walk."""
+        cls = type(value)
+        key = ("user-class", id(cls))
+        verdict = self._attribute_walk_verdicts.get(key)
+        if verdict is None or verdict[0] is not cls:
+            verdict = (cls, is_user_code_object(cls))
+            self._attribute_walk_verdicts[key] = verdict
+        return verdict[1]
 
     def _instance_class_carrier(self, value: Any, _seen: set) -> type | None:
         """``type(value)`` if it is user code and not already seen this walk.
@@ -366,47 +434,57 @@ class CodeArgs:
         """
         parts: list[str] = []
         seen_carriers: set[int] = set()
-        # A clock test double's date is the date, not code (`fake_clock`).
-        fake_dates = _plain_data.fake_clock()[0]
         for param, value in (*((None, a) for a in args), *kwargs.items()):
-            for carrier in self.iter_code_carriers(value):
-                if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
-                    continue
-                # Dedup ACROSS arguments too, not just within one walk:
-                # `f(a, b, c)` with three instances of one class reaches
-                # `is_opaque` + `CodeIdentity.code_surface_hash` once instead of three
-                # times. Safe by identity because every carrier is
-                # reachable from `args`/`kwargs` for this whole loop, so no
-                # id can be recycled underneath us.
-                if id(carrier) in seen_carriers:
-                    continue
-                seen_carriers.add(id(carrier))
-                if is_opaque(carrier):
-                    continue
-                digest = self._code.code_surface_hash(carrier)
-                if digest is not None:
-                    parts.append(f"{carrier_name(carrier)}:{digest}")
-                    # Its CODE is in the key; the globals that code reads
-                    # were not. A callback reading a module
-                    # constant served the old result after the constant
-                    # changed, while the same read one call level deeper,
-                    # or in the cached function itself, invalidated.
-                    if is_user_code_carrier(carrier):
-                        parts.extend(self._carrier_read_global_parts(carrier, func_name))
-                        self._warn_untrackable_in_carrier_once(carrier, func_name, param)
-                elif is_user_code_carrier(carrier):
-                    # User code we could not hash: a C-extension type, an
-                    # exotic descriptor, a ``functools.partial`` (whose
-                    # wrapped function pickles by reference like any
-                    # other). We fall back to today's key, which means an
-                    # edit will NOT invalidate -- so say so once. This is
-                    # the residue where cash genuinely cannot determine the
-                    # answer, and silence is the danger.
-                    self._warn_unhashable_code_once(carrier, func_name, param)
+            parts.extend(self.carrier_parts(value, func_name, param, seen_carriers))
         if not parts:
             return state_hash
         payload = ":".join(sorted(set(parts)))
         return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
+
+    def carrier_parts(
+        self, value: Any, func_name: str = "?", param: str | None = None, seen_carriers: set[int] | None = None
+    ) -> list[str]:
+        """Key parts for the user code *value* carries: each carrier's code and
+        what that code reads. One walk for an argument and a data global.
+
+        *seen_carriers* dedups across several values of one call:
+        `f(a, b, c)` with three instances of one class reaches `is_opaque` +
+        `CodeIdentity.code_surface_hash` once instead of three times. Safe by
+        identity because every carrier stays reachable from the values for
+        the whole key build, so no id can be recycled underneath us.
+        """
+        if seen_carriers is None:
+            seen_carriers = set()
+        parts: list[str] = []
+        # A clock test double's date is the date, not code (`fake_clock`).
+        fake_dates = _plain_data.fake_clock()[0]
+        for carrier in self.iter_code_carriers(value):
+            if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
+                continue
+            if id(carrier) in seen_carriers:
+                continue
+            seen_carriers.add(id(carrier))
+            if is_opaque(carrier):
+                continue
+            digest = self._code.code_surface_hash(carrier)
+            if digest is not None:
+                parts.append(f"{carrier_name(carrier)}:{digest}")
+                # Its CODE is in the key; the globals that code reads
+                # were not. A callback reading a module
+                # constant served the old result after the constant
+                # changed, while the same read one call level deeper,
+                # or in the cached function itself, invalidated.
+                if is_user_code_carrier(carrier):
+                    parts.extend(self._carrier_read_global_parts(carrier, func_name))
+                    self._warn_untrackable_in_carrier_once(carrier, func_name, param)
+            elif is_user_code_carrier(carrier):
+                # User code we could not hash: a C-extension type, an
+                # exotic descriptor. We fall back to today's key, which means
+                # an edit will NOT invalidate -- so say so once. This is
+                # the residue where cash genuinely cannot determine the
+                # answer, and silence is the danger.
+                self._warn_unhashable_code_once(carrier, func_name, param)
+        return parts
 
     def _carrier_read_global_parts(self, carrier: Any, func_name: str) -> list[str]:
         """Key parts for the module data a code carrier's functions read.

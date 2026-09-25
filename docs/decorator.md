@@ -194,7 +194,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when any input below changed. The
 left column is tracked for you. The right column is not, and says what to do.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @890a1a88, cash/decorator/code_args.py:CodeArgs.fold_code_args @3190707c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
 | Tracked: a change recomputes | Not tracked: what to do |
 |---|---|
 | The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |
@@ -202,7 +202,7 @@ left column is tracked for you. The right column is not, and says what to do.
 | The code of every **helper it calls**, transitively, in your project or your own installed package | The **clock** or a random UUID. Pass the value as an argument ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) |
 | **Module globals** read by the function or its helpers, parameter defaults, and captured variables | **Code picked at run time** (`getattr(mod, name)()`, a dict built in the body). Name it with `depends_on=` |
 | Another **cached function** it calls or passes on (`pool.map(inner, xs)`) | A file read by a reader cash does not know. Use `file_depends_on=` |
-| **Your class or function passed as an argument**, and what that code reads | The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...). Changing them keeps entries |
+| **Your class or function passed as an argument** or held in an argument or global, also inside a library object (a transformer in an sklearn pipeline), and what that code reads | The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...). Changing them keeps entries |
 | A **file** read by a [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked), by content, or declared with `file_depends_on=`. Also a file it looked for and did not find, once it appears | |
 | An **environment variable** read by literal name (`os.getenv("TENANT")`) and the working directory | |
 | Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed `ttl` | |

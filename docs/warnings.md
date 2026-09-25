@@ -963,7 +963,7 @@ is the classic case.
 
 *Decorator.*
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @890a1a88 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63 -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 
