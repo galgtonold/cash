@@ -30,7 +30,7 @@ cash keys each call on its arguments and on the function's source. Every result
 is written to disk, in a [`.cash/` folder](../decorator.md#where-results-are-stored)
 in your project, so the next run of the script gets a hit on the first call too.
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb, cash/object_hashing.py:builtin_hash @bd4210c7 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @8db464eb, cash/object_hashing.py:builtin_hash @bd4210c7 -->
 Arguments do not need to be hashable: DataFrames and arrays are hashed by
 content, so an equal copy hits the same entry.
 

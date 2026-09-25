@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7, cash/object_hashing.py:compute_hash_full @b86706dd -->
+<!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7, cash/object_hashing.py:compute_hash_full @244ad49e -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them for a loop
 iteration's values and for the arguments of a cached call inside a statement.
@@ -34,7 +34,7 @@ iteration's values and for the arguments of a cached call inside a statement.
 |------|---------|----------------|
 | `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: Python objects and strings by their pickled form, so `1` and `'1'` differ |
 | `ndarray` | numpy | shape, dtype, memory order and every byte |
-| `DataFrame`, `Series` | polars | schema and every row |
+| `DataFrame`, `Series` | polars | schema and every row; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, not the contents |
 | `Table`, `RecordBatch` | pyarrow | schema and every row, as Arrow's IPC format writes it: a slice from its offset, a dictionary column with its dictionary |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
@@ -49,7 +49,7 @@ contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 For other types, register a hasher; see
 [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/object_hashing.py:compute_hash @a7245478 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/object_hashing.py:compute_hash @7aa554ba -->
 === "Decorator"
 
     Registered hashers apply to call arguments. The order in which an argument
@@ -161,7 +161,7 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:compute_hash @a7245478 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:compute_hash @7aa554ba -->
 For each input variable, the statement key uses the first of these that
 exists:
 

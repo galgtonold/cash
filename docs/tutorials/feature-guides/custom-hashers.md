@@ -122,7 +122,7 @@ registrations:
 |---|---|
 | pandas `DataFrame`, `Series` | schema (names, dtypes with their categories, index and its `freq`), `attrs` and every value |
 | numpy `ndarray` | shape, dtype, memory order and the full buffer |
-| polars `DataFrame`, `Series`, `LazyFrame` | schema and row hashes; a `LazyFrame` by its serialized plan |
+| polars `DataFrame`, `Series`, `LazyFrame` | schema and row hashes, an `Object` column by its values' content; a `LazyFrame` by its serialized plan |
 | PyArrow `Table`, `RecordBatch` | schema and every row, dictionaries included |
 | modin `DataFrame`, `Series` | converted to pandas, then as pandas |
 | dask collections | the task keys and the schema |
@@ -141,7 +141,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @8db464eb -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result. Override only
 when you hold an identity the value itself does not show, such as a dataset

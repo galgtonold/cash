@@ -19,7 +19,7 @@ from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
-from ..object_hashing import builtin_hash, stable_key_repr
+from ..object_hashing import builtin_hash, is_native_panic, stable_key_repr
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, PLAIN_SEQS
 
 if TYPE_CHECKING:
@@ -301,6 +301,13 @@ def is_opaque(obj: Any) -> bool:
         return False
 
 
+def _raise_panic_as_unhashable(exc: BaseException) -> None:
+    """Raise a native library's panic as the TypeError of an unhashable value
+    (see `ArgHasher.hash_payload`); return for anything else."""
+    if is_native_panic(exc):
+        raise TypeError(f"hashing an argument panicked inside a native library: {exc}") from exc
+
+
 class ArgHasher:
     """Canonical arguments and their content hashes, with the memos that keep
     re-hashing an unchanged argument cheap."""
@@ -529,7 +536,14 @@ class ArgHasher:
 
     def hash_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
-        values; the caller decides whether to retry with a different form."""
+        values; the caller decides whether to retry with a different form.
+
+        A panic out of a Rust extension while hashing (polars raises one on
+        values it cannot hash) is a ``BaseException``: it passed every
+        handler on the way out and ended the user's call. It is raised as the
+        ``TypeError`` of an unhashable argument instead, so the call runs
+        uncached with KEY-UNHASHABLE-ARG.
+        """
 
         def get_arg_hash(arg):
             # Content-authoritative builtin hashers FIRST. pandas /
@@ -653,8 +667,12 @@ class ArgHasher:
                 costliest = (label, seconds, type(value).__name__, producer, old_pandas)
             return digest
 
-        hashed_args = tuple(timed(f"#{i}", a) for i, a in enumerate(args))
-        hashed_kwargs = {k: timed(k, v) for k, v in kwargs.items()}
+        try:
+            hashed_args = tuple(timed(f"#{i}", a) for i, a in enumerate(args))
+            hashed_kwargs = {k: timed(k, v) for k, v in kwargs.items()}
+        except BaseException as exc:
+            _raise_panic_as_unhashable(exc)
+            raise
         # An argument with no hasher of its own goes into the payload AS IS,
         # and its cost is the walk and the pickle below, not the lookup timed
         # above -- so CACHE-NET-LOSS named a 2M-row list as taking "about 0ms
@@ -672,10 +690,14 @@ class ArgHasher:
 
         # One canonical form (`stable_key_repr`): sets and dicts in a stable
         # order, every container tagged with its type.
-        payload = stable_key_repr(
-            (tuple(map(plain_key_part, hashed_args)), {k: plain_key_part(v) for k, v in hashed_kwargs.items()})
-        )
-        args_bytes = _plain_data.key_dumps(payload)
+        try:
+            payload = stable_key_repr(
+                (tuple(map(plain_key_part, hashed_args)), {k: plain_key_part(v) for k, v in hashed_kwargs.items()})
+            )
+            args_bytes = _plain_data.key_dumps(payload)
+        except BaseException as exc:
+            _raise_panic_as_unhashable(exc)
+            raise
         if raw:
             payload_seconds = _perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:

@@ -66,7 +66,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c4f48efb -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @8db464eb -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.

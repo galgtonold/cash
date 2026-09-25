@@ -510,6 +510,12 @@ def hash_polars(value: Any) -> str | None:
     ``Int64`` column holding the same numbers, or a renamed column, would
     collide. The schema -- names and dtypes -- is folded in ahead of them.
 
+    An ``Object`` column is keyed by its items' content
+    (`_object_items_bytes`). Polars hashes Object values with Python's
+    ``hash()``, which panics on an unhashable one (an ndarray, a dict) and is
+    no content key: ``hash(-1) == hash(-2)``, ``1``, ``1.0`` and ``True``
+    share a hash, and a string's changes with ``PYTHONHASHSEED``.
+
     A ``LazyFrame`` is identified by ``serialize()``, never by ``explain()``.
     ``explain()`` renders the human-readable QUERY PLAN, and two frames over
     different in-memory data print identically -- both
@@ -532,11 +538,20 @@ def hash_polars(value: Any) -> str | None:
 
         if isinstance(value, pl.DataFrame):
             h = hashlib.sha256(f"{value.schema}:{value.height}:".encode("utf-8"))
-            h.update(repr(value.hash_rows().to_list()).encode("utf-8"))
+            objects = [name for name, dtype in value.schema.items() if dtype == pl.Object]
+            rest = value.drop(objects) if objects else value
+            if rest.width:
+                h.update(rest.hash_rows().to_numpy().tobytes())
+            for name in objects:
+                h.update(f"|{name!r}|".encode("utf-8"))
+                h.update(_object_items_bytes(value.get_column(name).to_list()))
             return h.hexdigest()
         if isinstance(value, pl.Series):
             h = hashlib.sha256(f"{value.name!r}:{value.dtype}:{len(value)}:".encode("utf-8"))
-            h.update(repr(value.hash().to_list()).encode("utf-8"))
+            if value.dtype == pl.Object:
+                h.update(_object_items_bytes(value.to_list()))
+            else:
+                h.update(value.hash().to_numpy().tobytes())
             return h.hexdigest()
         if isinstance(value, pl.LazyFrame):
             try:
@@ -546,7 +561,18 @@ def hash_polars(value: Any) -> str | None:
                 return None
     except (ImportError, TypeError, ValueError, AttributeError):
         logger.debug("Failed to hash polars %s", type(value).__name__)
+    except BaseException as exc:
+        if not is_native_panic(exc):
+            raise
+        logger.debug("polars panicked hashing a %s: %s", type(value).__name__, exc)
     return None
+
+
+def is_native_panic(exc: BaseException) -> bool:
+    """Is *exc* a panic raised out of a Rust extension (``pyo3``), such as
+    polars'? It derives from ``BaseException``, so no ``except Exception``
+    stops it, and a panic while building a key ended the user's call."""
+    return type(exc).__name__ == "PanicException"
 
 
 class _HashSink:
@@ -793,11 +819,18 @@ def compute_hash(obj: Any) -> str:
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     except _HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
+    except BaseException as exc:
+        if not is_native_panic(exc):
+            raise
+        return identity_hash(obj)
 
     try:
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     except (TypeError, pickle.PicklingError):
         pass
+    except BaseException as exc:
+        if not is_native_panic(exc):
+            raise
 
     return identity_hash(obj)
 
@@ -825,6 +858,10 @@ def compute_hash_full(obj: Any) -> str:
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     except _HASH_ERRORS as exc:
         logger.debug("Full hash failed for %s: %s", type(obj).__name__, exc)
+    except BaseException as exc:
+        if not is_native_panic(exc):
+            raise
+        logger.debug("Full hash of a %s panicked: %s", type(obj).__name__, exc)
     return compute_hash(obj)
 
 
