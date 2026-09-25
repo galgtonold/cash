@@ -56,6 +56,10 @@ cash info
 #   Source:     project:/home/me/project/pyproject.toml,env
 ```
 
+<!-- claim: cash/__main__.py:local_cache_dir @909369d0 -->
+- `Cache dir` is where the entries are: the first file or sqlite tier's own
+  `cache_dir` (or `db_path`) when a tier stack sets one, else `cache_dir`.
+  `cash inspect` and `cash clear` act on the same directory.
 - `Max size` shows the caps the disk and RAM tiers actually use, including
   the automatic ones.
 - `Config files` lists every file looked for: `read`, `not found`,
@@ -222,7 +226,7 @@ Running `on` again with the same mode does nothing. To switch modes, run
 `cash autoload off` first, or pass `--force`: `on` refuses to overwrite an
 existing hook with a different body.
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @f8794ec8 -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @ee74bfe2 -->
 ## Exit codes
 
 | Code | When |

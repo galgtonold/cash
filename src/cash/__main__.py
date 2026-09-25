@@ -20,6 +20,7 @@ from cash.backends._base import effective_ttl
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
 from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
+from cash.backends.factory import tier_specs
 from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.config import (
@@ -27,6 +28,7 @@ from cash.config import (
     TOML_MISSING,
     TOML_NOT_CASH,
     TOML_SECTION,
+    CashConfig,
     config_provenance,
     format_size,
     get_config,
@@ -49,9 +51,27 @@ def resolved_cache_dir() -> str:
     ``./.cash`` the user did not mean.
     """
     try:
-        return str(get_config().cache_dir)
+        return local_cache_dir(get_config())
     except Exception:  # noqa: BLE001 - a broken config must not break `clear`
         return ".cash"
+
+
+def local_cache_dir(config: CashConfig) -> str:
+    """The directory the backend *config* describes keeps its entries in.
+
+    The first file or sqlite tier's, as the backend factory resolves it: a
+    tier's own ``cache_dir`` (or a sqlite tier's ``db_path``) wins over the
+    top-level ``cache_dir``, which ``cash info``, ``inspect`` and ``clear``
+    reported while the library wrote to the tier's directory. The top-level
+    one when no tier is on disk.
+    """
+    for kind, settings in tier_specs(config):
+        if kind in ("file", "sqlite"):
+            resolved = dict(settings)
+            if kind == "sqlite" and resolved.get("db_path"):
+                return os.path.dirname(str(resolved["db_path"])) or "."
+            return str(resolved["cache_dir"])
+    return str(config.cache_dir)
 
 
 def tool_cache_dir(name: str) -> str:
@@ -76,7 +96,7 @@ def notebook_cache_dir(notebook_path: str) -> str:
     """
     nb_dir = Path(notebook_path).resolve().parent
     try:
-        cache_dir = str(get_config(anchor=nb_dir).cache_dir)
+        cache_dir = local_cache_dir(get_config(anchor=nb_dir))
     except Exception:  # noqa: BLE001 - a broken config must not break `clear`
         cache_dir = ".cash"
     return os.path.normpath(os.path.join(nb_dir, cache_dir))
@@ -132,13 +152,14 @@ def cmd_info(args: argparse.Namespace) -> None:
 
     source, origins, files = config_provenance(config)
 
+    cache_dir = local_cache_dir(config)
     print(f"Cash v{get_version()}")
     print(f"  Backend:    {config.backend}")
-    print(f"  Cache dir:  {config.cache_dir}")
+    print(f"  Cache dir:  {cache_dir}")
     # What it holds, next to where it is: the number a user asks for when
     # deciding whether to clear it.
-    database = _sqlite_cache(config.cache_dir)
-    held = database if database is not None else entry_totals(config.cache_dir)
+    database = _sqlite_cache(cache_dir)
+    held = database if database is not None else entry_totals(cache_dir)
     if database is not None:
         print(f"  Holds:      {database[0]} entries, {human_bytes(database[1])} (one sqlite database)")
     elif held is None:
@@ -160,7 +181,7 @@ def cmd_info(args: argparse.Namespace) -> None:
         # the cache's own bytes and would show a cap lower than the one
         # enforced, next to a "Holds" that seems to exceed it.
         own = held[1] if held is not None else 0
-        disk = human_bytes(adaptive_disk_cap_for(config.cache_dir, own))
+        disk = human_bytes(adaptive_disk_cap_for(cache_dir, own))
         print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
     else:
         print(

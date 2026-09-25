@@ -162,3 +162,56 @@ def test_python_m_cash_targets_the_project_you_stand_in(tmp_path):
     line = next(ln for ln in out.stdout.splitlines() if "Cache dir" in ln)
     shown = line.split(":", 1)[1].strip()
     assert os.path.normcase(os.path.realpath(shown)) == os.path.normcase(os.path.realpath(project / ".cash")), line
+
+
+@pytest.fixture
+def a_cache_in_a_file_tier_s_own_dir(tmp_path):
+    """A project whose file tier sets its own ``cache_dir``: the library
+    writes there, not to the top-level ``cache_dir``."""
+    pytest.importorskip("tomllib" if sys.version_info >= (3, 11) else "tomli")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "0"\n\n'
+        '[[tool.cash.tiers]]\ntype = "memory"\n\n'
+        '[[tool.cash.tiers]]\ntype = "file"\ncache_dir = "tiercache"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "model.py").write_text(
+        "import cash, time\n@cash.cache(assume_safe=True)\ndef f(x):\n    time.sleep(0.3)\n    return x + 1\nf(1)\n",
+        encoding="utf-8",
+    )
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    out = subprocess.run([sys.executable, "model.py"], capture_output=True, text=True, cwd=str(tmp_path), env=environ)
+    assert out.returncode == 0, out.stderr
+    entries = list((tmp_path / "tiercache").glob("*.entry"))
+    assert entries, "test setup: nothing was cached in the tier's directory"
+    return tmp_path, environ
+
+
+def _cli_here(cwd, environ, *argv):
+    return subprocess.run(
+        [sys.executable, "-m", "cash", *argv], capture_output=True, text=True, cwd=str(cwd), env=environ
+    )
+
+
+def test_info_inspect_and_clear_follow_a_file_tier_s_cache_dir(a_cache_in_a_file_tier_s_own_dir):
+    """`cash info` said "Holds: nothing yet" for `.cash`, `cash inspect` found
+    no cache and `cash clear --all` cleared nothing, while the entries sat in
+    the tier's own directory."""
+    project, environ = a_cache_in_a_file_tier_s_own_dir
+    info = _cli_here(project, environ, "info")
+    assert "tiercache" in info.stdout and "1 entries" in info.stdout, info.stdout
+    inspect = _cli_here(project, environ, "inspect")
+    assert inspect.returncode == 0 and "model.f" in inspect.stdout, inspect.stdout + inspect.stderr
+    cleared = _cli_here(project, environ, "clear", "--all")
+    assert cleared.returncode == 0, cleared.stdout + cleared.stderr
+    assert not list((project / "tiercache").glob("*.entry"))
+
+
+def test_a_sqlite_tier_s_db_path_names_the_directory():
+    from cash.__main__ import local_cache_dir
+    from cash.config import CashConfig, TierConfig
+
+    config = CashConfig(cache_dir="/top", tiers=[TierConfig(type="sqlite", db_path="/data/c/cache.db")])
+    assert local_cache_dir(config) == "/data/c"
+    assert local_cache_dir(CashConfig(cache_dir="/top", tiers=[TierConfig(type="memory")])) == "/top"
+    assert local_cache_dir(CashConfig(cache_dir="/top")) == "/top"
