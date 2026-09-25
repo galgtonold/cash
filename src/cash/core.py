@@ -77,6 +77,7 @@ from .diagnostics import (
 from .effectiveness import EffectivenessLedger
 from .exceptions import (
     CashCacheIneffectiveWarning,
+    CashCacheStoreFailedWarning,
 )
 from .graph import DependencyGraph
 from .object_hashing import builtin_hash_family
@@ -694,7 +695,7 @@ class Cash:
 
     def _delete_backend_entries(self, func_name: str) -> None:
         """Delete all backend cache entries whose key starts with *func_name*,
-        and tell running processes.
+        tell running processes, and say which entries could not be removed.
 
         Other processes (and other `Cash` instances on the folder) may hold
         the deleted results in their RAM tiers. Moving the disk tier's
@@ -704,19 +705,45 @@ class Cash:
         backend = self.backend
         prefix = f"{func_name}:"
         deleted = 0
+        survivors: list[str] = []
         try:
-            for entry in backend.list_entries():
-                key = CacheMetadata.from_dict(entry).key or ""
-                if key.startswith(prefix):
-                    backend.delete(key)
-                    deleted += 1
+            keys = [
+                k
+                for k in (CacheMetadata.from_dict(e).key or "" for e in backend.list_entries())
+                if k.startswith(prefix)
+            ]
         except (OSError, RuntimeError, KeyError):
-            logger.debug("Failed to clear cache entries for %s", func_name)
+            logger.debug("Failed to list cache entries for %s", func_name, exc_info=True)
+            keys = []
+        for key in keys:
+            try:
+                backend.delete(key)
+                deleted += 1
+                # A file another process holds open cannot be removed on
+                # Windows; the delete says nothing, and the next call would
+                # be served the entry that was meant to be gone.
+                if backend.get_metadata(key) is not None:
+                    survivors.append(key)
+            except Exception:  # one entry must not stop the clear
+                logger.debug("Failed to clear cache entry %s", key, exc_info=True)
+                survivors.append(key)
         if deleted:
             try:
                 backend.bump_generation()
             except Exception:  # the local clear is done either way
                 logger.debug("Could not tell other processes about the clear", exc_info=True)
+        if survivors:
+            warn_diagnostic(
+                CashCacheStoreFailedWarning,
+                "CACHE-CLEAR-INCOMPLETE",
+                f"{func_name}.cache_clear() could not remove {len(survivors)} of its "
+                f"{len(keys)} cache entr{'y' if len(keys) == 1 else 'ies'}; "
+                f"{'it is' if len(survivors) == 1 else 'they are'} still stored and "
+                f"will be served.",
+                "another process has the entry files open (on Windows: a reader, a "
+                "virus scanner, an indexer). Close it and clear again, or run "
+                "`cash clear --function` once it has let go.",
+            )
 
     def _wrap_with_stats(self, cf: CachedFunction, wrapper: Callable) -> Callable:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.

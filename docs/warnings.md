@@ -3,7 +3,7 @@
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. The index says which path each code comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @91940b7d -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @9c9e1bfe -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -145,6 +145,25 @@ step inside the generator.
 
 **When it is safe to ignore.** When the generator is cheap and you do not
 need it cached.
+
+## CACHE-CLEAR-INCOMPLETE {#cache-clear-incomplete}
+
+*Decorator.*
+
+<!-- claim: cash/core.py:Cash._delete_backend_entries @b7c16174, cash/backends/file_eviction.py:FileEvictor.remove_path @ec89275a -->
+**What happened.** `f.cache_clear()` could not remove some of the function's
+entries. The message says how many.
+
+**Why it matters.** Those entries are still stored, so the next call with
+their arguments is served the result you meant to clear.
+
+**What to do.** On Windows, a file cannot be removed while another process has
+it open: a reader, a virus scanner, a search indexer. Cash retries briefly
+first. Close whatever holds the cache folder and clear again, or run
+`cash clear --function NAME` once it has let go.
+
+**When it is safe to ignore.** Never when you cleared to get rid of a wrong
+result. For freeing space only, the entries go at the next clear.
 
 ## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 

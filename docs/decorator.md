@@ -107,7 +107,7 @@ entries it logs how much it removed:
 cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
 ```
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @a08b9044, cash/core.py:Cash._delete_backend_entries @2fd9ac21 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @a08b9044, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
 **Clearing.** Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -119,8 +119,11 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 | Everything | `cash clear --all` |
 
 A clear reaches processes that are still running, whichever of these made it:
-within about a second they stop serving what was cleared. Plain `cash clear`
-with no option prints help and exits with an error.
+within about a second they stop serving what was cleared. An entry file that
+another process holds open (on Windows) cannot be removed; `cache_clear()`
+then warns ([`CACHE-CLEAR-INCOMPLETE`](warnings.md#cache-clear-incomplete)),
+and the CLI prints the entries it could not remove. Plain `cash clear` with no
+option prints help and exits with an error.
 
 Your test suite runs from the same project, so it reads and writes this same
 cache. Give it its own; see [Testing your code](tutorials/feature-guides/testing-your-code.md#isolating-the-suites-cache).

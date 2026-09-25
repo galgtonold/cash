@@ -152,6 +152,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # object, costing the sum of every snapshot
         "CACHE-NET-LOSS",  # key hashing has cost more than it has saved
         "CACHE-THRASH",  # at the cap, evicting within writes of storing
+        "CACHE-CLEAR-INCOMPLETE",  # cache_clear() could not remove some entries,
+        # which are still served
         "CACHE-DIR-UNWRITABLE",  # the cache directory cannot be written at all,
         # so nothing reaches disk this run
         "CACHE-NOT-WORTH-BYTES",  # more disk per second saved than cash will spend

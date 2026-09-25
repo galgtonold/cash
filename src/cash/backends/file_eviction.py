@@ -17,6 +17,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .._paths import REPLACE_RETRY_DELAYS
 from ..config import human_bytes
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
@@ -45,6 +46,22 @@ def _stem(path: str) -> str:
 def _priority(metadata: dict, size: int, base: float) -> float:
     """GDSF: ``H = L + hits * execution_time / size``, L as of *base*."""
     return base + gdsf_value(metadata, size)
+
+
+def _remove_with_retry(path: str) -> None:
+    """``os.remove`` that waits out a file another process briefly holds.
+
+    On Windows a file cannot be removed while any handle has it open without
+    delete sharing (a reader, a virus scanner, an indexer). Retried like
+    `cash._paths.replace_with_retry`; a file that stays held raises.
+    """
+    for delay in REPLACE_RETRY_DELAYS:
+        try:
+            os.remove(path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.remove(path)
 
 
 class FileEvictor:
@@ -399,12 +416,23 @@ class FileEvictor:
         its bookkeeping, and return the bytes freed.
 
         Measured from the file: the bookkeeping only knows the keys this
-        process touched.
+        process touched. An entry that cannot be removed -- on Windows, one
+        another process holds open, past a few retries -- keeps its
+        bookkeeping and frees nothing: it is still there, and still served.
+        Whoever asked for the removal checks for survivors.
         """
         try:
             freed = os.path.getsize(path)
         except OSError:
             freed = 0
+
+        try:
+            _remove_with_retry(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.debug("Failed to remove cache entry %s: %s", path, exc)
+            return 0
 
         with self._lock:
             if key is None:
@@ -414,13 +442,6 @@ class FileEvictor:
                 self.write_seq_by_key.pop(key, None)
                 self.base.pop(key, None)
             self.current_bytes -= freed
-
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.debug("Failed to remove cache entry %s: %s", path, exc)
         return freed
 
     def evict(self) -> None:
