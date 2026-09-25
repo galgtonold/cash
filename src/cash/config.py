@@ -71,11 +71,49 @@ _TIER_FIELDS: dict[str, frozenset[str]] = {
 }
 
 
+#: The smallest value each numeric setting can take (tier keys included), and
+#: the largest where there is one. A size or count of 0 or less would cap
+#: everything out -- nothing reached disk, and the messages then said "up to
+#: -1 B" -- and a negative interval or timeout means nothing. ``None`` stays
+#: the way to say "no cap".
+_RANGES: dict[str, tuple[float, float | None]] = {
+    "max_cache_size": (1, None),
+    "max_size_bytes": (1, None),
+    "max_memory_entries": (1, None),
+    "max_entries": (1, None),
+    "file_hash_full_max_bytes": (0, None),
+    "flush_interval": (0, None),
+    "shutdown_write_timeout": (0, None),
+    "default_ttl": (0, None),
+    "min_execution_time_to_cache_seconds": (0, None),
+    "call_cost_floor_seconds": (0, None),
+    "loop_split_max_iter_seconds": (0, None),
+    "loop_split_min_remaining_seconds": (0, None),
+    "min_cache_savings_pct": (0, 1),
+    "min_cache_fixed_budget_seconds": (0, None),
+    "remote_revalidate_max_age_seconds": (0, None),
+    "redis_port": (0, 65535),
+    "port": (0, 65535),
+    "redis_db": (0, None),
+    "db": (0, None),
+}
+
+
 def _check_choice(name: str, value: Any) -> None:
-    """``ValueError`` when *name* must be one of a fixed set and *value* is not."""
+    """``ValueError`` when *name* must be one of a fixed set and *value* is
+    not, or is a number outside the range *name* allows (`_RANGES`)."""
     allowed = _NAMED_CHOICES.get(name)
     if allowed is not None and isinstance(value, str) and value not in allowed:
         raise ValueError(f"{name}={value!r}: not one of {', '.join(sorted(allowed))}")
+    bounds = _RANGES.get(name)
+    if bounds is None or not isinstance(value, (int, float)) or isinstance(value, bool):
+        return
+    low, high = bounds
+    # `not (x >= low)` also refuses NaN.
+    if not (value >= low) or (high is not None and value > high):
+        span = f"between {low} and {high}" if high is not None else f"{low} or more"
+        unset = " (leave it unset for no cap)" if low == 1 else ""
+        raise ValueError(f"{name}={value!r}: must be {span}{unset}")
 
 
 @dataclass
@@ -909,6 +947,13 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
     write then failed comparing it with an int -- the cache silently kept
     nothing on disk for the rest of the process.
     """
+    checked = _typed_value(name, value, dataclass_type)
+    _check_choice(name, checked)
+    return checked
+
+
+def _typed_value(name: str, value: Any, dataclass_type: type) -> Any:
+    """`validate_value` before the choice and range checks."""
     field_type = _field_type(name, dataclass_type)
     args = typing.get_args(field_type)
     optional = type(None) in args
@@ -937,12 +982,10 @@ def validate_value(name: str, value: Any, dataclass_type: type = CashConfig) -> 
             return float(value)
     elif base is str:
         if isinstance(value, str):
-            if name in _NAMED_CHOICES and value not in _NAMED_CHOICES[name]:
-                # Checked here so a file or env layer reports it
-                # (CONFIG-INVALID) and falls back, as every other bad value
-                # does, instead of the backend factory raising out of `import
-                # cash` and `cash info`.
-                raise ValueError(f"{name}={value!r}: not one of {', '.join(sorted(_NAMED_CHOICES[name]))}")
+            # A named choice is checked by the caller, so a file or env layer
+            # reports it (CONFIG-INVALID) and falls back, as every other bad
+            # value does, instead of the backend factory raising out of
+            # `import cash` and `cash info`.
             return value
     else:
         return value  # lists, nested configs: checked elsewhere

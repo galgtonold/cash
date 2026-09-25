@@ -55,7 +55,7 @@ Every setting below has a `CASH_<FIELD>` environment variable, and its TOML key
 is the field name. **Path** says whether it affects `@cash.cache` (decorator),
 notebook caching (notebook), or both.
 
-<!-- claim: cash/config.py:validate_value @78aa44f0, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @0460d759 -->
+<!-- claim: cash/config.py:validate_value @b391f4e9, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @0460d759 -->
 Values are checked whichever layer they come from. Strings are read as an
 environment variable would be (`"true"`, `"8"`). Byte sizes also take units:
 `"2GB"`, `"500MB"`, `"512MiB"` (KB/MB/GB are powers of 1000, KiB/MiB/GiB of
@@ -64,6 +64,9 @@ not a setting (`Cash(ttl=60)`, a misspelt name, an unknown key in a tier
 table), with the closest real name. A bad value in a file or variable is
 skipped with [`CONFIG-INVALID`](../warnings.md#config-invalid), and an unknown
 key in a file warns [`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key).
+Sizes and entry counts must be at least 1 (leave them unset for no cap),
+seconds and other numbers at least 0, and `min_cache_savings_pct` between 0
+and 1.
 
 ### Storage
 

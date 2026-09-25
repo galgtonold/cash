@@ -167,3 +167,50 @@ def test_use_locking_takes_only_a_flag(tmp_path):
     with pytest.raises(ValueError, match="use_locking"):
         Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking="no")
     assert Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, use_locking=1).use_locking is True
+
+
+@pytest.mark.parametrize(
+    "kwargs, field",
+    [
+        ({"max_cache_size": -1}, "max_cache_size"),
+        ({"max_cache_size": 0}, "max_cache_size"),
+        ({"max_memory_entries": -10}, "max_memory_entries"),
+        ({"flush_interval": -10}, "flush_interval"),
+        ({"shutdown_write_timeout": -5}, "shutdown_write_timeout"),
+        ({"shutdown_write_timeout": float("nan")}, "shutdown_write_timeout"),
+        ({"min_cache_savings_pct": 1.5}, "min_cache_savings_pct"),
+        ({"tiers": [{"type": "file", "max_size_bytes": -1}]}, "max_size_bytes"),
+        ({"tiers": [{"type": "file", "default_ttl": -1}]}, "default_ttl"),
+    ],
+)
+def test_a_value_out_of_range_raises_in_code(tmp_path, kwargs, field):
+    """`Cash(max_cache_size=-1)` was accepted: nothing reached disk, and the
+    messages said "up to -1 B" and "raise max_cache_size above 36 B"."""
+    with pytest.raises(ValueError, match=field):
+        Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "var, raw", [("CASH_MAX_MEMORY_ENTRIES", "-10"), ("CASH_FLUSH_INTERVAL", "-1"), ("CASH_TIER_0_MAX_SIZE_BYTES", "0")]
+)
+def test_a_variable_out_of_range_is_reported_and_skipped(monkeypatch, var, raw):
+    monkeypatch.setenv(var, raw)
+    if var.startswith("CASH_TIER_0"):
+        monkeypatch.setenv("CASH_TIER_0_TYPE", "file")
+    with pytest.warns(UserWarning, match=r"\[CONFIG-INVALID\]"):
+        cfg = get_config(user_config_path=None, project_config_path=None)
+    assert cfg.max_memory_entries is None and cfg.flush_interval == 5
+    assert all(t.max_size_bytes is None for t in cfg.tiers)
+
+
+def test_the_edges_of_each_range_are_accepted(tmp_path):
+    c = Cash(
+        cache_dir=str(tmp_path / ".cash"),
+        register_magic=False,
+        max_cache_size=1,
+        max_memory_entries=1,
+        flush_interval=0,
+        shutdown_write_timeout=0,
+        min_cache_savings_pct=1,
+    )
+    assert (c.config.max_cache_size, c.config.flush_interval, c.config.shutdown_write_timeout) == (1, 0, 0)
