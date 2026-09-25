@@ -169,3 +169,58 @@ def test_settings_a_memo_read_before_the_first_cached_call_are_an_input(tmp_path
     # Control: nothing changed, so the fourth run is served from disk.
     run = subprocess.run([sys.executable, str(app)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     assert "RAN" not in run.stderr, "the entry never reached disk: this test proves nothing"
+
+
+_IMPORT_TIME_CONFIG = """
+import functools, json, os, sys
+
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfg.json")
+
+@functools.lru_cache(maxsize=None)
+def load_cfg():
+    with open(PATH, encoding="utf-8") as fh:
+        return json.load(fh)
+
+print("starting", load_cfg()["name"], file=sys.stderr)   # a banner at import
+"""
+
+_IMPORT_TIME_MAIN = """
+import sys, time
+import cash
+from config import load_cfg
+
+@cash.cache
+def f(x):
+    print("RAN", file=sys.stderr)
+    time.sleep(0.25)          # over the persistence floor: the entry must reach disk
+    return x * load_cfg()["k"]
+
+print(f(2))
+"""
+
+
+def test_a_memo_filled_at_import_before_any_decoration_is_an_input(tmp_path):
+    """The memo was filled while the app's modules were imported, before any
+    function was decorated -- and the read watch started only at the first
+    decoration, so the read was nobody's and a config edit was served stale.
+    It starts when cash is imported."""
+    import json
+    import subprocess
+    import sys
+
+    (tmp_path / "config.py").write_text(_IMPORT_TIME_CONFIG, encoding="utf-8")
+    (tmp_path / "main.py").write_text(_IMPORT_TIME_MAIN, encoding="utf-8")
+    cfg = tmp_path / "cfg.json"
+    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / "cache"), PYTHONWARNINGS="ignore")
+    env.pop("CASH_DISABLE", None)
+    got = []
+    for step, k in enumerate((10, 10, 11)):
+        cfg.write_text(json.dumps({"name": "demo", "k": k}), encoding="utf-8")
+        st = os.stat(cfg)
+        os.utime(cfg, ns=(st.st_atime_ns, st.st_mtime_ns + (step + 1) * 2_000_000_000))
+        run = subprocess.run(
+            [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
+        )
+        assert run.returncode == 0, run.stderr[-2000:]
+        got.append((run.stdout.strip().splitlines()[-1], "RAN" in run.stderr))
+    assert got[2] == ("22", True), f"a config edit was served the old result: {got}"

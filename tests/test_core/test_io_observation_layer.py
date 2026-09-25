@@ -78,7 +78,9 @@ def test_patches_exist_only_while_a_scope_is_open():
         assert current() == before
         assert never_wrapped() == plain
         assert _shared_import_hook not in sys.meta_path
-        assert io_watch._active == {}, io_watch._active  # the audit hook is inert
+        # Importing cash watches opens outside calls (a memo filled while the
+        # app's modules import, before anything is decorated), and nothing else.
+        assert set(io_watch._active) == {"open"}, io_watch._active
 
         @cash.cache
         def f():

@@ -254,6 +254,22 @@ recorded. A SQLite database in WAL mode is the same: a commit lands in the
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
 the statement if the read is cheap.
 
+### A file read into a memo before cash was imported
+
+<!-- claim: cash/__init__.py:_watch_reads_from_import @25ca0666 -->
+**Symptom:** a cached function gets its config from a loader memoised with
+`functools.lru_cache`, you edit the config file, and the function returns
+the old result with no warning.
+
+Cash watches file reads from `import cash` on. A memoised loader that first
+ran before that (it was imported, and called, ahead of `cash`) read the file
+where cash could not see it, so later calls get the memo and record no file.
+A loader first called after `import cash` is recorded, even when that call
+came from outside any cached function.
+
+**Fix:** import `cash` before the modules that load config, or pass the path
+as an argument (`load_cfg("config.yaml")` inside the cached function).
+
 ### An edit that keeps the size and timestamps
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @809a68f2, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->

@@ -17,6 +17,7 @@ part of the public API; import them from ``cash``, e.g. ``from cash import pure`
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -45,7 +46,34 @@ from .exceptions import (
 from .file_source import FileDataSource
 from .purity import is_pure, is_stateful, pure, stateful
 from .remote_source import RemoteFileDataSource
+from .tracking.file_tracker import install_read_watch
 from .tracking.randomness import CashRandomnessWarning
+
+
+def _watch_reads_from_import() -> None:
+    """Credit file reads to the code that made them from ``import cash`` on.
+
+    A config loader memoised with ``lru_cache`` is often first called while
+    the app's modules are imported -- a banner, logging setup -- before any
+    function is decorated, which is when the watch used to start. That read
+    was nobody's, the cached function that later got the memoised config
+    recorded no file, and an edit to the file was served the old result.
+    Not with ``CASH_DISABLE`` set: caching off promises nothing is watched.
+    """
+    from .config import validate_value
+
+    try:
+        if validate_value("disable", os.environ.get("CASH_DISABLE", "").strip() or "0"):
+            return
+    except ValueError:
+        pass  # the config load reports the bad value
+    try:
+        install_read_watch()
+    except Exception:  # noqa: BLE001 - decorating a function installs it anyway
+        pass
+
+
+_watch_reads_from_import()
 
 
 def opaque(cls: type) -> type:
