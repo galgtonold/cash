@@ -42,7 +42,7 @@ that can change the result without changing an argument:
 
 | Folded in | Detail |
 |---|---|
-| The function's source | Parsed and rendered back (`ast.unparse`) without docstrings, so comments, blank lines, indentation, quote style, trailing commas, redundant parentheses and line breaks do not count: running `ruff format` or `black` keeps the cache. `# @cash:` directives count. |
+| The function's source | Parsed and rendered back (`ast.unparse`) without docstrings, so comments, blank lines, indentation, quote style, trailing commas, redundant parentheses and line breaks do not count: running `ruff format` or `black` keeps the cache. `# @cash:` directives count. A function with no readable source (`python -c`, a `python - <<EOF` heredoc, `exec`) is keyed by its bytecode, and its helpers and globals are found from the names that bytecode looks up. |
 | Helpers it calls | Followed transitively through your own modules and your own installed package; other people's libraries are where it stops. `depends_on=` adds more. |
 | Classes its code reaches | Classes it constructs, names or annotates, transitively. For a cached method: the class-level code and constants it reaches. |
 | Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict. Modules, functions and classes are tracked as code instead. |

@@ -7,6 +7,8 @@ module; on anything else it is looked up statically, or not at all.
 :func:`called_names` lists the bare names a tree calls, and
 :func:`called_dotted_names` the ``module.func`` spellings. :func:`parse_cached`
 is the one bounded parse memo for statement and cell text.
+:func:`bytecode_global_refs` is what stands in for the names a tree reads
+when a function has no source.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Any, Literal
 
 __all__ = [
     "CallScope",
+    "bytecode_global_refs",
     "called_dotted_names",
     "called_names",
     "parse_cached",
@@ -214,3 +217,37 @@ def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[st
 
     visit(tree, True)
     return frozenset(out)
+
+
+def bytecode_global_refs(func: Any) -> list[tuple[str, ...]]:
+    """The global names *func*'s compiled code may look up, as chains.
+
+    For a function without source (``python - <<EOF``, ``python -c``,
+    ``exec``), whose AST the walks that find helpers and globals start from.
+    Each name in ``co_names`` of the function and its nested code that its
+    globals hold is a one-name chain; a module among them adds a two-name
+    chain for every other name in ``co_names`` it has as an attribute,
+    which is how ``mod.helper(x)`` compiles. An over-approximation (an
+    attribute name matches any global), which costs a fold, never a stale
+    value.
+    """
+    code = getattr(func, "__code__", None)
+    g = getattr(func, "__globals__", None)
+    if code is None or not isinstance(g, dict):
+        return []
+    names: dict[str, None] = {}
+    stack = [code]
+    seen = 0
+    while stack and seen < 64:
+        c = stack.pop()
+        seen += 1
+        names.update(dict.fromkeys(c.co_names))
+        stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
+    chains: list[tuple[str, ...]] = [(n,) for n in names if n in g]
+    for (root,) in list(chains):
+        module = g[root]
+        if isinstance(module, types.ModuleType):
+            chains.extend(
+                (root, n) for n in names if n != root and isinstance(getattr(module, n, None), types.FunctionType)
+            )
+    return chains

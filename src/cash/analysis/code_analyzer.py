@@ -23,7 +23,7 @@ from typing import Any
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from .ast_util import parse_cached
+from .ast_util import bytecode_global_refs, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 from .namespace_effects import capturable_globals
@@ -514,14 +514,17 @@ class CodeAnalyzer:
         result after ``inner``'s helper changed -- only a CALL made an edge.
         """
 
+        visitor = _CallVisitor()
         try:
             source = textwrap.dedent(inspect.getsource(func))
             tree = ast.parse(source)
         except SOURCE_RETRIEVAL_ERRORS:
-            return set()
-
-        visitor = _CallVisitor()
-        visitor.visit(tree)
+            # No source (`python - <<EOF`, `python -c`, `exec`): the names
+            # its bytecode looks up stand in for the calls, so a cached
+            # function it calls is still an edge.
+            visitor.names_to_resolve = [".".join(chain) for chain in bytecode_global_refs(func)]
+        else:
+            visitor.visit(tree)
 
         # An opaque callable (builtin / C-extension / ufunc / partial) may have
         # source available via ``__wrapped__`` yet lack ``__globals__``; without

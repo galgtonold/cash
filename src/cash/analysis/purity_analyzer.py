@@ -83,7 +83,7 @@ from ..source_norm import (
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
 from .annotations import audited_lines
-from .ast_util import called_names, resolve_callee
+from .ast_util import bytecode_global_refs, called_names, resolve_callee
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .mutations import PANDAS_INPLACE_METHODS
 from .purity_flow import (
@@ -1457,6 +1457,16 @@ def _binding_path(caller: Any, chain: tuple[str, ...] | None) -> tuple[str, tupl
     return module_name, chain
 
 
+def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> Any:
+    """What *chain* names in *namespace*, through modules only; None if nothing."""
+    obj = namespace.get(chain[0])
+    for part in chain[1:]:
+        if not isinstance(obj, types.ModuleType):
+            return None
+        obj = getattr(obj, part, None)
+    return obj
+
+
 def _ref(obj: Any) -> Callable[[], Any]:
     """A weak reference where the object allows one, a strong one otherwise."""
     try:
@@ -1859,6 +1869,25 @@ class PurityAnalyzer:
                     opaque.append(qualname)
                 helper_hashes[qualname] = compiled_identity(func)
                 _record_resolution_path(func, qualname)
+                # Its helpers still decide the result. Without source there
+                # is no AST to find them in, so the bytecode's global names
+                # stand in: a cached function run from `python - <<EOF` or
+                # `python -c` keyed its own bytecode and nothing it called,
+                # and an edited helper was served the old result.
+                if depth < self._MAX_DEPTH and isinstance(func, types.FunctionType):
+                    for chain in bytecode_global_refs(func):
+                        callee = resolve_callee_chain(func.__globals__, chain)
+                        if not isinstance(callee, types.FunctionType) or callee is func:
+                            continue
+                        if is_mock(callee) or getattr(callee, "_cash_cached", False):
+                            continue
+                        if not own_code_is_user(callee, root_module):
+                            continue
+                        path = _binding_path(func, chain)
+                        _note_binding(callee, path)
+                        if path is not None:
+                            caller_paths.setdefault(id(callee), path)
+                        stack.append((callee, depth + 1, False, reported))
                 continue
             src = textwrap.dedent(src)
 

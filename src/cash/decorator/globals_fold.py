@@ -197,6 +197,44 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried
     return v
 
 
+#: A plain operand load: the key between a global's load and a subscript store.
+_OPERAND_LOADS = frozenset({"LOAD_FAST", "LOAD_CONST", "LOAD_DEREF", "LOAD_NAME"})
+
+
+def _bytecode_mutated_globals(scopes: tuple, names: set[str]) -> set[str]:
+    """The *names* compiled code plainly writes into, for code without source.
+
+    A load of the global followed by a writing method (`REPORTED_METHODS`:
+    ``append``, ``update``, ...) or an attribute store (``obj.x = v``), or
+    by one operand and a subscript store (``table[k] = v``). Exact shapes
+    only: a global read as the VALUE stored (``d[k] = G``) must stay
+    folded. What this misses is caught at run time by the provisional
+    watch, one miss later.
+    """
+    found: set[str] = set()
+    for scope in scopes:
+        instrs = list(dis.get_instructions(scope))
+        for i, ins in enumerate(instrs):
+            if ins.opname != "LOAD_GLOBAL" or ins.argval not in names:
+                continue
+            after = instrs[i + 1 : i + 3]
+            if not after:
+                continue
+            first = after[0]
+            if (first.opname in ("LOAD_ATTR", "LOAD_METHOD") and first.argval in REPORTED_METHODS) or first.opname in (
+                "STORE_ATTR",
+                "DELETE_ATTR",
+            ):
+                found.add(ins.argval)
+            elif (
+                len(after) == 2
+                and first.opname in _OPERAND_LOADS
+                and after[1].opname in ("STORE_SUBSCR", "DELETE_SUBSCR")
+            ):
+                found.add(ins.argval)
+    return found
+
+
 #: A miss in `GlobalsFold._local_binding_cache`, whose entries may be None.
 _NO_PLAN = object()
 
@@ -379,11 +417,14 @@ class GlobalsFold:
                 hard |= suspected - provisional
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
-                # No source: the conservative answer. Without an AST
-                # there is no way to tell a read from a mutation, and folding
-                # blind would risk the permanent-miss trap with nothing to
-                # learn from.
-                candidates, provisional = set(), frozenset()
+                # No source (`python - <<EOF`, `python -c`, `exec`): the
+                # bytecode stands in for the AST. What it plainly writes
+                # (`calls.append(x)`, `table[k] = v`) stays out; the rest is
+                # folded PROVISIONALLY -- watched after a miss, and dropped
+                # once a call is seen to move it. Folding none of them
+                # served a stale result whenever a global it reads changed.
+                candidates -= _bytecode_mutated_globals(scopes, candidates)
+                provisional = frozenset(candidates)
         names = tuple(sorted(candidates))
         # A MISSING entry is not "nothing is provisional" --
         # `GlobalsFold.fold_read_globals` reads that as "watch every folded
