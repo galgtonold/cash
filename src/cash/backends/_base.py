@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "EntryMetadata",
+    "store_seconds",
     "MetadataDict",
     "CacheBackend",
     "effective_ttl",
@@ -32,10 +33,27 @@ UNKNOWN_COST_S = 0.001
 _GDSF_STEPS_PER_OCTAVE = 16
 
 
+def store_seconds(metadata: MetadataDict | dict) -> float:
+    """What keeping an entry saves: its ``store_time`` when the writer recorded
+    one, else its ``execution_time``.
+
+    A notebook statement records both. ``b = shifted(a) + 1`` took as long as
+    the call inside it, but the call's own entry holds that; keeping the
+    statement's value saves only the ``+ 1`` and restoring the call's result.
+    """
+    seconds = metadata.get("store_time")
+    if seconds is None:
+        seconds = metadata.get("execution_time")
+    try:
+        return float(seconds or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def gdsf_value(metadata: MetadataDict | dict, size: int) -> float:
     """The value term of a GreedyDual-Size-Frequency priority, both tiers' ranking.
 
-    ``hits * execution_time / size``, rounded down to a 1/16-octave step.
+    ``hits * store_seconds / size``, rounded down to a 1/16-octave step.
     Unrounded, a one-byte size difference decided between entries of equal
     cost -- and the newest entry is often the one a byte bigger (a longer
     key), so it went first: recency inverted among equals, and the
@@ -43,7 +61,7 @@ def gdsf_value(metadata: MetadataDict | dict, size: int) -> float:
     seven orders of magnitude, so a 4% step costs no ranking that matters,
     and ties fall through to recency as they should.
     """
-    cost = metadata.get("execution_time") or 0.0
+    cost = store_seconds(metadata)
     if cost <= 0:
         cost = UNKNOWN_COST_S
     hits = metadata.get("access_count", 0) + 1
@@ -89,6 +107,8 @@ class EntryMetadata(TypedDict, total=False):
     # From the writer.
     #: Seconds the value took to compute.
     execution_time: float
+    #: Seconds keeping it saves, when less than ``execution_time`` (`store_seconds`).
+    store_time: float
     #: When the decorator wrote it; ages an entry that has no ``created_at``.
     timestamp: float
     #: The `Serializer` class to rebuild the value with.

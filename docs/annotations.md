@@ -154,7 +154,7 @@ stale.
 
 ### `# @cash:no-cache-calls` { #call-level-caching-default-and-cashno-cache-calls }
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @2b0c1268 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @56cf9df0 -->
 Cash also caches the expensive **calls inside** a statement, by default and with
 no directive. That is what keeps work cached where the statement itself cannot
 be: in `results.append(compute(x))` the append runs every time, but `compute(x)`
@@ -180,6 +180,9 @@ not cached this way. Calls show on the badge tagged `[intercepted]`:
   @cash.cache:
     compute() [intercepted]: 2/3 cached (0.402s)
 ```
+
+The statement around a cached call is then stored only for its own work; see
+[a statement around a cached call](cost-model.md#a-statement-around-a-cached-call).
 
 <!-- claim: cash/notebook/statement/call_routing.py:CallRouting.current_call_ttl @2d43c3de, cash/notebook/statement/call_routing.py:CallRouting.current_call_persist @acb22cc8 -->
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,

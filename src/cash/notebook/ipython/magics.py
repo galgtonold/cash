@@ -1176,7 +1176,7 @@ class CashMagics(InspectionMagicsMixin, Magics):
                 # What the USER's code cost: the statement's wall time less
                 # cash's own time inside it -- recording file reads, keying and
                 # hashing the arguments of the calls it routes, storing them
-                # (``cash_tax``, the same measurement ``CallRouting.statement_cost``
+                # (``cash_tax``, the same measurement ``CallRouting.price``
                 # uses). Counting that as the user's compute cancelled it out
                 # of the overhead below, so a paired run measured 370 s of
                 # slowdown where %cash_stats reported 210 s.

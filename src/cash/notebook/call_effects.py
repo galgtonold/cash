@@ -93,9 +93,10 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
     return result, tee_out.getvalue(), tee_err.getvalue()
 
 
-def replay_deps(metadata: Mapping[str, Any]) -> None:
+def replay_deps(metadata: Mapping[str, Any]) -> frozenset[str]:
     """Re-declare a hit entry's recorded file/remote deps as though THIS
-    call had just read them, onto the statement's ambient tracker.
+    call had just read them, onto the statement's ambient tracker, and
+    return the paths and URLs declared.
 
     Attribution AND propagation: the call unit already validated these
     deps before serving the hit (they are checked as part of the
@@ -109,13 +110,12 @@ def replay_deps(metadata: Mapping[str, Any]) -> None:
     """
     snap = metadata.get("auto_file_deps")
     if not snap:
-        return
+        return frozenset()
     try:
         tracker = active_tracker.get()
     except Exception:  # noqa: BLE001 - tracking is best-effort
-        return
-    if tracker is None:
-        return
+        tracker = None
+    declared: set[str] = set()
     for path, recorded in snap.items():
         try:
             # A remote entry must go back onto the remote channel --
@@ -123,12 +123,18 @@ def replay_deps(metadata: Mapping[str, Any]) -> None:
             # stat'ed, and be dropped, same reasoning as
             # ``propagate_file_deps_to_active_tracker`` in decorator/file_deps.py.
             if isinstance(recorded, dict) and recorded.get("remote"):
-                tracker.add_tracked_remote(path)
+                declared.add(path)
+                if tracker is not None:
+                    tracker.add_tracked_remote(path)
             else:
                 # The file THIS process reads, as the decorator replays it.
-                tracker.add_tracked(dep_path_for_this_process(path, recorded))
+                local = dep_path_for_this_process(path, recorded)
+                declared.add(local)
+                if tracker is not None:
+                    tracker.add_tracked(local)
         except Exception:  # noqa: BLE001 - a dep that cannot be replayed is left out
             logger.debug("call unit: could not replay dep %r", path)
+    return frozenset(declared)
 
 
 def replay_output(metadata: Mapping[str, Any]) -> None:

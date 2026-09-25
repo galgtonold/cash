@@ -39,6 +39,8 @@ from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
+from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import (
@@ -59,6 +61,7 @@ from cash.notebook.call_refs import (
     SIZE_FIELD,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
+from cash.object_hashing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
@@ -182,6 +185,18 @@ _OVERHEAD_FACTOR = 3.0
 #: call itself: the hit that follows also restores the value, so it would save
 #: next to nothing.
 _HIT_MUST_SAVE = 0.75
+
+
+@dataclasses.dataclass
+class _Invocation:
+    """One cached call under way, and the cached calls made inside it."""
+
+    #: What the calls made inside it that the cache holds stand for: their
+    #: compute, and the predicted restore of their results.
+    inner_compute_s: float = 0.0
+    inner_restore_s: float = 0.0
+    #: The same for this call itself, once it was served or stored.
+    own: tuple[float, float] | None = None
 
 
 @dataclasses.dataclass
@@ -323,6 +338,19 @@ class CallUnit:
         #: ``StatementProcessor._finish``).
         self.overhead_s = 0.0
         self.hits_saved_s = 0.0
+        #: The compute of the calls the cache now holds -- a stored miss's
+        #: run time, a hit's recorded cost -- and the predicted restore time
+        #: of their results. What a statement's own work leaves out (see
+        #: ``CallRouting.store_cost``). Outermost calls only: a cached call's
+        #: compute already holds the calls made inside it. Monotonic, like
+        #: the two above.
+        self.cached_compute_s = 0.0
+        self.cached_restore_s = 0.0
+        self._invocations: list[_Invocation] = []
+        #: The files and URLs read inside calls the cache holds, each with the
+        #: sequence number of its last such read (see :meth:`files_read_since`).
+        self._cached_reads: dict[str, int] = {}
+        self.reads_seq = 0
         self._last_hit = False
         self._last_key_s: float | None = None
         self._invoked_keys: list[str | None] = []
@@ -441,11 +469,13 @@ class CallUnit:
             # One slot per invocation: a call the callee makes through a
             # lambda it was handed runs its own `_invoke` inside this one.
             self._invoked_keys.append(None)
+            self._invocations.append(_Invocation())
             started = _perf_counter()
             try:
                 result = invoke(*args, **kwargs)
             finally:
                 invoked_key = self._invoked_keys.pop()
+                self._count_cached(self._invocations.pop())
             spent = _perf_counter() - started
             self.last_returned = (invoked_key, id(result), site.source)
             run.total_s += spent
@@ -471,6 +501,49 @@ class CallUnit:
             return result
 
         return _entry
+
+    def _count_cached(self, invocation: _Invocation) -> None:
+        """Add what *invocation* leaves in the cache to the call around it, or
+        to the totals when it is outermost: the call itself when it was served
+        or stored, else the cached calls made inside it."""
+        compute, restore = invocation.own or (invocation.inner_compute_s, invocation.inner_restore_s)
+        if self._invocations:
+            outer = self._invocations[-1]
+            outer.inner_compute_s += compute
+            outer.inner_restore_s += restore
+        else:
+            self.cached_compute_s += compute
+            self.cached_restore_s += restore
+
+    def _cached(self, compute: float, value: Any, reads: frozenset[str]) -> None:
+        """The call under way is now held by the cache: it stands for
+        *compute* seconds, returned *value*, and read *reads*.
+
+        Only a call its entry keeps past a restart counts: one that took the
+        persistence floor (``COMPUTE_FLOOR_S``), or that ``persist`` sends to
+        disk. A quicker one lives in RAM only, so after a restart the
+        statement around it is what would bring its result back."""
+        if compute < COMPUTE_FLOOR_S and not self._entries.persists():
+            return
+        if self._invocations:
+            self._invocations[-1].own = (compute, self._restore_estimate(value))
+        if reads:
+            self.reads_seq += 1
+            for path in reads:
+                self._cached_reads[path] = self.reads_seq
+
+    def _restore_estimate(self, value: Any) -> float:
+        """Seconds the cost model predicts restoring *value* takes, from the
+        tier a statement's value is restored from."""
+        try:
+            kind = restore_kind(getattr(self._cash, "backend", None))
+            return estimated_restore_time(type(value).__name__, estimate_object_size(value), kind)
+        except Exception:  # noqa: BLE001 - an estimate is never worth an error
+            return 0.0
+
+    def files_read_since(self, seq: int) -> frozenset[str]:
+        """Files and URLs read inside cached calls since :attr:`reads_seq` was *seq*."""
+        return frozenset(path for path, at in self._cached_reads.items() if at > seq)
 
     def wrap(self, fn, site: CallSite):
         func_name = self._func_name(fn)
@@ -543,7 +616,7 @@ class CallUnit:
         # ``propagate_file_deps_to_active_tracker`` in decorator/file_deps.py,
         # the ``@cash.cache`` decorator's defence against the same
         # failure mode.
-        replay_deps(metadata)
+        reads = replay_deps(metadata)
         replay_output(metadata)
         restore_globals(call.fn, call.mutated_globals, captured_globals)
         if not captured_globals:
@@ -551,6 +624,7 @@ class CallUnit:
         self._record(call.func_name, call.site, call.key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
         self._last_compute = recorded_cost or 0.0
         self._last_hit = True
+        self._cached(self._last_compute, value, reads)
         self._entries.drop_if_hit_costs_more(call.key, _perf_counter() - hit_started, recorded_cost)
         return value
 
@@ -605,6 +679,12 @@ class CallUnit:
             self._entries.refuse(call.key)
         elif self._worth_storing(call, result, elapsed):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
+        if stored:
+            self._cached(
+                elapsed,
+                result,
+                frozenset(call_tracker.get_accessed_files()) | frozenset(call_tracker.get_accessed_remote_urls()),
+            )
         self._record(call.func_name, call.site, call.key, cache_hit=False, elapsed=elapsed, stored=stored)
         self._last_compute = elapsed
         return result

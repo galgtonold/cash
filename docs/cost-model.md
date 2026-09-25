@@ -26,10 +26,9 @@ decision to cache it, and its results are always written to disk (see the
 compute time by at least `min_cache_savings_pct` (20%). A large value that
 computes in 0.3 s but takes a second to read back stays in memory.
 
-<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.statement_cost @f4929b3d -->
+<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.price @b74b755f -->
 Compute time is your code's, not cash's. Time cash spends inside a statement
-(tracking files, storing the calls it caches) is left out, and a call served from
-the cache counts at what it cost to compute.
+(tracking files, storing the calls it caches) is left out.
 
 The thresholds apply to each statement on its own; cash does not add them up. A
 cell of 120 independent statements at 0.05 s each takes six seconds and writes
@@ -40,10 +39,32 @@ nothing to disk. The exceptions work in your favour:
   written at the end of the cell; see
   [Restarts and persistence](tutorials/feature-guides/smart-persistence.md).
 - A statement that reads a tracked file skips the in-memory check below: it is
-  always cached, and written to disk if it took over 0.1 s.
+  always cached, and written to disk if it took over 0.1 s. A file read inside a
+  cached call does not count; the call's entry keeps it.
 
 `# @cash:persist` skips every threshold for one statement, and `%cash_persist on`
 for all of them. Only a storage tier's size cap still applies.
+
+### A statement around a cached call { #a-statement-around-a-cached-call }
+
+<!-- claim: cash/notebook/statement/store.py:StatementStore._store @c88dd1c6, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @6680f15e -->
+Cash also caches the slow calls inside a statement on their own (see
+[`no-cache-calls`](annotations.md#call-level-caching-default-and-cashno-cache-calls)).
+The call's result is kept in the call's entry, so a statement around it is
+judged by its **own** work: what it does beyond its cached calls, plus reading
+their results back. That time goes through the thresholds above. A call that
+took under 0.1 s stays in memory only, so it counts as the statement's own work:
+after a restart, only the statement's entry would bring it back.
+
+| Statement, with a slow `shifted` | What cash keeps |
+|---|---|
+| `b = shifted(a) + 1` | the call only; the next run reads it back and adds 1 again |
+| `b = shifted(a) + slow_part(a)` | the call, and the statement's value |
+| `b = shifted(a)` | the call, and a small entry that points at it |
+
+The time a hit shows as saved is still the whole statement's, the call's time
+included. A statement whose own work is too cheap to store still records the
+names it bound, so the cells below it can be restored after a restart.
 
 ## What the badge shows
 

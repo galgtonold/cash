@@ -25,7 +25,7 @@ expensive_function(1, 2)   # first call: runs, about 5 seconds
 expensive_function(1, 2)   # second call: cache hit, instant
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5 -->
 cash keys each call on its arguments and on the function's source. Every result
 is written to disk, in a [`.cash/` folder](../decorator.md#where-results-are-stored)
 in your project, so the next run of the script gets a hit on the first call too.

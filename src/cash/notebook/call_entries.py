@@ -76,6 +76,13 @@ class CallEntries:
         #: execution).
         self._refused: set[str] = set()
 
+    def persists(self) -> bool:
+        """Whether the statement under way asked for its calls to reach disk."""
+        try:
+            return bool(self._persist_provider())
+        except Exception:  # noqa: BLE001 - no answer is the cost model's answer
+            return False
+
     def refuse(self, key: str) -> None:
         """Never look *key* up or write it again this session."""
         self._refused.add(key)

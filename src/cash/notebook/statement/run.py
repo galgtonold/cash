@@ -90,15 +90,22 @@ class StatementExecution:
     captured: Any = field(default_factory=NoCapture)
     #: Wall time of the run, as the badge shows it.
     wall_time: float = 0.0
-    #: What the statement's own code cost: the wall time less cash's own time
+    #: What the statement's code cost: the wall time less cash's own time
     #: inside it, plus what the calls it served from the cache would have cost.
+    #: What a hit is credited with, and the entry's ``execution_time``.
     cost: float = 0.0
+    #: What storing its value saves: ``cost`` less the calls the cache holds,
+    #: plus restoring their results (``CallRouting.store_cost``). What decides
+    #: whether the value is stored.
+    store_cost: float = 0.0
     #: Cash's own seconds inside the run.
     tax: float = 0.0
     accessed_files: set[str] = field(default_factory=set)
     accessed_remote: set[str] = field(default_factory=set)
     #: Files the statement was seen writing (``write_observer``).
     written_paths: frozenset[str] = frozenset()
+    #: Files and URLs read only inside calls the cache holds.
+    cached_call_reads: frozenset[str] = frozenset()
 
 
 class CodeRunner:

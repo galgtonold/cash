@@ -121,7 +121,7 @@ def test_computed_row_leaves_out_cash_s_time_inside_the_statement() -> None:
     storing the calls it routes) is not the statement's compute either.
 
     The restore credits "saved" at the wall time less that tax
-    (``CallRouting.statement_cost``), so a row that kept it read "EXECUTED
+    (``CallRouting.price``), so a row that kept it read "EXECUTED
     0.92s" beside "saved 0.82s" for one computation of a large frame.
     """
     metrics = [

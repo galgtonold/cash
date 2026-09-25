@@ -70,9 +70,9 @@ LOOP = (
     "raw = pd.concat(parts, ignore_index=True)\n"
     "print('rows', len(raw))"
 )
-#: Two 24 MB frames, each cached twice (the ``shifted`` call and the
-#: statement): 96 MB of cheap-per-byte values written after the loop, against
-#: a 40 MB cap. Measured: ~130 ms per copy, most of it cash hashing and storing
+#: Three 24 MB frames, each cached once (the ``shifted`` call's entry; the
+#: statement that is nothing but the call refers to it): 72 MB of
+#: cheap-per-byte values written after the loop, against a 40 MB cap. Measured: ~130 ms per copy, most of it cash hashing and storing
 #: the frame, so ~5 ms per MB; a read takes ~1.5 ms for a 77 KB frame, ~20 ms
 #: per MB and twice that once the control arm has hit it.
 #:
@@ -89,8 +89,8 @@ BIG = (
     "    time.sleep(0.02)\n"
     "    return frame + k\n"
     "w = pd.DataFrame(np.zeros((750_000, 4)))\n"
-    + "\n".join(f"w{k} = shifted(w, {k})" for k in range(1, 3))
-    + "\nprint('w', len(w2))"
+    + "\n".join(f"w{k} = shifted(w, {k})" for k in range(1, 4))
+    + "\nprint('w', len(w3))"
 )
 #: The byte cap's clock: above zero once the cap has evicted something.
 _CLOCK = f"{_RAM}._gdsf_clock"

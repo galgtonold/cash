@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from ._base import CacheBackend, MetadataDict, entry_expired
+from ._base import CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
 from .persistence_policy import PersistencePolicy
 from .serialization import PickleSerializer, Serializer
@@ -458,7 +458,7 @@ class TieredBackend(CacheBackend):
             size = metadata.get("size", 0) or 0
             cap_size = size or metadata.get("cost_model_size_bytes", 0)
             if decision.skipped == "bytes":
-                exec_time = metadata.get("execution_time", 0) or 0
+                exec_time = store_seconds(metadata)
                 if decision.report:
                     self.notices.not_worth_bytes(key, decision.weight, exec_time, code=metadata.get("code"))
                 self._drop_persisted_call_refs(metadata.get("call_refs"))

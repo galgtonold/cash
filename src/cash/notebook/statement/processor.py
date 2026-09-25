@@ -847,8 +847,8 @@ class StatementProcessor:
             execution.result = error_result(e)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = time.time() - start_time
-        execution.cost = self._calls.statement_cost(execution.wall_time, marks)
-        execution.tax = self._calls.cash_tax_seconds(marks)
+        execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
+        execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
         """Record what the executed statement did, and store it."""
@@ -1096,7 +1096,7 @@ class StatementProcessor:
         self._report_saved(run, saved_metadata)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._rebuild_cost.note(
-            run.cache_key, run.inputs, run.outputs, execution.cost, on_disk=any(s != "RAM" for s in storage)
+            run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
         )
 
         run.metrics["total_time"] = time.time() - run.process_start
@@ -1240,7 +1240,7 @@ class StatementProcessor:
             not run.skip_cache
             and not run.force_persist
             and not self._miss_guard.should_serialise(run.source_hash)
-            and not self._store.write_is_cheap(run.outputs, captured_vars, execution.cost)
+            and not self._store.write_is_cheap(run.outputs, captured_vars, execution.store_cost)
         )
 
     def _skip_a_newly_seen_draw(self, run: StatementRun) -> None:

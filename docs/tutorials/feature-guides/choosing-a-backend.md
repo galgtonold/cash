@@ -42,7 +42,7 @@ which values also go to the slower tiers depends on the path:
 
 === "Decorator"
 
-    <!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643 -->
+    <!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5 -->
     A decorated result goes to **every** tier whose size cap allows it, however
     cheap it was to compute. The compute floor and cost model do not apply, and
     a `promotion_policy` you pass has no effect on decorated functions. See

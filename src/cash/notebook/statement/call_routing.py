@@ -13,7 +13,7 @@ import ast
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
@@ -32,7 +32,39 @@ logger = logging.getLogger(__name__)
 
 _LOG_PROCESSOR = "[PROCESSOR]"
 
-__all__ = ["CallRouting"]
+__all__ = ["CallRouting", "CashMarks", "StatementPrice"]
+
+
+class StatementPrice(NamedTuple):
+    """What one run of a statement cost (:meth:`CallRouting.price`)."""
+
+    #: What its code cost, the calls it served from the cache included: what
+    #: a hit is credited with.
+    cost: float
+    #: What storing its value saves: ``cost`` less the calls the cache holds,
+    #: plus restoring their results.
+    store_cost: float
+    #: Cash's own seconds inside it.
+    tax: float
+
+
+class CashMarks(NamedTuple):
+    """Cash's clocks around a statement (:meth:`CallRouting.cash_time_marks`):
+    as read before it ran, or as advanced while it ran."""
+
+    #: Seconds the file tracker spent.
+    tracking: float
+    #: The call unit that routed the statement's calls, when there is one.
+    unit: Any
+    #: The call unit's own seconds, and the compute its hits stood in for.
+    overhead: float
+    saved: float
+    #: The compute of the calls the cache holds, and the predicted restore of
+    #: their results (``CallUnit.cached_compute_s``).
+    cached_compute: float
+    cached_restore: float
+    #: ``CallUnit.reads_seq``.
+    reads_seq: int
 
 
 def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | None:
@@ -456,59 +488,85 @@ class CallRouting:
             logger.debug("%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR)
             return code, tree
 
-    def cash_time_marks(self) -> tuple[float, Any, float, float]:
-        """Cash's own clocks, read around a statement (see :meth:`statement_cost`)."""
+    def cash_time_marks(self) -> CashMarks:
+        """Cash's own clocks, read around a statement (see :meth:`price`)."""
 
         unit = self._call_cache.call_unit if self._call_cache is not None else None
-        return (tracking_seconds(), unit, getattr(unit, "overhead_s", 0.0), getattr(unit, "hits_saved_s", 0.0))
+        return CashMarks(
+            tracking_seconds(),
+            unit,
+            getattr(unit, "overhead_s", 0.0),
+            getattr(unit, "hits_saved_s", 0.0),
+            getattr(unit, "cached_compute_s", 0.0),
+            getattr(unit, "cached_restore_s", 0.0),
+            getattr(unit, "reads_seq", 0),
+        )
 
-    def _statement_tax(self, marks: tuple[float, Any, float, float]) -> tuple[float, float]:
-        """``(cash's own seconds inside this statement, what its cached calls saved)``.
+    def _since(self, marks: CashMarks) -> CashMarks:
+        """What each of cash's clocks advanced by since *marks* were read.
 
         The tax is time recording file reads, and keying, hashing and storing
         the calls cash routed -- work the user's own kernel would not have
         done. It is measured, not estimated: the file tracker and the call
         unit both count their own seconds.
 
-        Used twice, and the two must not diverge: to price the statement for
-        storing (:meth:`statement_cost`) and to report it as OVERHEAD rather
-        than as the user's compute. Counting it as compute cancelled it out of
-        `%cash_stats`, which reported 210 s of overhead for a run a pairing
-        measured 370 s slower.
+        Used both to price the statement (:meth:`price`) and to report it as
+        OVERHEAD rather than as the user's compute, and the two must not
+        diverge. Counting it as compute
+        cancelled it out of `%cash_stats`, which reported 210 s of overhead
+        for a run a pairing measured 370 s slower.
         """
 
-        tracking0, unit0, overhead0, saved0 = marks
-        tracking = max(0.0, tracking_seconds() - tracking0)
         unit = self._call_cache.call_unit if self._call_cache is not None else None
-        overhead = saved = 0.0
-        if unit is not None:
-            base_overhead, base_saved = (overhead0, saved0) if unit is unit0 else (0.0, 0.0)
-            overhead = max(0.0, getattr(unit, "overhead_s", 0.0) - base_overhead)
-            saved = max(0.0, getattr(unit, "hits_saved_s", 0.0) - base_saved)
-        return tracking + overhead, saved
+        same = unit is not None and unit is marks.unit
 
-    def statement_cost(self, wall_time: float, marks: tuple[float, Any, float, float]) -> float:
-        """What the statement's own code cost, for storing and for crediting a hit.
+        def advanced(name: str, base: float) -> float:
+            return max(0.0, getattr(unit, name, 0.0) - (base if same else 0.0)) if unit is not None else 0.0
 
-        The wall time under cash, less cash's own time inside it -- recording
-        file reads, keying and storing the calls it routed -- plus what the calls
-        it served from the cache would have cost. The badge once said "saved 16.50s" for a
-        folder read that takes 1.8 s without cash, and "saved 6.55s" for
-        a dict of fits that takes 50-100 s, built from calls served from the
-        cache. The badge's run time stays the wall time.
-        """
+        return CashMarks(
+            max(0.0, tracking_seconds() - marks.tracking),
+            unit,
+            advanced("overhead_s", marks.overhead),
+            advanced("hits_saved_s", marks.saved),
+            advanced("cached_compute_s", marks.cached_compute),
+            advanced("cached_restore_s", marks.cached_restore),
+            marks.reads_seq if same else 0,
+        )
+
+    def price(self, wall_time: float, marks: CashMarks) -> StatementPrice:
+        """What the statement cost, what storing its value saves, and cash's
+        tax inside it, from one reading of cash's clocks since *marks*."""
         try:
-            tax, saved = self._statement_tax(marks)
-            return max(0.0, wall_time - tax) + saved
+            spent = self._since(marks)
         except Exception:  # noqa: BLE001 - a cost estimate never breaks a statement
-            return wall_time
+            return StatementPrice(wall_time, wall_time, 0.0)
+        tax = spent.tracking + spent.overhead
+        # What the statement's code cost, for crediting a hit: the wall time
+        # under cash, less cash's own time inside it -- recording file reads,
+        # keying and storing the calls it routed -- plus what the calls it
+        # served from the cache would have cost. The badge once said "saved
+        # 16.50s" for a folder read that takes 1.8 s without cash, and "saved
+        # 6.55s" for a dict of fits that takes 50-100 s, built from calls
+        # served from the cache. The badge's run time stays the wall time.
+        cost = max(0.0, wall_time - tax) + spent.saved
+        # What storing its value saves: that, less the calls inside it the
+        # cache now holds (stored, or served), plus the predicted time to
+        # restore their results -- what running the statement again costs
+        # once its calls are cached. ``b = shifted(a) + 1`` over a 0.2 s call
+        # costs the ``+ 1``: storing its value would keep a second copy of
+        # what the call's entry holds, to save that much.
+        store_cost = max(0.0, cost - spent.cached_compute) + spent.cached_restore
+        return StatementPrice(cost, store_cost, tax)
 
-    def cash_tax_seconds(self, marks: tuple[float, Any, float, float]) -> float:
-        """The tax alone, for the session's overhead accounting."""
+    def files_read_in_cached_calls(self, marks: CashMarks) -> frozenset[str]:
+        """Files and URLs the statement read only inside calls the cache holds."""
+        unit = self._call_cache.call_unit if self._call_cache is not None else None
+        if unit is None:
+            return frozenset()
         try:
-            return self._statement_tax(marks)[0]
-        except Exception:  # noqa: BLE001 - never let accounting break a statement
-            return 0.0
+            return unit.files_read_since(marks.reads_seq if unit is marks.unit else 0)
+        except Exception:  # noqa: BLE001 - nothing known is nothing left out
+            return frozenset()
 
     def plain_call_result(self, code: str) -> tuple[tuple[str, int] | None, dict[str, int] | None]:
         """``(trusted, unpacked)`` for `with_call_refs` when the statement is

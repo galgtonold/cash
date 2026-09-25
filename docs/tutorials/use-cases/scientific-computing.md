@@ -25,7 +25,7 @@ def simulate(n_steps: int, dt: float, alpha: float, seed: int):
 trajectory = simulate(n_steps=10_000, dt=0.01, alpha=0.5, seed=42)
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @dfaf7643 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5 -->
 The first call runs the simulation and writes the result to disk; every later
 call with the same four arguments, in this run or the next, loads it. Change
 `alpha` or `seed` and it runs again. Large results are stored like small ones:

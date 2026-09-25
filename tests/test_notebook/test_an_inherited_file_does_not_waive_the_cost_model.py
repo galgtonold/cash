@@ -18,10 +18,12 @@ def _waivers(cash_magics, tmp_path):
     orig = StatementStore.should_skip_large_object_caching
     seen = {}
 
-    def spy(self, captured_vars, execution_time, force_persist, has_file_dependencies=False):
+    def spy(self, captured_vars, execution_time, force_persist, has_file_dependencies=False, **kwargs):
         for name in captured_vars:
             seen[name] = has_file_dependencies
-        return orig(self, captured_vars, execution_time, force_persist, has_file_dependencies=has_file_dependencies)
+        return orig(
+            self, captured_vars, execution_time, force_persist, has_file_dependencies=has_file_dependencies, **kwargs
+        )
 
     StatementStore.should_skip_large_object_caching = spy
     try:

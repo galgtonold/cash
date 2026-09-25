@@ -30,7 +30,7 @@ from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
 
-from ..call_refs import REF_BYTES_FIELD, REFS_FIELD
+from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, CallRef
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -247,6 +247,7 @@ class StatementStore:
         execution_time: float,
         force_persist: bool = False,
         has_file_dependencies: bool = False,
+        exempt: set[str] = frozenset(),
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Decide whether keeping a statement's output values is worthwhile.
 
@@ -257,6 +258,7 @@ class StatementStore:
 
         Never refused: under ``force_persist`` (``@cash:persist``), or when the
         statement reads files itself (reading is the expensive part then).
+        Nor for a variable in *exempt*, though it is predicted.
 
         Returns:
             ``(should_skip, reason, prediction)`` where *reason* is a human-readable
@@ -279,7 +281,7 @@ class StatementStore:
             if prediction is not None:
                 if largest_prediction is None or prediction["size_bytes"] > largest_prediction["size_bytes"]:
                     largest_prediction = prediction
-            if skip and skip_decision is None:
+            if skip and skip_decision is None and var_name not in exempt:
                 skip_decision = (reason, prediction)
 
         if force_persist or has_file_dependencies:
@@ -374,9 +376,18 @@ class StatementStore:
         # What this key recorded is about to change (``_producer_file_snapshots``).
         self._producer_snapshots.pop(run.cache_key, None)
 
-        if self._too_cheap_to_store(run, execution, file_dependencies):
+        if self._too_cheap_to_store(run, execution, file_dependencies, execution.cost):
             return None
-        should_skip, skip_reason, prediction = self._refusal(run, execution, captured_vars, miss_guarded)
+        payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
+        if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
+            # Its own work is not worth an entry: the calls inside it are what
+            # was, and the cache holds them. The metadata still records its
+            # output lineages, which a restart needs.
+            return self._store_metadata_only(run, execution, None, {})
+        by_reference = {name for name, value in payload["variables"].items() if isinstance(value, CallRef)}
+        should_skip, skip_reason, prediction = self._refusal(
+            run, execution, captured_vars, miss_guarded, by_reference=by_reference
+        )
         cost_fields = _cost_fields(prediction)
         if should_skip:
             return self._store_metadata_only(run, execution, skip_reason, cost_fields)
@@ -386,6 +397,10 @@ class StatementStore:
             inputs=list(run.inputs),
             outputs=list(run.outputs),
             execution_time=execution.cost,
+            # An entry that refers to call entries holds no second copy of
+            # their results, and restoring it saves the whole statement: the
+            # calls it refers to weigh in (``call_ref_bytes``) with what they cost.
+            store_time=execution.cost if referenced else execution.store_cost,
             source_hash=run.source_hash,
             code=run.code,
             key=run.cache_key,
@@ -399,7 +414,6 @@ class StatementStore:
             version_slot=_version_slot(run.source_hash, run.outputs),
             **cost_fields,
         )
-        payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         wire = self._wire(run, metadata, referenced)
         self._write(run, payload, wire, prediction)
 
@@ -410,32 +424,42 @@ class StatementStore:
 
         return StatementCacheMetadata.from_dict(wire)
 
-    def _too_cheap_to_store(
-        self, run: StatementRun, execution: StatementExecution, file_dependencies: set[str]
-    ) -> bool:
-        """Whether *run* gets no entry at all, not even a metadata-only one.
+    @staticmethod
+    def _reads_files(execution: StatementExecution, file_dependencies: set[str]) -> bool:
+        """Whether *file_dependencies* or the URLs the statement read hold any
+        read outside the calls the cache holds: those calls' entries keep
+        their own reads, and restore them."""
+        cached = execution.cached_call_reads
+        return bool(set(file_dependencies) - cached or set(execution.accessed_remote) - cached)
 
-        Checked apart from the refusals below so that nothing is written:
-        a notebook with many trivial statements (100 ``a_i = i + 1``) would
-        otherwise write 100 metadata-only files on its first run, and every
-        later run would pay ~1ms a statement reading them only to find
-        skipped entries. Writing nothing makes the next lookup a fast clean
-        miss.
+    def _too_cheap_to_store(
+        self, run: StatementRun, execution: StatementExecution, file_dependencies: set[str], seconds: float
+    ) -> bool:
+        """Whether *run*'s value, worth *seconds*, is not worth an entry.
+
+        Asked of the statement's whole cost first: under the floor, it gets no
+        entry at all, not even a metadata-only one. Checked apart from the
+        refusals below so that nothing is written: a notebook with many
+        trivial statements (100 ``a_i = i + 1``) would otherwise write 100
+        metadata-only files on its first run, and every later run would pay
+        ~1ms a statement reading them only to find skipped entries. Writing
+        nothing makes the next lookup a fast clean miss. Then of its own
+        work, the calls the cache holds left out (``store_cost``).
 
         The floor is waived for a statement with any file dependency, its
-        inputs' included. A cheap reader of a file HANDLE
-        (``lines = [l for l in fh]``) must still be stored: re-run on a second
-        Run All, it reads the handle its skipped producer left at EOF and
-        gets [] (test_file_handle_iteration_second_run_all).
+        inputs' included, except one read inside a call the cache holds. A
+        cheap reader of a file HANDLE (``lines = [l for l in fh]``) must still
+        be stored: re-run on a second Run All, it reads the handle its
+        skipped producer left at EOF and gets [] (test_file_handle_iteration_second_run_all).
         """
-        if run.force_persist or file_dependencies or execution.accessed_remote:
+        if run.force_persist or self._reads_files(execution, file_dependencies):
             return False
         # On a contended machine a trivial statement can measure tens of ms
         # and clear the floor, so nothing may assume this branch is taken
         # for a given statement (the floor-exit test pins the threshold
         # rather than trusting the machine to be fast).
         policy = self.policy()
-        execution_time = execution.cost
+        execution_time = seconds
         if not policy.too_cheap_to_store(execution_time) or self._rebuild_cost.final_over_costly_inputs(
             run.inputs, run.outputs, in_loop=self._calls.in_loop, written_later=self.written_later_in_cell
         ):
@@ -453,26 +477,31 @@ class StatementStore:
         execution: StatementExecution,
         captured_vars: dict[str, Any],
         miss_guarded: bool,
+        by_reference: set[str] = frozenset(),
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Whether *run*'s value is kept as metadata only, and why.
 
         Returns ``(should_skip, reason, prediction)``: *reason* may be None
         for a skip nothing needs to report, and *prediction* is the cost
         model's for the largest output. The gates run in order, each only if
-        the ones before let the value through.
+        the ones before let the value through. The outputs named in
+        *by_reference* are stored as references to call entries, which the
+        restore-cost check leaves out: restoring one is restoring the call's
+        result, which running the statement again would do too.
         """
         code, force_persist = run.code, run.force_persist
         # The restore-cost check is waived only for a statement that READS a
         # file itself: reading is the expensive part then. Waiving it for every
         # file the inputs were built from exempted everything downstream of a
         # load: ~400 MiB frames restoring slower than they computed, served as
-        # hits.
-        reads_files = bool(execution.accessed_files or execution.accessed_remote)
+        # hits. Nor for a file read inside a call the cache holds.
+        reads_files = self._reads_files(execution, set(execution.accessed_files or ()))
         should_skip, skip_reason, prediction = self.should_skip_large_object_caching(
             captured_vars,
-            execution.cost,
+            execution.store_cost,
             force_persist,
             has_file_dependencies=reads_files,
+            exempt=by_reference,
         )
 
         # Statements whose outputs include a __main__-defined function or
@@ -544,6 +573,7 @@ class StatementStore:
             inputs=list(run.inputs),
             outputs=list(run.outputs),
             execution_time=execution.cost,
+            store_time=execution.store_cost,
             source_hash=run.source_hash,
             code=run.code,
             key=run.cache_key,

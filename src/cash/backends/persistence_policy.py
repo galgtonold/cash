@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash import cost_model
 
+from ._base import store_seconds
 from .value_policy import worth_its_bytes
 
 if TYPE_CHECKING:
@@ -170,7 +171,7 @@ class PersistencePolicy:
         if metadata.get("decorator_entry"):
             # The caller decided already; only the tiers' size caps still apply.
             return Decision(True, weight=cap_size)
-        compute_s = metadata.get("execution_time", 0) or 0
+        compute_s = store_seconds(metadata)
         if metadata.get("cost_model_family") is not None:
             pays = self.pays_to_restore(
                 compute_s,

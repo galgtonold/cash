@@ -34,7 +34,13 @@ class StatementCacheMetadata:
     timestamp: float | None = None
     inputs: list[str] | None = None
     outputs: list[str] | None = None
+    #: What the statement's code cost, the calls it served from the cache
+    #: included: what a hit is credited with.
     execution_time: float | None = None
+    #: What storing its value saves: ``execution_time`` less the calls inside
+    #: it the cache holds, plus restoring their results. What the persistence
+    #: policy weighs.
+    store_time: float | None = None
     source_hash: str | None = None
     code: str | None = None
     # path -> {"mtime": float, "size": int}

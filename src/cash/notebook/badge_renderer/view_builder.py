@@ -257,7 +257,7 @@ def _own_compute(m: dict[str, Any]) -> float:
     the files it reads, and keying, hashing and storing the calls it routes.
     For a call that returns a large frame that is a noticeable share, and the
     row showed it while the same statement restored showed "saved" net of it
-    (``CallRouting.statement_cost``): "0.92s" beside "saved 0.82s" for one
+    (``CallRouting.price``): "0.92s" beside "saved 0.82s" for one
     computation. ``%cash_stats`` counts compute the same way. The difference
     lands in the overhead row's ``cache`` part, with the rest of cash's cost.
     """
