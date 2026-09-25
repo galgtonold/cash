@@ -46,7 +46,7 @@ coarse = np.linspace(0.0, 1.0, 200)
 assert len(np.intersect1d(coarse, np.linspace(0.0, 1.0, 240))) == 2
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @8db464eb -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @210f1e78 -->
 The axis is one argument, and 240 points from `linspace` are 240 new
 coordinates: only the two endpoints survive. There is no earlier work to reuse.
 

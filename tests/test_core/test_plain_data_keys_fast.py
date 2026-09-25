@@ -80,12 +80,13 @@ def test_different_content_keys_apart(key, a, b):
     assert key(a) != key(b)
 
 
-def test_a_list_reached_twice_keys_like_two_equal_ones(key):
-    """As it always has: the general path rebuilt every list, which dropped
-    the sharing too. The key is the content."""
+def test_a_list_reached_twice_keys_apart_from_two_equal_ones(key):
+    """Written through one reference, a shared list changes in both places;
+    see test_aliased_containers_key_apart."""
     inner = [1]
-    assert key([inner, inner]) == key([[1], [1]])
-    assert key(inner, inner) == key([1], [1])
+    assert key([inner, inner]) != key([[1], [1]])
+    assert key(inner, inner) != key([1], [1])
+    assert key([1], [1]) == key([1], [1])
 
 
 def test_plain_data_is_recognised_and_other_data_is_not():

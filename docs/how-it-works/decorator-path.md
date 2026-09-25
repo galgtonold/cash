@@ -66,7 +66,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @8db464eb -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @210f1e78 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -84,6 +84,9 @@ a restart. Equal values share a key, but the type counts: `[1, 2]` and
 dict's order, which code can read (`pd.DataFrame(d)` orders its columns by
 it): `{"a": 1, "b": 2}` and `{"b": 2, "a": 1}` are separate entries, and so
 are `**kwargs` passed in two orders. Named arguments share a key in any order.
+One list held twice is not two equal lists either: `[[0] * 3] * 3` repeats
+one row, and a write to it shows in every row, so it keys apart from a
+3x3 grid of separate rows.
 [Custom hashers](../tutorials/feature-guides/custom-hashers.md) covers
 registration.
 

@@ -22,7 +22,7 @@ import operator
 import pickle
 import random
 import sys
-from itertools import chain
+from itertools import chain, compress
 from typing import Any
 
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
@@ -119,6 +119,76 @@ def is_plain(value: Any) -> bool:
     return True
 
 
+def aliases(value: Any) -> tuple | None:
+    """Where *value* holds one list (or bytearray) more than once, or None
+    if it is not plain data.
+
+    ``[[0] * 3] * 3`` is one row three times; written into, it changes in
+    three places, where three equal rows change in one. Pickled without the
+    memo, the two are the same bytes, so a key must carry this too:
+    ``((level, position), (level, position first met))`` per repeat, empty
+    when every list appears once.
+
+    Found at C speed for the common case. A list held once has one
+    reference from its parent and one from the level's flat list; only an
+    item with more (`_unshared_refs`) can repeat, and only those are compared by
+    identity. A reference held elsewhere, such as a variable naming one
+    row, only makes that row a candidate.
+    """
+    if type(value) not in PLAIN_SEQS:
+        return None
+    repeats: list = []
+    first: dict[int, tuple] = {}
+    held: list = []
+    try:
+        for depth, (flat, types) in enumerate(_levels(value)):
+            if list not in types and bytearray not in types:
+                continue
+            if types <= _WRITABLE:
+                items, extra = flat, 0
+            else:
+                items, extra = [x for x in flat if type(x) in _WRITABLE], 1
+            base = _unshared_refs() + extra
+            refs = list(map(sys.getrefcount, items))
+            if not refs or max(refs) <= base:
+                continue
+            for pos in compress(range(len(refs)), map(base.__lt__, refs)):
+                item = items[pos]
+                seen = first.get(id(item))
+                if seen is None:
+                    first[id(item)] = (depth, pos)
+                    held.append(item)
+                else:
+                    repeats.append(((depth, pos), seen))
+    except (_NotPlain, TypeError):
+        return None
+    return tuple(repeats)
+
+
+_WRITABLE = frozenset({list, bytearray})
+
+
+def _shared_probe() -> int:
+    """`sys.getrefcount` of a list its parent and one flat list hold, read
+    the way `aliases` reads it."""
+    parent = [[]]
+    flat = list(chain.from_iterable([parent]))
+    return max(map(sys.getrefcount, flat))
+
+
+def _unshared_refs() -> int:
+    """What `aliases` reads for an item held once: measured, because what
+    ``sys.getrefcount`` counts besides the holders varies across Python
+    versions."""
+    global _UNSHARED_REFS
+    if _UNSHARED_REFS is None:
+        _UNSHARED_REFS = _shared_probe()
+    return _UNSHARED_REFS
+
+
+_UNSHARED_REFS: int | None = None
+
+
 def dict_rows(value: Any) -> tuple[tuple, list] | None:
     """``(keys, rows as tuples)`` for a list of dicts, or None.
 
@@ -139,6 +209,8 @@ def dict_rows(value: Any) -> tuple[tuple, list] | None:
         return None
     if len(orders) != 1:
         return None
+    if max(map(sys.getrefcount, value)) > _unshared_refs() - 1 and len(set(map(id, value))) != len(value):
+        return None  # one dict more than once: the general path keys that
     keys = next(iter(orders))
     if not keys or not all(type(k) in (str, int) for k in keys):
         return None

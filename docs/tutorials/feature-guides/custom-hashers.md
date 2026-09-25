@@ -141,7 +141,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @8db464eb -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @210f1e78 -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result. Override only
 when you hold an identity the value itself does not show, such as a dataset

@@ -121,7 +121,7 @@ def _typed(value: Any, canon: Any) -> tuple:
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
 
-def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> Any:
+def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None, _seen: dict | None = None) -> Any:
     """The form a cache key hashes *value* in: equal values pickle to equal
     bytes, in any process.
 
@@ -139,6 +139,12 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> A
       that set is sorted too. Any other object is left to pickle, which stores it as it asks to
       be stored (its ``__reduce__``) and keeps the loops in its graph.
 
+    * A list, dict or set met a second time in one walk becomes a marker
+      naming where it was first met. Rebuilt as tuples, ``[[0] * 3] * 3``
+      -- one row three times -- and three separate rows keyed alike, and a
+      function that copied the grid and set one cell was served the aliased
+      grid's answer.
+
     A container graph that loops back on itself raises `CyclicValueError` (a
     TypeError, so the value is reported as unhashable and the call runs
     uncached). Expanding it path by path to the depth limit never returned,
@@ -151,20 +157,34 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> A
         return value
     if _stack is None:
         _stack = set()
+    if _seen is None:
+        _seen = {}
     if id(value) in _stack:
         raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
+    if isinstance(value, _MUTABLE_CONTAINERS):
+        first = _seen.get(id(value))
+        if first is not None:
+            return ("__cash_alias__", first[0])
+        # The value is held, so its id cannot be reused by another
+        # container while the walk lasts.
+        _seen[id(value)] = (len(_seen), value)
     _stack.add(id(value))
     try:
-        return _stable_key_repr_of(value, _depth, _stack)
+        return _stable_key_repr_of(value, _depth, _stack, _seen)
     finally:
         _stack.discard(id(value))
 
 
-def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
+#: Containers whose identity code can observe by writing through one
+#: reference and reading through another.
+_MUTABLE_CONTAINERS = (list, dict, set)
+
+
+def _stable_key_repr_of(value: Any, _depth: int, _stack: set, _seen: dict) -> Any:
     """`stable_key_repr` of one object, with the path walked so far."""
 
     def sub(v: Any) -> Any:
-        return stable_key_repr(v, _depth + 1, _stack)
+        return stable_key_repr(v, _depth + 1, _stack, _seen)
 
     if isinstance(value, (set, frozenset)):
         items = [sub(v) for v in value]

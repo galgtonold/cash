@@ -39,8 +39,10 @@ def plain_census(value: Any) -> tuple[str, Any] | None:
     """What kind of plain data *value* is, memoized for the key build in progress.
 
     ``("plain", value)`` for lists and tuples of primitives (`_plain_data.is_plain`),
-    ``("dict_rows", (keys, rows))`` for a list of dicts sharing their keys
-    (`_plain_data.dict_rows`), None for anything else.
+    ``("plain_aliased", (value, repeats))`` for such data holding one list more than
+    once (`_plain_data.aliases`), ``("dict_rows", (keys, rows))`` for a list
+    of dicts sharing their keys (`_plain_data.dict_rows`), None for anything
+    else.
     """
     memo = getattr(PLAIN_CENSUS, "memo", None)
     if memo is not None:
@@ -48,8 +50,9 @@ def plain_census(value: Any) -> tuple[str, Any] | None:
         if hit is not None and hit[0] is value:
             return hit[1]
     found: tuple[str, Any] | None = None
-    if _plain_data.is_plain(value):
-        found = ("plain", value)
+    repeats = _plain_data.aliases(value)
+    if repeats is not None:
+        found = ("plain_aliased", (value, repeats)) if repeats else ("plain", value)
     else:
         rows = _plain_data.dict_rows(value)
         if rows is not None:
@@ -299,6 +302,19 @@ def is_opaque(obj: Any) -> bool:
     except Exception as e:  # noqa: BLE001 - opacity check must never break a call
         logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
         return False
+
+
+def _shared_plain_args(values: list) -> tuple:
+    """``(position, first position)`` for each list or bytearray argument
+    that is the same object as an earlier one."""
+    first: dict[int, int] = {}
+    shared = []
+    for pos, value in enumerate(values):
+        if type(value) in (list, bytearray):
+            seen = first.setdefault(id(value), pos)
+            if seen != pos:
+                shared.append((pos, seen))
+    return tuple(shared)
 
 
 def _raise_panic_as_unhashable(exc: BaseException) -> None:
@@ -690,12 +706,19 @@ class ArgHasher:
         ]
         payload_t0 = _perf_counter()
 
-        # One canonical form (`stable_key_repr`): sets and dicts in a stable
-        # order, every container tagged with its type.
+        # One canonical form (`stable_key_repr`): sets in a stable order,
+        # every container tagged with its type, a container met twice marked.
+        # Plain data is keyed by a digest of each argument on its own, so one
+        # list passed as two arguments is marked here.
         try:
-            payload = stable_key_repr(
-                (tuple(map(plain_key_part, hashed_args)), {k: plain_key_part(v) for k, v in hashed_kwargs.items()})
+            form: tuple = (
+                tuple(map(plain_key_part, hashed_args)),
+                {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
             )
+            shared = _shared_plain_args([*hashed_args, *hashed_kwargs.values()])
+            if shared:
+                form += (("__cash_shared_args__", shared),)
+            payload = stable_key_repr(form)
             args_bytes = _plain_data.key_dumps(payload)
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
