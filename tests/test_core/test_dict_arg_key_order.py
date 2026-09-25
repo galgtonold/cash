@@ -1,13 +1,16 @@
-"""Dict arguments equal but for insertion order must share a cache key.
+"""A dict argument keys on its insertion order; a set does not.
 
-Before the fix, ``f({'a': 1, 'b': 2})`` and ``f({'b': 2, 'a': 1})`` produced two
-different cache keys (the stable-key canonicalisation of dict order only ran when
-a set was present), so logically-identical calls missed the cache and recomputed.
-Dict ordering is now canonicalised (recursively) whenever a dict argument value
-is present, while list/tuple order stays semantic and set handling is untouched.
+A dict's order is part of what code reads: ``pd.DataFrame(d)`` orders its
+columns by it, ``json.dumps`` and ``csv.DictWriter`` write in it. Sorting a
+dict's items before keying made ``{"name": .., "score": ..}`` and its
+reordering share an entry, and the second call was served the first one's
+column order. Equal dicts built in two orders now cost one miss; a set, whose
+order nothing can read back, still keys the same in any order.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from cash import Cash, FileBackend
 
@@ -16,7 +19,68 @@ def _cash(tmp_path):
     return Cash(backend=FileBackend(cache_dir=str(tmp_path)))
 
 
-def test_permuted_flat_dict_hits(tmp_path):
+def test_a_reordered_dict_gets_its_own_result(tmp_path):
+    pd = pytest.importorskip("pandas")
+    c = _cash(tmp_path)
+
+    @c.cache
+    def frame_columns(data):
+        return list(pd.DataFrame(data).columns)
+
+    assert frame_columns({"name": ["x"], "score": [1]}) == ["name", "score"]
+    assert frame_columns({"score": [1], "name": ["x"]}) == ["score", "name"]
+
+
+def test_a_reordered_nested_dict_gets_its_own_result(tmp_path):
+    c = _cash(tmp_path)
+
+    @c.cache
+    def keys(d):
+        return [list(d), list(d["x"])]
+
+    assert keys({"x": {"a": 1, "b": 2}, "y": 3}) == [["x", "y"], ["a", "b"]]
+    assert keys({"x": {"b": 2, "a": 1}, "y": 3}) == [["x", "y"], ["b", "a"]]
+
+
+def test_rows_of_reordered_dicts_get_their_own_header(tmp_path):
+    c = _cash(tmp_path)
+
+    @c.cache
+    def header(rows):
+        return ",".join(rows[0])
+
+    assert header([{"id": 1, "name": "x"}]) == "id,name"
+    assert header([{"name": "x", "id": 1}]) == "name,id"
+    assert header([{"id": 1, "name": "x"}, {"name": "y", "id": 2}]) == "id,name"
+    assert header([{"name": "y", "id": 2}, {"id": 1, "name": "x"}]) == "name,id"
+
+
+def test_forwarded_keyword_arguments_keep_their_order(tmp_path):
+    c = _cash(tmp_path)
+
+    @c.cache
+    def columns(**cols):
+        return list(cols)
+
+    assert columns(a=1, b=2) == ["a", "b"]
+    assert columns(b=2, a=1) == ["b", "a"]
+
+
+def test_named_arguments_in_any_order_hit(tmp_path):
+    """Named parameters are bound to the signature, so the order a call
+    writes them in is not an order the body can read."""
+    c = _cash(tmp_path)
+
+    @c.cache
+    def f(rows, n):
+        return rows[:n]
+
+    assert f(rows=[(1, "a")], n=2) == [(1, "a")]
+    assert f(n=2, rows=[(1, "a")]) == [(1, "a")]
+    assert f.cache_info()["hits"] == 1
+
+
+def test_an_equal_dict_in_the_same_order_hits(tmp_path):
     c = _cash(tmp_path)
 
     @c.cache
@@ -24,41 +88,8 @@ def test_permuted_flat_dict_hits(tmp_path):
         return sum(d.values())
 
     assert f({"a": 1, "b": 2}) == 3
-    assert f({"b": 2, "a": 1}) == 3  # same dict, different insertion order
-    info = f.cache_info()
-    assert info["misses"] == 1, "permuted equal dicts must not recompute"
-    assert info["hits"] == 1
-
-
-def test_permuted_nested_dict_hits(tmp_path):
-    c = _cash(tmp_path)
-
-    @c.cache
-    def f(d):
-        return d
-
-    assert f({"x": {"a": 1, "b": 2}, "y": 3}) == {"x": {"a": 1, "b": 2}, "y": 3}
-    # Outer keys reordered AND inner dict keys reordered -> still a hit.
-    f({"y": 3, "x": {"b": 2, "a": 1}})
-    info = f.cache_info()
-    assert info["misses"] == 1
-    assert info["hits"] == 1
-
-
-def test_dict_inside_list_value_hits(tmp_path):
-    """A dict nested inside a list argument is canonicalised; the list order
-    itself is preserved (semantic)."""
-    c = _cash(tmp_path)
-
-    @c.cache
-    def f(items):
-        return len(items)
-
-    assert f([{"a": 1, "b": 2}]) == 1
-    f([{"b": 2, "a": 1}])
-    info = f.cache_info()
-    assert info["misses"] == 1
-    assert info["hits"] == 1
+    assert f({"a": 1, "b": 2}) == 3
+    assert f.cache_info()["hits"] == 1
 
 
 def test_different_dict_contents_still_miss(tmp_path):
@@ -91,10 +122,7 @@ def test_list_order_is_semantic(tmp_path):
     assert info["hits"] == 0
 
 
-def test_unsortable_mixed_type_keys_do_not_crash(tmp_path):
-    """Mixed-type dict keys (int + str) are not directly orderable; the
-    pickle-bytes sort must handle them without crashing, and a permuted copy
-    must still hit."""
+def test_mixed_type_keys_do_not_crash(tmp_path):
     c = _cash(tmp_path)
 
     @c.cache
@@ -102,10 +130,8 @@ def test_unsortable_mixed_type_keys_do_not_crash(tmp_path):
         return len(d)
 
     assert f({1: "a", "b": 2}) == 2
-    assert f({"b": 2, 1: "a"}) == 2  # permuted mixed-type keys -> hit, no crash
-    info = f.cache_info()
-    assert info["misses"] == 1
-    assert info["hits"] == 1
+    assert f({1: "a", "b": 2}) == 2
+    assert f.cache_info()["hits"] == 1
 
 
 def test_set_argument_still_canonicalises(tmp_path):

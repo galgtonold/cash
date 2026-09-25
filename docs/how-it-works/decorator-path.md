@@ -75,13 +75,15 @@ Each argument is fingerprinted by the first rule that applies:
 3. An identity tag Cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 4. A hasher you registered without `override=True`.
-5. The pickled value, in one canonical form: dicts and sets in sorted order,
-   every container tagged with its type.
+5. The pickled value, in one canonical form: sets in sorted order, every
+   container tagged with its type.
 
 Content comes before any in-memory tag, so a stored entry is still found after
-a restart. Equal values share a key (`{"a": 1, "b": 2}` and
-`{"b": 2, "a": 1}`), but the type counts: `[1, 2]` and `(1, 2)`, or `0.5` and
-`np.float64(0.5)`, are separate entries.
+a restart. Equal values share a key, but the type counts: `[1, 2]` and
+`(1, 2)`, or `0.5` and `np.float64(0.5)`, are separate entries. So does a
+dict's order, which code can read (`pd.DataFrame(d)` orders its columns by
+it): `{"a": 1, "b": 2}` and `{"b": 2, "a": 1}` are separate entries, and so
+are `**kwargs` passed in two orders. Named arguments share a key in any order.
 [Custom hashers](../tutorials/feature-guides/custom-hashers.md) covers
 registration.
 

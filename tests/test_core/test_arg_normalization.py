@@ -113,20 +113,24 @@ def test_var_positional_passthrough_does_not_crash():
     assert calls["n"] == 2
 
 
-def test_var_keyword_order_independent():
+def test_var_keyword_order_reaches_the_key():
+    """``**opts`` is a dict whose order the body can read, so two orders are
+    two calls; the same order hits."""
     c = _cash()
     calls = {"n": 0}
 
     @c.cache
     def f(**opts):
         calls["n"] += 1
-        return sorted(opts.items())
+        return list(opts.items())
 
-    f(a=1, b=2)
-    f(b=2, a=1)  # same **kwargs, different order
+    assert f(a=1, b=2) == [("a", 1), ("b", 2)]
+    assert f(a=1, b=2) == [("a", 1), ("b", 2)]
     assert calls["n"] == 1
-    f(a=1, b=3)
+    assert f(b=2, a=1) == [("b", 2), ("a", 1)]
     assert calls["n"] == 2
+    f(a=1, b=3)
+    assert calls["n"] == 3
 
 
 def test_unpicklable_default_falls_back_to_raw_and_still_caches():

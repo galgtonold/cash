@@ -74,7 +74,9 @@ def test_containers_of_different_types_key_apart(tmp_path):
     assert kind(collections.OrderedDict(a=1)) == "OrderedDict"
 
 
-def test_equal_values_key_alike_whatever_their_order(tmp_path):
+def test_equal_sets_key_alike_whatever_their_order(tmp_path):
+    """A set's order cannot be read back, so it is not in the key; a dict's
+    order can (see test_dict_arg_key_order), so it is."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
     runs = []
 
@@ -84,7 +86,7 @@ def test_equal_values_key_alike_whatever_their_order(tmp_path):
         return len(opts) + len(tags)
 
     assert count({"a": 1, "b": {2, 3}}, {"x", "y"}) == 4
-    assert count({"b": {3, 2}, "a": 1}, {"y", "x"}) == 4
+    assert count({"a": 1, "b": {3, 2}}, {"y", "x"}) == 4
     assert len(runs) == 1
 
 

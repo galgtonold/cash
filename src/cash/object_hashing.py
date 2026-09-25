@@ -124,10 +124,13 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> A
 
     * Every dict, list, tuple, set and frozenset becomes a tuple tagged with its
       type (`_typed`), so containers of different types never key alike.
-    * The items of a set, and of a plain dict, are sorted by their pickled
-      bytes: a set of strings iterates in an order PYTHONHASHSEED picks, and a
-      dict equals its reordering. A dict subclass keeps its order, which may be
-      what it means (``OrderedDict``).
+    * The items of a set are sorted by their pickled bytes: a set of strings
+      iterates in an order PYTHONHASHSEED picks, and nothing can read a
+      set's order back. A dict keeps its insertion order, which code reads:
+      ``pd.DataFrame(d)`` orders its columns by it, ``json.dumps`` and
+      ``csv.DictWriter`` write in it. Sorted, ``{"name": ..., "score": ...}``
+      and its reordering shared an entry and the second call got the first
+      one's column order. Equal dicts built in two orders now cost a miss.
     * An object with a set somewhere inside becomes its type and its
       canonicalised instance state (`object_state`), so that set is sorted
       too. Any other object is left to pickle, which stores it as it asks to
@@ -165,10 +168,7 @@ def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
         items.sort(key=_plain_data.key_dumps)
         return _typed(value, tuple(items))
     if isinstance(value, dict):
-        items = [(sub(k), sub(v)) for k, v in value.items()]
-        if type(value) is dict:
-            items.sort(key=lambda kv: _plain_data.key_dumps(kv[0]))
-        return _typed(value, tuple(items))
+        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()))
     if isinstance(value, (list, tuple)):
         return _typed(value, tuple(sub(v) for v in value))
     if not contains_set(value):

@@ -91,7 +91,7 @@ def test_plain_containers_still_hit_and_key_is_unchanged():
     assert total((1, 2, 3)) == 6  # HIT
     assert len(calls) == 1, "plain tuple stopped hitting -- key changed for the common case"
 
-    # A plain dict equal but for insertion order must still share a key.
+    # An equal plain dict must still share a key.
     @inst.cache
     def keys(d):
         calls.append(1)
@@ -99,8 +99,8 @@ def test_plain_containers_still_hit_and_key_is_unchanged():
 
     keys({"a": 1, "b": 2})
     before = len(calls)
-    keys({"b": 2, "a": 1})  # reordered -> must HIT
-    assert len(calls) == before, "insertion-order-only dict difference wrongly missed"
+    keys({"a": 1, "b": 2})
+    assert len(calls) == before, "an equal plain dict wrongly missed"
 
 
 def test_equal_namedtuples_of_the_same_type_still_hit():

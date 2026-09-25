@@ -61,7 +61,6 @@ def test_equal_content_keys_equal(key):
     assert shared[0][1] is shared[1][1] and fresh[0][1] is not fresh[1][1]
     assert key(shared) == key(fresh)
     assert key([(1, 2)] * 3) == key([(1, 2), (1, 2), (1, 2)])
-    assert key(rows=[(1, "a")], n=2) == key(n=2, rows=[(1, "a")])
 
 
 @pytest.mark.parametrize(
@@ -177,13 +176,14 @@ def test_date_rows_key_by_content(key):
     assert key([(_decimal.Decimal("1.5"),)]) != key([(1.5,)])
 
 
-def test_dict_rows_key_by_content_whatever_the_insertion_order(key):
+def test_dict_rows_key_by_content_and_key_order(key):
     """csv.DictReader rows went down the general path, every dict
     walked and rebuilt in Python -- ~10x the same data as tuples."""
     rows = [{"id": i, "city": f"c{i % 5}"} for i in range(1000)]
-    same = [{"city": f"c{i % 5}", "id": i} for i in range(1000)]
+    reordered = [{"city": f"c{i % 5}", "id": i} for i in range(1000)]
     assert arg_hashing.plain_census(rows)[0] == "dict_rows"
-    assert key(rows) == key(same)
+    assert key(rows) == key([dict(r) for r in rows])
+    assert key(rows) != key(reordered), "a header read from the rows would differ"
     other = [dict(r) for r in rows]
     other[500]["city"] = "elsewhere"
     assert key(rows) != key(other)

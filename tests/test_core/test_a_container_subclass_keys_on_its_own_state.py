@@ -60,7 +60,7 @@ def test_equal_plain_containers_still_share_an_entry(cash_instance):
         return sum(values.values()) if isinstance(values, dict) else sum(values)
 
     assert total({"a": 1, "b": 2}) == 3
-    assert total({"b": 2, "a": 1}) == 3
+    assert total({"a": 1, "b": 2}) == 3
     assert total([1, 2]) == 3
     assert total([1, 2]) == 3
     assert len(ran) == 2, "an equal plain dict/list must keep sharing its entry"

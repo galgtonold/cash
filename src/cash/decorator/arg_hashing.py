@@ -463,9 +463,11 @@ class ArgHasher:
             return args, kwargs
         # ``bound.arguments`` is ordered by parameter definition, so the result
         # is canonical regardless of how the caller wrote the call. Re-express
-        # named params as kwargs; keep *args positional; sort **kwargs so its
-        # order doesn't leak into the key. (We only build a payload to hash, so
-        # routing named params through kwargs is purely for determinism.)
+        # named params as kwargs; keep *args positional. ``**kwargs`` keeps the
+        # caller's order: it is a dict the body can read the order of
+        # (``pd.DataFrame(kwargs)``, ``dict(**kwargs)`` forwarded), like a dict
+        # argument. (We only build a payload to hash, so routing named params
+        # through kwargs is purely for determinism.)
         canon_args: list[Any] = []
         canon_kwargs: dict[str, Any] = {}
         for name, param in sig.parameters.items():
@@ -481,7 +483,7 @@ class ArgHasher:
                 # called as `request("/a", url="x")` then keyed on the kwargs
                 # `url` alone, so every such call shared one entry and
                 # `request("/b", url="x")` was served `GET /a`.
-                for k in sorted(val):
+                for k in val:
                     canon_kwargs[f"{name}:{k}"] = val[k]
             else:
                 canon_kwargs[name] = val

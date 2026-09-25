@@ -186,9 +186,11 @@ def test_auto_file_tracking_is_content_hash(tmp_path):
 
 
 def test_content_equal_args_share_one_entry(tmp_path):
-    """Two content-equal but non-identical args (here dicts differing only in
-    insertion order) hit the same cache entry — cash hashes by content, unlike
-    ``functools.lru_cache``. The same holds for DataFrames/arrays via hashers."""
+    """Two content-equal but non-identical args (here dicts built separately)
+    hit the same cache entry — cash hashes by content, unlike
+    ``functools.lru_cache``, which needs hashable arguments. The same holds
+    for DataFrames/arrays via hashers. A dict's insertion order is content:
+    see docs/how-it-works/decorator-path.md."""
     c = _cash(tmp_path)
     n = {"c": 0}
 
@@ -198,7 +200,7 @@ def test_content_equal_args_share_one_entry(tmp_path):
         return sum(d.values())
 
     summ({"a": 1, "b": 2})
-    summ({"b": 2, "a": 1})
+    summ(dict([("a", 1), ("b", 2)]))
     assert n["c"] == 1
 
 

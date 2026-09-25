@@ -120,25 +120,26 @@ def is_plain(value: Any) -> bool:
 
 
 def dict_rows(value: Any) -> tuple[tuple, list] | None:
-    """``(sorted keys, rows as tuples)`` for a list of dicts, or None.
+    """``(keys, rows as tuples)`` for a list of dicts, or None.
 
-    ``csv.DictReader`` rows and JSON records: dicts that share one set of
-    string (or int) keys, with plain values. Keyed as dicts they took the
-    general path -- every dict walked and rebuilt in Python to put its keys in
-    order -- about 10x the plain-rows cost. Their content is the
-    keys once and a tuple of values per row, which ``map(itemgetter(...))``
-    builds at C speed, in key order, so two lists equal but for their dicts'
-    insertion order have the same form.
+    ``csv.DictReader`` rows and JSON records: dicts that share one sequence
+    of string (or int) keys, in one order, with plain values. Keyed as dicts
+    they took the general path -- every dict walked and rebuilt in Python --
+    about 10x the plain-rows cost. Their content is the keys once and a
+    tuple of values per row, which ``map(itemgetter(...))`` builds at C
+    speed. The keys stay in the rows' own order, which code reads (a
+    header, a frame's columns); rows whose orders differ take the general
+    path, which keeps each dict's order.
     """
     if type(value) is not list or not value or set(map(type, value)) != {dict}:
         return None
     try:
         orders = set(map(tuple, value))
-        if len({frozenset(o) for o in orders}) != 1:
-            return None
-        keys = tuple(sorted(next(iter(orders))))
-    except TypeError:  # keys that do not sort together
+    except TypeError:
         return None
+    if len(orders) != 1:
+        return None
+    keys = next(iter(orders))
     if not keys or not all(type(k) in (str, int) for k in keys):
         return None
     getter = operator.itemgetter(*keys)
