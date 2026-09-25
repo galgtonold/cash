@@ -57,10 +57,11 @@ Cash records a file when your code reads it through one of these:
 | built-in | `open()` in a read mode (`'r'`, `'rb'`, `'r+'`, `'a+'`), and `pathlib.Path.read_text()`, `read_bytes()`, `open()` |
 | pandas | every `read_*` function |
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
-| pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `feather.read_table`, `feather.read_feather`, `json.read_json` |
+| pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `dataset.dataset` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
+| datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
 | missing files | `os.path.exists` and `os.path.isfile` when they return `False`, so a file that appears counts |
 
 A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file

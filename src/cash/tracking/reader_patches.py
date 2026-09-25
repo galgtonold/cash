@@ -16,6 +16,7 @@ import concurrent.futures
 import concurrent.futures.thread as cf_thread
 import contextvars
 import functools
+import glob
 import importlib.abc
 import importlib.util
 import logging
@@ -28,6 +29,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cash._memo import PATCH_SITES, LruMemo
+from cash._paths import is_remote_url
 from cash.tracking import io_watch
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
@@ -229,6 +231,54 @@ def _patch_thread_pool_submit() -> None:
         return submit
 
     _patch_attribute(cf_thread.ThreadPoolExecutor, "submit", make)
+
+
+def _dataset_member(name: str) -> bool:
+    """Is *name* part of a dataset directory's data? pyarrow's rule, which
+    pandas and polars follow: names starting with ``.`` or ``_`` are
+    bookkeeping (``_SUCCESS``, ``.crc`` files, ``_temporary/``)."""
+    return not name.startswith((".", "_"))
+
+
+def track_dataset(tracker: Any, target: Any) -> None:
+    """Record what a reader given *target* reads: a file, or every file of a
+    directory or glob.
+
+    A dataset reader (``pd.read_parquet("dd")``, ``pl.read_parquet("dd/*.parquet")``,
+    ``ds.dataset("dd")``) reads every file under the directory or matching
+    the pattern. Recorded as the directory alone, a rewrite of one of its files
+    left the directory's mtime -- the only thing checked -- where it was, and
+    the old total was served; a glob recorded as a path that does not exist
+    was dropped altogether, so even a new file went unseen. Each file is a
+    dependency now, and each directory listed on the way is too, so a new
+    file counts.
+    """
+    text = os.fsdecode(target) if isinstance(target, bytes) else os.fspath(target)
+    if not isinstance(text, str) or is_remote_url(text):
+        tracker.track_path(target)
+        return
+    try:
+        if os.path.isdir(text):
+            tracker.track_path(target)
+            # Listed, not untracked: each directory's listing is recorded as a
+            # read (`read_events._on_listing`), which is what makes a new file
+            # in any of them a change.
+            for root, dirs, files in os.walk(text):
+                dirs[:] = sorted(d for d in dirs if _dataset_member(d))
+                for name in sorted(files):
+                    if _dataset_member(name):
+                        tracker.track_path(os.path.join(root, name))
+            return
+        if glob.has_magic(text) and not os.path.exists(text):
+            # The pattern's directory is recorded by the ``glob.glob`` audit
+            # event (`read_events._on_glob`), and each directory it lists.
+            for match in sorted(glob.glob(text, recursive=True)):
+                if os.path.isfile(match):
+                    tracker.track_path(match)
+            return
+    except (OSError, ValueError):
+        pass
+    tracker.track_path(target)
 
 
 def _sqlite_uri_path(uri: str) -> str | None:
@@ -502,9 +552,18 @@ class FileDependencyRegistry:
             if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = active_tracker.get()
                 if _tracker is not None:
-                    _tracker.track_path(target)
+                    track_dataset(_tracker, target)
                 else:
                     note_untracked_read(target, sys._getframe(1))
+            elif isinstance(target, (list, tuple)):
+                # ``pl.read_parquet([a, b])``, ``ds.dataset([a, b])``.
+                _tracker = active_tracker.get()
+                for item in target:
+                    if isinstance(item, (str, bytes, os.PathLike)):
+                        if _tracker is not None:
+                            track_dataset(_tracker, item)
+                        else:
+                            note_untracked_read(item, sys._getframe(1))
             return original_func(*args, **kwargs)
 
         return tracked_func
