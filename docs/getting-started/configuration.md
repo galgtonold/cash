@@ -26,16 +26,18 @@ max_cache_size = "5GB"
 `cash info` prints every setting in effect and the layer it came from
 ([CLI](../cli.md#cash-info)).
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @fb2bceec -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @edf1f957 -->
 ### What paths are relative to
 
 A relative `cache_dir` is resolved against whoever wrote it:
 
 | Written in | Resolved against |
 |---|---|
-| `Cash(cache_dir=...)`, `cash.configure(...)` or `CASH_CACHE_DIR` | the current working directory |
+| `Cash(cache_dir=...)`, `cash.configure(...)` or `CASH_CACHE_DIR` | the current working directory when it is read |
 | a config file | that file's directory |
 | nowhere (the `.cash` default) | the project root: the first directory above the running script that holds a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`; without one, the script's own directory. In a notebook or REPL, the current directory. |
+
+A tier's own `cache_dir` or `db_path` follows the same rule.
 
 Installed programs such as `pytest` or a console script use the project
 root above the current directory, or a per-user cache directory per tool when
@@ -215,7 +217,7 @@ from cash import Cash
 app = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @18f97088 -->
+<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
 The named file ranks above the project and user files and below environment
 variables and code. That lets an installed package ship its own settings: put
 a TOML file inside the package and pass
@@ -223,7 +225,7 @@ a TOML file inside the package and pass
 `[cash]` or `[tool.cash]`. A relative `cache_dir` in it is relative to the
 file, and `~` is your home directory.
 
-<!-- claim: cash/config.py:_resolve_config @18f97088 -->
+<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
 A missing file warns [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing).
 `cash info --config path/to/cash.toml` shows what a file resolves to.
 
@@ -256,13 +258,14 @@ An instance of your own is built again in each worker by your code, so its
 `reconfigure(...)` stays in the process that called it. See
 [Threads and processes](../tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 
-<!-- claim: cash/reconfigure.py:apply_overrides @b8ecc0a2, cash/config.py:validated_overrides @db2d884f -->
+<!-- claim: cash/reconfigure.py:apply_overrides @b8ecc0a2, cash/config.py:validated_overrides @fecbc461 -->
 Values are checked exactly as `Cash(...)` checks them, before anything
 changes: a bad value raises `ValueError` and leaves the old settings in place.
 So does a backend that cannot be built (`backend="s3"` without `s3_bucket`,
 a Redis tier without the `redis` package): the old backend keeps working.
 `~` is expanded, and a relative `cache_dir` is relative to the current
-directory. An instance built with a backend object (`Cash(backend=...)`) keeps
+directory, made absolute at once so a later `os.chdir()` does not move the
+cache. An instance built with a backend object (`Cash(backend=...)`) keeps
 it: changing its tier settings raises `ValueError`.
 
 ## Magics that set these fields

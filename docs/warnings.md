@@ -169,7 +169,7 @@ result. For freeing space only, the entries go at the next clear.
 
 *Both paths.*
 
-<!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @2d5dd9da -->
+<!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @2d37cc7a -->
 **What happened.** Cash could not create a file in its cache directory: a
 read-only mount, missing permissions, or a path that no longer exists. The
 message names the directory and the OS error. On Windows without long paths
@@ -449,7 +449,7 @@ result. If it fires every run, those entries are never stored.
 
 *Both paths.*
 
-<!-- claim: cash/config.py:_resolve_config @18f97088 -->
+<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. Cash used the other configuration layers.
 

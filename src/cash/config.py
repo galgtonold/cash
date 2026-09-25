@@ -18,6 +18,7 @@ env vars (``CASH_TIER_0_TYPE=redis``, ``CASH_TIER_0_HOST=...``).
 from __future__ import annotations
 
 import ast
+import dataclasses
 import difflib
 import functools
 import inspect
@@ -778,9 +779,12 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
     * **a config file** -- relative to that file's directory, the ordinary rule
       for paths in config files, so ``[tool.cash] cache_dir`` does not move
       with the cwd.
-    * **an env var or a kwarg** -- left exactly as written. The user typed it in
-      the shell or in the code that is running now, so cwd-relative is what they
-      meant, and it is what every other command-line path does.
+    * **an env var or a kwarg** -- relative to the current directory, as every
+      other command-line path is, and made absolute NOW. The user typed it in
+      the shell or in the code that is running now. Left relative, it moved
+      with every later ``os.chdir()``: the backend was built in one directory
+      and worker processes (handed the absolute path) used another, and a
+      ``configure()`` after a chdir rebuilt the cache somewhere new.
 
     An absolute path is returned untouched in all three cases.
     """
@@ -793,11 +797,35 @@ def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
         # Windows expands `~/b` to `C:\Users\me/b`; normalise it to one
         # separator style so it compares equal to the same path built by hand.
         cache_dir = os.path.normpath(expanded)
-    if origin is _CALLER_RELATIVE or os.path.isabs(cache_dir):
+    if os.path.isabs(cache_dir):
         return cache_dir
+    if origin is _CALLER_RELATIVE:
+        return os.path.abspath(cache_dir)
     if not isinstance(origin, Path):
         return cache_dir
     return os.path.normpath(str(origin / cache_dir))
+
+
+#: The tier keys that are paths, resolved the way ``cache_dir`` is.
+_TIER_PATH_KEYS = ("cache_dir", "db_path")
+
+
+def _anchor_tier_paths(tiers: Any, origin: Path | object) -> Any:
+    """*tiers* with each tier's path keys resolved against *origin*, the
+    layer that set them (`_anchor_cache_dir`). A tier path left relative was
+    resolved against whatever the cwd was when the backend was built."""
+    if not isinstance(tiers, list):
+        return tiers
+    out = []
+    for tier in tiers:
+        if isinstance(tier, dict):
+            tier = {k: (_anchor_cache_dir(v, origin) if k in _TIER_PATH_KEYS else v) for k, v in tier.items()}
+        elif isinstance(tier, TierConfig):
+            tier = dataclasses.replace(
+                tier, **{k: _anchor_cache_dir(getattr(tier, k), origin) for k in _TIER_PATH_KEYS}
+            )
+        out.append(tier)
+    return out
 
 
 def get_config(
@@ -905,8 +933,11 @@ def _resolve_config(
     ):
         if path is not None:
             layers.append((f"{label}:{path}", file_layer(layer, path), str(path), Path(path).parent))
-    layers.append(("env", env_data, None, _CALLER_RELATIVE))
-    layers.append(("kwargs", kwarg_data, "Cash(...)", _CALLER_RELATIVE))
+    # Relative to the cwd -- or, for a given anchor, to it: the directory a
+    # process anchored there (a notebook's kernel) runs in.
+    here: Path | object = _CALLER_RELATIVE if anchor is None else Path(anchor)
+    layers.append(("env", env_data, None, here))
+    layers.append(("kwargs", kwarg_data, "Cash(...)", here))
 
     merged: dict[str, Any] = {
         f.name: getattr(CashConfig(), f.name) for f in fields(CashConfig) if not f.name.startswith("_")
@@ -920,6 +951,8 @@ def _resolve_config(
     for source, data, origin, relative_to in layers:
         if not data:
             continue
+        if "tiers" in data:
+            data = {**data, "tiers": _anchor_tier_paths(data["tiers"], relative_to)}
         _merge(merged, data)
         sources.append(source)
         for key in data:
@@ -1159,6 +1192,8 @@ def validated_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
         checked["tiers"] = _build_tiers(checked["tiers"] or [])
     if "cache_dir" in checked:
         checked["cache_dir"] = _anchor_cache_dir(checked["cache_dir"], _CALLER_RELATIVE)
+    if "tiers" in checked:
+        checked["tiers"] = _anchor_tier_paths(checked["tiers"], _CALLER_RELATIVE)
     return checked
 
 

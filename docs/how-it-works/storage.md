@@ -35,8 +35,10 @@ what is running:
 To choose the folder yourself, set `CASH_CACHE_DIR`, `cache_dir` under
 `[tool.cash]` in `pyproject.toml`, or `Cash(cache_dir=...)`. A relative path
 in `pyproject.toml` is relative to that file; one in the environment variable
-or in code is relative to the current directory. The path is made absolute at
-startup, so a later `os.chdir()` does not move it.
+or in code (including `cash.configure(cache_dir=...)`) is relative to the
+current directory. The path is made absolute when the setting is read, so a
+later `os.chdir()` does not move it. A tier's own `cache_dir` follows the same
+rule.
 [Configuration](../getting-started/configuration.md) lists every setting and
 which one wins.
 

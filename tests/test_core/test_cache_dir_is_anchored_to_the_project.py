@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -159,7 +160,9 @@ def test_the_env_var_still_wins_and_stays_relative_to_you(project, tmp_path):
     """
     root, script, elsewhere = project
     result = _run(script, cwd=elsewhere, env_extra={"CASH_CACHE_DIR": "here"})
-    assert result["cache_dir"] == "here", "an explicitly given path must be carried exactly as written"
+    # Relative to the directory it was typed in, resolved once, so a later
+    # os.chdir() cannot move it.
+    assert Path(result["cache_dir"]).resolve() == (elsewhere / "here").resolve()
     # And what it resolves to on disk is the caller's directory, not the
     # project's -- the assertion that would catch the anchoring reaching a
     # value the user typed.

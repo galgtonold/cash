@@ -259,9 +259,9 @@ class TestPrecedence:
         )
         monkeypatch.setenv("CASH_CACHE_DIR", "from_env")
         cfg = get_config(user_config_path=None, project_config_path=proj)
-        # Taken exactly as typed: an env var is written in the shell you are
-        # standing in, so it stays relative to the cwd like any other path.
-        assert cfg.cache_dir == "from_env"
+        # An env var is written in the shell you are standing in, so it is
+        # relative to the cwd like any other path -- resolved as it is read.
+        assert cfg.cache_dir == os.path.abspath("from_env")
 
     def test_kwargs_override_env(self, tmp_path, monkeypatch):
         """Explicit kwargs to get_config (mirroring what Cash() does
@@ -270,7 +270,7 @@ class TestPrecedence:
 
         monkeypatch.setenv("CASH_CACHE_DIR", "from_env")
         cfg = get_config(overrides={"cache_dir": "from_kwarg"})
-        assert cfg.cache_dir == "from_kwarg"
+        assert cfg.cache_dir == os.path.abspath("from_kwarg")
 
     def test_full_chain(self, tmp_path, monkeypatch):
         from cash.config import get_config
