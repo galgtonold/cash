@@ -36,7 +36,7 @@ from cash.tracking.read_classification import (
 from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
 from cash.tracking.reader_patches import install_patches, patch_reader_aliases, remove_patches
-from cash.tracking.tracker_context import active_tracker
+from cash.tracking.tracker_context import active_tracker, untracked
 
 __all__ = ["FileAccessTracker", "install_read_watch", "tracking_seconds"]
 
@@ -119,6 +119,11 @@ class FileAccessTracker:
         # that is never fresh: dropped, the entry would have no dependency on
         # the file at all, and every edit to it would be served stale.
         self.unresolved_files: set[str] = set()
+        # Paths this block looked for and FOUND without reading them -- a flag
+        # file, an output folder -- and what they were (``file``, ``dir`` or
+        # ``any``). See ``track_present``.
+        self.present_files: dict[str, str] = {}
+        self._probes_seen: set[tuple[Any, str | None]] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
         # so a file that changed in between was fingerprinted as if it were
@@ -213,6 +218,10 @@ class FileAccessTracker:
     def get_absent_files(self) -> set[str]:
         """Paths this block looked for and did not find."""
         return self.absent_files
+
+    def get_present_files(self) -> dict[str, str]:
+        """Paths this block probed and found, with what it asked them to be."""
+        return self.present_files
 
     def get_unresolved_files(self) -> set[str]:
         """Paths this block read that cannot be stat'ed as recorded."""
@@ -400,7 +409,51 @@ class FileAccessTracker:
             parent.note_reading_code(code)
 
     def track_absent(self, path) -> None:
-        """Record *path* as looked-for-and-missing.
+        """Record *path* as looked-for-and-missing."""
+        if self._probed_before(path, None):
+            return
+        # Untracked: the filters below probe paths too, through the same
+        # wrapped functions.
+        with untracked():
+            normalized = self._probed_path(path)
+        if normalized is not None:
+            self.add_tracked_absent(normalized)
+
+    def track_present(self, path, kind: str) -> None:
+        """Record *path* as looked-for-and-found: ``kind`` is ``file``,
+        ``dir`` or ``any`` (what the probe asked). A flag file checked with
+        ``os.path.exists`` and never opened decides the result by being there,
+        and a result computed with it stays right only while it is."""
+        if self._probed_before(path, kind):
+            return
+        # Untracked: the filters below probe paths too, through the same
+        # wrapped functions.
+        with untracked():
+            normalized = self._probed_path(path)
+        if normalized is not None:
+            self.add_tracked_present(normalized, kind)
+
+    def _probed_before(self, path, kind: str | None) -> bool:
+        """Was this probe, with this answer, recorded in this block already?
+
+        A loop that checks the same file on every iteration asked once:
+        recording it again cost 20-40 us a probe, for nothing. The recorded
+        form does not depend on the working directory (see `_probed_path`),
+        so the path as given is the key.
+        """
+        try:
+            key = (os.fspath(path), kind)
+        except TypeError:
+            return False
+        if key in self._probes_seen:
+            return True
+        if len(self._probes_seen) < 65536:
+            self._probes_seen.add(key)
+        return False
+
+    def _probed_path(self, path) -> str | None:
+        """How an existence probe of *path* is recorded, or None when it is
+        not the user's question.
 
         Kept as WRITTEN, not resolved: a relative probe is about "a file with
         this name, here", and that is exactly the thing that must be
@@ -412,17 +465,17 @@ class FileAccessTracker:
         cash's own storage are not user dependencies.
         """
         try:
-            raw = str(path)
+            raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
         except (TypeError, ValueError):
-            return
+            return None
         if not raw or is_pseudo_fs(raw):
-            return
+            return None
         try:
             normalized = normalize_path(raw)
         except (TypeError, ValueError):
-            return
+            return None
         if is_cash_internal(normalized):
-            return
+            return None
         if os.path.isabs(raw):
             # An absolute probe is about one fixed file, so record it resolved
             # the way a read of it would be -- otherwise the two spellings of
@@ -432,13 +485,13 @@ class FileAccessTracker:
             except (TypeError, ValueError, OSError):
                 pass
             if is_pseudo_fs(normalized) or is_cash_internal(normalized):
-                return
+                return None
         # A library probing for an optional file while it is imported
         # (matplotlib looks for a `matplotlibrc` in the working directory) or
         # inside its own package is not the user's question either.
         if incidental_read(os.path.abspath(raw), self._own_package) is not None:
-            return
-        self.add_tracked_absent(normalized)
+            return None
+        return normalized
 
     def add_tracked_absent(self, path: str) -> None:
         """Record an absent path here and, when propagating, on the parents."""
@@ -446,6 +499,15 @@ class FileAccessTracker:
         parent = self._propagation_parent()
         if parent is not None:
             parent.add_tracked_absent(path)
+
+    def add_tracked_present(self, path: str, kind: str) -> None:
+        """Record a path probed and found here and, when propagating, on the
+        parents. Probed as two kinds, it is recorded as ``any``."""
+        known = self.present_files.get(path)
+        self.present_files[path] = kind if known in (None, kind) else "any"
+        parent = self._propagation_parent()
+        if parent is not None:
+            parent.add_tracked_present(path, kind)
 
     def add_tracked_remote(self, url: str) -> None:
         """Record a remote *url* read, propagating to the enclosing tracker."""

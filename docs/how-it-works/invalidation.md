@@ -49,7 +49,7 @@ stored. This page lists what it tracks and how it checks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @39300631, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @959f01d6, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
 Cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -62,7 +62,7 @@ Cash records a file when your code reads it through one of these:
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
-| missing files | `os.path.exists` and `os.path.isfile` when they return `False`, so a file that appears counts |
+| existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`: a path that was not there counts once it appears, and one your code found (a flag file, an output folder) counts once it is gone |
 
 A reader counts however a script or a module of your code names it:
 `pq.read_table(...)`, `from pyarrow.parquet import read_table`, or an alias
@@ -73,7 +73,7 @@ A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file
 read another way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @0f17a917, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 When the result is stored, each file is recorded with its size, modification
 time and a content hash. Before the result is reused:
 

@@ -60,6 +60,7 @@ __all__ = [
     "snapshot_file_deps",
     "snapshot_remote_deps",
     "snapshot_absent_deps",
+    "snapshot_present_deps",
     "snapshot_dependencies",
     "existing_file_deps",
     "file_content_hash",
@@ -86,6 +87,11 @@ _REMOTE_MARKER = "remote"
 # a hit: the B run recorded NO dependencies, so its entry looks valid
 # everywhere.
 _ABSENT_MARKER = "absent"
+
+# Marks a snapshot entry as a path that WAS there and was not read: a flag file
+# or a folder the call only checked for. Its value is what the probe asked for
+# (``file``, ``dir`` or ``any``), and the entry is fresh while that still holds.
+_PRESENT_MARKER = "present"
 
 # Marks a snapshot entry for a file that was read but could not be stat'ed as
 # recorded. Such an entry is never fresh: failing closed costs a recompute,
@@ -468,6 +474,30 @@ def snapshot_absent_deps(paths: Iterable[str]) -> dict[str, dict[str, Any]]:
     return snapshot
 
 
+def _is_present(path: str, kind: Any) -> bool:
+    """Is *path* there as *kind* (``file``, ``dir``, anything else: any)?"""
+    if kind == "file":
+        return os.path.isfile(path)
+    if kind == "dir":
+        return os.path.isdir(path)
+    return os.path.lexists(path)
+
+
+def snapshot_present_deps(paths: Mapping[str, str]) -> dict[str, dict[str, Any]]:
+    """Return ``{path: {'present': kind}}`` for paths that were probed and
+    found, and are still there as *kind* at snapshot time (one the call itself
+    removed is not an input it found)."""
+    snapshot: dict[str, dict[str, Any]] = {}
+    for path, kind in paths.items():
+        try:
+            if not _is_present(path, kind):
+                continue
+        except (OSError, ValueError):
+            continue
+        snapshot[path] = {_PRESENT_MARKER: kind}
+    return snapshot
+
+
 def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
     """Return ``{url: {'remote': True, 'hash': token}}`` for remote reads.
 
@@ -502,12 +532,14 @@ def snapshot_dependencies(
     known: dict[str, tuple[Any, str]] | None = None,
     full_hash_max: int | None = None,
     unresolved: Iterable[str] | None = None,
+    present: Mapping[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
     *unresolved* are paths the call read that cannot be stat'ed as recorded
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
-    fresh.
+    fresh. *present* are paths it probed and found without reading
+    (``FileAccessTracker.get_present_files``).
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -523,6 +555,10 @@ def snapshot_dependencies(
         # After the present ones, and never over them: a path both probed and
         # read is present, and the read is the stronger record.
         for path, entry in snapshot_absent_deps(absent).items():
+            snapshot.setdefault(path, entry)
+    if present:
+        # Weaker than a read of the same path, which already says it is there.
+        for path, entry in snapshot_present_deps(present).items():
             snapshot.setdefault(path, entry)
     for path in unresolved or ():
         snapshot[path] = {_UNRESOLVED_MARKER: True}
@@ -706,8 +742,9 @@ def file_dep_is_fresh(
 
     ``stale_reason`` is ``None`` when fresh, else one of
     ``'unreadable' | 'size' | 'content' | 'hash-mode' | 'mtime' |
-    'mtime-sampled' | 'ctime-sampled' | 'unresolved' | 'remote-changed' |
-    'remote-unresolved'`` for debug attribution.
+    'mtime-sampled' | 'ctime-sampled' | 'appeared' | 'vanished' |
+    'unresolved' | 'remote-changed' | 'remote-unresolved'`` for debug
+    attribution.
 
     **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
     "path" is a URL, so there is nothing to stat, and the store's own validator
@@ -724,6 +761,13 @@ def file_dep_is_fresh(
             return (not os.path.exists(resolved_path)), "appeared"
         except (OSError, ValueError):
             return False, "appeared"
+    if _PRESENT_MARKER in stored:
+        # The call found this path and did not read it: fresh while it is
+        # still there, as what the probe asked for.
+        try:
+            return _is_present(resolved_path, stored[_PRESENT_MARKER]), "vanished"
+        except (OSError, ValueError):
+            return False, "vanished"
     if stored.get(_UNRESOLVED_MARKER):
         return False, "unresolved"
     stored_size = stored.get("size")

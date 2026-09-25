@@ -33,7 +33,7 @@ from cash._memo import PATCH_SITES, LruMemo
 from cash._paths import is_remote_url
 from cash.install_paths import is_user_path
 from cash.tracking import io_watch
-from cash.tracking.read_credit import note_untracked_read
+from cash.tracking.read_credit import _frame_kind, note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "file_registry", "install_patches", "remove_patches"]
@@ -300,7 +300,9 @@ def _track_regular_file(path: Any) -> None:
 
 
 def _patch_pathlib_stat() -> None:
-    """Track the file ``Path.stat()`` looks at.
+    """Track the file ``Path.stat()`` looks at: a regular file by content, a
+    directory by being there, and a path that is not there as absent -- which
+    is what ``Path.exists()``, ``is_file()`` and ``is_dir()`` see through it.
 
     An export cell ending with
     ``print({p.name: p.stat().st_size for p in sorted(OUT.glob('*.csv'))})``:
@@ -316,9 +318,23 @@ def _patch_pathlib_stat() -> None:
     def make(original):
         @functools.wraps(original)
         def tracked_path_stat(self, *args, **kwargs):
-            result = original(self, *args, **kwargs)
-            if active_tracker.get() is not None and stat.S_ISREG(result.st_mode):
-                _track_regular_file(self)
+            try:
+                result = original(self, *args, **kwargs)
+            except (FileNotFoundError, NotADirectoryError):
+                # ``Path.exists()`` / ``is_file()`` answering False: the path
+                # was looked for and was not there.
+                tracker = active_tracker.get()
+                if tracker is not None:
+                    tracker.track_absent(self)
+                raise
+            tracker = active_tracker.get()
+            if tracker is not None:
+                if stat.S_ISREG(result.st_mode):
+                    _track_regular_file(self)
+                elif stat.S_ISDIR(result.st_mode) and _asked_by_user_code(sys._getframe(1)):
+                    # ``Path("out").is_dir()``: a directory has no content to
+                    # depend on, but it being there is what the code asked.
+                    tracker.track_present(self, "dir")
             return result
 
         return tracked_path_stat
@@ -350,6 +366,71 @@ def _patch_thread_pool_submit() -> None:
         return submit
 
     _patch_attribute(cf_thread.ThreadPoolExecutor, "submit", make)
+
+
+def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[..., Any]:
+    """Wrap an existence probe (``os.path.exists``, ``isfile``, ``isdir``,
+    ``os.access``) to record its answer.
+
+    False: the path is recorded as absent, so the entry is stale once it
+    appears. True: as present (of *kind*), so the entry is stale once it is
+    gone -- a flag file or an output folder that is checked but never read.
+    A False from ``isfile``, ``isdir`` or ``access`` on a path that IS there
+    (another kind, no permission) records what is there instead: that is
+    what the answer rests on.
+
+    This wraps a genuinely hot function, so it calls through first and only
+    looks further while a tracker is open.
+    """
+    exact_negative = kind == "any" and getattr(original_func, "__name__", "") != "access"
+
+    @functools.wraps(original_func)
+    def tracked_probe(path, *args, **kwargs):
+        result = original_func(path, *args, **kwargs)
+        _tracker = active_tracker.get()
+        if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
+            if result:
+                if _asked_by_user_code(sys._getframe(1)):
+                    _tracker.track_present(path, kind)
+            elif exact_negative:
+                _tracker.track_absent(path)
+            else:
+                _record_negative_probe(_tracker, path)
+        return result
+
+    return tracked_probe
+
+
+#: Modules that only pass a path question on: the frame that matters is the
+#: one that called them.
+_PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathlib", "pathlib._local", "pathlib._abc"})
+
+
+def _asked_by_user_code(frame: Any) -> bool:
+    """Did the user's own code ask this probe (through pathlib or ``os`` at most)?
+
+    A path found THERE is recorded only then. Libraries and cash probe paths
+    for themselves all the time -- ``inspect`` checks that a function's source
+    file exists while cash keys a nested call -- and each would become a
+    dependency of whatever cached call was running. A path NOT there is
+    recorded whoever asked, as it always was.
+    """
+    while frame is not None and frame.f_globals.get("__name__") in _PATH_MACHINERY:
+        frame = frame.f_back
+    return frame is not None and _frame_kind(frame.f_code.co_filename) == "user"
+
+
+def _record_negative_probe(tracker: Any, path: Any) -> None:
+    """A probe said no: absent if nothing is there, else present as what is."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        tracker.track_absent(path)
+        return
+    if not _asked_by_user_code(sys._getframe(2)):
+        return
+    kind = "dir" if stat.S_ISDIR(st.st_mode) else "file" if stat.S_ISREG(st.st_mode) else "any"
+    tracker.track_present(path, kind)
 
 
 def _dataset_member(name: str) -> bool:
@@ -426,13 +507,15 @@ def _sqlite_uri_path(uri: str) -> str | None:
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
 
-    __slots__ = ("value", "files", "absent", "unresolved")
+    __slots__ = ("value", "files", "absent", "unresolved", "present")
 
-    def __init__(self, value: Any, files: list[str], absent: list[str], unresolved: list[str]) -> None:
-        self.value, self.files, self.absent, self.unresolved = value, files, absent, unresolved
+    def __init__(
+        self, value: Any, files: list[str], absent: list[str], unresolved: list[str], present: dict[str, str]
+    ) -> None:
+        self.value, self.files, self.absent, self.unresolved, self.present = value, files, absent, unresolved, present
 
     def __reduce__(self):
-        return (_WorkerReads, (self.value, self.files, self.absent, self.unresolved))
+        return (_WorkerReads, (self.value, self.files, self.absent, self.unresolved, self.present))
 
 
 class _ReadsInWorker:
@@ -463,6 +546,7 @@ class _ReadsInWorker:
             sorted(tracker.get_accessed_files()),
             sorted(tracker.get_absent_files()),
             sorted(tracker.get_unresolved_files()),
+            dict(tracker.get_present_files()),
         )
 
 
@@ -519,6 +603,8 @@ def _patch_process_pool_submit() -> None:
                         tracker.add_tracked_absent(path)
                     for path in result.unresolved:
                         tracker.add_tracked_unresolved(path)
+                    for path, kind in result.present.items():
+                        tracker.add_tracked_present(path, kind)
                     result = result.value
                 outer.set_result(result)
 
@@ -622,13 +708,15 @@ class FileDependencyRegistry:
         # produces no read to track. An entry written by a run that found
         # nothing recorded no dependencies at all, so it looked valid
         # everywhere: directory B's answer came back in directory A,
-        # silently. Only a NEGATIVE result is recorded; a probe that
-        # says yes is followed by the read that tracks it properly. `os.stat`
-        # raises no audit event.
-        self.register("os.path", "exists", self._create_exists_handler)
-        self.register("os.path", "isfile", self._create_exists_handler)
-        self.register("genericpath", "exists", self._create_exists_handler)
-        self.register("genericpath", "isfile", self._create_exists_handler)
+        # silently. A probe that says YES is an input too: a flag file or an
+        # output folder that is checked and never read was served as present
+        # after it was deleted. `os.stat` raises no audit event.
+        for module in ("os.path", "genericpath"):
+            self.register(module, "exists", self._create_exists_handler)
+            self.register(module, "lexists", self._create_exists_handler)
+            self.register(module, "isfile", self._create_isfile_handler)
+            self.register(module, "isdir", self._create_isdir_handler)
+        self.register("os", "access", self._create_exists_handler)
         self._ready = True
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
@@ -724,27 +812,19 @@ class FileDependencyRegistry:
 
     @staticmethod
     def _create_exists_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Record a path that was looked for and was NOT there.
+        """Record what an existence probe answered: a path that was not there
+        (absent), or one that was (present, of any kind)."""
+        return _probe_handler(original_func, "any")
 
-        Only the negative case. A probe that finds the file is followed by the
-        read that records it properly, and recording it here as well would add
-        a second, weaker entry for the same path.
+    @staticmethod
+    def _create_isfile_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """`_create_exists_handler` for ``isfile``: present means a file."""
+        return _probe_handler(original_func, "file")
 
-        This one wraps a genuinely hot function, so it does the cheapest thing
-        that can work: call through first, and only consult the tracker when
-        the answer was False.
-        """
-
-        @functools.wraps(original_func)
-        def tracked_exists(path, *args, **kwargs):
-            result = original_func(path, *args, **kwargs)
-            if not result:
-                _tracker = active_tracker.get()
-                if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
-                    _tracker.track_absent(path)
-            return result
-
-        return tracked_exists
+    @staticmethod
+    def _create_isdir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """`_create_exists_handler` for ``isdir``: present means a directory."""
+        return _probe_handler(original_func, "dir")
 
     #: Suffixes of files that hold code, not data (see `_create_source_reader_handler`).
     _SOURCE_SUFFIXES = (".py", ".pyc", ".pyw", ".pyi", ".pyx")

@@ -57,6 +57,7 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         tracker.get_absent_files(),
         known=known,
         unresolved=getattr(tracker, "unresolved_files", None),
+        present=getattr(tracker, "present_files", None),
     )
     # A file beside the function's own code is part of this INSTALL, not a
     # fixed location: record where it sits relative to the code, so another
@@ -84,6 +85,11 @@ def propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
         # dropped - so the outer entry would silently lose the dependency.
         if isinstance(recorded, dict) and recorded.get("remote"):
             tracker.add_tracked_remote(path)
+        elif isinstance(recorded, dict) and recorded.get("absent"):
+            # Looked for and missing: still an absence, not a file to stat.
+            tracker.add_tracked_absent(dep_path_for_this_process(path, recorded))
+        elif isinstance(recorded, dict) and "present" in recorded:
+            tracker.add_tracked_present(dep_path_for_this_process(path, recorded), recorded["present"])
         else:
             # The file THIS process would read -- another install's copy
             # would give the enclosing entry the writer's path.

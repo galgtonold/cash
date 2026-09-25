@@ -203,7 +203,7 @@ left column is tracked for you. The right column is not, and says what to do.
 | **Module globals** read by the function or its helpers, parameter defaults, and captured variables | **Code picked at run time** (`getattr(mod, name)()`, a dict built in the body). Name it with `depends_on=` |
 | Another **cached function** it calls or passes on (`pool.map(inner, xs)`) | A file read by a reader cash does not know. Use `file_depends_on=` |
 | **Your class or function passed as an argument** or held in an argument or global, also inside a library object (a transformer in an sklearn pipeline), and what that code reads | The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...). Changing them keeps entries |
-| A **file** read by a [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked), by content, or declared with `file_depends_on=`. Also a file it looked for and did not find, once it appears | |
+| A **file** read by a [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked), by content, or declared with `file_depends_on=`. Also a file it looked for and did not find, once it appears, and one it found without reading, once it is gone | |
 | An **environment variable** read by literal name (`os.getenv("TENANT")`) and the working directory | |
 | Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed `ttl` | |
 

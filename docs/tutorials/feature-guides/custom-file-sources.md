@@ -26,7 +26,7 @@ print(load_features.explain())
 #     /home/you/project/data/features.csv: content changed
 ```
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @0f17a917, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
 hits. A same-size edit within the same second still recomputes. When a file's
 size and timestamps have not moved, the check is one `stat` call, so a hit stays
@@ -36,11 +36,11 @@ modification time must match too. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @39300631, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @959f01d6, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
 Cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
-matching file recomputes the call) and existence checks that answer False (the
-call recomputes once the file appears). The full reader list is under
+matching file recomputes the call) and existence checks (the call recomputes
+once a missing file appears, or once a file it found is gone). The full reader list is under
 [Files](../../how-it-works/invalidation.md#files).
 
 A path passed by keyword counts the same as one passed by position.
