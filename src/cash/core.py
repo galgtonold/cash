@@ -693,15 +693,30 @@ class Cash:
         return wrapper
 
     def _delete_backend_entries(self, func_name: str) -> None:
-        """Delete all backend cache entries whose key starts with *func_name*."""
+        """Delete all backend cache entries whose key starts with *func_name*,
+        and tell running processes.
+
+        Other processes (and other `Cash` instances on the folder) may hold
+        the deleted results in their RAM tiers. Moving the disk tier's
+        generation is what tells them to drop those, as ``cash clear
+        --function`` does; without it they went on serving what was cleared.
+        """
+        backend = self.backend
+        prefix = f"{func_name}:"
+        deleted = 0
         try:
-            prefix = f"{func_name}:"
-            for entry in self.backend.list_entries():
+            for entry in backend.list_entries():
                 key = CacheMetadata.from_dict(entry).key or ""
                 if key.startswith(prefix):
-                    self.backend.delete(key)
+                    backend.delete(key)
+                    deleted += 1
         except (OSError, RuntimeError, KeyError):
             logger.debug("Failed to clear cache entries for %s", func_name)
+        if deleted:
+            try:
+                backend.bump_generation()
+            except Exception:  # the local clear is done either way
+                logger.debug("Could not tell other processes about the clear", exc_info=True)
 
     def _wrap_with_stats(self, cf: CachedFunction, wrapper: Callable) -> Callable:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.

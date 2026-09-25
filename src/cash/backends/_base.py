@@ -256,6 +256,10 @@ class CacheBackend(ABC):
         outside the process, or None when it cannot tell."""
         return None
 
+    def bump_generation(self) -> None:  # intentional no-op default
+        """Move `generation_token`, so running processes notice that entries
+        were removed under them. A no-op where there is no token."""
+
     def set_metadata_only(self, key: str, metadata: dict) -> None:  # intentional no-op default
         """Keep *metadata* for *key* without a value, where the backend can.
 

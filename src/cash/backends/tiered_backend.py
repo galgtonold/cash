@@ -95,6 +95,19 @@ class TieredBackend(CacheBackend):
         disk = self._disk_tier()
         return disk.generation_token() if disk is not None else None
 
+    def bump_generation(self) -> None:
+        """Tell other processes (and other instances in this one) that entries
+        were removed from the disk tier, so they drop their RAM tiers.
+
+        This instance removed its own copies already: it keeps its RAM tier,
+        unless something else moved the token since it last looked."""
+        disk = self._disk_tier()
+        if disk is None:
+            return
+        before = disk.generation_token()
+        disk.bump_generation()
+        self._clear_watch.moved_by_us(before, disk.generation_token())
+
     def _disk_tier(self) -> CacheBackend | None:
         """The tier whose directory can be cleared under this process."""
         return next((b for b in self.backends if b.local_dir is not None), None)

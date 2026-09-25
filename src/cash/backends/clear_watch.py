@@ -33,6 +33,13 @@ class ClearWatcher:
         self._checked_at = 0.0
         self._stamp_writes_seen = 0
 
+    def moved_by_us(self, before: Any, after: Any) -> None:
+        """This process moved the token from *before* to *after*
+        (`TieredBackend.bump_generation`): not a clear to react to, unless
+        the token had moved from elsewhere first."""
+        if self._generation is not _UNSEEN and self._generation == before:
+            self._generation = after
+
     def cleared(self, disk: CacheBackend) -> bool:
         """Was *disk* cleared since the last look? Throttled to `CHECK_EVERY`."""
         now = time.monotonic()
