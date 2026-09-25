@@ -25,11 +25,13 @@ import pathlib
 import stat
 import sys
 import threading
+import types
 from collections.abc import Callable
 from typing import Any
 
 from cash._memo import PATCH_SITES, LruMemo
 from cash._paths import is_remote_url
+from cash.install_paths import is_user_path
 from cash.tracking import io_watch
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
@@ -149,6 +151,123 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
                 if original is None or not callable(original) or _is_patch(original):
                     continue
                 _install_wrapper(module_obj, name, original, factory, lambda o, f=factory: f(o, _dispatch_track))
+        for class_name in _CLASS_READERS.get(module_name, ()):
+            owner = getattr(module_obj, class_name, None)
+            if isinstance(owner, type):
+                _patch_attribute(owner, "__init__", _make_init_path_handler)
+
+
+#: Reader CLASSES, by module: the class is left in place, so ``isinstance``
+#: still works, and its ``__init__`` records the path it is given.
+_CLASS_READERS: dict[str, tuple[str, ...]] = {"pyarrow.parquet": ("ParquetFile",)}
+
+
+def _make_init_path_handler(original: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a reader class's ``__init__(self, source, ...)``."""
+    path_handler = FileDependencyRegistry._create_path_arg_handler(lambda *a, **k: None, _dispatch_track)
+
+    @functools.wraps(original)
+    def tracked_init(self, *args, **kwargs):
+        path_handler(*args, **kwargs)
+        return original(self, *args, **kwargs)
+
+    return tracked_init
+
+
+#: id(namespace) -> (its size when scanned, the names bound to a wrapped
+#: reader); `_patch_aliases_in`.
+_alias_scans: LruMemo[int, tuple[int, tuple[str, ...]]] = LruMemo(PATCH_SITES)
+#: (`_patches` version, ``id(original) -> (original, wrapper)``); `_wrapped_originals`.
+_originals_memo: list[Any] = [None, {}]
+
+
+def _wrapped_originals() -> dict[int, tuple[Any, Any]]:
+    """``id(original) -> (original, cash's wrapper)`` for every module-level
+    reader wrapped now."""
+    if _originals_memo[0] == _patches.version:
+        return _originals_memo[1]
+    found: dict[int, tuple[Any, Any]] = {}
+    for owner, _name, new, old in _patches.installed():
+        if not isinstance(owner, types.ModuleType) or not callable(old):
+            continue
+        if _is_patch(new) and getattr(new, "_original_func", None) is old:
+            found[id(old)] = (old, new)
+    _originals_memo[:] = [_patches.version, found]
+    return found
+
+
+def _is_user_module(module: Any) -> bool:
+    """A module of the user's own code, loaded from a file: a script or an
+    import. Not a notebook's namespace -- see `patch_reader_aliases`."""
+    return isinstance(module, types.ModuleType) and is_user_path(getattr(module, "__file__", None))
+
+
+def _patch_aliases_in(module: types.ModuleType) -> None:
+    """Point the names in *module* that hold a wrapped reader at its wrapper.
+
+    ``from pyarrow.parquet import read_table`` at the top of a module binds the
+    ORIGINAL function, before any tracker opened; wrapping the module
+    attribute does nothing for that name, so the read went unseen and edits
+    were served stale -- while ``pq.read_table(...)`` beside it recomputed.
+    A plain alias (``reader = pl.read_csv``) is the same case. The wrapper
+    stands for the library's function in a cache key, as the patched module
+    attribute always has. Remembered per namespace while its size holds, so a
+    module with no such name (most) costs one lookup.
+    """
+    ns = module.__dict__
+    size = len(ns)
+    known = _alias_scans.get(id(ns))
+    originals = None
+    if known is not None and known[0] == size:
+        names: tuple[str, ...] = known[1]
+    else:
+        originals = _wrapped_originals()
+        try:
+            names = tuple(name for name, value in list(ns.items()) if id(value) in originals)
+        except RuntimeError:  # changed size while scanned: another thread importing
+            return
+        _alias_scans[id(ns)] = (size, names)
+    if not names:
+        return
+    if originals is None:
+        originals = _wrapped_originals()
+    for name in names:
+        value = ns.get(name)
+        hit = originals.get(id(value))
+        if hit is not None and hit[0] is value:
+            _patches.replace(module, name, hit[1])
+
+
+#: (number of modules when listed, the user's modules then); `_patch_user_module_aliases`.
+_user_modules: list[Any] = [-1, ()]
+
+
+def _patch_user_module_aliases() -> None:
+    """`_patch_aliases_in` every module of the user's own code."""
+    if not _wrapped_originals():
+        return
+    if _user_modules[0] != len(sys.modules):
+        _user_modules[:] = [len(sys.modules), tuple(m for m in list(sys.modules.values()) if _is_user_module(m))]
+    for module in _user_modules[1]:
+        _patch_aliases_in(module)
+
+
+def patch_reader_aliases(ns: Any) -> None:
+    """`_patch_aliases_in` the module whose globals a tracker was opened for
+    (the decorator's cached function), as its tracker opens.
+
+    Catches a name bound after the patches went in. A notebook's namespace is
+    left alone: rebinding a name there in the middle of a statement would read
+    as the statement assigning it, and change its lineage.
+    """
+    if not isinstance(ns, dict) or not io_watch.holding():
+        return
+    name = ns.get("__name__")
+    module = sys.modules.get(name) if isinstance(name, str) else None
+    if module is None or getattr(module, "__dict__", None) is not ns or not _is_user_module(module):
+        return
+    with _install_lock:
+        _patch_aliases_in(module)
 
 
 def _patch_attribute(owner: Any, name: str, make: Callable[[Any], Any]) -> None:
@@ -455,9 +574,9 @@ class FileDependencyRegistry:
         # pyarrow reads in C++, so nothing passes through Python's open(): a
         # cached function that switched to pyarrow.csv for speed recorded no
         # file dependency at all, and a whole new export returned yesterday's
-        # numbers. Path-taking readers only -- a class such as
-        # ParquetFile is left alone, since replacing it with a function would
-        # break isinstance checks.
+        # numbers. A reader class such as ParquetFile is not replaced -- a
+        # function in its place would break isinstance checks -- its
+        # ``__init__`` is wrapped instead (``_CLASS_READERS``).
         self.register("pyarrow.csv", "read_csv", self._create_path_arg_handler)
         self.register("pyarrow.csv", "open_csv", self._create_path_arg_handler)
         self.register("pyarrow.parquet", "read_table", self._create_path_arg_handler)
@@ -465,6 +584,13 @@ class FileDependencyRegistry:
         self.register("pyarrow.feather", "read_table", self._create_path_arg_handler)
         self.register("pyarrow.feather", "read_feather", self._create_path_arg_handler)
         self.register("pyarrow.json", "read_json", self._create_path_arg_handler)
+        self.register("pyarrow.orc", "read_table", self._create_path_arg_handler)
+        # Arrow IPC files are opened by path in C++ too: ``pa.memory_map`` is
+        # the zero-copy way to read one, ``ipc.open_file`` the reader over it.
+        self.register("pyarrow", "memory_map", self._create_path_arg_handler)
+        self.register("pyarrow", "input_stream", self._create_path_arg_handler)
+        self.register("pyarrow.ipc", "open_file", self._create_path_arg_handler)
+        self.register("pyarrow.ipc", "open_stream", self._create_path_arg_handler)
 
         # pyarrow.dataset reads in C++ like the rest of pyarrow; `read_table`
         # was registered and `dataset()` was not, so one entry point of an
@@ -738,7 +864,14 @@ def install_patches() -> None:
         # A cached call opens and closes a tracker every time it misses: while
         # the handlers and the imported modules are the ones the last install
         # saw, put the same wrappers back without looking anything up.
-        basis = (id(registry), registry._revision, tuple(id(sys.modules.get(name)) for name in registry.handlers))
+        # The number of modules stands for the user's modules, whose names
+        # bound to a reader are wrapped too (`_patch_user_module_aliases`).
+        basis = (
+            id(registry),
+            registry._revision,
+            tuple(id(sys.modules.get(name)) for name in registry.handlers),
+            len(sys.modules),
+        )
         if basis != _installed_for or not _patches.reinstall():
             for mod_name in registry.handlers:
                 module = sys.modules.get(mod_name)
@@ -749,6 +882,7 @@ def install_patches() -> None:
             # work handed to a process pool reports what it read back to it.
             _patch_thread_pool_submit()
             _patch_process_pool_submit()
+            _patch_user_module_aliases()
             _installed_for = basis
         if _shared_import_hook not in sys.meta_path:
             sys.meta_path.insert(0, _shared_import_hook)

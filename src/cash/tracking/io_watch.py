@@ -171,9 +171,11 @@ class Patches:
     open.
     """
 
-    __slots__ = ("_installed", "_last")
+    __slots__ = ("_installed", "_last", "version")
 
     def __init__(self) -> None:
+        #: Moves whenever what is installed changes.
+        self.version = 0
         self._installed: list[tuple[Any, str, Any, Any]] = []
         #: What the last `restore` put back, in install order (see `reinstall`).
         self._last: list[tuple[Any, str, Any, Any]] = []
@@ -191,11 +193,17 @@ class Patches:
         except (AttributeError, TypeError):
             return False
         self._installed.append((owner, name, new, old))
+        self.version += 1
         return True
+
+    def installed(self) -> list[tuple[Any, str, Any, Any]]:
+        """``(owner, name, replacement, original)`` for each replacement in place."""
+        return list(self._installed)
 
     def restore(self) -> None:
         """Put back every original that is still covered by cash's replacement."""
         installed, self._installed = self._installed, []
+        self.version += 1
         restored = []
         for entry in reversed(installed):
             owner, name, new, old = entry
@@ -228,6 +236,7 @@ class Patches:
         except (AttributeError, TypeError):
             return False
         self._installed = list(last)
+        self.version += 1
         return True
 
 

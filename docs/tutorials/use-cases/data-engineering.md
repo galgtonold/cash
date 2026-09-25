@@ -41,12 +41,12 @@ is a new argument for `normalize`, so everything downstream recomputes.
 
 ## Source data
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @dbee3164 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @39300631 -->
 Files read inside a step are tracked by content, with nothing to declare:
 pandas and polars readers, pyarrow's `csv`, `parquet`, `feather` and `json`
 readers, `open()`. An `s3://` or `gs://` read is tracked by the object's ETag or
 version. A `touch` that leaves the bytes alone does not invalidate. Readers
-cash can't see (`h5py`, `pyarrow.parquet.ParquetFile`) need
+cash can't see (`h5py`, a `pyarrow.fs` file system) need
 `file_depends_on=`; see [File dependencies](../feature-guides/custom-file-sources.md).
 
 Databases and APIs have no file to check. Three ways to handle them:

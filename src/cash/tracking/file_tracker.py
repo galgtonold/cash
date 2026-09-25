@@ -35,7 +35,7 @@ from cash.tracking.read_classification import (
 )
 from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
-from cash.tracking.reader_patches import install_patches, remove_patches
+from cash.tracking.reader_patches import install_patches, patch_reader_aliases, remove_patches
 from cash.tracking.tracker_context import active_tracker
 
 __all__ = ["FileAccessTracker", "install_read_watch", "tracking_seconds"]
@@ -153,6 +153,9 @@ class FileAccessTracker:
         # read inside this block also registers with the outer tracker(s).
         self._parent_stack.append(active_tracker.get())
         self._token_stack.append(active_tracker.set(self))
+        # A reader the block's own namespace bound by name (``from polars
+        # import read_parquet``) after the wrappers went in.
+        patch_reader_aliases(self.user_ns)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

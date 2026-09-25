@@ -239,7 +239,7 @@ the statement.
 
 ### Reads through a loader cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_install_module_patches @c4527d67 -->
+<!-- claim: cash/tracking/reader_patches.py:_install_module_patches @3e52b060 -->
 **Symptom:** you changed a file and the cell still shows the old data, with a
 `CACHED` badge and no warning.
 
@@ -248,7 +248,9 @@ Cash records a file when it is read through a reader it watches: `pd.read_*`,
 [others](how-it-works/invalidation.md#what-counts-as-a-change). A read through
 anything else (a C extension that opens the file itself, a client library, a
 subprocess, `os.open`) is invisible, and the statement is cached with no file
-recorded. A SQLite database in WAL mode is the same: a commit lands in the
+recorded. So is a watched reader imported by name in a cell
+(`from polars import read_parquet`): call it through its module
+(`pl.read_parquet(...)`). A SQLite database in WAL mode is the same: a commit lands in the
 `-wal` file.
 
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
