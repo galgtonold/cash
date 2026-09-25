@@ -121,6 +121,9 @@ def test_a_read_with_storage_options_caches_and_invalidates(s3, endpoint, tmp_pa
     assert load(url) == 5
     assert len(calls) == 2
 
+    # The store is written in the background: finish it, or the walk lists a
+    # temp file that is renamed into place before it can be opened.
+    cash.shutdown()
     written = b""
     for root, _dirs, files in os.walk(tmp_path / ".cash"):
         for name in files:
