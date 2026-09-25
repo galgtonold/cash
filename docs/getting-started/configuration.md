@@ -66,7 +66,8 @@ skipped with [`CONFIG-INVALID`](../warnings.md#config-invalid), and an unknown
 key in a file warns [`CONFIG-UNKNOWN-KEY`](../warnings.md#config-unknown-key).
 Sizes and entry counts must be at least 1 (leave them unset for no cap),
 seconds and other numbers at least 0, and `min_cache_savings_pct` between 0
-and 1.
+and 1. An empty `cache_dir` is refused the same way, and a `CASH_*` variable
+set to the empty string (`CASH_CACHE_DIR=${X:-}`) counts as unset.
 
 ### Storage
 

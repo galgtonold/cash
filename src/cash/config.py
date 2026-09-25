@@ -99,9 +99,17 @@ _RANGES: dict[str, tuple[float, float | None]] = {
 }
 
 
+#: Settings that name a path, where ``""`` would mean the current directory:
+#: the cache landed among the user's source files.
+_PATH_SETTINGS = frozenset({"cache_dir", "db_path"})
+
+
 def _check_choice(name: str, value: Any) -> None:
     """``ValueError`` when *name* must be one of a fixed set and *value* is
-    not, or is a number outside the range *name* allows (`_RANGES`)."""
+    not, is a number outside the range *name* allows (`_RANGES`), or is an
+    empty path."""
+    if name in _PATH_SETTINGS and isinstance(value, str) and not value.strip():
+        raise ValueError(f"{name}={value!r}: an empty path (leave it unset for the default)")
     allowed = _NAMED_CHOICES.get(name)
     if allowed is not None and isinstance(value, str) and value not in allowed:
         raise ValueError(f"{name}={value!r}: not one of {', '.join(sorted(allowed))}")
@@ -687,6 +695,10 @@ def _load_env_config() -> dict[str, Any]:
 
     for env_key, raw in os.environ.items():
         if not env_key.startswith("CASH_"):
+            continue
+        if not raw.strip():
+            # Set but empty -- `CASH_CACHE_DIR=${X:-}` in CI, `docker -e
+            # CASH_CACHE_DIR=` -- is how a shell says "not set".
             continue
 
         # Tier override?

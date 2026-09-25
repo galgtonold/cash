@@ -214,3 +214,34 @@ def test_the_edges_of_each_range_are_accepted(tmp_path):
         min_cache_savings_pct=1,
     )
     assert (c.config.max_cache_size, c.config.flush_interval, c.config.shutdown_write_timeout) == (1, 0, 0)
+
+
+def test_an_empty_cache_dir_variable_counts_as_unset(monkeypatch, tmp_path):
+    """`CASH_CACHE_DIR=${X:-}` in CI set it to "", and the cache was written
+    into the current directory, among the user's source files; `cash info`
+    showed a blank cache dir and `cash clear --all` found nothing."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CASH_CACHE_DIR", raising=False)
+    default = get_config(user_config_path=None, project_config_path=None).cache_dir
+    monkeypatch.setenv("CASH_CACHE_DIR", "")
+    cfg = get_config(user_config_path=None, project_config_path=None)
+    assert cfg.cache_dir == default != str(tmp_path)
+
+
+@pytest.mark.parametrize("empty", ["", "  "])
+def test_an_empty_cache_dir_in_code_raises(tmp_path, empty):
+    with pytest.raises(ValueError, match="cache_dir"):
+        Cash(cache_dir=empty, register_magic=False)
+    with pytest.raises(ValueError, match="cache_dir"):
+        Cash(register_magic=False, tiers=[{"type": "file", "cache_dir": empty}])
+    with pytest.raises(ValueError, match="cache_dir"):
+        cash.configure(cache_dir=empty)
+
+
+def test_an_empty_cache_dir_in_a_file_is_reported_and_skipped(tmp_path):
+    pytest.importorskip("tomllib" if __import__("sys").version_info >= (3, 11) else "tomli")
+    project = tmp_path / "pyproject.toml"
+    project.write_text('[tool.cash]\ncache_dir = ""\n', encoding="utf-8")
+    with pytest.warns(UserWarning, match=r"\[CONFIG-INVALID\].*cache_dir"):
+        cfg = get_config(project_config_path=str(project), user_config_path=None)
+    assert cfg.cache_dir != str(tmp_path)
