@@ -120,7 +120,7 @@ registrations:
 
 | Type | Hashed from |
 |---|---|
-| pandas `DataFrame`, `Series` | schema (names, dtypes, index) and every value |
+| pandas `DataFrame`, `Series` | schema (names, dtypes with their categories, index and its `freq`), `attrs` and every value |
 | numpy `ndarray` | shape, dtype, memory order and the full buffer |
 | polars `DataFrame`, `Series`, `LazyFrame` | schema and row hashes; a `LazyFrame` by its serialized plan |
 | PyArrow `Table`, `RecordBatch` | schema and every row, dictionaries included |

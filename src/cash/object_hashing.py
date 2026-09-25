@@ -302,20 +302,41 @@ def hash_pandas(value: Any) -> str | None:
     try:
         import pandas as pd
 
-        index_dtypes = [str(dt) for dt in getattr(value.index, "dtypes", [value.index.dtype])]
+        index = value.index
+        index_dtypes = [_pandas_dtype_key(dt) for dt in getattr(index, "dtypes", [index.dtype])]
+        # What the labels and dtypes leave out, and code reads: the column
+        # axis's own name (``melt``, ``stack`` and ``reset_index`` name
+        # columns after it), an index's ``freq`` (``shift(freq=...)``,
+        # ``asfreq``) and ``attrs``.
+        axes = f"{list(index.names)!r}:{index_dtypes!r}:{getattr(index, 'freq', None)!r}:"
         if type(value).__name__ == "DataFrame":
-            schema = (
-                f"{list(value.columns)!r}:{list(value.index.names)!r}:"
-                f"{[str(dt) for dt in value.dtypes]!r}:{index_dtypes!r}:"
-            )
+            dtypes = [_pandas_dtype_key(dt) for dt in value.dtypes]
+            schema = f"{list(value.columns)!r}:{list(value.columns.names)!r}:{dtypes!r}:{axes}"
         else:  # Series
-            schema = f"{value.name!r}:{list(value.index.names)!r}:{str(value.dtype)!r}:{index_dtypes!r}:"
+            schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
         h = hashlib.sha256(schema.encode("utf-8"))
+        if value.attrs:
+            h.update(pickle.dumps(stable_key_repr(value.attrs), protocol=4))
         h.update(pd.util.hash_pandas_object(value).values.tobytes())
         return h.hexdigest()
-    except (ImportError, TypeError, ValueError, AttributeError):
+    except (ImportError, TypeError, ValueError, AttributeError, pickle.PicklingError):
         logger.debug("Failed to hash pandas %s via hash_pandas_object", type(value).__name__)
         return None
+
+
+def _pandas_dtype_key(dtype: Any) -> str:
+    """A pandas dtype as a key reads it: ``repr``, and all of a categorical.
+
+    ``str`` is ``'category'`` for every categorical, and ``repr`` elides
+    a long list of categories, so the categories and the ``ordered`` flag
+    are spelled out: ``get_dummies``, ``value_counts`` and ``cat.codes``
+    read them, and two series of the same values over different categories
+    were served each other's columns.
+    """
+    categories = getattr(dtype, "categories", None)
+    if categories is None or getattr(dtype, "name", None) != "category":
+        return repr(dtype)
+    return f"category:{dtype.ordered!r}:{_pandas_dtype_key(categories.dtype)}:{categories.tolist()!r}"
 
 
 def array_layout(value: Any) -> str:
