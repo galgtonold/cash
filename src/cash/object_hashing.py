@@ -33,6 +33,7 @@ in the caller — do not grow this module into a class with options.
 
 from __future__ import annotations
 
+import copyreg
 import dataclasses
 import hashlib
 import logging
@@ -99,7 +100,9 @@ def _typed(value: Any, canon: Any) -> tuple:
     A subclass also brings the state it holds beside its items, which its
     items drop: ``defaultdict(list)`` and ``defaultdict(set)`` shared one
     entry, and a ``dict`` subclass holding ``self.source`` served the first
-    caller's answer for every source. Nothing is caught here: a part that
+    caller's answer for every source. The state is read from ``__dict__``
+    and ``__slots__`` both (`object_state`): a subclass declaring slots kept
+    its values out of the key. Nothing is caught here: a part that
     cannot be read is not left out of the key, it makes the call unkeyable
     (run uncached, with a warning).
     """
@@ -109,7 +112,7 @@ def _typed(value: Any, canon: Any) -> tuple:
         return ("__cash_type__", tag, canon)
     state: Any = ()
     factory = getattr(value, "default_factory", None)
-    own = {k: v for k, v in (getattr(value, "__dict__", None) or {}).items() if not k.startswith("__")}
+    own = {k: v for k, v in object_state(value).items() if not k.startswith("__")}
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
@@ -131,9 +134,9 @@ def stable_key_repr(value: Any, _depth: int = 0, _stack: set | None = None) -> A
       ``csv.DictWriter`` write in it. Sorted, ``{"name": ..., "score": ...}``
       and its reordering shared an entry and the second call got the first
       one's column order. Equal dicts built in two orders now cost a miss.
-    * An object with a set somewhere inside becomes its type and its
-      canonicalised instance state (`object_state`), so that set is sorted
-      too. Any other object is left to pickle, which stores it as it asks to
+    * An object with a set somewhere inside becomes its type and the
+      canonicalised parts pickle would store for it (`_pickled_state`), so
+      that set is sorted too. Any other object is left to pickle, which stores it as it asks to
       be stored (its ``__reduce__``) and keeps the loops in its graph.
 
     A container graph that loops back on itself raises `CyclicValueError` (a
@@ -174,7 +177,44 @@ def _stable_key_repr_of(value: Any, _depth: int, _stack: set) -> Any:
     if not contains_set(value):
         return value
     t = type(value)
-    return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(object_state(value)))
+    return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
+
+
+#: The reconstructors ``object.__reduce_ex__`` names: their state is the
+#: instance's own (``__getstate__``), so nothing is left beside it.
+_COPYREG_REBUILDERS = (copyreg.__newobj__, copyreg.__newobj_ex__, copyreg._reconstructor)
+
+
+def _pickled_state(value: Any) -> Any:
+    """What pickle stores for *value*, as parts `stable_key_repr` can order.
+
+    An object holding a set is opened up so the set can be sorted. Its
+    ``__dict__`` alone is not all it holds: the value of a builtin or C base
+    -- an ndarray subclass's data, a ``str`` subclass's text, a ``deque``
+    subclass's items -- lives outside it, and two tagged arrays over
+    ``[1, 2]`` and ``[30, 40]`` keyed alike. So the parts are what
+    ``__reduce_ex__`` hands pickle: the constructor arguments, the state
+    and any items. The class inside the arguments is replaced by a marker,
+    the type being keyed beside them, so a class pickle cannot find by name
+    still keys. A class whose own reduce leaves its instance dict out
+    (``ndarray``'s) has that added. A value that refuses to be reduced (a
+    module, a function) keeps its instance state alone.
+    """
+    try:
+        reduced = value.__reduce_ex__(4)
+    except TypeError:
+        return object_state(value)
+    if isinstance(reduced, str):
+        return reduced  # pickled by name
+    t = type(value)
+    rebuild, args, *rest = reduced
+    parts: list = [tuple("__cash_self_type__" if a is t else a for a in args or ())]
+    for i, part in enumerate(rest):
+        # State, then the iterators of list items and dict items.
+        parts.append(list(part) if i and part is not None else part)
+    if rebuild not in _COPYREG_REBUILDERS:
+        parts.append(object_state(value))
+    return tuple(parts)
 
 
 def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
