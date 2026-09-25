@@ -20,6 +20,7 @@ from collections import ChainMap
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .ast_util import parse_cached
@@ -463,6 +464,36 @@ def _forbidden_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _callee_name(obj: Any, known_by_id: Mapping[int, str]) -> str | None:
+    """The ``module.qualname`` a called or referenced *obj* is registered under.
+
+    A known function is found by identity -- itself or what its wrappers
+    wrap -- so the edge gets the registry's own name, however that was
+    spelled. Otherwise the script's ``__main__`` is named the way the
+    registry names it (`resolve_main_module`, read from the innermost
+    function's globals: a wrapper's globals are its decorator's module).
+    Run as ``python pipeline.py``, a cached ``inner`` is registered as
+    ``pipeline.inner`` but its ``__module__`` says ``__main__``, and a
+    caller of it recorded no edge: editing ``inner`` never reached it.
+    """
+    inner = obj
+    for _ in range(8):
+        name = known_by_id.get(id(inner))
+        if name is not None:
+            return name
+        nxt = getattr(inner, "__wrapped__", None)
+        if nxt is None or nxt is inner:
+            break
+        inner = nxt
+    qualname = getattr(obj, "__qualname__", None)
+    if not isinstance(qualname, str):
+        return None
+    module = getattr(obj, "__module__", None) or "__unknown__"
+    if module in MAIN_MODULE_NAMES:
+        module = resolve_main_module(inner)
+    return f"{module}.{qualname}"
+
+
 class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
 
@@ -499,6 +530,7 @@ class CodeAnalyzer:
         if globals_dict is None:
             return set()
         resolved_qualnames: set[str] = set()
+        known_by_id = {id(f): n for n, f in known_functions.items()} if known_functions else {}
 
         for name in visitor.names_to_resolve:
             parts = name.split(".")
@@ -519,11 +551,9 @@ class CodeAnalyzer:
                         if not isinstance(obj, functools.partial):
                             break
                         obj = obj.func
-                    if hasattr(obj, "__qualname__"):
-                        module = getattr(obj, "__module__", None) or "__unknown__"
-                        fqn = f"{module}.{obj.__qualname__}"
-                        if known_functions is None or fqn in known_functions:
-                            resolved_qualnames.add(fqn)
+                    fqn = _callee_name(obj, known_by_id)
+                    if fqn is not None and (known_functions is None or fqn in known_functions):
+                        resolved_qualnames.add(fqn)
                 except AttributeError:
                     pass  # Expected: some callables lack __qualname__
 
@@ -532,14 +562,16 @@ class CodeAnalyzer:
             for name in dict.fromkeys(visitor.referenced):
                 if name in called:
                     continue
-                fqn = CodeAnalyzer._referenced_function(name, globals_dict)
+                fqn = CodeAnalyzer._referenced_function(name, globals_dict, known_by_id)
                 if fqn is not None and fqn in known_functions:
                     resolved_qualnames.add(fqn)
 
         return resolved_qualnames
 
     @staticmethod
-    def _referenced_function(name: str, globals_dict: dict[str, Any]) -> str | None:
+    def _referenced_function(
+        name: str, globals_dict: dict[str, Any], known_by_id: Mapping[int, str] | None = None
+    ) -> str | None:
         """``module.qualname`` of the function a READ name holds, or None.
 
         Resolved through modules and classes only: an instance's attribute can
@@ -558,10 +590,7 @@ class CodeAnalyzer:
                 obj = obj.func
             if not callable(obj) or isinstance(obj, type):
                 return None
-            qualname = getattr(obj, "__qualname__", None)
-            if not isinstance(qualname, str):
-                return None
-            return f"{getattr(obj, '__module__', None) or '__unknown__'}.{qualname}"
+            return _callee_name(obj, known_by_id or {})
         except Exception:  # noqa: BLE001 - a probe of arbitrary globals
             return None
 

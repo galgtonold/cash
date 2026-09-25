@@ -266,3 +266,43 @@ def test_a_notebook_style_namespace_stays_main():
     namespace: dict = {"__name__": "__main__"}
     exec("def f(n): return n", namespace)
     assert c.get_func_key(namespace["f"]).startswith("__main__.")
+
+
+# ---------------------------------------------------------------------------
+# A cached function calling another one, in a script run directly
+# ---------------------------------------------------------------------------
+
+NESTED = """
+    import cash
+    c = cash.Cash(cache_dir=CACHE_DIR)
+    RATE = 2
+
+    @c.cache(assume_safe=True)
+    def inner(x):
+        return x * RATE
+
+    @c.cache(assume_safe=True)
+    def outer(x):
+        return inner(x) + 1
+"""
+
+
+def _run_as_script(tmp_path, body):
+    """Execute *body* the way ``python pipeline.py`` does: ``__main__`` with a ``__file__``."""
+    path = tmp_path / "pipeline.py"
+    path.write_text(textwrap.dedent(body), encoding="utf-8")
+    namespace = {"__name__": "__main__", "__file__": str(path), "CACHE_DIR": str(tmp_path / "cache")}
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+    return namespace
+
+
+def test_a_cached_callee_in_a_script_is_an_edge_of_its_caller(tmp_path):
+    """The registry names ``inner`` ``pipeline.inner``; its ``__module__`` says
+    ``__main__``. The caller's edge was looked up under the second name, never
+    found, so a change to what ``inner`` reads left ``outer`` serving its old value."""
+    ns = _run_as_script(tmp_path, NESTED)
+    assert ns["outer"](1) == 3
+    ns["RATE"] = 5
+    assert ns["inner"](1) == 5
+    assert ns["outer"](1) == 6, "outer kept its result after the global its cached callee reads changed"
+    assert "pipeline.inner" in ns["c"]._registry.graph.get_dependencies("pipeline.outer")
