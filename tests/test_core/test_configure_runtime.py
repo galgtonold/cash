@@ -242,6 +242,32 @@ class TestSameAsTheConstructor:
         assert c.config.tiers == []
         assert c.backend is backend
 
+    def test_a_backend_that_cannot_be_built_changes_nothing(self, tmp_path):
+        """``backend="s3"`` without ``s3_bucket`` passes the value checks and
+        fails only when the S3 tier is built. It was built after the new
+        values were applied and the old backend shut down, so the raise left
+        ``backend="s3"`` in the config and a shut-down backend in place:
+        every later store failed for the rest of the process."""
+        import warnings
+
+        from cash import Cash
+
+        c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+        f = c.cache(assume_safe=True)(lambda x: list(range(x)))
+        f(10)
+        backend = c.backend
+        with pytest.raises(ValueError, match="s3_bucket"):
+            c.reconfigure(backend="s3")
+        assert c.config.backend == "tiered"
+        assert c.backend is backend
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert f(20) == list(range(20))
+            backend.backends[-1]._writes.wait_all()
+        assert [getattr(w.message, "code", None) for w in caught] == []
+        assert f.cache_info()["misses"] == 2
+        assert f(20) == list(range(20)) and f.cache_info()["hits"] == 1
+
     def test_a_home_relative_cache_dir_is_expanded(self, tmp_path, monkeypatch):
         from cash import Cash
 

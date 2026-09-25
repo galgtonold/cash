@@ -251,9 +251,11 @@ An instance of your own is built again in each worker by your code, so its
 `reconfigure(...)` stays in the process that called it. See
 [Threads and processes](../tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 
-<!-- claim: cash/reconfigure.py:apply_overrides @87ef96b0, cash/config.py:validated_overrides @db2d884f -->
+<!-- claim: cash/reconfigure.py:apply_overrides @1f893dbd, cash/config.py:validated_overrides @db2d884f -->
 Values are checked exactly as `Cash(...)` checks them, before anything
 changes: a bad value raises `ValueError` and leaves the old settings in place.
+So does a backend that cannot be built (`backend="s3"` without `s3_bucket`,
+a Redis tier without the `redis` package): the old backend keeps working.
 `~` is expanded, and a relative `cache_dir` is relative to the current
 directory. An instance built with a backend object (`Cash(backend=...)`) keeps
 it: changing its tier settings raises `ValueError`.

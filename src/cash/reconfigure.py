@@ -34,7 +34,10 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
 
     Raises ``ValueError`` before changing anything if a key is not a setting,
     a value is not valid for it, or it would change the tiers of a backend
-    the caller supplied.
+    the caller supplied. A running backend's replacement is built before
+    anything changes too, so a configuration that cannot be built (an S3
+    tier without a bucket, a Redis tier without the ``redis`` package) raises
+    and leaves the old settings and the old backend working.
     """
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
     unknown = set(overrides) - valid
@@ -42,8 +45,8 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
         raise ValueError(f"{sorted(unknown)!r} is not a configurable field. Valid keys: {sorted(valid)!r}")
     checked = validated_overrides(overrides)
 
-    before = tier_specs(cash.config)
-    tiers_change = tier_specs(dataclasses.replace(cash.config, **checked)) != before
+    proposed = dataclasses.replace(cash.config, **checked)
+    tiers_change = tier_specs(proposed) != tier_specs(cash.config)
     running = cash.backend_if_built
     if tiers_change and running is not None and not built_from_config(running):
         raise ValueError(
@@ -51,6 +54,10 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
             f"Cash was given its backend ({type(running).__name__}) as an object, and cash does not "
             f"rebuild a backend it did not build. Configure that backend, or pass a new one."
         )
+    # Built from a copy before the config is touched: if it raises, nothing
+    # has changed and the running backend keeps serving. Building is cheap --
+    # a backend creates its directory and threads on first use.
+    replacement = build_backend_from_config(proposed) if tiers_change and running is not None else None
 
     for key, val in checked.items():
         setattr(cash.config, key, val)
@@ -62,7 +69,7 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
 
     if running is None:
         return  # built from the config on first use
-    if not tiers_change:
+    if replacement is None:
         if "min_cache_savings_pct" in checked:
             apply_persistence_settings(running, cash.config)
         return
@@ -70,4 +77,4 @@ def apply_overrides(cash: Cash, overrides: dict[str, Any]) -> None:
         running.shutdown()  # drain its pending writes
     except Exception as e:  # noqa: BLE001 - the new backend must still be swapped in
         logger.warning("Old backend shutdown failed during configure(): %s", e)
-    cash.backend = build_backend_from_config(cash.config)
+    cash.backend = replacement
