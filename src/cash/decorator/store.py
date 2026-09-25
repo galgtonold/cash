@@ -297,7 +297,17 @@ class ResultStore:
         body_seconds: float | None = None,
         saves_seconds: float | None = None,
         rng_replay: dict[str, Any] | None = None,
-    ) -> None:
+        manifest: dict[str, Any] | None = None,
+        chunks_not_persisted: str | None = None,
+    ) -> bool:
+        """Store *result* under *cache_key*; True if a backend took it.
+
+        *manifest*: the fields that make this entry a chunked iterator's
+        manifest (``iterator_storage``, ``n_chunks``, ``chunk_stream``),
+        stored like any decorated result. *chunks_not_persisted*: why one of
+        its chunks stayed in RAM, which leaves the entry RAM-only whatever
+        happens to the manifest itself.
+        """
         try:
             serializer = get_serializer(result)
 
@@ -357,6 +367,7 @@ class ResultStore:
                 # `frozen=True` does not look undecorated to the rate ceiling
                 # and lose disk persistence.
                 copy_required=not self._registry.is_frozen(func_name),
+                **(manifest or {}),
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value
@@ -369,7 +380,7 @@ class ResultStore:
             store_errors = meta_dict.get("store_errors")
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
-            not_persisted = not_persisted_reason(meta_dict)
+            not_persisted = not_persisted_reason(meta_dict) or chunks_not_persisted
             self._misses.remember_outcome(
                 cache_key,
                 {
@@ -383,6 +394,7 @@ class ResultStore:
                 self._stored_keys.note_stored(func_name, cache_key, ttl, ledger)
             else:
                 self._stored_keys.note_ram_only(func_name, cache_key, not_persisted, ledger)
+            return True
         except (OSError, TypeError, pickle.PicklingError, RuntimeError, CacheBackendError) as e:
             self._misses.note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self._backend_slot.backend).__name__
@@ -396,6 +408,7 @@ class ResultStore:
                 code="STORE-FAILED",
                 fix=STORE_FAILED_FIX,
             )
+            return False
 
     def _warn_cache_if_bypassed(self, spec: CachedFunction) -> None:
         """One-shot: the result outgrew a single chunk, so cache_if cannot run.
@@ -482,6 +495,8 @@ class ResultStore:
         committed = False
         stream = secrets.token_hex(8)
         prefix = chunk_prefix(cache_key, stream)
+        #: Why a chunk written so far stayed in RAM, if one did.
+        chunks_not_persisted: str | None = None
 
         try:
             # Entered ONCE. Per item we only suspend around the `yield`, which
@@ -503,7 +518,9 @@ class ResultStore:
                     if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
                         if chunk_index == 1 and cache_if is not None:
                             self._warn_cache_if_bypassed(spec)
-                        self._write_one_chunk(prefix, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
+                        chunks_not_persisted = chunks_not_persisted or self._write_one_chunk(
+                            prefix, chunk_index, buffer, func_name, ttl=ttl, execution_time=produced_seconds
+                        )
                         buffer = []
                         buffer_bytes = 0
                         chunk_index += 1
@@ -531,7 +548,9 @@ class ResultStore:
                     self._misses.note_not_stored(cache_key, refusal)
                 else:
                     if buffer:
-                        self._write_one_chunk(prefix, 0, buffer, ttl=ttl, execution_time=produced_seconds)
+                        chunks_not_persisted = self._write_one_chunk(
+                            prefix, 0, buffer, func_name, ttl=ttl, execution_time=produced_seconds
+                        )
                     # An empty iterator still gets a zero-chunk manifest, so a
                     # hit returns empty instead of recomputing.
                     self._store_chunked_manifest(
@@ -544,12 +563,15 @@ class ResultStore:
                         produced_seconds,
                         auto_file_deps,
                         stream,
+                        chunks_not_persisted,
                     )
             else:
                 if buffer:
                     if chunk_index == 1 and cache_if is not None:
                         self._warn_cache_if_bypassed(spec)
-                    self._write_one_chunk(prefix, chunk_index, buffer, ttl=ttl, execution_time=produced_seconds)
+                    chunks_not_persisted = chunks_not_persisted or self._write_one_chunk(
+                        prefix, chunk_index, buffer, func_name, ttl=ttl, execution_time=produced_seconds
+                    )
                     chunk_index += 1
                 self._store_chunked_manifest(
                     cache_key,
@@ -561,6 +583,7 @@ class ResultStore:
                     produced_seconds,
                     auto_file_deps,
                     stream,
+                    chunks_not_persisted,
                 )
 
             committed = True
@@ -580,10 +603,11 @@ class ResultStore:
         prefix: str,
         chunk_index: int,
         chunk_buffer: list[Any],
+        func_name: str,
         ttl: int | None = None,
         execution_time: float = 0.0,
-    ) -> None:
-        """Write a single chunk to the backend.
+    ) -> str | None:
+        """Write a single chunk to the backend; why it stayed in RAM, if it did.
 
         The chunk's metadata is minimal - the authoritative manifest
         lives at the canonical cache_key. We need *some* metadata for
@@ -600,17 +624,18 @@ class ResultStore:
             key=chunk_key,
             timestamp=time.time(),
             serializer_cls=type(serializer),
-            # The PRODUCER's time, not 0. A chunk is not an independent result
-            # whose worth gets decided on its own -- it is the payload of an
-            # entry whose durability was already decided. Writing 0 here sent
-            # every chunk under the smart-persistence compute floor, so chunks
-            # stayed RAM-only while the manifest (carrying the real time) went
-            # to disk. A fresh process then found a manifest with no chunks
-            # behind it and, because a missing chunk terminates iteration,
-            # returned an EMPTY iterator. Silent data loss, and the cross-
-            # process hit is the entire point of caching a generator.
             execution_time=execution_time,
             ttl=ttl,
+            # A chunk is not a result whose worth is decided on its own: it is
+            # part of a decorated result, and goes where that result goes.
+            # Judged by the compute floor instead, on the time produced so
+            # far, the early chunks of a quick generator stayed in RAM while
+            # its manifest reached disk, and every later process found the
+            # entry incomplete and recomputed it.
+            decorator_entry=True,
+            # The replay hands out the chunk's items: a copy, as for any
+            # decorated result (`ResultStore.store`).
+            copy_required=not self._registry.is_frozen(func_name),
         ).to_dict()
         try:
             self._backend_slot.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
@@ -632,6 +657,8 @@ class ResultStore:
                 fix="clear the entry with f.cache_clear() before anything reads "
                 "it, then fix the write the exception names.",
             )
+            return None
+        return not_persisted_reason(chunk_metadata)
 
     def _store_chunked_manifest(
         self,
@@ -644,48 +671,39 @@ class ResultStore:
         execution_time: float,
         auto_file_deps: dict[str, dict[str, float]] | None,
         stream: str,
+        chunks_not_persisted: str | None,
     ) -> None:
         """Write the manifest entry for a chunked iterator at *cache_key*.
 
         The value stored at the key is the manifest dict (``n_chunks``,
-        ``total_items``). The metadata flags this entry as chunked so
-        the hit path knows to use ``ChunkedCachedIterator``, and names the
+        ``total_items``), stored as any decorated result is
+        (`ResultStore.store`): the same persistence rules, and the same record
+        of where it landed. Its metadata flags the entry as chunked so the
+        hit path knows to use ``ChunkedCachedIterator``, and names the
         *stream* whose chunks it covers. The chunks of the manifest it
         replaces are deleted once it is written: nothing names them any more.
         """
         replaced = self._replaced_stream(cache_key, stream)
-        try:
-            serializer = get_serializer(manifest_data)
-            metadata = CacheMetadata(
-                key=cache_key,
-                func_name=func_name,
-                timestamp=time.time(),
-                execution_time=execution_time,
-                serializer_cls=type(serializer),
-                ttl=ttl,
-                args_hash=args_hash,
-                state_hash=state_hash,
-                iterator_storage="chunked",
-                n_chunks=manifest_data["n_chunks"],
-                chunk_stream=stream,
-                auto_file_deps=auto_file_deps or None,
-            ).to_dict()
-            self._backend_slot.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
-            if replaced is not None:
-                self._drop_chunks(*replaced)
-        except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
-            backend_name = type(self._backend_slot.backend).__name__
-            self._notices.warn_once(
-                CashCacheStoreFailedWarning,
-                func_name,
-                "",
-                f"@cash.cache on {func_name}: backend {backend_name} failed "
-                f"to store chunked manifest ({type(e).__name__}: {e}). "
-                f"Compute succeeded, nothing was stored, and the next call "
-                f"recomputes.",
-                code="STORE-FAILED",
-                fix=STORE_FAILED_FIX,
-            )
+        stored = self.store(
+            cache_key,
+            func_name,
+            manifest_data,
+            ttl,
+            state_hash,
+            args_hash,
+            execution_time=execution_time,
+            auto_file_deps=auto_file_deps,
+            # The producer's time is all body: only the spans inside `next()`.
+            body_seconds=execution_time,
+            manifest={
+                "iterator_storage": "chunked",
+                "n_chunks": manifest_data["n_chunks"],
+                "chunk_stream": stream,
+            },
+            chunks_not_persisted=chunks_not_persisted,
+        )
+        if stored and replaced is not None:
+            self._drop_chunks(*replaced)
 
     def _replaced_stream(self, cache_key: str, stream: str) -> tuple[str, int] | None:
         """The chunk prefix and count of the manifest at *cache_key* that a

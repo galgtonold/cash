@@ -30,7 +30,7 @@ are cached as ordinary values.
 
 ## The first call streams
 
-<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @aff0a8ca broad="the loop, the tracker scope and the commit rule are one mechanism" -->
+<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @0e824f20 broad="the loop, the tracker scope and the commit rule are one mechanism" -->
 On a miss you get each item as the function produces it, so caching does not
 delay the first item. Cash copies the items into chunks as they pass and
 stores the result once the generator is exhausted. Files the generator reads
@@ -101,7 +101,7 @@ own; it is never split. To opt out of chunking, return a list.
   result is stored anyway, with a warning
   ([`CACHE-IF-BYPASSED`](../../warnings.md#cache-if-bypassed)). Raise the
   chunk limits if you need the predicate.
-- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @026f06cf -->
+- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @1b12e2a2 -->
   **A chunk that fails to store** warns
   ([`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed)). The result is
   then incomplete, so the next call recomputes it rather than serving part of
@@ -109,7 +109,9 @@ own; it is never split. To opt out of chunking, return a list.
 - **Chunks share the entry's `ttl`** and are removed with it by
   `cash clear --expired`, `cash.cleanup()` and `f.cache_clear()`.
 - **Keep chunks on disk for other processes.** The default stack writes every
-  chunk to disk. With a RAM-only backend, an evicted chunk means a recompute.
+  chunk to disk, however quickly the generator ran, as it does any decorated
+  result, so the next process replays it. With a RAM-only backend, an evicted
+  chunk means a recompute.
 - **`frozen=True` has no effect on an iterator result.** A cached function that
   receives one hashes its contents. Return a list if you need `frozen=`.
 - **Side-effect checks apply as usual.** A generator that reads the clock

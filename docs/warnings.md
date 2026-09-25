@@ -1203,7 +1203,7 @@ something is replacing files under a running job, such as a deploy.
 
 *Both paths.*
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @03c214ae -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @49caeff5 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception.
 
