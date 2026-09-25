@@ -40,7 +40,8 @@ def plain_census(value: Any) -> tuple[str, Any] | None:
 
     ``("plain", value)`` for lists and tuples of primitives (`_plain_data.is_plain`),
     ``("plain_aliased", (value, repeats))`` for such data holding one list more than
-    once (`_plain_data.aliases`), ``("dict_rows", (keys, rows))`` for a list
+    once (`_plain_data.aliases`), ``("plain_numpy", (value, repeats))`` for
+    plain data with numpy scalars among its leaves, ``("dict_rows", (keys, rows))`` for a list
     of dicts sharing their keys (`_plain_data.dict_rows`), None for anything
     else.
     """
@@ -50,9 +51,13 @@ def plain_census(value: Any) -> tuple[str, Any] | None:
         if hit is not None and hit[0] is value:
             return hit[1]
     found: tuple[str, Any] | None = None
-    repeats = _plain_data.aliases(value)
-    if repeats is not None:
-        found = ("plain_aliased", (value, repeats)) if repeats else ("plain", value)
+    shape = _plain_data.aliases(value)
+    if shape is not None:
+        repeats, numpy = shape
+        if numpy:
+            found = ("plain_numpy", (value, repeats))
+        else:
+            found = ("plain_aliased", (value, repeats)) if repeats else ("plain", value)
     else:
         rows = _plain_data.dict_rows(value)
         if rows is not None:
@@ -75,6 +80,10 @@ def plain_key_part(value: Any) -> Any:
     if census is None:
         return value
     kind, data = census
+    if kind == "plain_numpy":
+        h = hashlib.sha256(_plain_data.level_key_bytes(data[0]))
+        h.update(pickle.dumps(data[1], protocol=4))
+        return (f"__cash_{kind}__", h.hexdigest())
     return (f"__cash_{kind}__", hashlib.sha256(_plain_data.pickle_unshared(data)).hexdigest())
 
 

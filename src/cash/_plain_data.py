@@ -80,13 +80,14 @@ def key_dumps(value: Any) -> bytes:
     return _dump(value, fast=False)
 
 
-def _levels(value: Any):
+def _levels(value: Any, extra: tuple = ()):
     """Yield ``(flat, types)`` for each level below *value*; stop at leaves.
 
     ``flat`` is every item one level down, ``types`` their exact types. Raises
     ``_NotPlain`` as soon as a level holds anything but leaves and sequences.
+    *extra* are more leaf types (`numpy_scalar_types`).
     """
-    fakes = fake_clock()[0]
+    fakes = fake_clock()[0] + extra
     leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
     level = [value]
     for _ in range(MAX_LEVELS):
@@ -119,9 +120,11 @@ def is_plain(value: Any) -> bool:
     return True
 
 
-def aliases(value: Any) -> tuple | None:
-    """Where *value* holds one list (or bytearray) more than once, or None
-    if it is not plain data.
+def aliases(value: Any) -> tuple[tuple, bool] | None:
+    """``(repeats, numpy)``: where *value* holds one list (or bytearray) more
+    than once, and whether numpy scalars are among its leaves; or None if it
+    is not plain data. A numpy number is a leaf here (`numpy_scalar_types`),
+    keyed by `level_key_bytes`.
 
     ``[[0] * 3] * 3`` is one row three times; written into, it changes in
     three places, where three equal rows change in one. Pickled without the
@@ -140,8 +143,12 @@ def aliases(value: Any) -> tuple | None:
     repeats: list = []
     first: dict[int, tuple] = {}
     held: list = []
+    numbers = numpy_scalar_types()
+    has_numbers = False
     try:
-        for depth, (flat, types) in enumerate(_levels(value)):
+        for depth, (flat, types) in enumerate(_levels(value, numbers)):
+            if numbers and not has_numbers:
+                has_numbers = not types.isdisjoint(numbers)
             if list not in types and bytearray not in types:
                 continue
             if types <= _WRITABLE:
@@ -162,7 +169,75 @@ def aliases(value: Any) -> tuple | None:
                     repeats.append(((depth, pos), seen))
     except (_NotPlain, TypeError):
         return None
-    return tuple(repeats)
+    return tuple(repeats), has_numbers
+
+
+def numpy_scalar_types() -> tuple:
+    """The exact numpy number types (``np.float64``, ``np.int32``, ...),
+    or ``()`` while numpy is not loaded. Not ``longdouble``: its bytes carry
+    padding that is not the value.
+
+    ``list(arr)`` and iterating an array give numpy scalars, not Python
+    numbers. Not leaves, such a list left the fast path: every scalar was
+    walked for sets and pickled one by one, 7 us each, and a hit on 200k of
+    them cost 1.4 s where the body took 7 ms.
+    """
+    return _numpy_scalars()[1]
+
+
+def numpy_scalar_set() -> frozenset:
+    """`numpy_scalar_types` as a set, for a test per value: asked of every
+    value a key walks, so answered from one comparison when numpy is as
+    it was."""
+    known = _NUMPY_SCALARS
+    if sys.modules.get("numpy") is known[0]:
+        return known[2]
+    return _numpy_scalars()[2]
+
+
+def _numpy_scalars() -> tuple[Any, tuple, frozenset]:
+    global _NUMPY_SCALARS
+    numpy = sys.modules.get("numpy")
+    if numpy is not _NUMPY_SCALARS[0]:
+        found = () if numpy is None else tuple(dict.fromkeys(numpy.dtype(c).type for c in "?bhilqpBHILQPefdFD"))
+        _NUMPY_SCALARS = (numpy, found, frozenset(found))
+    return _NUMPY_SCALARS
+
+
+#: ``(the numpy module or None, its number types, the same as a set)``
+_NUMPY_SCALARS: tuple[Any, tuple, frozenset] = (None, (), frozenset())
+
+
+def level_key_bytes(value: Any) -> bytes:
+    """The key bytes of plain data holding numpy scalars, level by level.
+
+    For each level: the item types (once, when they are all one); the length of each
+    list or tuple; each numpy type's values as one array (exact, and C
+    speed where pickling a scalar is not); and the other leaves pickled.
+    With the top type, that is all the value is, so nothing else keys alike.
+    """
+    import numpy
+
+    numbers = numpy_scalar_types()
+    parts = [type(value).__name__.encode()]
+    for flat, types in _levels(value, numbers):
+        if len(types) > 1:
+            parts.append(pickle.dumps(list(map(type, flat)), protocol=4))
+        else:
+            parts.append(pickle.dumps(next(iter(types)), protocol=4))
+        seqs = flat if types <= _SEQS else [x for x in flat if type(x) in PLAIN_SEQS]
+        if seqs:
+            parts.append(pickle.dumps(list(map(len, seqs)), protocol=4))
+        for kind in sorted(types.intersection(numbers), key=lambda t: t.__name__):
+            same = flat if len(types) == 1 else [x for x in flat if type(x) is kind]
+            parts.append(kind.__name__.encode() + numpy.array(same, dtype=kind).tobytes())
+        rest = types.difference(numbers).difference(_SEQS)
+        if rest:
+            parts.append(pickle_unshared(flat if len(types) == len(rest) else [x for x in flat if type(x) in rest]))
+    return b"".join(len(part).to_bytes(8, "little") + part for part in parts)
+
+
+_SEQS = frozenset(PLAIN_SEQS)
 
 
 _WRITABLE = frozenset({list, bytearray})

@@ -64,6 +64,6 @@ def test_a_row_held_elsewhere_is_not_an_alias(key):
 
     rows = [[i, str(i)] for i in range(100)]
     held = rows[7]
-    assert aliases(rows) == ()
+    assert aliases(rows) == ((), False)
     assert key(rows) == key([[i, str(i)] for i in range(100)])
     assert held is rows[7]

@@ -173,6 +173,9 @@ def stable_key_repr(
         stand_in = hook(value)
         if stand_in is not NOT_HOOKED:
             return stand_in
+    if type(value) in _plain_data.numpy_scalar_set():
+        # A number: pickled by value, nothing inside to order.
+        return ("__cash_np__", value.dtype.char, value.tobytes())
     family = _builtin_family_of(type(value))
     if family is not None:
         digest = builtin_hash(value)
@@ -314,6 +317,8 @@ def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> 
         # the key -- and walking it means walking every logger in the process,
         # 270 us on each call of any function that reads a module `logger`.
         return False
+    if type(value) in _plain_data.numpy_scalar_set():
+        return False  # a number; without this, an MRO walk per scalar
     _seen.add(id(value))
     if isinstance(value, dict):
         return any(contains_set(k, _depth + 1, _seen) or contains_set(v, _depth + 1, _seen) for k, v in value.items())

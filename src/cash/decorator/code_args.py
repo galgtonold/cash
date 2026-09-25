@@ -200,13 +200,13 @@ class CodeArgs:
         """
         if _depth > 8:
             return
-        # Primitives carry no user code, and in a large argument they ARE the
+        # Primitives (and numpy numbers) carry no user code, and in a large argument they ARE the
         # argument. Returning before ``_seen`` is touched keeps a list of a
         # million numbers allocation-free; otherwise the id-set below would grow
         # to the container's length on every cached call. Mirrors
         # ``iter_contained``'s first line. See `CODELESS_PRIMS` for why this
         # is an exact-type test against a tuple rather than an isinstance.
-        if type(value) in CODELESS_PRIMS:
+        if type(value) in CODELESS_PRIMS or type(value) in _plain_data.numpy_scalar_set():
             return
         # A frozen function's list/tuple/dict result is keyed by the call that
         # produced it (`FrozenResults.remember_container`), code inside it included:
