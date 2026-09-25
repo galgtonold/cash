@@ -50,14 +50,31 @@ def test_a_dict_of_call_results_is_stored_as_references(nb):
 
 
 def test_a_result_changed_after_the_call_is_stored_by_value(nb):
+    """The ``__iadd__`` sleeps so the statement is stored for its own work
+    (a statement whose own work is cheap keeps no value beside its call's)."""
     magics, shell, backend = nb
-    code = "m = fit(2).__iadd__([-1])"
+    code = "m = fit(2).__iadd__([time.sleep(0.12) or -1])"
     run_cash_cell(magics, code)
     stored = _stored(backend, code)["m"]
     assert not isinstance(stored, CallRef) and stored[-1] == -1, type(stored)
     shell.user_ns.pop("m")
     run_cash_cell(magics, code)
     assert shell.user_ns["m"][-1] == -1 and len(shell.user_ns["m"]) == 2001
+    run_cash_cell(magics, "f = fit(2)")
+    assert shell.user_ns["f"] == list(range(2000)), "the change reached the call's entry"
+
+
+def test_a_method_changing_a_call_result_in_place_leaves_its_entry_alone(nb):
+    """``fit(2)`` inside ``fit(2).__iadd__(...)`` is a call unit; the method
+    runs on what the call returned, and the entry must not see the change."""
+    magics, shell, backend = nb
+    code = "m = fit(2).__iadd__([-1])"
+    for _ in range(3):
+        shell.user_ns.pop("m", None)
+        run_cash_cell(magics, code)
+        assert shell.user_ns["m"][-1] == -1 and len(shell.user_ns["m"]) == 2001
+    run_cash_cell(magics, "f = fit(2)")
+    assert shell.user_ns["f"] == list(range(2000))
 
 
 def test_a_statement_whose_call_entry_is_gone_recomputes(nb):

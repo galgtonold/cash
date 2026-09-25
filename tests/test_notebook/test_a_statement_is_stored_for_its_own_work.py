@@ -207,3 +207,17 @@ def test_a_call_under_the_persistence_floor_is_the_statements_work(tiers, mock_s
     meta, value = _entry(ram, "quick(a) + [1]")
     assert value is not None and value["variables"]["b"][-1] == 1
     assert meta["store_time"] >= 0.04, meta
+
+
+def test_a_call_whose_result_a_method_is_called_on_is_a_call_unit(tiers, mock_shell):
+    """``b = shifted(a).count(5)``: the rewrite took the bound method
+    ``shifted(a).count`` as the callee, which is never cached, so ``shifted(a)``
+    inside it ran again on every run. It is the call unit; the ``.count(5)``
+    is the statement's own, cheap, work."""
+    magics, ram, disk = tiers
+    _setup(magics)
+    run_cash_cell(magics, "b = shifted(a).count(5)")
+    assert mock_shell.user_ns["b"] == 1
+    calls = [m for m in ram.list_entries() or () if str(m.get("key", "")).startswith("call:")]
+    assert [str(m.get("function")).rsplit(".", 1)[-1] for m in calls] == ["shifted"], calls
+    assert _entry(ram, "count(5)") == (None, None), "the statement kept a value its call already holds"

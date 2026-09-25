@@ -168,6 +168,7 @@ A call is cached when it does not read the statement's own target:
 | `s += compute(x)` | `compute(x)` |
 | `out.append(compute(x))` | `compute(x)` |
 | `rows.append(dict(t=t, v=compute(t)))` | `compute(t)` |
+| `total = load(p).sum()` | `load(p)` |
 | `s = merge(s, x)` | none: the call reads `s` |
 | `df.sort_values(inplace=True)` | none: the change is the work |
 

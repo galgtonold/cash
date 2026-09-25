@@ -183,6 +183,19 @@ def test_a_call_inside_an_uninterceptable_call_is_found():
     assert [s.source for s in with_ns] == ["score(df, k)"]
 
 
+def test_a_method_on_a_call_result_is_searched_inside():
+    """``shifted(a).sum()`` took the bound method ``shifted(a).sum`` as the
+    callee. It is never wrapped at runtime, and ``shifted(a)`` inside it was
+    never considered, so the call was not cached."""
+
+    def shifted(x):
+        return x
+
+    for src in ("b = shifted(a).sum()", "b = shifted(a).x.sum()", "b = shifted(a)['x'].sum()"):
+        _, sites = wrap_eligible_calls(ast.parse(src), namespace={"shifted": shifted})
+        assert [s.source for s in sites] == ["shifted(a)"], src
+
+
 def test_a_call_the_gate_rejects_is_searched_inside():
     tree = ast.parse("out.append(log_it(compute(x)))")
     _, sites = wrap_eligible_calls(tree, gate=lambda call: ast.unparse(call.func) != "log_it")

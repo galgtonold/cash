@@ -230,6 +230,18 @@ def _static_callee(node: ast.AST, namespace) -> object:
     return _NOT_FOUND
 
 
+def _on_a_call_result(func: ast.expr) -> bool:
+    """Whether a callee is an attribute of what a call returned
+    (``shifted(a).sum``, ``load(p)["x"].mean``): at runtime a bound method,
+    which :func:`interceptable` refuses."""
+    if not isinstance(func, ast.Attribute):
+        return False
+    node: ast.expr = func
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return isinstance(node, ast.Call)
+
+
 def wrap_eligible_calls(
     tree: ast.Module,
     *,
@@ -269,7 +281,10 @@ def wrap_eligible_calls(
     instead. ``rows.append(dict(k=k, err=score(df, k)))`` accepted the
     ``dict(...)`` as the outermost call; at runtime it is a class and was not
     wrapped, and ``score(df, k)`` inside it was never considered -- a
-    backtest was recomputed in full on an unchanged re-run.
+    backtest was recomputed in full on an unchanged re-run. A method on a
+    call's result is the same case: in ``shifted(a).sum()`` the callee is the
+    bound method ``shifted(a).sum``, never wrapped, so it is searched inside and
+    ``shifted(a)`` is the site.
 
     A gate with a ``local`` parameter is also handed the names an enclosing
     comprehension or lambda binds around the call: they have no lineage, and
@@ -283,6 +298,8 @@ def wrap_eligible_calls(
 
     def skip(call: ast.Call, local: frozenset[str] = frozenset()) -> bool:
         if namespace is not None:
+            if _on_a_call_result(call.func):
+                return True
             callee = _static_callee(call.func, namespace)
             if callee is not _NOT_FOUND and not interceptable(callee):
                 return True
