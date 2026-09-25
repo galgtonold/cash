@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
 from ._active import ACTIVE_CONFIG
+from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
 from .backends._base import entry_expired
@@ -1220,7 +1221,9 @@ class Cash:
             except (ImportError, RuntimeError):
                 pass
         text = self.run_summary()
-        print(text if text else "cash: no cached function has been called yet.")
+        # Escaped where stdout's encoding lacks a character: a function named
+        # outside cp1252 raised UnicodeEncodeError into a Windows pipe.
+        print(encodable(text) if text else "cash: no cached function has been called yet.")
 
     def register_magic(self) -> None:
         """Register IPython magic commands (``%cash_on``, ``%cash_stats``, etc.)."""

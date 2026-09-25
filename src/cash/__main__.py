@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cash import __version__
+from cash._console import survive_narrow_streams
 from cash._location import per_user_cache_root
 from cash.backends._base import effective_ttl
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
@@ -973,6 +974,10 @@ def cmd_autoload(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # A function or folder name outside the console's code page (cp1252 on a
+    # Windows pipe) raised UnicodeEncodeError from print -- after `clear` had
+    # already deleted, so it reported failure for work it had done.
+    survive_narrow_streams()
     parser = argparse.ArgumentParser(
         prog="cash",
         description="A Python cache that re-runs only what changed.",

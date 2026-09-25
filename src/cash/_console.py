@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 
-__all__ = ["safe_text", "stdout_supports_unicode"]
+__all__ = ["encodable", "safe_text", "stdout_supports_unicode", "survive_narrow_streams"]
 
 _ASCII_FALLBACKS: dict[str, str] = {
     # Status / outcome
@@ -111,3 +111,38 @@ def safe_text(s: str, *, stream: object | None = None) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+def encodable(s: str, *, stream: object | None = None) -> str:
+    """*s* as *stream* (default ``sys.stdout``) can write it: characters its
+    encoding lacks become ``\\uXXXX`` escapes.
+
+    For text that names things -- a function called ``数据``, a cache
+    directory with an emoji in it -- where `safe_text`'s dropping would lose
+    the name. A cp1252 pipe or file on Windows raised ``UnicodeEncodeError``
+    out of ``print`` for them.
+    """
+    if stream is None:
+        stream = sys.stdout
+    encoding = getattr(stream, "encoding", None) or "ascii"
+    try:
+        s.encode(encoding)
+        return s
+    except UnicodeEncodeError:
+        return s.encode(encoding, "backslashreplace").decode(encoding)
+    except LookupError:
+        return s
+
+
+def survive_narrow_streams() -> None:
+    """Make ``sys.stdout`` and ``sys.stderr`` escape what their encoding
+    cannot write, instead of raising. For the ``cash`` command, which owns
+    its streams: every name and path it prints can hold any character."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (ValueError, OSError):  # a detached or closed stream
+            pass

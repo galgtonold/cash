@@ -6,7 +6,7 @@
 `cash` and `python -m cash` are the same command. With no subcommand it prints
 help and exits 0.
 
-<!-- claim: cash/__main__.py:main @fc218b1b broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @63d84ebf broad="the quick-reference table is a claim about the whole subcommand set" -->
 | Command | What it does | Deletes? |
 |---|---|---|
 | [`cash version`](#cash-version) | Print the installed version. | No |
@@ -16,7 +16,8 @@ help and exits 0.
 | [`cash autoload`](#cash-autoload) | Load cash in every new IPython kernel (notebook only). | Only its own hook file |
 
 Every subcommand takes `-h` / `--help`. There is no `--version` flag; use
-`cash version`.
+`cash version`. A character the console cannot encode (a function named
+`数据` piped through cp1252 on Windows) is printed as a `\uXXXX` escape.
 
 ## `cash version`
 
