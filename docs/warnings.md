@@ -628,11 +628,13 @@ On the `def` line, the comment waives findings about the whole body. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._first_showing @8007ca34 -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @5093fe76 -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,
-not once per process.
+not once per process. A run whose warning filters ignore it, or turn it into
+an error, does not count as having shown it, so a CI job that fails on it
+fails on every run.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 

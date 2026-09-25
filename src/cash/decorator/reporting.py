@@ -168,10 +168,17 @@ class Notices:
             if cf is not None:
                 cf.warnings.append(entry)
                 del cf.warnings[:-WARNINGS_MAX]
-        if once_per_version and not self._first_showing(func_name, rendered):
+        digest = self._not_shown_before(func_name, rendered) if once_per_version else None
+        if digest == "":
             entry["shown_by_an_earlier_run"] = True
             return
-        warn_diagnostic_message(category, code, rendered, fallback=self._definition_site(func_name))
+        shown = warn_diagnostic_message(category, code, rendered, fallback=self._definition_site(func_name))
+        # Recorded only once it was shown: a filter that ignores it, or turns
+        # it into an error (which raises past this line), must not hide it
+        # from every later run -- a CI job that fails on it would pass on the
+        # rerun.
+        if digest and shown:
+            self._stored_keys.note_warning_shown(func_name, digest)
 
     def has_warned(self, key: tuple[type[Warning], str, str, str]) -> bool:
         """Has `warn_once` already shown the warning *key* names?"""
@@ -189,20 +196,20 @@ class Notices:
             cf.warnings.clear()
             self._seen = {k for k in self._seen if k[1] != cf.name}
 
-    def _first_showing(self, func_name: str, rendered: str) -> bool:
-        """Has no earlier run on this cache shown *rendered*? Records that one
-        has. True whenever the cache keeps no record -- when in doubt, show."""
+    def _not_shown_before(self, func_name: str, rendered: str) -> str | None:
+        """Has an earlier run on this cache shown *rendered*? ``""`` when one
+        has; else the digest to record once it is shown, or ``None`` when the
+        cache keeps no record -- when in doubt, show."""
         try:
             self._backend_slot.backend  # the first call is about to build it for its lookup anyway
         except Exception:  # noqa: BLE001 - no backend, no record: show it
-            return True
+            return None
         if self._stored_keys.path(func_name) is None:
-            return True
+            return None
         digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
         if digest in self._stored_keys.read(func_name)["warned"]:
-            return False
-        self._stored_keys.note_warning_shown(func_name, digest)
-        return True
+            return ""
+        return digest
 
     def _definition_site(self, func_name: str) -> tuple[str, int] | None:
         """Where *func_name* is defined: what a warning blames when the call

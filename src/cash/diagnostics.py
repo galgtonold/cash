@@ -117,15 +117,47 @@ def _user_frame_level() -> int | None:
     return None
 
 
-def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | None) -> None:
+def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | None) -> bool:
     """Warn *instance* at *level* frames out -- counted from the caller of this
-    function's caller -- or at *fallback* when there is no user frame."""
+    function's caller -- or at *fallback* when there is no user frame.
+
+    Returns whether the active warning filters let it through: False for an
+    ``"ignore"`` filter. An ``"error"`` filter raises it instead of returning.
+    """
     if level is None and fallback is not None:
-        warnings.warn_explicit(instance, type(instance), fallback[0], fallback[1])
-        return
+        filename, lineno = fallback
+        module = filename[:-3] if filename.lower().endswith(".py") else filename
+        shown = _filter_action(instance, module, lineno) != "ignore"
+        warnings.warn_explicit(instance, type(instance), filename, lineno)
+        return shown
     if level is None:
         level = _stacklevel_of_first_user_frame() - 1
+    try:
+        frame = sys._getframe(level)
+        module, lineno = frame.f_globals.get("__name__", "<string>"), frame.f_lineno
+    except ValueError:  # deeper than the stack: warnings blames `sys`
+        module, lineno = "sys", 0
+    shown = _filter_action(instance, module, lineno) != "ignore"
     warnings.warn(instance, stacklevel=level + 1)
+    return shown
+
+
+def _filter_action(instance: Warning, module: str, lineno: int) -> str:
+    """The action the warning filters in force take on *instance* raised in
+    *module* at *lineno*: the first filter that matches, as
+    `warnings.warn_explicit` picks it, else the default action."""
+    get_filters = getattr(warnings, "_get_filters", None)  # 3.14: per-context filters
+    filters = get_filters() if get_filters is not None else warnings.filters
+    text = str(instance)
+    for action, msg, category, mod, ln in filters:
+        if (
+            (msg is None or msg.match(text))
+            and isinstance(instance, category)
+            and (mod is None or mod.match(module))
+            and (ln == 0 or ln == lineno)
+        ):
+            return action
+    return warnings.defaultaction
 
 
 #: Every diagnostic code Cash can emit. Adding a warning means adding its code
@@ -320,8 +352,9 @@ def warn_diagnostic_message(
     message: str,
     *,
     fallback: tuple[str, int] | None = None,
-) -> None:
-    """Emit an already-rendered *message* carrying *code*.
+) -> bool:
+    """Emit an already-rendered *message* carrying *code*; whether the
+    warning filters let it through (`_warn_at`).
 
     ``Notices.warn_once`` renders with :func:`format_diagnostic` itself, because
     it files the same text into ``cache_info()['warnings']`` before emitting and
@@ -336,4 +369,4 @@ def warn_diagnostic_message(
         raise KeyError(f"unknown diagnostic code: {code!r}")
     instance = category(message)
     instance.code = code
-    _warn_at(instance, _user_frame_level(), fallback)
+    return _warn_at(instance, _user_frame_level(), fallback)
