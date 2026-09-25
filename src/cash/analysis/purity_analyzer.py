@@ -58,6 +58,7 @@ from .._memo import CODE_OBJECTS, PURITY_REPORTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
+    ENVIRON_KEYED_METHODS,
     ENVIRON_NAMES,
     METHOD_VERBS,
     MODULE_CALLS,
@@ -66,6 +67,7 @@ from ..effects import (
     EffectKind,
     classify_call,
     dotted_name,
+    environ_membership,
     environment_input,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -425,6 +427,10 @@ class _PurityVisitor(ast.NodeVisitor):
         # The module's own log helpers (`_log_helper_names`): a call to one is
         # a print, not a call made for an effect a hit would skip.
         self._log_helpers = log_helpers
+        # ``os.environ`` nodes read for one named variable (a subscript, a
+        # ``get``, an ``in``) or changed through a method: judged there, not
+        # as a read of the whole environment (`visit_Attribute`).
+        self._environ_keyed: set[int] = set()
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
@@ -436,8 +442,62 @@ class _PurityVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Name):
             self._name_call_nodes.append(node)
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in ENVIRON_KEYED_METHODS
+            and dotted_name(func.value) in ENVIRON_NAMES
+        ):
+            self._environ_keyed.add(id(func.value))
+        for keyword in node.keywords:
+            # `subprocess.run(cmd, env=os.environ)`: handed to a child, which
+            # is reported as what it is.
+            if keyword.arg == "env":
+                self._environ_keyed.add(id(keyword.value))
         self._record_call(node)
         self.generic_visit(node)
+
+    def visit_Compare(self, node: ast.Compare) -> None:
+        """``"DEBUG" in os.environ``: whether a variable is set, read by name."""
+        environ = environ_membership(node)
+        if environ is not None:
+            self._environ_keyed.add(id(environ))
+            env = environment_input(node)
+            if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
+                if id(node) not in self._log_only:
+                    self.environment_reads.add(env)
+            elif id(node) not in self._log_only:
+                self._whole_environment_read(node, "... in os.environ with a name computed at run time")
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        """``os.environ`` used as a whole: ``.copy()``, ``.items()``,
+        ``dict(os.environ)``, ``env = os.environ``. Which variables it reads is
+        not known, so no key can fold them."""
+        if (
+            isinstance(node.ctx, ast.Load)
+            and id(node) not in self._environ_keyed
+            and dotted_name(node) in ENVIRON_NAMES
+            and id(node) not in self._log_only
+        ):
+            self._whole_environment_read(node, f"{dotted_name(node)} as a whole")
+            return
+        self.generic_visit(node)
+
+    def _whole_environment_read(self, node: ast.AST, what: str) -> None:
+        self.issues.append(
+            PurityIssue(
+                kind=ISSUE_AMBIENT_READ,
+                description=(
+                    f"{what} - reads the environment, which is not in the cache "
+                    f"key, so the first call's environment is frozen into every "
+                    f"later result; read each variable by name "
+                    f'(os.environ.get("NAME")) to have it keyed'
+                ),
+                where=self._qualname,
+                line=getattr(node, "lineno", 0),
+            )
+        )
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         """``os.environ["KEY"]`` -- the one ambient read that is not a call.
@@ -449,6 +509,8 @@ class _PurityVisitor(ast.NodeVisitor):
         Load context only. ``os.environ["KEY"] = ...`` is a side effect rather
         than a frozen input, a different issue with a different fix.
         """
+        if get_base_name(node.value) in ENVIRON_NAMES:
+            self._environ_keyed.add(id(node.value))
         env = environment_input(node)
         if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
             if id(node) not in self._log_only:
@@ -2286,6 +2348,10 @@ def _log_only_ambient_reads(
             and isinstance(node.ctx, ast.Load)
             and get_base_name(node.value) in ENVIRON_NAMES
         ):
+            candidates.append(node)
+        elif isinstance(node, ast.Attribute) and dotted_name(node) in ENVIRON_NAMES:
+            candidates.append(node)
+        elif environ_membership(node) is not None:
             candidates.append(node)
     if not candidates:
         return frozenset()  # the common case pays for no parent map

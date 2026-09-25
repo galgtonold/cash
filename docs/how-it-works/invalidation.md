@@ -21,7 +21,8 @@ stored. This page lists what it tracks and how it checks.
     - **A file it read**, or a file named in `file_depends_on=`
       ([files](#files), below).
     - **An environment variable it reads** by name, or the working directory
-      it reads with `os.getcwd()`.
+      it reads (`os.getcwd()`, `Path.cwd()`, or `os.path.abspath` /
+      `Path.resolve()` on a path that may be relative).
     - **The random seed in force**, for a function that draws from a global
       random stream.
     - **Its age**, when `ttl=` is set and the entry is older.

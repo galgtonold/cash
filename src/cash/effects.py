@@ -225,8 +225,17 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "pandas.Timestamp.utcnow": _CK,
     # -- the environment --
     "os.getcwd": _EV,
+    "os.getcwdb": _EV,
     "os.getenv": _EV,
+    "os.getenvb": _EV,
     "os.environ.get": _EV,
+    "os.environb.get": _EV,
+    # The working directory, read to make a path absolute. Not when the path
+    # is already absolute (`_surely_absolute`).
+    "pathlib.Path.cwd": _EV,
+    "Path.cwd": _EV,
+    "os.path.abspath": _EV,
+    "os.path.realpath": _EV,
     # -- the console --
     "print": _CO,
     "logging.debug": _CO,
@@ -356,8 +365,22 @@ CLOCK_WHEN_ARGS_OMITTED: dict[str, int] = {
 }
 
 #: How the process environment is spelled at a subscript: ``os.environ[...]``,
-#: or bare ``environ[...]`` after ``from os import environ``.
-ENVIRON_NAMES: frozenset[str] = frozenset({"os.environ", "environ"})
+#: or bare ``environ[...]`` after ``from os import environ``; and its bytes
+#: twin.
+ENVIRON_NAMES: frozenset[str] = frozenset({"os.environ", "environ", "os.environb", "environb"})
+
+#: Methods of the environment that change it (a side effect, not a read of
+#: it) or read one named variable (folded like a subscript).
+ENVIRON_KEYED_METHODS: frozenset[str] = frozenset(
+    {"get", "setdefault", "pop", "popitem", "update", "clear", "putenv", "unsetenv", "__setitem__", "__delitem__"}
+)
+
+#: Calls whose answer is the working directory, whatever their arguments.
+_CWD_CALLS: frozenset[str] = frozenset({"os.getcwd", "os.getcwdb", "pathlib.Path.cwd", "Path.cwd"})
+#: Calls that read the working directory to resolve a RELATIVE path.
+_CWD_RESOLVERS: frozenset[str] = frozenset({"os.path.abspath", "os.path.realpath"})
+#: Path methods that do the same (``Path(p).resolve()``).
+_CWD_RESOLVER_METHODS: frozenset[str] = frozenset({"resolve", "absolute"})
 
 # matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
 # pyplot's PROCESS-GLOBAL current figure -- drawing (``plt.plot``, ``plt.hist``),
@@ -489,30 +512,108 @@ def is_environ_read(node: ast.AST) -> bool:
 EnvironmentInput = tuple[str, str]
 
 
+def _variable_name(node: ast.AST | None) -> str | None:
+    """An environment variable's name written out: a str, or bytes for
+    ``os.environb``."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return node.value
+        if isinstance(node.value, bytes):
+            return os.fsdecode(node.value)
+    return None
+
+
+def environ_membership(node: ast.AST) -> ast.expr | None:
+    """``"NAME" in os.environ`` (or ``not in``): the environment operand."""
+    if (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], (ast.In, ast.NotIn))
+        and dotted_name(node.comparators[0]) in ENVIRON_NAMES
+    ):
+        return node.comparators[0]
+    return None
+
+
+#: What a path built from these is anchored to: already absolute.
+_ABSOLUTE_PATH_MAKERS = frozenset(
+    {"Path", "PurePath", "pathlib.Path", "pathlib.PurePath", "os.path.dirname", "os.path.join", "str", "os.fspath"}
+)
+_ABSOLUTE_PATH_METHODS = frozenset({"joinpath", "with_name", "with_suffix", "with_stem"})
+
+
+def _surely_absolute(node: ast.AST | None) -> bool:
+    """Is the path *node* builds absolute however the code runs?
+
+    A literal absolute path, ``__file__``, and what is built from one
+    (``Path(__file__).parent / "data"``, ``os.path.dirname(__file__)``):
+    resolving those reads no working directory. Anything else might be
+    relative.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+        text = os.fsdecode(node.value) if isinstance(node.value, bytes) else node.value
+        return text.startswith(("/", "\\")) or (len(text) > 2 and text[1] == ":" and text[2] in "/\\")
+    if isinstance(node, ast.Name):
+        return node.id == "__file__"
+    if isinstance(node, ast.Attribute):
+        return node.attr in ("parent", "parents") and _surely_absolute(node.value)
+    if isinstance(node, ast.Subscript):
+        return _surely_absolute(node.value)
+    if isinstance(node, ast.BinOp):
+        return isinstance(node.op, ast.Div) and _surely_absolute(node.left)
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in _CWD_RESOLVER_METHODS:
+            return True  # what it returns is absolute; the call is judged on its own
+        if isinstance(func, ast.Attribute) and func.attr in _ABSOLUTE_PATH_METHODS:
+            return _surely_absolute(func.value)
+        name = dotted_name(func)
+        if name in _CWD_CALLS or name in _CWD_RESOLVERS:
+            return True
+        return name in _ABSOLUTE_PATH_MAKERS and bool(node.args) and _surely_absolute(node.args[0])
+    return False
+
+
+def _resolves_relative_path(call: ast.Call) -> bool:
+    """``Path(p).resolve()`` / ``.absolute()`` on a path that may be relative."""
+    func = call.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr in _CWD_RESOLVER_METHODS
+        and not call.args
+        and all(kw.arg == "strict" for kw in call.keywords)
+        and not _surely_absolute(func.value)
+    )
+
+
 def environment_input(node: ast.AST, namespace: Mapping[str, Any] | None = None) -> EnvironmentInput | None:
     """What an environment read reads, when its value can go into a key.
 
-    ``os.getenv("NAME")``, ``os.environ.get("NAME")`` and
-    ``os.environ["NAME"]`` with the name written out give ``("env", "NAME")``;
-    ``os.getcwd()`` gives ``("cwd", "")``. Anything else is None -- including a
-    read whose name is only known at run time, which no key can fold.
+    ``os.getenv("NAME")``, ``os.environ.get("NAME")``, ``os.environ["NAME"]``
+    and ``"NAME" in os.environ`` with the name written out give
+    ``("env", "NAME")`` (``os.environb`` too); ``os.getcwd()``, ``Path.cwd()``,
+    and making a path that may be relative absolute (``os.path.abspath(p)``,
+    ``Path(p).resolve()``) give ``("cwd", "")``. Anything else is None --
+    including a read whose name is only known at run time, which no key can
+    fold.
     """
     if is_environ_read(node):
-        key = node.slice  # type: ignore[attr-defined]
-        if isinstance(key, ast.Constant) and isinstance(key.value, str):
-            return ("env", key.value)
-        return None
+        name = _variable_name(node.slice)  # type: ignore[attr-defined]
+        return ("env", name) if name is not None else None
+    if environ_membership(node) is not None:
+        name = _variable_name(node.left)  # type: ignore[attr-defined]
+        return ("env", name) if name is not None else None
     if not isinstance(node, ast.Call):
         return None
+    if _resolves_relative_path(node):
+        return ("cwd", "")
     effect = classify_call(node, namespace)
     if effect is None or effect.kind is not EffectKind.ENVIRONMENT:
         return None
-    if effect.name == "os.getcwd":
+    if effect.name in _CWD_CALLS or effect.name in _CWD_RESOLVERS:
         return ("cwd", "")
-    name = _literal_arg(node, 0, "key")
-    if isinstance(name, ast.Constant) and isinstance(name.value, str):
-        return ("env", name.value)
-    return None
+    name = _variable_name(_literal_arg(node, 0, "key"))
+    return ("env", name) if name is not None else None
 
 
 def environment_label(entry: EnvironmentInput) -> str:
@@ -591,6 +692,8 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
         return EffectKind.NETWORK  # a computed method: the direction is unknown
     if name.endswith("urlopen") and _literal_arg(call, 1, "data") is not None:
         return _NW
+    if name in _CWD_RESOLVERS and _surely_absolute(_literal_arg(call, 0, "path")):
+        return None  # `os.path.abspath(__file__)` reads no working directory
     return kind
 
 
