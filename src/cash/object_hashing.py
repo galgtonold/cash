@@ -451,26 +451,47 @@ def hash_polars(value: Any) -> str | None:
     return None
 
 
-def hash_pyarrow(value: Any) -> str | None:
-    """Hash a PyArrow Table or RecordBatch: schema, row count and every buffer.
+class _HashSink:
+    """A write-only file that feeds what is written to it into a hash."""
 
-    The previous size-gated path hashed ONLY schema+row-count for tables
-    >=10 MB, so any two same-shape tables collided into a wrong cache hit.
-    Buffer hashing is zero-copy and total.
+    closed = False
+
+    def __init__(self, h: Any) -> None:
+        self._h = h
+
+    def write(self, data: Any) -> int:
+        self._h.update(data)
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def hash_pyarrow(value: Any) -> str | None:
+    """Hash a PyArrow Table or RecordBatch by what it holds, not its buffers.
+
+    The table is written as an Arrow IPC stream into the hash, never into
+    memory. The raw buffers are not the content: a slice (``t.slice(2, 2)``,
+    each batch of ``to_batches()``) shares its parent's buffers and differs
+    only in an offset they do not show, so every equal-length slice of one
+    table hashed alike and was served the first one's result. A dictionary
+    column's buffers hold only the indices, so ``["red", "blue"]`` and
+    ``["cat", "dog"]`` hashed alike too. The IPC stream carries the schema,
+    each batch's rows from its offset, and every dictionary.
     """
     try:
         import pyarrow as pa
 
         if isinstance(value, (pa.Table, pa.RecordBatch)):
-            h = hashlib.sha256(f"{value.schema}:{value.num_rows}:".encode())
-            for col in value.columns:
-                chunks = col.chunks if hasattr(col, "chunks") else [col]
-                for chunk in chunks:
-                    for buf in chunk.buffers():
-                        if buf is not None:
-                            h.update(memoryview(buf))
+            h = hashlib.sha256(f"{type(value).__name__}:{value.num_rows}:".encode())
+            sink = pa.PythonFile(_HashSink(h), mode="w")
+            with pa.ipc.new_stream(sink, value.schema) as writer:
+                writer.write(value)
             return h.hexdigest()
-    except (ImportError, TypeError, ValueError, AttributeError, MemoryError):
+    except (ImportError, TypeError, ValueError, AttributeError, MemoryError, NotImplementedError):
         logger.debug("Failed to hash PyArrow %s", type(value).__name__)
     return None
 

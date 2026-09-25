@@ -36,7 +36,7 @@ iteration's values and for the arguments of a cached call inside a statement.
 | `ndarray` | numpy | shape, dtype, memory order and every byte |
 | `DataFrame`, `Series` | polars | schema and every row |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, not the contents |
-| `Table`, `RecordBatch` | pyarrow | schema, row count and every column buffer |
+| `Table`, `RecordBatch` | pyarrow | schema and every row, as Arrow's IPC format writes it: a slice from its offset, a dictionary column with its dictionary |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
 

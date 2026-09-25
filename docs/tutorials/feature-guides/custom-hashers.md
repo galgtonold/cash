@@ -123,7 +123,7 @@ registrations:
 | pandas `DataFrame`, `Series` | schema (names, dtypes, index) and every value |
 | numpy `ndarray` | shape, dtype, memory order and the full buffer |
 | polars `DataFrame`, `Series`, `LazyFrame` | schema and row hashes; a `LazyFrame` by its serialized plan |
-| PyArrow `Table`, `RecordBatch` | schema, row count and every column buffer |
+| PyArrow `Table`, `RecordBatch` | schema and every row, dictionaries included |
 | modin `DataFrame`, `Series` | converted to pandas, then as pandas |
 | dask collections | the task keys and the schema |
 
