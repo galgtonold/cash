@@ -16,6 +16,7 @@ checked by hand.
 from __future__ import annotations
 
 import os
+import time
 
 from cash.backends import FileBackend
 
@@ -104,9 +105,18 @@ def test_without_the_index_a_restart_ranks_entries_as_unknown_cost(tmp_path):
 
     Same sequence, but the index is deleted between the two processes. With
     nothing to go on, B ranks A's entries as costing an unknown (small)
-    amount, below the new entries it knows, so it evicts among A's by size
-    and age -- and 'costly', the biggest and oldest, goes first. The
-    entries B wrote itself survive.
+    amount, below the new entries it knows, so it evicts among A's by age
+    -- and 'costly', the oldest, goes first. The entries B wrote itself
+    survive.
+
+    Only age separates A's entries here: the value per byte is rounded to a
+    1/16-octave step (`gdsf_value`), which 'costly' being 1% bigger does not
+    cross. And age is the file's mtime, which the filesystem stamps from a
+    coarse clock (4 ms steps on the Linux CI): A writes several entries in
+    one step, and among entries of one step with no index the order is the
+    directory's. With 'costly' and two cheap entries listed before it in one
+    step, the two cheap ones went and 'costly' stayed. So the entries are
+    dated here a second apart, oldest first, as a real earlier run's are.
     """
     cache = tmp_path / "c"
     a = _backend(cache)
@@ -115,6 +125,9 @@ def test_without_the_index_a_restart_ranks_entries_as_unknown_cost(tmp_path):
         _put(a, f"cheap-{i}", MB, 0.05)
     a.shutdown()
     os.remove(cache / INDEX)
+    an_hour_ago = time.time() - 3600
+    for age, key in enumerate(["costly"] + [f"cheap-{i}" for i in range(8)]):
+        os.utime(a._get_path(key), (an_hour_ago + age, an_hour_ago + age))
 
     b = _backend(cache)
     _put(b, "later-0", MB, 0.05)
