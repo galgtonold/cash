@@ -43,7 +43,7 @@ from typing import Any
 
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import StatementAnalysis
-from cash.analysis.namespace_effects import user_callee_writing_files
+from cash.analysis.namespace_effects import statement_user_writer_call
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
 logger = logging.getLogger(__name__)
@@ -222,9 +222,14 @@ def decide_cacheability(
         for name in analysis.called_names:
             if is_stateful_call(name):
                 return False, ["Calls @stateful function"]
-            writer = None if waived else user_callee_writing_files(user_ns.get(name))
-            if writer:
-                return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
+        # Every spelling of the call: ``save(...)``, and ``helpers.save(...)``
+        # through a project module -- how a function reaches the notebook
+        # after it moves into a module. Offered only bare names, the module
+        # spelling was stored and a later run restored it without the write.
+        found = None if waived else statement_user_writer_call(code, user_ns, tree)
+        if found:
+            name, writer = found
+            return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
     except (TypeError, AttributeError) as exc:
         logger.debug("Error checking function purity: %s", exc)
 

@@ -28,6 +28,7 @@ touches a DataFrame, and an append must stay a skippable effect.
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -37,6 +38,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import _writer_lib
 
+from cash.analysis.annotations import CacheAnnotation
+from cash.analysis.cacheability import analyze_statement
+from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.namespace_effects import statement_calls_user_writer, user_callee_writing_files
 
 
@@ -99,3 +103,61 @@ def test_an_unknown_name_is_not_a_writer(ns):
     """A module that is not in the namespace must not raise or guess."""
     assert statement_calls_user_writer("p = nope.save(x)", ns) is None
     assert statement_calls_user_writer("p = tl.no_such_function(x)", ns) is None
+
+
+def test_a_write_one_module_further_down_is_seen(ns):
+    """``tl.build_report`` hands the write to another project module as
+    ``_writer_io.write_table(...)``: the helper's own call is spelled through a
+    module too, and is followed like a bare-name call."""
+    assert user_callee_writing_files(_writer_lib.build_report) == "write_table"
+    assert statement_calls_user_writer("tl.build_report(rows, 'out.txt')", ns) == "write_table"
+
+
+def _verdict(code: str, ns: dict, annotation=None) -> tuple[bool, list[str]]:
+    tree = ast.parse(code)
+    return decide_cacheability(
+        code=code,
+        tree=tree,
+        inputs=set(),
+        outputs=set(),
+        annotation=annotation,
+        analysis=analyze_statement(code, tree),
+        user_ns=ns,
+        variable_lineage={},
+        is_stateful_call=lambda _name: False,
+        scan_forbidden=lambda _code, _ns, _tree: [],
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "writer"),
+    [
+        ("tl.export_summary(d, 'out.json')", "export_summary"),
+        ("p = _writer_lib.save_chart(fig, 'chart.png')", "save_chart"),
+        ("tl.build_report(rows, 'out.txt')", "write_table"),
+        ("export_summary(d, 'out.json')", "export_summary"),  # ``from tl import export_summary``
+    ],
+)
+def test_the_cacheability_decision_refuses_a_project_module_writer(ns, code, writer):
+    """The decision that stores a statement is the one that must see it.
+
+    ``tl.export_summary(...)`` was judged a writer by the upstream replay and
+    the file-answer check, but the cacheability decision offered only
+    bare-name callees to the writer check: the statement was stored, and the
+    next run restored it without writing the file.
+    """
+    cacheable, reasons = _verdict(code, ns)
+    assert cacheable is False
+    assert len(reasons) == 1
+    assert f"which writes files ({writer})" in reasons[0]
+
+
+def test_the_decision_still_caches_module_calls_that_replace_no_file(ns):
+    """Controls: no write, and an append, keep caching through a module."""
+    assert _verdict("v = tl.tidy(values)", ns) == (True, [])
+    assert _verdict("tl.note('hello')", ns) == (True, [])
+
+
+def test_assume_safe_waives_a_project_module_writer(ns):
+    """``# @cash:assume-safe`` waives the write however the call is spelled."""
+    assert _verdict("tl.export_summary(d, 'out.json')", ns, CacheAnnotation(assume_safe=True)) == (True, [])

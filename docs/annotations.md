@@ -79,7 +79,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @7601d168 -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows a plain `EXECUTED` row. A statement below that reads its
 result is cached as usual and computed again when the value changes.
@@ -136,7 +136,7 @@ directive and has no such caveat.
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @420335a6, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @7601d168, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 Cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached

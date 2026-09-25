@@ -129,7 +129,11 @@ Cash spots side effects from the statement's source, without running it. So:
   literal `SELECT` query cache normally. Writing to the console
   (`sys.stdout.write`) counts as a `print`, not a file.
 - A call to a function of yours whose body writes a file counts as a write
-  (`save(fig, "chart.png")`).
+  (`save(fig, "chart.png")`), whether it is defined in the notebook or in a
+  module of your project (`helpers.save(fig, "chart.png")`), and so does one
+  that writes through another of your functions. A function of an installed
+  package is not looked into, and neither is a method called on an object
+  (`report.build()`): put `# @cash:no-cache` on such a statement.
 
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @d70a1c80 -->
 A statement that reads the clock (`time.time()`, `datetime.now()`), makes a

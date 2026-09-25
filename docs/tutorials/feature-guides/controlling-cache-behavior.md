@@ -145,7 +145,7 @@ def announce(text):
 receipt = announce("model trained")    # badge: NOT CACHED - Calls @stateful function
 ```
 
-<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @420335a6 -->
+<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @7601d168 -->
 Without the marker, a slow `announce` call is cached and a re-run skips the
 message: cash does not look inside `announce` for a chat client. Three things to
 know:
@@ -159,7 +159,8 @@ know:
   wrapper too.
 - **File writes need no marker.** A helper you wrote that writes a file
   (`fig.savefig(...)`, `df.to_csv(...)`, `open(p, "w")`), directly or through
-  another of your functions, is detected: the statement runs every time and the
+  another of your functions, in the notebook or in a module of your project, is
+  detected: the statement runs every time and the
   badge says `Calls save(), which writes files`. Appending to a log file does not
   count. If such a write does not matter, mark the helper `@pure` and it caches
   again. Apart from this, `@pure` does not change what a notebook statement does.

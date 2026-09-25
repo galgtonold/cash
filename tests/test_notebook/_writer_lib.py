@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+import _writer_io
+
 
 def export_summary(data, path):
     """The reported shape: a project-module export that replaces a file."""
@@ -31,3 +33,9 @@ def note(msg):
     """An APPEND, which a cache hit is understood to skip, like a print."""
     with open("run.log", "a", encoding="utf-8") as fh:
         fh.write(msg + "\n")
+
+
+def build_report(rows, path):
+    """The write sits in another project module, reached through it."""
+    _writer_io.write_table(sorted(rows), path)
+    return path

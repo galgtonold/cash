@@ -77,7 +77,7 @@ they talk to the outside world.
 <!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3 -->
 | A statement that... | What cash does |
 |---|---|
-| writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote | runs every time |
+| writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
 | sends something over the network (`requests.post`, `session.post`, `client.publish`, `s3.upload_file`) | runs every time |
 | writes to a database (`INSERT`, `commit`, `df.to_sql`) | runs every time |
 | starts a process (`subprocess.run`, `os.system`) | runs every time |

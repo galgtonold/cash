@@ -34,6 +34,7 @@ from .file_effects import (
 
 __all__ = [
     "statement_calls_user_writer",
+    "statement_user_writer_call",
     "user_callee_writing_files",
     "resolve_literal_path",
     "statement_written_paths",
@@ -76,6 +77,23 @@ def statement_calls_user_writer(
     instance is therefore still not seen; that is a narrower gap, and closing
     it needs a way to look up the attribute without evaluating it.
     """
+    found = statement_user_writer_call(code, namespace, tree)
+    return found[1] if found else None
+
+
+def statement_user_writer_call(
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
+) -> tuple[str, str] | None:
+    """``(callee as spelled, writing function)`` for the first call in *code*
+    into user code that writes files, or None.
+
+    The spelling is what the statement says (``tl.export``), for a reason the
+    user can find in their cell; the writing function is where the write is,
+    which may be a helper that one calls. :func:`statement_calls_user_writer`
+    is the same question without the spelling.
+    """
     if not namespace or "(" not in code:
         return None
     if tree is None:
@@ -88,7 +106,7 @@ def statement_calls_user_writer(
             continue
         found = user_callee_writing_files(resolve_callee(node.func, namespace))
         if found:
-            return found
+            return ast.unparse(node.func), found
     return None
 
 
@@ -152,8 +170,11 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     found = func.__name__ if replaces else None
     if found is None:
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                callee = func.__globals__.get(node.func.id)
+            if isinstance(node, ast.Call):
+                # ``helper(...)`` and ``other_module.helper(...)`` alike: a
+                # project module's export often hands the write to a sibling
+                # module. Attributes are followed through modules only.
+                callee = resolve_callee(node.func, func.__globals__)
                 if callee is not None and callee is not func:
                     found = user_callee_writing_files(callee, _depth + 1)
                     if found:
