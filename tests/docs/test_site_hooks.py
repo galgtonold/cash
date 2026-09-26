@@ -80,3 +80,16 @@ def test_every_page_box_becomes_a_chip():
         if '!!! info "Applies to:' in out or 'class="cash-path cash-path--' not in out:
             left.append(page.relative_to(REPO_ROOT).as_posix())
     assert not left, left
+
+
+# --- Output blocks ----------------------------------------------------------------
+
+
+def test_output_blocks_lose_the_copy_button():
+    html = (
+        '<div class="language-text highlight"><span class="filename">Output</span><pre>'
+        '<div class="language-python highlight"><span class="filename">demo.py</span><pre>'
+    )
+    out = hooks.mark_output_blocks(html)
+    assert '<div class="language-text highlight cash-output no-copy"><span class="filename">Output</span>' in out
+    assert '<div class="language-python highlight"><span class="filename">demo.py</span>' in out

@@ -47,6 +47,12 @@ page is for. The source keeps the box (the page conventions and their checks
 rely on it); the site shows it as a small path chip under the H1, with the
 audience line beside it. On the home page it is dropped, and on the Project
 pages only the audience line stays: "both paths" tells those readers nothing.
+
+Printed output
+--------------
+A code block titled ``Output`` (```` ```text title="Output" ````) is what a
+program prints, not code to type. It gets the ``cash-output`` class for its own
+look in ``cash-design.css`` and ``no-copy``, which drops Material's copy button.
 """
 
 from __future__ import annotations
@@ -70,6 +76,9 @@ _APPLIES_BOX = re.compile(
     re.MULTILINE,
 )
 _PATH_LABELS = {"decorator": "Decorator", "notebook": "Notebook", "both paths": "Both paths"}
+
+# A titled code block whose title starts with "Output".
+_OUTPUT_BLOCK = re.compile(r'<div class="(?P<cls>[^"]*\bhighlight\b[^"]*)"><span class="filename">Output\b')
 
 
 def strip_docnum_markers(markdown: str) -> str:
@@ -110,6 +119,13 @@ def applies_to_chip(markdown: str, *, chip: bool = True, keep: bool = True) -> s
     )
 
 
+def mark_output_blocks(html: str) -> str:
+    """Give code blocks titled "Output" the ``cash-output`` and ``no-copy`` classes."""
+    return _OUTPUT_BLOCK.sub(
+        lambda m: f'<div class="{m.group("cls")} cash-output no-copy"><span class="filename">Output', html
+    )
+
+
 def rewrite_badge_paths(html: str, page_url: str) -> str:
     """Rewrite root-absolute ``/_badges/...`` iframe srcs to page-relative ones.
 
@@ -143,5 +159,5 @@ def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:
 
 
 def on_post_page(output: str, *, page, config, **kwargs) -> str:
-    """mkdocs hook: fix badge iframe paths."""
-    return rewrite_badge_paths(output, page.url)
+    """mkdocs hook: fix badge iframe paths and mark output blocks."""
+    return mark_output_blocks(rewrite_badge_paths(output, page.url))

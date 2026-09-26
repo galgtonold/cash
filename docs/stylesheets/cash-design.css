@@ -788,6 +788,42 @@ a.cash-cta-card:hover {
   background: var(--cash-bg-section);
 }
 
+/* ─── Printed output ─────────────────────────────────────────────────── *
+ * A block titled "Output" is what a program prints, not code to type.
+ * mkdocs_hooks.py gives it .cash-output (and .no-copy, which removes the
+ * copy button). It sits on the page background with a rule on its left,
+ * under a small caps label, so it cannot be mistaken for code. */
+.md-typeset .cash-output {
+  border-left: 3px solid var(--cash-rule-strong);
+  border-radius: 0 var(--cash-radius-code) var(--cash-radius-code) 0;
+}
+.md-typeset .cash-output > .filename {
+  background: transparent;
+  border-bottom: 0;
+  color: var(--cash-ink-4);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.5em 1.1em 0;
+}
+.md-typeset .cash-output pre > code,
+.md-typeset .cash-output code {
+  background: transparent;
+  color: var(--cash-ink-2);
+}
+.md-typeset .cash-output pre {
+  margin-top: 0;
+  background: transparent;
+}
+/* Printed lines (a log line, a summary table row) can run long; they wrap
+ * instead of scrolling, so the end of the line, often the reason, stays in
+ * view. */
+.md-typeset .cash-output pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ─── Badge example frames ───────────────────────────────────────────── *
  * The badge examples are light cards, as a notebook shows them. In dark
  * mode the page's color-scheme is dark; a frame whose document is light
