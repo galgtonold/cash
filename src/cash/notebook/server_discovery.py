@@ -355,12 +355,16 @@ def _open_sessions(req: urllib.request.Request):
     names it, and a proxy cannot reach the kernel's own loopback interface, so
     a local server would look unreachable. A server on another host (a
     JupyterHub whose single-user servers run elsewhere) keeps the
-    environment's proxy settings, which it may need.
+    environment's proxy settings, which it may need. Those are read on every
+    call: ``urllib.request.urlopen`` reuses one opener that read them at the
+    first ``urlopen`` in the process, so a proxy set later in the kernel would
+    be ignored.
     """
     if _is_loopback(req.full_url):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        return opener.open(req, timeout=_SESSIONS_TIMEOUT_S)
-    return urllib.request.urlopen(req, timeout=_SESSIONS_TIMEOUT_S)
+    else:
+        opener = urllib.request.build_opener()
+    return opener.open(req, timeout=_SESSIONS_TIMEOUT_S)
 
 
 def _search_servers_for_notebook(kernel_id: str) -> str | None:

@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 import types
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psutil
@@ -305,6 +306,28 @@ def test_a_local_server_is_reached_past_an_http_proxy(runtime_dir, serve, tmp_pa
 def test_a_server_on_another_host_still_goes_through_the_proxy(runtime_dir, serve, tmp_path, monkeypatch):
     """The control arm: a JupyterHub server on another host may need the
     proxy, so its request goes there. The stub plays the proxy and answers."""
+    proxy = serve()
+    root = tmp_path / "home"
+    remote = "http://jupyterhub.invalid:8000/user/ada/"
+    _write_server_file(runtime_dir, "jpserver-4242.json", url=remote, root=root, token="tok")
+    _proxy_env(monkeypatch, proxy.url)
+
+    assert sd.get_notebook_path() == os.path.join(str(root), NB_PATH)
+    assert proxy.paths == [remote + "api/sessions"]
+
+
+def test_a_proxy_set_after_an_earlier_request_is_used(runtime_dir, serve, tmp_path, monkeypatch):
+    """``urllib.request.urlopen`` keeps one opener per process, and its proxy
+    settings are the environment at the first ``urlopen``. Any earlier request
+    in the kernel (here one made before the proxy is set) must not freeze
+    them: the remote server is still asked through the proxy set now."""
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    for name in ("http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    with urllib.request.urlopen("data:,x") as primed:
+        assert primed.read() == b"x"
+    assert urllib.request._opener is not None, "the process-wide opener was not built"
+
     proxy = serve()
     root = tmp_path / "home"
     remote = "http://jupyterhub.invalid:8000/user/ada/"
