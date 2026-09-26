@@ -235,7 +235,11 @@ class FileAccessTracker:
         global _tracking_seconds
         started = _perf_counter()
         try:
-            self._track_path_untimed(path)
+            # Untracked: deciding whether this read counts probes paths too
+            # (the time zone directories, looked up on the first read in a
+            # process), and through the same wrapped functions.
+            with untracked():
+                self._track_path_untimed(path)
         finally:
             _tracking_seconds += _perf_counter() - started
 
