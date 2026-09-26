@@ -59,7 +59,13 @@ extra_javascript:
   - javascripts/cacheability-checker.js
 
 plugins:
-  - search
+  # The default separator splits only on spaces and hyphens, so `%cash_on`,
+  # `cash.register_hasher(` and `# @cash:no-cache` were indexed as one word
+  # each and searching `cash_on` found nothing. This one also splits on
+  # % @ . ` and brackets. Underscores stay inside words (cash_on is one
+  # term), dots between digits stay too (0.11.0), and CamelCase splits.
+  - search:
+      separator: '[\s\u200b\-,:!=\[\]()"`/%@#]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
   - autorefs
   # Pages that moved keep working: the old URL (still linked from PyPI and
   # the 0.11.0 README) forwards to the page that replaced it.
