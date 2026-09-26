@@ -36,8 +36,15 @@ def test_a_call_inside_a_stored_call_is_counted_once(unit_and_sites):
 
     wrapped = unit.wrap(outer, CallSite(source="outer(x)", free_names=frozenset({"outer", "x"}), occurrence_index=0))
     assert wrapped(1) == [1, 0]
-    assert [e["stored"] for e in unit.drain()] == [True, True], "both calls must be cached for this to test anything"
-    assert ABOVE_PERSISTENCE_FLOOR_S * 0.9 <= unit.cached_compute_s < ABOVE_PERSISTENCE_FLOOR_S * 1.6
+    events = unit.drain()
+    assert [e["stored"] for e in events] == [True, True], "both calls must be cached for this to test anything"
+    inner_s, outer_s = (e["execution_time"] for e in events)
+    assert inner_s >= ABOVE_PERSISTENCE_FLOOR_S * 0.9
+    # Against the times the calls measured, not the sleep: a slow runner
+    # oversleeps by more than any fixed margin.
+    assert unit.cached_compute_s == pytest.approx(outer_s), (
+        f"counted {unit.cached_compute_s:.3f}s for an outer call of {outer_s:.3f}s holding an inner one of {inner_s:.3f}s"
+    )
 
 
 def test_a_call_inside_one_the_cache_does_not_hold_still_counts(unit_and_sites):

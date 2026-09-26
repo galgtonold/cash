@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
+from cash.backends.persistence_policy import COMPUTE_FLOOR_S
 from tests._cell_driver import run_cash_cell
 
 DEFS = (
@@ -56,6 +57,16 @@ def _metadata(disk, needle):
     raise AssertionError(f"no record of {needle!r}")
 
 
+def _call_seconds(backend, name):
+    """The compute the cached call to *name* recorded. The statement is
+    checked against it rather than the sleep: a runner's sleep can return a
+    fraction of a millisecond early, or oversleep by a tenth of a second."""
+    for meta in backend.list_entries() or ():
+        if str(meta.get("key", "")).startswith("call:") and str(meta.get("function")).rsplit(".", 1)[-1] == name:
+            return meta["execution_time"]
+    raise AssertionError(f"no cached call to {name!r}")
+
+
 def _setup(magics):
     run_cash_cell(magics, DEFS)
     run_cash_cell(magics, "a = list(range(1000))")
@@ -70,7 +81,7 @@ def test_a_cheap_rest_around_a_cached_call_keeps_no_value(tiers, mock_shell):
     assert _entry(ram, "shifted(a) + [1]") == (None, None), "the statement kept a second copy of the call's result"
     meta = _metadata(disk, "shifted(a) + [1]")
     assert meta.get("metadata_only"), meta
-    assert meta["execution_time"] >= 0.2, "a hit is credited with the whole cost"
+    assert meta["execution_time"] >= _call_seconds(ram, "shifted") >= 0.15, "a hit is credited with the whole cost"
     assert meta["store_time"] < 0.1, meta
     assert meta.get("output_lineages", {}).get("b"), "the lineage a restart needs was not kept"
 
@@ -89,7 +100,9 @@ def test_a_statement_missing_while_its_call_hits_keeps_no_value(tiers, mock_shel
     assert mock_shell.user_ns["c"] == [*range(1000), 2]
     assert _entry(ram, "shifted(a) + [2]") == (None, None)
     meta = _metadata(disk, "shifted(a) + [2]")
-    assert meta["execution_time"] >= 0.2, "the served call's compute was left out of the credit"
+    assert meta["execution_time"] >= _call_seconds(ram, "shifted") >= 0.15, (
+        "the served call's compute was left out of the credit"
+    )
 
 
 def test_a_statement_whose_own_work_is_expensive_is_stored(tiers, mock_shell):
@@ -202,11 +215,14 @@ def test_a_call_under_the_persistence_floor_is_the_statements_work(tiers, mock_s
     left out of what storing the statement saves."""
     magics, ram, disk = tiers
     _setup(magics)
-    run_cash_cell(magics, "def quick(x):\n    time.sleep(0.05)\n    return list(x)")
+    # Far under the floor: a slow runner's sleep(0.05) took over 0.1 s.
+    run_cash_cell(magics, "def quick(x):\n    time.sleep(0.02)\n    return list(x)")
     run_cash_cell(magics, "b = quick(a) + [1]")
+    quick_s = _call_seconds(ram, "quick")
+    assert quick_s < COMPUTE_FLOOR_S, f"quick() took {quick_s:.3f}s, not under the floor this tests"
     meta, value = _entry(ram, "quick(a) + [1]")
     assert value is not None and value["variables"]["b"][-1] == 1
-    assert meta["store_time"] >= 0.04, meta
+    assert meta["store_time"] >= quick_s, meta
 
 
 def test_a_call_whose_result_a_method_is_called_on_is_a_call_unit(tiers, mock_shell):
