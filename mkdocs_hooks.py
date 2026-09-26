@@ -3,8 +3,12 @@
 Wired up via ``hooks:`` in ``mkdocs.yml``.  mkdocs imports this file directly
 (by path) and calls any ``on_*`` event functions it defines.
 
-Why this exists
----------------
+Every change here is a build-time rewrite: the Markdown source keeps what the
+docs tests (``tests/docs``) read, and the published page shows what a reader
+needs.
+
+Badge iframe paths
+------------------
 The "Cash badge" example iframes are authored with a *root-absolute* ``src``::
 
     <iframe class="cash-badge" src="/_badges/anatomy_hero.html" ...></iframe>
@@ -21,11 +25,20 @@ built site.  ``on_post_page`` rewrites them at build time to a path relative to
 the page being rendered, so they resolve no matter what base path the site is
 mounted at -- and with no client-side flash.
 
-``on_page_markdown`` removes the ``<!-- docnum:NAME -->`` markers that
-``scripts/doc_numbers.py`` keeps around derived numbers. In prose they are
-invisible HTML comments, but inside inline code or a code block they render
-literally, so the site would show ``cash-lib<!-- docnum:version_pin -->~=...``.
-The value between the markers stays; only the markers go.
+Doc-number markers
+------------------
+``scripts/doc_numbers.py`` keeps ``<!-- docnum:NAME -->`` markers around derived
+numbers. In prose they are invisible HTML comments, but inside inline code or a
+code block they render literally, so the site would show
+``cash-lib<!-- docnum:version_pin -->~=...``. The value between the markers
+stays; only the markers go.
+
+Test-harness lines
+------------------
+A ``# test:inject: <code>`` line in a code block is a step the docs harness runs
+(an import, a file edit, a clock jump) that the example does not show. It is
+test plumbing, so it is dropped from the page and from what the copy button
+copies. The harness reads the source, where the line stays.
 """
 
 from __future__ import annotations
@@ -39,10 +52,18 @@ _ABS_BADGE_SRC = re.compile(r'(<iframe\b[^>]*\bsrc=")/(_badges/[^"]+)(")')
 # The opening and closing markers of scripts/doc_numbers.py's MARKER.
 _DOCNUM_MARKER = re.compile(r"<!--\s*(?:docnum:[a-z0-9_]+|/docnum)\s*-->")
 
+# The same line tests/docs/_harness.py turns into code, with its line break.
+_TEST_INJECT_LINE = re.compile(r"^[ \t]*# test:inject:.*(?:\n|$)", re.MULTILINE)
+
 
 def strip_docnum_markers(markdown: str) -> str:
     """Remove ``docnum`` markers, keeping the value between them."""
     return _DOCNUM_MARKER.sub("", markdown)
+
+
+def strip_test_injects(markdown: str) -> str:
+    """Drop every ``# test:inject:`` line; the docs harness reads the source."""
+    return _TEST_INJECT_LINE.sub("", markdown)
 
 
 def rewrite_badge_paths(html: str, page_url: str) -> str:
@@ -59,10 +80,11 @@ def rewrite_badge_paths(html: str, page_url: str) -> str:
 
 
 def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:
-    """mkdocs hook: drop doc-number markers before the page is rendered."""
-    return strip_docnum_markers(markdown)
+    """mkdocs hook: rewrite the Markdown source before it is rendered."""
+    markdown = strip_docnum_markers(markdown)
+    return strip_test_injects(markdown)
 
 
 def on_post_page(output: str, *, page, config, **kwargs) -> str:
-    """mkdocs hook: fix badge iframe paths in every rendered page."""
+    """mkdocs hook: fix badge iframe paths."""
     return rewrite_badge_paths(output, page.url)
