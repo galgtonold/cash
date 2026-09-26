@@ -13,8 +13,8 @@ stored result or runs it and stores what it produced.
 flowchart TB
     A["Run a cell"]
     U["Upstream check:<br/>restore or re-run<br/>cells above"]
-    S{"Safe to cache<br/>the statement?"}
-    K{"Stored and<br/>still fresh?"}
+    S{"Safe to<br/>cache?"}
+    K{"Stored and<br/>fresh?"}
     R1["Run it,<br/>store nothing"]
     H["Restore variables,<br/>replay output"]
     R2["Run it, store<br/>if worth it"]

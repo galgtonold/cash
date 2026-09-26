@@ -147,14 +147,15 @@ tier in front, and mark values you would rather not fetch remotely
 ## How the decision is made
 
 <!-- claim: cash/cost_model.py:_TYPE_TO_FAMILY @674b9d86, cash/cost_model.py:resolve_family @91ef972a, cash/cost_model.py:_resolve_backend @d6308bba, cash/cost_model.py:_KNOWN_BACKENDS @3f31251c -->
-A statement that took 10 ms or more goes through three checks in order:
+A statement that took 10 ms or more goes through three checks in order,
+explained below the chart:
 
 ```mermaid
 flowchart TB
     A["Statement took<br/>10 ms or more"]
-    M{"Quick to read<br/>back from memory?"}
-    D{"Over 0.1 s, and<br/>disk read-back 20%<br/>faster than compute?"}
-    W{"At most 128 MiB<br/>per second saved?"}
+    M{"Store it<br/>at all?"}
+    D{"Write it<br/>to disk?"}
+    W{"Worth its<br/>bytes?"}
     N0["Not stored"]
     RAM["Memory only"]
     DISK["Memory and disk"]

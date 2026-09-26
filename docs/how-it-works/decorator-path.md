@@ -9,11 +9,11 @@ Every call to a decorated function takes the same route:
 flowchart TD
     A["Call f(args)"] --> B{"Key built?"}
     B -->|No| W["Warn, run uncached"]
-    B -->|Yes| C{"Entry stored?"}
+    B -->|Yes| C{"Entry<br/>stored?"}
     C -->|No| D["Run the body,<br/>store the result"]
     C -->|Yes| E{"ttl expired?"}
     E -->|Yes| D
-    E -->|No| F{"Files it read<br/>unchanged?"}
+    E -->|No| F{"Files<br/>unchanged?"}
     F -->|No| D
     F -->|Yes| G["Return the<br/>stored value"]
 ```
