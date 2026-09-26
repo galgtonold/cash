@@ -89,10 +89,15 @@ Extras for pandas, polars, Redis, S3 and more are listed in
     is as safe as the code that wrote it. See the
     [trust model](api/backends.md#security).
 
-## Where next
+## Related
 
 - [Why cash?](why-cash.md): what each path does, and how cash compares with
   other caches.
-- [FAQ](faq.md) and [Glossary](glossary.md).
-- [How it works](how-it-works/overview.md).
-- [For coding agents](for-coding-agents.md): the page an agent should read first.
+- [FAQ](faq.md) and [Glossary](glossary.md): short answers and the words the
+  docs use.
+- [How it works](how-it-works/overview.md): how cash decides what to reuse.
+- [For coding agents](for-coding-agents.md): the page an agent should read
+  first.
+- Look something up: [Settings](getting-started/configuration.md#all-settings),
+  [CLI](cli.md), [Warnings](warnings.md), [Magics](magics.md),
+  [Annotations](annotations.md), [API](api/index.md).
