@@ -16,20 +16,25 @@ the kernel, so cash sees your latest edits without a save.
 
 ## Optional extras
 
-Install only what you need:
+Install only what you need, in quotes so the shell leaves the brackets alone:
 
 ```bash
-pip install "cash-lib[pandas]"      # pandas + pyarrow, for stable DataFrame hashing
-pip install "cash-lib[polars]"      # polars support
-pip install "cash-lib[notebook]"    # IPython, for %cash_on and the other magics
-pip install "cash-lib[memory]"      # psutil, for memory-aware cache budgets
-pip install "cash-lib[redis]"       # Redis backend, for a cache shared between machines
-pip install "cash-lib[s3]"          # S3 backend (boto3)
-pip install "cash-lib[ipynbname]"   # one more way to find the running notebook's file
-pip install "cash-lib[viz]"         # matplotlib + ipywidgets, for the cash.show_stats() dashboard
-pip install "cash-lib[toml]"        # tomli, to read [tool.cash] in pyproject.toml on Python 3.10
-pip install "cash-lib[all]"         # all of the above
+pip install "cash-lib[pandas]"
+pip install "cash-lib[pandas,notebook]"   # several at once
 ```
+
+| Extra | What it adds | You need it when |
+|---|---|---|
+| `cash-lib[pandas]` | pandas and pyarrow | you want stable DataFrame hashing |
+| `cash-lib[polars]` | polars | you use polars |
+| `cash-lib[notebook]` | IPython | you use `%cash_on` and the other magics |
+| `cash-lib[memory]` | psutil | you want memory-aware cache budgets |
+| `cash-lib[redis]` | the Redis client | you share a cache between machines through Redis |
+| `cash-lib[s3]` | boto3 | you store the cache in S3 |
+| `cash-lib[ipynbname]` | ipynbname | you want one more way to find the running notebook's file |
+| `cash-lib[viz]` | matplotlib and ipywidgets | you use the `cash.show_stats()` dashboard |
+| `cash-lib[toml]` | tomli, on Python 3.10 only | you set `[tool.cash]` in `pyproject.toml` on Python 3.10 |
+| `cash-lib[all]` | all of the above | you want everything |
 
 `[all]` is exactly the extras above. The contributor extras (`dev`, `docs`,
 `docs-test`) are not part of it; see [Contributing](../contributing.md).
