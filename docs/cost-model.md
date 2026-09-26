@@ -26,9 +26,11 @@ decision to cache it, and its results are always written to disk (see the
 compute time by at least `min_cache_savings_pct` (20%). A large value that
 computes in 0.3 s but takes a second to read back stays in memory.
 
-<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.price @b74b755f -->
+<!-- claim: cash/notebook/statement/call_routing.py:CallRouting.price @2197abce -->
 Compute time is your code's, not cash's. Time cash spends inside a statement
-(tracking files, storing the calls it caches) is left out.
+(tracking files, storing the calls it caches) is left out. A cached call counts
+the time it measured, as its own entry records it, so a statement never costs
+less than a call inside it.
 
 The thresholds apply to each statement on its own; cash does not add them up. A
 cell of 120 independent statements at 0.05 s each takes six seconds and writes

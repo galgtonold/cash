@@ -65,6 +65,46 @@ class CashMarks(NamedTuple):
     cached_restore: float
     #: ``CallUnit.reads_seq``.
     reads_seq: int
+    #: The run time of the calls that ran through the cache, and the seconds
+    #: the file tracker spent inside the calls it routed
+    #: (``CallUnit.computed_s``, ``CallUnit.tracking_in_calls_s``).
+    computed: float = 0.0
+    tracking_in_calls: float = 0.0
+
+
+def statement_price(wall_time: float, spent: CashMarks) -> StatementPrice:
+    """What a statement that took *wall_time* cost, what storing its value
+    saves, and cash's tax inside it, from what cash's clocks advanced by
+    while it ran (*spent*).
+
+    The tax is time recording file reads, and keying, looking up and storing
+    the calls cash routed -- work the user's own kernel would not have done.
+    The file tracker's seconds inside a routed call are not added again: those
+    outside the call's run are already the call unit's overhead, and those
+    inside it are part of the call's own time, which its entry records.
+
+    What the statement's code cost, for crediting a hit, is the wall time
+    under cash less that tax, plus what the calls it served from the cache
+    would have cost. The badge once said "saved 16.50s" for a folder read that
+    takes 1.8 s without cash, and "saved 6.55s" for a dict of fits that takes
+    50-100 s, built from calls served from the cache. The calls that ran are
+    credited with the time they measured, and the tax is taken from the rest,
+    so a statement is never recorded as cheaper than a call inside it: taken
+    from the whole, a statement around a 0.2 s call came out 0.4 ms under it.
+    The badge's run time stays the wall time.
+
+    What storing its value saves is that, less the calls inside it the cache
+    now holds (stored, or served), plus the predicted time to restore their
+    results -- what running the statement again costs once its calls are
+    cached. ``b = shifted(a) + 1`` over a 0.2 s call costs the ``+ 1``:
+    storing its value would keep a second copy of what the call's entry
+    holds, to save that much.
+    """
+    tax = max(0.0, spent.tracking - spent.tracking_in_calls) + spent.overhead
+    computed = min(spent.computed, wall_time)
+    cost = computed + max(0.0, wall_time - computed - tax) + spent.saved
+    store_cost = max(0.0, cost - spent.cached_compute) + spent.cached_restore
+    return StatementPrice(cost, store_cost, tax)
 
 
 def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | None:
@@ -500,6 +540,8 @@ class CallRouting:
             getattr(unit, "cached_compute_s", 0.0),
             getattr(unit, "cached_restore_s", 0.0),
             getattr(unit, "reads_seq", 0),
+            getattr(unit, "computed_s", 0.0),
+            getattr(unit, "tracking_in_calls_s", 0.0),
         )
 
     def _since(self, marks: CashMarks) -> CashMarks:
@@ -531,6 +573,8 @@ class CallRouting:
             advanced("cached_compute_s", marks.cached_compute),
             advanced("cached_restore_s", marks.cached_restore),
             marks.reads_seq if same else 0,
+            advanced("computed_s", marks.computed),
+            advanced("tracking_in_calls_s", marks.tracking_in_calls),
         )
 
     def price(self, wall_time: float, marks: CashMarks) -> StatementPrice:
@@ -540,23 +584,7 @@ class CallRouting:
             spent = self._since(marks)
         except Exception:  # noqa: BLE001 - a cost estimate never breaks a statement
             return StatementPrice(wall_time, wall_time, 0.0)
-        tax = spent.tracking + spent.overhead
-        # What the statement's code cost, for crediting a hit: the wall time
-        # under cash, less cash's own time inside it -- recording file reads,
-        # keying and storing the calls it routed -- plus what the calls it
-        # served from the cache would have cost. The badge once said "saved
-        # 16.50s" for a folder read that takes 1.8 s without cash, and "saved
-        # 6.55s" for a dict of fits that takes 50-100 s, built from calls
-        # served from the cache. The badge's run time stays the wall time.
-        cost = max(0.0, wall_time - tax) + spent.saved
-        # What storing its value saves: that, less the calls inside it the
-        # cache now holds (stored, or served), plus the predicted time to
-        # restore their results -- what running the statement again costs
-        # once its calls are cached. ``b = shifted(a) + 1`` over a 0.2 s call
-        # costs the ``+ 1``: storing its value would keep a second copy of
-        # what the call's entry holds, to save that much.
-        store_cost = max(0.0, cost - spent.cached_compute) + spent.cached_restore
-        return StatementPrice(cost, store_cost, tax)
+        return statement_price(wall_time, spent)
 
     def files_read_in_cached_calls(self, marks: CashMarks) -> frozenset[str]:
         """Files and URLs the statement read only inside calls the cache holds."""

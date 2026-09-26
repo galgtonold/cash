@@ -62,7 +62,7 @@ from cash.notebook.call_refs import (
 )
 from cash.notebook.consumables import is_consumable_unrestorable
 from cash.object_hashing import estimate_object_size
-from cash.tracking.file_tracker import FileAccessTracker
+from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
@@ -197,6 +197,12 @@ class _Invocation:
     inner_restore_s: float = 0.0
     #: The same for this call itself, once it was served or stored.
     own: tuple[float, float] | None = None
+    #: What this call would have cost to compute: its run time on a miss,
+    #: its recorded cost on a hit, ``None`` when it ran plain. Kept per call:
+    #: a call run plain inside its wrapper must not take on the outcome of
+    #: a cached call made inside it.
+    compute: float | None = None
+    hit: bool = False
 
 
 @dataclasses.dataclass
@@ -329,21 +335,30 @@ class CallUnit:
         #: Per call site, how its calls went in the statement run under way
         #: (see :meth:`_entry_for`); emptied by :meth:`begin_statement`.
         self._site_runs: dict[CallSite, _SiteRun] = {}
-        #: What the call just made would have cost to compute: its run time on
-        #: a miss, its recorded cost on a hit, ``None`` when it ran plain.
-        self._last_compute: float | None = None
         #: Seconds this unit spent on calls beyond their own compute (keys,
         #: lookups, stores, restores), and the compute its hits stood in for.
         #: Monotonic; a statement reads the difference across its run (see
-        #: ``StatementProcessor._finish``).
+        #: ``CallRouting.price``). The overhead is that of calls made outside
+        #: every other call's run: one made inside a call that runs is part
+        #: of that call's measured time, which is what its entry records.
         self.overhead_s = 0.0
         self.hits_saved_s = 0.0
+        #: The run time of the calls that ran through the cache, outside every
+        #: other call's run, and the seconds the file tracker spent inside
+        #: those calls and the ones served. The tracker's seconds inside a
+        #: call are already in ``overhead_s`` or in the call's own time: a
+        #: statement does not take them off again. Monotonic.
+        self.computed_s = 0.0
+        self.tracking_in_calls_s = 0.0
+        #: How many calls are running their function right now (see
+        #: :meth:`_run_miss`); a call made while one is, is part of its time.
+        self._running = 0
         #: The compute of the calls the cache now holds -- a stored miss's
         #: run time, a hit's recorded cost -- and the predicted restore time
         #: of their results. What a statement's own work leaves out (see
-        #: ``CallRouting.store_cost``). Outermost calls only: a cached call's
+        #: ``CallRouting.price``). Outermost calls only: a cached call's
         #: compute already holds the calls made inside it. Monotonic, like
-        #: the two above.
+        #: those above.
         self.cached_compute_s = 0.0
         self.cached_restore_s = 0.0
         self._invocations: list[_Invocation] = []
@@ -351,7 +366,6 @@ class CallUnit:
         #: sequence number of its last such read (see :meth:`files_read_since`).
         self._cached_reads: dict[str, int] = {}
         self.reads_seq = 0
-        self._last_hit = False
         self._last_key_s: float | None = None
         self._invoked_keys: list[str | None] = []
         #: The source of the call the current statement is nothing but
@@ -463,13 +477,14 @@ class CallUnit:
                     )
                 self.last_returned = (None, id(result), site.source)
                 return result
-            self._last_compute = None
             self._last_key_s = None
-            self._last_hit = False
             # One slot per invocation: a call the callee makes through a
             # lambda it was handed runs its own `_invoke` inside this one.
             self._invoked_keys.append(None)
-            self._invocations.append(_Invocation())
+            invocation = _Invocation()
+            self._invocations.append(invocation)
+            outside = self._running == 0
+            tracked = tracking_seconds() if outside else 0.0
             started = _perf_counter()
             try:
                 result = invoke(*args, **kwargs)
@@ -479,17 +494,14 @@ class CallUnit:
             spent = _perf_counter() - started
             self.last_returned = (invoked_key, id(result), site.source)
             run.total_s += spent
-            if self._last_compute is not None:
-                if self._last_hit:
-                    self.overhead_s += spent
-                    self.hits_saved_s += self._last_compute
-                else:
-                    self.overhead_s += max(0.0, spent - self._last_compute)
+            compute = invocation.compute
+            if compute is not None:
+                self._add_to_clocks(invocation, spent, tracking_seconds() - tracked if outside else None)
             run.calls += 1
             if self._last_key_s is not None:
                 run.key_s += self._last_key_s
-            if self._last_compute is not None:
-                run.compute_s += self._last_compute
+            if compute is not None:
+                run.compute_s += compute
                 run.computed += 1
             if (
                 not run.decided
@@ -501,6 +513,32 @@ class CallUnit:
             return result
 
         return _entry
+
+    def _add_to_clocks(self, invocation: _Invocation, spent: float, tracked: float | None) -> None:
+        """Add a call that was served or ran through the cache to the
+        statement's clocks: *spent* seconds in all, *tracked* of them (or
+        ``None`` when it was made inside another call's run) recording reads.
+
+        A hit's compute is what it stood in for, however deep. The rest is
+        counted only for a call made outside every other call's run: one
+        made inside is part of that call's measured time."""
+        compute = invocation.compute or 0.0
+        if invocation.hit:
+            self.hits_saved_s += compute
+        if tracked is None:
+            return
+        self.tracking_in_calls_s += max(0.0, tracked)
+        if invocation.hit:
+            self.overhead_s += spent
+        else:
+            self.overhead_s += max(0.0, spent - compute)
+            self.computed_s += compute
+
+    def _outcome(self, compute: float, *, hit: bool) -> None:
+        """What the call under way would have cost to compute (see ``_Invocation.compute``)."""
+        if self._invocations:
+            self._invocations[-1].compute = compute
+            self._invocations[-1].hit = hit
 
     def _count_cached(self, invocation: _Invocation) -> None:
         """Add what *invocation* leaves in the cache to the call around it, or
@@ -622,9 +660,8 @@ class CallUnit:
         if not captured_globals:
             self._hold(call.key, value, metadata.get(DIGEST_FIELD), metadata.get(SIZE_FIELD))
         self._record(call.func_name, call.site, call.key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
-        self._last_compute = recorded_cost or 0.0
-        self._last_hit = True
-        self._cached(self._last_compute, value, reads)
+        self._outcome(recorded_cost or 0.0, hit=True)
+        self._cached(recorded_cost or 0.0, value, reads)
         self._entries.drop_if_hit_costs_more(call.key, _perf_counter() - hit_started, recorded_cost)
         return value
 
@@ -671,8 +708,12 @@ class CallUnit:
             getattr(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
-        with call_tracker:
-            result, stdout_text, stderr_text = call_capturing_output(call.fn, call.args, call.kwargs)
+        self._running += 1
+        try:
+            with call_tracker:
+                result, stdout_text, stderr_text = call_capturing_output(call.fn, call.args, call.kwargs)
+        finally:
+            self._running -= 1
         elapsed = _perf_counter() - started
         stored = False
         if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before):
@@ -686,7 +727,7 @@ class CallUnit:
                 frozenset(call_tracker.get_accessed_files()) | frozenset(call_tracker.get_accessed_remote_urls()),
             )
         self._record(call.func_name, call.site, call.key, cache_hit=False, elapsed=elapsed, stored=stored)
-        self._last_compute = elapsed
+        self._outcome(elapsed, hit=False)
         return result
 
     @staticmethod
