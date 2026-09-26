@@ -83,7 +83,8 @@ def test_control_user_code_that_cannot_be_hashed_still_warns(tmp_path):
 
 
 def test_a_built_in_module_is_judged_by_its_spec_not_its_name():
-    assert _io.__name__ != "_io", "premise: _io names itself io"
+    # Up to Python 3.11 _io names itself "io", which a name check would take for
+    # a module with no file of its own; 3.12 and later name it "_io".
     assert is_user_code_module(sys.modules["_io"]) is False
 
 
