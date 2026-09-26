@@ -26,7 +26,7 @@ import cash
 cash.stateful(pd.DataFrame.to_sql)  # pd is pandas
 ```
 
-<!-- claim: cash/purity.py:pure @f53a99f5, cash/purity.py:stateful @f86f4e92 -->
+<!-- claim: cash/purity.py:pure @26a3db86, cash/purity.py:stateful @afae9270 -->
 ::: cash.pure
 
 ::: cash.stateful

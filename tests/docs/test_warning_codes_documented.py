@@ -16,7 +16,12 @@ from cash.diagnostics import DIAGNOSTIC_CODES
 from cash.exceptions import CashWarning
 
 PAGE = Path(__file__).resolve().parents[2] / "docs" / "warnings.md"
-SECTION = re.compile(r"^## ([A-Z][A-Z-]+) \{#([a-z][a-z-]+)\}$", re.M)
+#: A code's own section: an H3 under its family's H2.
+SECTION = re.compile(r"^### ([A-Z][A-Z-]+) \{#([a-z][a-z-]+)\}$", re.M)
+#: A family: an H2 whose sections all share one prefix.
+FAMILY = re.compile(r"^## .+ \{#([a-z]+)-codes\}$", re.M)
+#: A row of a family's table of codes: ``| [CODE](#code) | path | meaning |``.
+INDEX_ROW = re.compile(r"^\| \[([A-Z][A-Z-]+)\]\(#([a-z-]+)\) \| (decorator|notebook|both) \| .+ \|$", re.M)
 REQUIRED = (
     "**What happened.**",
     "**Why it matters.**",
@@ -43,9 +48,51 @@ def test_every_anchor_is_the_lowercased_code(code):
 
 def test_every_section_answers_all_four_questions():
     text = PAGE.read_text("utf-8")
-    bodies = text.split("\n## ")[1:]
+    bodies = [b for b in re.split(r"\n#{2,3} ", text)[1:] if SECTION.match("### " + b)]
+    assert len(bodies) == len(documented_codes())
     missing = [(body.split(" ")[0], heading) for body in bodies for heading in REQUIRED if heading not in body]
     assert not missing, f"sections missing required headings: {missing}"
+
+
+def _families() -> dict[str, str]:
+    """Family prefix -> the text of that family's H2 section."""
+    text = PAGE.read_text("utf-8")
+    heads = list(FAMILY.finditer(text))
+    return {
+        m.group(1).upper(): text[m.end() : heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+        for i, m in enumerate(heads)
+    }
+
+
+def test_every_section_has_an_index_row_in_its_family():
+    """A code with a section but no row cannot be found by scanning the
+    tables, and a row in the wrong family sends the reader to the wrong part
+    of the page."""
+    families = _families()
+    assert families, "the page has no family sections"
+    missing = []
+    for code, anchor in documented_codes().items():
+        family = families.get(code.split("-")[0], "")
+        rows = {m.group(1): m.group(2) for m in INDEX_ROW.finditer(family)}
+        if rows.get(code) != anchor:
+            missing.append(code)
+    assert not missing, f"sections with no row in their family's table: {missing}"
+
+
+def test_every_index_row_has_a_section():
+    text = PAGE.read_text("utf-8")
+    rows = {m.group(1) for m in INDEX_ROW.finditer(text)}
+    orphaned = sorted(rows - set(documented_codes()))
+    assert not orphaned, f"index rows with no section: {orphaned}"
+
+
+def test_every_section_sits_in_its_own_family():
+    """A code's H3 lives under the H2 of its prefix, so the table of contents
+    groups it where a reader scanning by prefix looks for it."""
+    placed = [(prefix, code) for prefix, body in _families().items() for code, _ in SECTION.findall(body)]
+    assert len(placed) == len(documented_codes()), "some sections sit outside every family"
+    misplaced = [code for prefix, code in placed if code.split("-")[0] != prefix]
+    assert not misplaced, f"sections under the wrong family: {misplaced}"
 
 
 def test_every_registered_code_has_a_section():

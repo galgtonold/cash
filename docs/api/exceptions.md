@@ -71,8 +71,8 @@ CashWarning
 ```
 
 `CashNotebookDiscoveryWarning` is not importable from `cash`; filter it by its
-code, [`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found). The
-[Warnings index](../warnings.md#index) gives the class of every code.
+code, [`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found). Each
+code's section on [Warnings](../warnings.md#index) names its class.
 
 ::: cash.CashWarning
 

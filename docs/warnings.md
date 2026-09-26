@@ -1,96 +1,76 @@
+---
+search:
+  boost: 2
+---
+
 # Warnings
 
 !!! info "Applies to: both paths"
-    Every warning code cash emits, for `@cash.cache` users and notebook users. The index says which path each code comes from.
+    Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
 <!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @9c9e1bfe -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
-### Silencing one code
+## Silencing one code {#silencing-one-code}
 
 Filter on the code. The message always starts with it, so this silences one
 code and nothing else:
 
-    import warnings
-    warnings.filterwarnings("ignore", message=r"\[CACHE-THRASH\]")
+```python
+import warnings
+
+warnings.filterwarnings("ignore", message=r"\[CACHE-THRASH\]")
+```
 
 <!-- claim: cash/diagnostics.py:warn_diagnostic @af27ed90 -->
 Every warning also carries its code on `.code`, so a handler can test
 `w.message.code == "CACHE-THRASH"` instead of matching the wording. Filtering
-by class catches many codes at once (the index shows which); the class
-recipes are in [Exceptions and warnings](api/exceptions.md#filtering-warnings).
+by class catches many codes at once (each code's section names its class);
+the class recipes are in
+[Exceptions and warnings](api/exceptions.md#filtering-warnings).
 For a decorated function, `f.cache_info()["warnings"]` keeps the last twenty
 warnings it raised, in case one scrolled past.
 
-Where a section says to put `# @cash:assume-safe` on a line, that comment
-waives that one finding and keeps the rest of the function checked.
-`@cash.cache(assume_safe=True)` waives every finding in the function,
-including code added to it later.
+For the warnings about what a cached function does, two waivers act on the
+code instead of the message. Each of those codes ends with a **Silencing it**
+line that says which of them it honours.
 
-### Index
+- `# @cash:assume-safe` on a line waives that one finding and keeps the rest
+  of the function checked.
+- `@cash.cache(assume_safe=True)` waives every finding in the function,
+  including code added to it later.
 
-| Code | Applies to | Class | Meaning |
-|---|---|---|---|
-| [ANNOT-TTL-INVALID](#annot-ttl-invalid) | notebook | `CashCacheIneffectiveWarning` | `# @cash:ttl=` is not whole seconds; ignored |
-| [ANNOT-UNKNOWN-DIRECTIVE](#annot-unknown-directive) | both | `CashCacheIneffectiveWarning` | `# @cash:<name>` is not a directive; ignored |
-| [CACHE-ASYNC-GENERATOR](#cache-async-generator) | decorator | `CashCacheIneffectiveWarning` | async generators are not cached |
-| [CACHE-DIR-UNWRITABLE](#cache-dir-unwritable) | both | `CashCacheStoreFailedWarning` | the cache directory cannot be written |
-| [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | `CashCacheIneffectiveWarning` | the size cap had evicted a costly result, so it was computed again |
-| [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | `CashCacheIneffectiveWarning` | checking tracked files costs much of what a hit saves |
-| [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | `CashCacheIneffectiveWarning` | a live matplotlib figure is never stored |
-| [CACHE-IF-BYPASSED](#cache-if-bypassed) | decorator | `CashCacheIneffectiveWarning` | a chunked result was stored without running `cache_if` |
-| [CACHE-IF-RAISED](#cache-if-raised) | decorator | `CashCacheIneffectiveWarning` | the `cache_if` predicate raised |
-| [CACHE-LOOP-GROWTH](#cache-loop-growth) | notebook | `CashCacheIneffectiveWarning` | a loop stores every state of a growing value |
-| [CACHE-NET-LOSS](#cache-net-loss) | decorator | `CashCacheIneffectiveWarning` | caching this function costs more time than it saves |
-| [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | `CashCacheIneffectiveWarning` | a big, cheap value was not written to disk |
-| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | `CashImpurityWarning` | the result shares state with the caller's object |
-| [CACHE-THRASH](#cache-thrash) | both | `CashCacheIneffectiveWarning` | the cache is full and evicts what it just stored |
-| [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | `CashCacheIneffectiveWarning` | a value is bigger than the disk cap |
-| [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | `CashCacheStoreFailedWarning` | the process exited before its writes finished |
-| [CONFIG-FILE-MISSING](#config-file-missing) | both | `CashCacheIneffectiveWarning` | `Cash(config_path=...)` names a missing file |
-| [CONFIG-INVALID](#config-invalid) | both | `CashCacheIneffectiveWarning` | a setting or config file cash cannot use |
-| [CONFIG-TOML-UNREADABLE](#config-toml-unreadable) | both | `CashCacheIneffectiveWarning` | no TOML parser on Python 3.10 |
-| [CONFIG-UNKNOWN-KEY](#config-unknown-key) | both | `CashCacheIneffectiveWarning` | a config key that is not a setting |
-| [IMPURE-OBSERVED-EFFECTS](#impure-observed-effects) | decorator | `CashImpurityWarning` | the first call wrote, sent or changed something |
-| [IMPURE-SCOPE-MUTATION](#impure-scope-mutation) | decorator | `CashImpurityWarning` | the function rewrites a global it reads |
-| [IMPURE-SIDE-EFFECTS](#impure-side-effects) | decorator | `CashImpurityWarning` | the source has likely side effects |
-| [KEY-AMBIENT-READ](#key-ambient-read) | decorator | `CashImpurityWarning` | the body reads the clock or a fresh UUID |
-| [KEY-BOOL-STATE-TOKEN](#key-bool-state-token) | decorator | `CashCacheIneffectiveWarning` | `state_token()` returned a bool |
-| [KEY-BUILD-FAILED](#key-build-failed) | decorator | `CashCacheIneffectiveWarning` | building the key raised; the call ran uncached |
-| [KEY-CALLABLE-HASHER](#key-callable-hasher) | decorator | `CashCacheIneffectiveWarning` | a hasher registered for every function |
-| [KEY-DEPENDS-ON-OPAQUE](#key-depends-on-opaque) | decorator | `CashCacheIneffectiveWarning` | a `depends_on=` target has no source or bytecode to fingerprint |
-| [KEY-DYNAMIC-DEP-FAILED](#key-dynamic-dep-failed) | decorator | `CashCacheIneffectiveWarning` | a `dynamic_depends_on` resolver failed |
-| [KEY-DYNAMIC-DEPENDENCY](#key-dynamic-dependency) | decorator | `CashImpurityWarning` | code in an argument picks what it calls at run time |
-| [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | `CashImpurityWarning` | a `frozen=True` result was modified |
-| [KEY-FROZEN-NO-EFFECT](#key-frozen-no-effect) | decorator | `CashCacheIneffectiveWarning` | `frozen=True` cannot mark this result |
-| [KEY-INSTANCE-STATE](#key-instance-state) | decorator | `CashCacheIneffectiveWarning` | a bound method's instance cannot be hashed |
-| [KEY-NETWORK-READ](#key-network-read) | decorator | `CashImpurityWarning` | the body reads from a server or database |
-| [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | `CashImpurityWarning` | a callable's code cannot be hashed |
-| [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | `CashCacheIneffectiveWarning` | a code file changed after import |
-| [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | `CashCacheIneffectiveWarning` | an argument cannot be hashed; not cached |
-| [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | `CashCacheIneffectiveWarning` | a parameter default cannot be hashed; not cached |
-| [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | `CashImpurityWarning` | a global the function reads cannot be hashed |
-| [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | `CashCacheIneffectiveWarning` | an internal error; the cell ran uncached |
-| [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | `CashUpstreamSyntaxWarning` | an earlier cell does not parse |
-| [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | `CashWarning` | the notebook file is unknown; cross-cell tracking is off |
-| [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | `CashWarning` | a `plt.savefig` was not re-run |
-| [RANDOM-REPLAYED](#random-replayed) | notebook | `CashRandomnessWarning` | a restored value is an earlier random draw |
-| [RANDOM-SEED-NONE](#random-seed-none) | notebook | `CashRandomnessWarning` | `seed(None)` cannot refresh cached values |
-| [RANDOM-UNSEEDED](#random-unseeded) | both | `CashRandomnessWarning` | a draw from an unseeded source is not reproducible |
-| [REMOTE-FRESHNESS-COST](#remote-freshness-cost) | both | `CashCacheIneffectiveWarning` | checking remote files costs more than it protects |
-| [REMOTE-SIZE-ONLY](#remote-size-only) | both | `CashCacheIneffectiveWarning` | a remote file is tracked by size alone |
-| [REMOTE-STATE-UNREADABLE](#remote-state-unreadable) | both | `CashCacheIneffectiveWarning` | a remote file's state could not be read |
-| [STORE-CHUNK-FAILED](#store-chunk-failed) | decorator | `CashCacheStoreFailedWarning` | one chunk of an iterator failed to write |
-| [STORE-CODE-CHANGED](#store-code-changed) | decorator | `CashCacheStoreFailedWarning` | code changed on disk during the call; not stored |
-| [STORE-FAILED](#store-failed) | both | `CashCacheStoreFailedWarning` | the backend refused the write |
-| [STORE-INPUT-CHANGED](#store-input-changed) | decorator | `CashCacheStoreFailedWarning` | an input file changed during the call; not stored |
-| [STORE-LOCK-FAILED](#store-lock-failed) | decorator | `CashCacheIneffectiveWarning` | the per-key lock failed; ran without it |
-| [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | `CashCacheIneffectiveWarning` | a stored entry's metadata is unreadable |
+## Codes by family {#index}
 
-## ANNOT-TTL-INVALID {#annot-ttl-invalid}
+Codes share a prefix with the others of their kind. Each family below
+starts with a table of its codes; each code's section names its path and
+its warning class.
 
-*Notebook.*
+| Family | Prefix | Codes | What it reports |
+|---|---|---:|---|
+| [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
+| [Caching](#cache-codes) | `CACHE-` | 15 | Caching happened, or refused to, and it is worth saying. |
+| [Configuration](#config-codes) | `CONFIG-` | 4 | A setting cash found but could not act on. |
+| [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
+| [Cache keys](#key-codes) | `KEY-` | 16 | Something the result depends on may not be in the cache key. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 4 | Notebook-wide machinery rather than one statement. |
+| [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
+| [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
+| [Storing results](#store-codes) | `STORE-` | 6 | The call succeeded, but its result was not written. |
+
+## Annotations {#annot-codes}
+
+A `# @cash:` comment that cash could not honour. Every code here starts `ANNOT-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [ANNOT-TTL-INVALID](#annot-ttl-invalid) | notebook | `# @cash:ttl=` is not whole seconds; ignored |
+| [ANNOT-UNKNOWN-DIRECTIVE](#annot-unknown-directive) | both | `# @cash:<name>` is not a directive; ignored |
+
+### ANNOT-TTL-INVALID {#annot-ttl-invalid}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
 **What happened.** The value after `# @cash:ttl=` is not a whole number of
@@ -109,9 +89,9 @@ one directive per line: a second `# @cash:` on the same line is not read. See
 **When it is safe to ignore.** When cash already tracks what the value depends
 on (a file, a `DataSource`) and the TTL was only a backup.
 
-## ANNOT-UNKNOWN-DIRECTIVE {#annot-unknown-directive}
+### ANNOT-UNKNOWN-DIRECTIVE {#annot-unknown-directive}
 
-*Both paths: a notebook cell or a cached function's source.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/analysis/annotations.py:KNOWN_DIRECTIVES @91e03db7, cash/analysis/annotations.py:_warn_unknown_directive @24d9ef6e -->
 **What happened.** A comment starts `# @cash:` but the word after it is not a
@@ -128,9 +108,31 @@ misspelled `no-cache` means the statement is cached anyway.
 **When it is safe to ignore.** When the comment was never meant as a
 directive. Reword it so it does not start `# @cash:`.
 
-## CACHE-ASYNC-GENERATOR {#cache-async-generator}
+## Caching {#cache-codes}
 
-*Decorator.*
+Caching happened, or refused to, and it is worth saying. Every code here starts `CACHE-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [CACHE-ASYNC-GENERATOR](#cache-async-generator) | decorator | async generators are not cached |
+| [CACHE-CLEAR-INCOMPLETE](#cache-clear-incomplete) | decorator | `cache_clear()` could not remove some entries; they are still served |
+| [CACHE-DIR-UNWRITABLE](#cache-dir-unwritable) | both | the cache directory cannot be written |
+| [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | the size cap had evicted a costly result, so it was computed again |
+| [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | checking tracked files costs much of what a hit saves |
+| [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | a live matplotlib figure is never stored |
+| [CACHE-IF-BYPASSED](#cache-if-bypassed) | decorator | a chunked result was stored without running `cache_if` |
+| [CACHE-IF-RAISED](#cache-if-raised) | decorator | the `cache_if` predicate raised |
+| [CACHE-LOOP-GROWTH](#cache-loop-growth) | notebook | a loop stores every state of a growing value |
+| [CACHE-NET-LOSS](#cache-net-loss) | decorator | caching this function costs more time than it saves |
+| [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
+| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with the caller's object |
+| [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
+| [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
+| [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
+
+### CACHE-ASYNC-GENERATOR {#cache-async-generator}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/core.py:Cash.cache @2d082328 -->
 **What happened.** You put `@cash.cache` on an async generator (an
@@ -146,9 +148,9 @@ step inside the generator.
 **When it is safe to ignore.** When the generator is cheap and you do not
 need it cached.
 
-## CACHE-CLEAR-INCOMPLETE {#cache-clear-incomplete}
+### CACHE-CLEAR-INCOMPLETE {#cache-clear-incomplete}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/core.py:Cash._delete_backend_entries @b7c16174, cash/backends/file_eviction.py:FileEvictor.remove_path @ec89275a -->
 **What happened.** `f.cache_clear()` could not remove some of the function's
@@ -165,9 +167,9 @@ first. Close whatever holds the cache folder and clear again, or run
 **When it is safe to ignore.** Never when you cleared to get rid of a wrong
 result. For freeing space only, the entries go at the next clear.
 
-## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
+### CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @2d37cc7a -->
 **What happened.** Cash could not create a file in its cache directory: a
@@ -186,7 +188,8 @@ permission on the one named:
 
 <!-- test:skip reason="repoints the cache at a fixed absolute path; running it would send every later fence on this page to a directory that outlives the test" -->
 ```python
-cash.configure(cache_dir="/var/tmp/cash")   # or CASH_CACHE_DIR=... in the env
+# or set CASH_CACHE_DIR=/var/tmp/cash in the environment
+cash.configure(cache_dir="/var/tmp/cash")
 ```
 
 In a container, check the cache path is on a writable volume. On Windows,
@@ -195,9 +198,9 @@ use a shorter path or enable long paths (`LongPathsEnabled`).
 **When it is safe to ignore.** When the directory is read-only on purpose: a
 shared cache you only read from.
 
-## CACHE-EVICTED-RECOMPUTE {#cache-evicted-recompute}
+### CACHE-EVICTED-RECOMPUTE {#cache-evicted-recompute}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/backends/budget_notices.py:evicted_recompute_warning @0dd945bf, cash/effectiveness.py:CUMULATIVE_WASTE_SECONDS == 2.0, cash/decorator/reporting.py:Notices.evicted_recompute @94976b5e, cash/notebook/statement/evictions.py:EvictedRecomputes.attribute @c24d956b -->
 **What happened.** A result was stored on disk, then removed when the cache
@@ -220,9 +223,9 @@ per function or statement per process. Cheaper recomputes are not warned
 about, but `f.explain()`, the per-call log and a notebook badge still say
 "evicted to make room" for them.
 
-## CACHE-FRESHNESS-COST {#cache-freshness-cost}
+### CACHE-FRESHNESS-COST {#cache-freshness-cost}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps._warn_if_local_validation_is_expensive @ba7ad550, cash/remote_source.py:validation_is_expensive @18292cc6 -->
 **What happened.** Before serving a hit, cash checks every file the call read.
@@ -244,9 +247,9 @@ makes each check cheaper: files above it are sampled instead of hashed whole
 trade, such as half a second of checking against a five-minute job. It fires
 once per function per process.
 
-## CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
+### CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_coupled @9a87665b -->
 **What happened.** The function returned a live matplotlib `Figure` or `Axes`,
@@ -261,9 +264,9 @@ cache the part that computes the numbers, and draw in an uncached function.
 
 **When it is safe to ignore.** Almost always, when the function only draws.
 
-## CACHE-IF-BYPASSED {#cache-if-bypassed}
+### CACHE-IF-BYPASSED {#cache-if-bypassed}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/store.py:ResultStore._warn_cache_if_bypassed @e205ecf4 -->
 **What happened.** The function returned an iterator big enough to be stored
@@ -279,9 +282,9 @@ memory. If that is too big, gate the call before it runs instead.
 
 **When it is safe to ignore.** When the predicate only saved space.
 
-## CACHE-IF-RAISED {#cache-if-raised}
+### CACHE-IF-RAISED {#cache-if-raised}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/reporting.py:Notices.cache_if_raised @6298df6f -->
 **What happened.** Your `cache_if=` predicate raised when called with the
@@ -295,9 +298,9 @@ shape, for example `lambda r: r is not None and len(r) > 0`.
 
 **When it is safe to ignore.** When those results are cheap to recompute.
 
-## CACHE-LOOP-GROWTH {#cache-loop-growth}
+### CACHE-LOOP-GROWTH {#cache-loop-growth}
 
-*Notebook.*
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/notebook/statement/amplification.py:AmplificationGuard._warn @5193540b -->
 **What happened.** A statement in a loop stores a value that grows on each
@@ -314,9 +317,9 @@ are still cached per call.
 **When it is safe to ignore.** It is not urgent: the extra writing has already
 stopped. A new kernel re-runs the loop from where storing stopped.
 
-## CACHE-NET-LOSS {#cache-net-loss}
+### CACHE-NET-LOSS {#cache-net-loss}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/effectiveness.py:CUMULATIVE_WASTE_SECONDS == 2.0 -->
 **What happened.** Cash times what it spends on each call (building the key,
@@ -330,7 +333,7 @@ is a large argument, such as a big DataFrame, being hashed on every call.
 The check also runs at exit, so a script that calls each function once is
 covered, and several small losers are named together.
 
-<!-- claim: cash/core.py:Cash.register_hasher @f48a324b -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
 **What to do.** If a cached function produced the argument and nothing
 changes it afterwards, mark the producer `@cash.cache(frozen=True)`: the
 argument is then keyed by the call that made it. Otherwise register a cheap
@@ -339,14 +342,19 @@ dataframe types this needs `override=True`, and what it returns becomes the
 value's whole identity. If neither fits, remove the decorator. See
 [`frozen=` and large arguments](decorator.md#frozen-and-large-arguments).
 
-    cash.register_hasher(pd.DataFrame, lambda df: df.attrs["version"], override=True)
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+cash.register_hasher(
+    pd.DataFrame, lambda df: df.attrs["version"], override=True
+)
+```
 
 **When it is safe to ignore.** When speed is not why you cache, for example to
 avoid a paid API call or to hold a result steady.
 
-## CACHE-NOT-WORTH-BYTES {#cache-not-worth-bytes}
+### CACHE-NOT-WORTH-BYTES {#cache-not-worth-bytes}
 
-*Notebook.*
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/store_notices.py:StoreNotices.not_worth_bytes @bac7fc82 -->
 **What happened.** A value over 8 MiB was cheap enough to rebuild that storing
@@ -365,9 +373,9 @@ smaller: the aggregate or the columns you use.
 **When it is safe to ignore.** Usually. Act on it when the message names a
 recompute time you can feel on every restart.
 
-## CACHE-RESULT-SHARED {#cache-result-shared}
+### CACHE-RESULT-SHARED {#cache-result-shared}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @aabac7c2 -->
 **What happened.** The result shares state with an object the caller still
@@ -382,12 +390,15 @@ later runs.
 **What to do.** Return a value of its own: `.copy()`, `list(...)`,
 `dict(...)`. If the sharing is the point, do not cache the function.
 
-**When it is safe to ignore.** When callers only read the result. Pass
-`assume_safe=True` to record that.
+**When it is safe to ignore.** When callers only read the result.
 
-## CACHE-THRASH {#cache-thrash}
+**Silencing it.** Whole function: `@cash.cache(assume_safe=True)`. No line
+carries this finding, so `# @cash:assume-safe` does not apply. See [Silencing
+one code](#silencing-one-code).
 
-*Both paths.*
+### CACHE-THRASH {#cache-thrash}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.warn_thrash @9c41f109 -->
 **What happened.** The cache is at its size cap and evicts entries within a
@@ -402,9 +413,9 @@ smaller values, or move `cache_dir` to a bigger volume.
 
 **When it is safe to ignore.** Never: it always costs time.
 
-## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
+### CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/file_backend.py:FileBackend.promotion_size_cap @ef38a34e -->
 **What happened.** One value, serialized, is bigger than every disk tier's
@@ -421,9 +432,9 @@ something smaller.
 **When it is safe to ignore.** When you did not need that value cached. For a
 decorated function, `f.cache_info()` shows whether you get any hits.
 
-## CACHE-WRITE-ABANDONED {#cache-write-abandoned}
+### CACHE-WRITE-ABANDONED {#cache-write-abandoned}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/config.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
 **What happened.** At exit, cash waited for its background writes (60 s by
@@ -445,9 +456,20 @@ CASH_SHUTDOWN_WRITE_TIMEOUT=300 python nightly_job.py
 **When it is safe to ignore.** A one-off after writing an unusually large
 result. If it fires every run, those entries are never stored.
 
-## CONFIG-FILE-MISSING {#config-file-missing}
+## Configuration {#config-codes}
 
-*Both paths.*
+A setting cash found but could not act on. Every code here starts `CONFIG-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [CONFIG-FILE-MISSING](#config-file-missing) | both | `Cash(config_path=...)` names a missing file |
+| [CONFIG-INVALID](#config-invalid) | both | a setting or config file cash cannot use |
+| [CONFIG-TOML-UNREADABLE](#config-toml-unreadable) | both | no TOML parser on Python 3.10 |
+| [CONFIG-UNKNOWN-KEY](#config-unknown-key) | both | a config key that is not a setting |
+
+### CONFIG-FILE-MISSING {#config-file-missing}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/config.py:_resolve_config @21f63b6a -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
@@ -470,9 +492,9 @@ app = cash.Cash(config_path=Path(__file__).parent / "cash.toml")
 **When it is safe to ignore.** When the file is optional. Then check for it
 before passing it.
 
-## CONFIG-INVALID {#config-invalid}
+### CONFIG-INVALID {#config-invalid}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
 **What happened.** Cash could not use part of its configuration:
@@ -497,9 +519,9 @@ then check with `cash info`.
 **When it is safe to ignore.** When the default is what you want. Then delete
 the line.
 
-## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
+### CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/config.py:_load_toml_config @9d135d5c, cash/config.py:_warn_toml_unreadable @b0598e4e -->
 **What happened.** Cash found a config file with a `[tool.cash]` or `[cash]`
@@ -514,18 +536,19 @@ through `CASH_*` environment variables, or use Python 3.11 or newer.
 **When it is safe to ignore.** When that file is not meant for this
 environment.
 
-## CONFIG-UNKNOWN-KEY {#config-unknown-key}
+### CONFIG-UNKNOWN-KEY {#config-unknown-key}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_unknown_key @87165926 -->
 **What happened.** A `[tool.cash]` table, a `[cash]` table or a
 `CASH_TIER_<N>_*` variable sets a key that is not a cash setting. The message
 names the closest real setting:
 
-```text
-[CONFIG-UNKNOWN-KEY] …/pyproject.toml sets `max_cache_siz`, which is not a cash
-setting, so it does nothing. Did you mean `max_cache_size`?
+```text title="Output"
+[CONFIG-UNKNOWN-KEY] …/pyproject.toml sets `max_cache_siz`,
+which is not a cash setting, so it does nothing. Did you mean
+`max_cache_size`?
 ```
 
 Plain `CASH_*` variables that are not settings are not reported, because
@@ -539,9 +562,19 @@ effect and where it came from.
 
 **When it is safe to ignore.** Never for long: the key does nothing.
 
-## IMPURE-OBSERVED-EFFECTS {#impure-observed-effects}
+## Side effects {#impure-codes}
 
-*Decorator.*
+The function does something a cache hit will not repeat. Every code here starts `IMPURE-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [IMPURE-OBSERVED-EFFECTS](#impure-observed-effects) | decorator | the first call wrote, sent or changed something |
+| [IMPURE-SCOPE-MUTATION](#impure-scope-mutation) | decorator | the function rewrites a global it reads |
+| [IMPURE-SIDE-EFFECTS](#impure-side-effects) | decorator | the source has likely side effects |
+
+### IMPURE-OBSERVED-EFFECTS {#impure-observed-effects}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 **What happened.** Cash watched the first (missing) call and saw it reach
 outside its return value: a `file write`, a `subprocess`, or an `argument
@@ -568,9 +601,14 @@ file, a temp file), put `# @cash:assume-safe` on the line the message names.
 reads back. Only the path this call took was watched, so an empty report does
 not prove the function is pure.
 
-## IMPURE-SCOPE-MUTATION {#impure-scope-mutation}
+**Silencing it.** Per line: `# @cash:assume-safe` on the line the message
+names (an argument mutation names no line). Whole function:
+`@cash.cache(assume_safe=True)`. See [Silencing one
+code](#silencing-one-code).
 
-*Decorator.*
+### IMPURE-SCOPE-MUTATION {#impure-scope-mutation}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @6045b36f -->
 **What happened.** The function reads a module global or captured variable,
@@ -588,15 +626,17 @@ elsewhere no longer invalidates the entry.
 updating shared state is the function's job, cache only the expensive part.
 
 **When it is safe to ignore.** When the variable is the function's own memo,
-or a log you are happy for a hit to skip. Put `# @cash:assume-safe` on the
-line that changes it. `assume_safe=True` on the decorator does not silence
-this code; filter it by code if you must.
+or a log you are happy for a hit to skip.
 
-## IMPURE-SIDE-EFFECTS {#impure-side-effects}
+**Silencing it.** Per line: `# @cash:assume-safe` on the line the message
+names. `assume_safe=True` on the decorator does not silence this code; filter
+it by code if you must. See [Silencing one code](#silencing-one-code).
 
-*Decorator.*
+### IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4 -->
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662 -->
 **What happened.** Before the first call, cash read the source of the
 function and its helpers and found shapes that make a cached result doubtful.
 Each finding has a line number and a label:
@@ -626,9 +666,12 @@ not invalidate the entry.
 **What to do.** Fix the findings that are real. For each line you have checked
 and accept, add `# @cash:assume-safe`:
 
-    def build_report(rows):
-        print(f"building {len(rows)} rows")  # @cash:assume-safe
-        return summarise(rows)
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+def build_report(rows):
+    print(f"building {len(rows)} rows")  # @cash:assume-safe
+    return summarise(rows)
+```
 
 On the `def` line, the comment waives findings about the whole body. A line
 that changes an argument in place is better fixed than waived: return a
@@ -642,9 +685,36 @@ not once per process. A run whose warning filters ignore it, or turn it into
 an error, does not count as having shown it, so a CI job that fails on it
 fails on every run.
 
-## KEY-AMBIENT-READ {#key-ambient-read}
+**Silencing it.** Per line: `# @cash:assume-safe`. Whole function:
+`@cash.cache(assume_safe=True)`. See [Silencing one
+code](#silencing-one-code).
 
-*Decorator.*
+## Cache keys {#key-codes}
+
+Something the result depends on may not be in the cache key. Every code here starts `KEY-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [KEY-AMBIENT-READ](#key-ambient-read) | decorator | the body reads the clock or a fresh UUID |
+| [KEY-BOOL-STATE-TOKEN](#key-bool-state-token) | decorator | `state_token()` returned a bool |
+| [KEY-BUILD-FAILED](#key-build-failed) | decorator | building the key raised; the call ran uncached |
+| [KEY-CALLABLE-HASHER](#key-callable-hasher) | decorator | a hasher registered for every function |
+| [KEY-DEPENDS-ON-OPAQUE](#key-depends-on-opaque) | decorator | a `depends_on=` target has no source or bytecode to fingerprint |
+| [KEY-DYNAMIC-DEP-FAILED](#key-dynamic-dep-failed) | decorator | a `dynamic_depends_on` resolver failed |
+| [KEY-DYNAMIC-DEPENDENCY](#key-dynamic-dependency) | decorator | code in an argument picks what it calls at run time |
+| [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | a `frozen=True` result was modified |
+| [KEY-FROZEN-NO-EFFECT](#key-frozen-no-effect) | decorator | `frozen=True` cannot mark this result |
+| [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
+| [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
+| [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
+| [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
+| [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
+| [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
+| [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
+
+### KEY-AMBIENT-READ {#key-ambient-read}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/effects.py:MODULE_CALLS @7f115c19, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @23325da1 -->
 <!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @81835f7e, cash/effects.py:_canonical_names @e0692d46 -->
@@ -674,8 +744,9 @@ from datetime import date
 
 import cash
 
+# as_of is an argument, so it is in the key
 @cash.cache
-def report(rows, as_of):        # as_of is an argument, so it is in the key
+def report(rows, as_of):
     return sum(rows), as_of
 
 report([1, 2, 3], as_of=date.today())
@@ -684,12 +755,15 @@ report([1, 2, 3], as_of=date.today())
 For an environment variable, write its name out.
 
 **When it is safe to ignore.** When freezing the value is the point, such as
-a timestamp of when the result was computed. Put `# @cash:assume-safe` on the
-line.
+a timestamp of when the result was computed.
 
-## KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
+**Silencing it.** Per line: `# @cash:assume-safe`. Whole function:
+`@cash.cache(assume_safe=True)`. See [Silencing one
+code](#silencing-one-code).
 
-*Decorator.*
+### KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/data_source.py:state_token_of @914de552 -->
 **What happened.** Your `DataSource.state_token()` returned `True` or
@@ -704,9 +778,9 @@ digest, an mtime, an ETag. See [Data sources](api/data_sources.md).
 **When it is safe to ignore.** Never, if the source can change while your
 program runs.
 
-## KEY-BUILD-FAILED {#key-build-failed}
+### KEY-BUILD-FAILED {#key-build-failed}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
 **What happened.** Something raised while cash built the cache key. The
@@ -722,11 +796,11 @@ with the traceback.
 **When it is safe to ignore.** When the function is cheap enough to run every
 time.
 
-## KEY-CALLABLE-HASHER {#key-callable-hasher}
+### KEY-CALLABLE-HASHER {#key-callable-hasher}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.register_hasher @f48a324b -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
 **What happened.** You registered a hasher for `types.FunctionType`,
 `types.MethodType` or `functools.partial`. The registration took effect.
 
@@ -742,9 +816,9 @@ captured values too.
 **When it is safe to ignore.** When your hasher already returns everything that
 tells two such functions apart.
 
-## KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
+### KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/registry.py:FunctionRegistry._register_declared_callable_dep @cdef7cb8, cash/decorator/registry.py:warn_inert_dependency @6242cef6 -->
 **What happened.** A callable in `depends_on=` has no source and no Python
@@ -761,9 +835,9 @@ version as an argument, or use a `DataSource` whose token is the build id.
 **When it is safe to ignore.** Usually: a stdlib or pinned third-party builtin,
 such as `depends_on=[math.sqrt]`, will not change between runs.
 
-## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
+### KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @44d428bd -->
 **What happened.** A `dynamic_depends_on=` resolver raised, or returned
@@ -779,9 +853,9 @@ no dependency.
 **When it is safe to ignore.** When the function is cheap. If the dependency
 no longer changes, remove `dynamic_depends_on=`.
 
-## KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
+### KEY-DYNAMIC-DEPENDENCY {#key-dynamic-dependency}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @477865a2 -->
 **What happened.** An object you passed to a cached function carries code, and
@@ -797,11 +871,15 @@ function's own body raises `CashImpureFunctionError` instead.)
 candidates with `depends_on=[...]`.
 
 **When it is safe to ignore.** When the functions it can pick never change.
-Put `# @cash:assume-safe` on the line.
 
-## KEY-FROZEN-MUTATED {#key-frozen-mutated}
+**Silencing it.** Per line: `# @cash:assume-safe` on the line the message
+names. `assume_safe=True` on the decorator does not silence this code, because
+the line is in an argument's code, not the function's. See [Silencing one
+code](#silencing-one-code).
 
-*Decorator.*
+### KEY-FROZEN-MUTATED {#key-frozen-mutated}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/frozen.py:FrozenResults.audit @0786c6c6 -->
 **What happened.** A function marked `@cash.cache(frozen=True)` promised its
@@ -817,9 +895,12 @@ remove `frozen=True` or modify a copy.
 
 **When it is safe to ignore.** Never.
 
-## KEY-FROZEN-NO-EFFECT {#key-frozen-no-effect}
+**Silencing it.** Neither `# @cash:assume-safe` nor `assume_safe=True`
+silences this code. See [Silencing one code](#silencing-one-code).
 
-*Decorator.*
+### KEY-FROZEN-NO-EFFECT {#key-frozen-no-effect}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 **What happened.** A `frozen=True` function returned a value cash cannot mark:
 a `set`, or an object that takes no new attributes (`__slots__`, many C
@@ -833,9 +914,9 @@ object that takes attributes. Or remove `frozen=True`.
 
 **When it is safe to ignore.** When the result is small.
 
-## KEY-INSTANCE-STATE {#key-instance-state}
+### KEY-INSTANCE-STATE {#key-instance-state}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @29550361 -->
 **What happened.** You cached a bound method (`c.cache(obj.method)`) and the
@@ -847,15 +928,18 @@ recomputes.
 **What to do.** Register a hasher for the class that returns what the result
 depends on:
 
-    cash.register_hasher(Config, lambda c: c.fingerprint)
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+cash.register_hasher(Config, lambda c: c.fingerprint)
+```
 
 **When it is safe to ignore.** In a long-running process with one instance.
 
-## KEY-NETWORK-READ {#key-network-read}
+### KEY-NETWORK-READ {#key-network-read}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @7f115c19 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @7f115c19 -->
 <!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -888,12 +972,15 @@ A `ttl=` silences this warning. Under `strict=True` the call raises unless a
 `ttl=` is set.
 
 **When it is safe to ignore.** When the answer never changes for the arguments
-you pass, such as a fetch by pinned version. Put `# @cash:assume-safe` on the
-line.
+you pass, such as a fetch by pinned version.
 
-## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
+**Silencing it.** Per line: `# @cash:assume-safe`. Whole function:
+`@cash.cache(assume_safe=True)`, or a `ttl=`. See [Silencing one
+code](#silencing-one-code).
 
-*Decorator.*
+### KEY-OPAQUE-CALLABLE {#key-opaque-callable}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/code_args.py:is_user_code_carrier @c7843ce8, cash/decorator/code_identity.py:is_user_module @8bcf4264 -->
 **What happened.** A function, class or object from your own code reached a
@@ -912,9 +999,13 @@ this code for every object of that type.
 **When it is safe to ignore.** For a bound method of a compiled library object
 like `re.compile(p).match`: it cannot change under you.
 
-## KEY-SOURCE-CHANGED {#key-source-changed}
+**Silencing it.** Neither `# @cash:assume-safe` nor `assume_safe=True`
+silences this code; `cash.opaque(TheType)` does. See [Silencing one
+code](#silencing-one-code).
 
-*Decorator.*
+### KEY-SOURCE-CHANGED {#key-source-changed}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
 <!-- claim: cash/source_norm.py:_pyc_proves_unchanged @5d0686e2 -->
@@ -939,9 +1030,9 @@ entry.
 **When it is safe to ignore.** Always, for correctness. Look into it if you
 did not expect the file to change.
 
-## KEY-UNHASHABLE-ARG {#key-unhashable-arg}
+### KEY-UNHASHABLE-ARG {#key-unhashable-arg}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
 **What happened.** An argument could not be hashed, so no key could be built.
@@ -954,7 +1045,10 @@ is served.
 **What to do.** Register a hasher for the type, or pass something hashable in
 its place (a connection string, not a connection):
 
-    cash.register_hasher(DatabaseSession, lambda s: s.database_url)
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+cash.register_hasher(DatabaseSession, lambda s: s.database_url)
+```
 
 For a closure, `lambda` or `functools.partial`, pass a module-level function
 and give the captured values as arguments
@@ -962,9 +1056,9 @@ and give the captured values as arguments
 
 **When it is safe to ignore.** When you do not need that call cached.
 
-## KEY-UNHASHABLE-DEFAULT {#key-unhashable-default}
+### KEY-UNHASHABLE-DEFAULT {#key-unhashable-default}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @ea302891 -->
 **What happened.** A parameter default of the function, or of a helper it
@@ -980,9 +1074,9 @@ is the classic case.
 
 **When it is safe to ignore.** When you do not need the function cached.
 
-## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
+### KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63 -->
 **What happened.** The function (or a helper) reads a module global that
@@ -997,9 +1091,24 @@ register a hasher for its type.
 **When it is safe to ignore.** When the global is set once at import and never
 changed: a client, a logger, a compiled pattern.
 
-## NOTEBOOK-BAILOUT {#notebook-bailout}
+**Silencing it.** Per line: `# @cash:assume-safe` on the line that reads the
+global. `assume_safe=True` on the decorator does not silence this code; filter
+it by code if you must. See [Silencing one code](#silencing-one-code).
 
-*Notebook.*
+## Notebook {#notebook-codes}
+
+Notebook-wide machinery rather than one statement. Every code here starts `NOTEBOOK-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
+| [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
+| [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+
+### NOTEBOOK-BAILOUT {#notebook-bailout}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 **What happened.** Cash hit an internal error while processing the cell,
 stepped aside, and let IPython run it normally. The message names the
@@ -1014,9 +1123,9 @@ Restarting the kernel often clears it.
 **When it is safe to ignore.** When it happens once. If it repeats on the same
 cell, that cell is never cached.
 
-## NOTEBOOK-CELL-SYNTAX {#notebook-cell-syntax}
+### NOTEBOOK-CELL-SYNTAX {#notebook-cell-syntax}
 
-*Notebook.*
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashUpstreamSyntaxWarning</span>
 
 <!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._warn_broken_upstream_cells @6ebee167 -->
 **What happened.** An earlier cell in the notebook has a syntax error. The
@@ -1031,9 +1140,9 @@ If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
 
-## NOTEBOOK-NOT-FOUND {#notebook-not-found}
+### NOTEBOOK-NOT-FOUND {#notebook-not-found}
 
-*Notebook.*
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
 <!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @f1dad161 -->
 **What happened.** Cash could not find which notebook file this kernel runs,
@@ -1050,9 +1159,9 @@ notebook.
 **When it is safe to ignore.** In a run that executes the notebook top to
 bottom once. It is shown once per session.
 
-## NOTEBOOK-SAVEFIG-SKIP {#notebook-savefig-skip}
+### NOTEBOOK-SAVEFIG-SKIP {#notebook-savefig-skip}
 
-*Notebook.*
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
 <!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._warn_orphaned_figure_write @9973d398 -->
 **What happened.** While re-running earlier statements, cash skipped a
@@ -1065,16 +1174,29 @@ over your chart.
 **What to do.** To rewrite the image, re-run the cell that draws the plot. To
 avoid this, save through the figure object:
 
-    fig, ax = plt.subplots()
-    ax.plot(xs, ys)
-    fig.savefig("chart.png")
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+fig, ax = plt.subplots()
+ax.plot(xs, ys)
+fig.savefig("chart.png")
+```
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
 
-## RANDOM-REPLAYED {#random-replayed}
+## Randomness {#random-codes}
 
-*Notebook.*
+A cached value that randomness makes non-reproducible. Every code here starts `RANDOM-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
+| [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
+| [RANDOM-UNSEEDED](#random-unseeded) | both | a draw from an unseeded source is not reproducible |
+
+### RANDOM-REPLAYED {#random-replayed}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
 
 <!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663 -->
 **What happened.** A restored value came from an unseeded random source (a
@@ -1091,9 +1213,9 @@ keep it frozen on purpose, add `# @cash:allow-random`.
 **When it is safe to ignore.** When holding the value steady is why you cached
 it. Not when you are measuring how much a result varies.
 
-## RANDOM-SEED-NONE {#random-seed-none}
+### RANDOM-SEED-NONE {#random-seed-none}
 
-*Notebook.*
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
 
 <!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_entropy_reseed @23925b73 -->
 **What happened.** A statement called `seed(None)` (`np.random.seed(None)`,
@@ -1110,9 +1232,9 @@ reproducible, seed with a fixed number instead.
 
 **When it is safe to ignore.** When nothing cached depends on that stream.
 
-## RANDOM-UNSEEDED {#random-unseeded}
+### RANDOM-UNSEEDED {#random-unseeded}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
 
 **What happened.** A statement or a cached function draws from an unseeded
 random source.
@@ -1150,9 +1272,19 @@ do not cache the function.
 split, a demo, a smoke test. Not when the number goes into a report or a test
 assertion.
 
-## REMOTE-FRESHNESS-COST {#remote-freshness-cost}
+## Remote files {#remote-codes}
 
-*Both paths.*
+Checking whether a remote file changed. Every code here starts `REMOTE-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [REMOTE-FRESHNESS-COST](#remote-freshness-cost) | both | checking remote files costs more than it protects |
+| [REMOTE-SIZE-ONLY](#remote-size-only) | both | a remote file is tracked by size alone |
+| [REMOTE-STATE-UNREADABLE](#remote-state-unreadable) | both | a remote file's state could not be read |
+
+### REMOTE-FRESHNESS-COST {#remote-freshness-cost}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/remote_source.py:VALIDATION_WARN_RATIO == 0.5, cash/remote_source.py:VALIDATION_WARN_FLOOR_SECONDS == 0.25, cash/remote_source.py:VALIDATION_WARN_ABSOLUTE_SECONDS == 2.0 -->
 **What happened.** Checking whether remote files (`s3://`, `gs://`,
@@ -1171,9 +1303,9 @@ for that long.
 **When it is safe to ignore.** When the object can change and a stale answer
 would hurt: then the check is what you pay for.
 
-## REMOTE-SIZE-ONLY {#remote-size-only}
+### REMOTE-SIZE-ONLY {#remote-size-only}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/remote_source.py:_warn_weak_token @d860c31b -->
 **What happened.** The store gave no ETag, version id or last-modified time
@@ -1193,9 +1325,9 @@ rewritten in place. For a prefix or a glob, such as a folder of dated
 partitions, the objects' names are tracked too, so a new or removed partition
 still changes the key.
 
-## REMOTE-STATE-UNREADABLE {#remote-state-unreadable}
+### REMOTE-STATE-UNREADABLE {#remote-state-unreadable}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @bc945f69 -->
 **What happened.** Reading a remote file's state failed. The message names
@@ -1220,9 +1352,22 @@ a profile to avoid that.
 
 **When it is safe to ignore.** For a short blip on a cheap function.
 
-## STORE-CHUNK-FAILED {#store-chunk-failed}
+## Storing results {#store-codes}
 
-*Decorator.*
+The call succeeded, but its result was not written. Every code here starts `STORE-`.
+
+| Code | Applies to | Meaning |
+|---|---|---|
+| [STORE-CHUNK-FAILED](#store-chunk-failed) | decorator | one chunk of an iterator failed to write |
+| [STORE-CODE-CHANGED](#store-code-changed) | decorator | code changed on disk during the call; not stored |
+| [STORE-FAILED](#store-failed) | both | the backend refused the write |
+| [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
+| [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
+| [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
+
+### STORE-CHUNK-FAILED {#store-chunk-failed}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2 -->
@@ -1238,9 +1383,9 @@ permissions, or an item that cannot be serialized.
 **When it is safe to ignore.** Not for long: the function recomputes on every
 call.
 
-## STORE-CODE-CHANGED {#store-code-changed}
+### STORE-CODE-CHANGED {#store-code-changed}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @34c666d8, cash/decorator/registry.py:FunctionRegistry.code_functions @031ca888 -->
 **What happened.** A file holding the function, a helper, or a cached function
@@ -1255,9 +1400,9 @@ something is replacing files under a running job, such as a deploy.
 
 **When it is safe to ignore.** Once, while you edit a helper during a run.
 
-## STORE-FAILED {#store-failed}
+### STORE-FAILED {#store-failed}
 
-*Both paths.*
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/store.py:ResultStore.store @cc2d1ab2 -->
 **What happened.** The result was computed, but writing it to the cache
@@ -1273,9 +1418,9 @@ handle), or on Windows a file held open by another process.
 
 **When it is safe to ignore.** A one-off on a cheap function.
 
-## STORE-INPUT-CHANGED {#store-input-changed}
+### STORE-INPUT-CHANGED {#store-input-changed}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @5b620397, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @a2ece8d1 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @7622ec96 -->
@@ -1293,18 +1438,18 @@ from the write:
 ```python
 @cash.cache
 def summarise(path):
-    return build_summary(pd.read_csv(path))      # reads only
+    return build_summary(pd.read_csv(path))  # reads only
 
 summary = summarise("state.csv")
-summary.to_csv("state.csv")                      # the write happens outside
+summary.to_csv("state.csv")  # the write happens outside
 ```
 
 **When it is safe to ignore.** When another process was writing the file and
 has finished.
 
-## STORE-LOCK-FAILED {#store-lock-failed}
+### STORE-LOCK-FAILED {#store-lock-failed}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483 -->
 **What happened.** Cash could not take the per-key lock that stops two
@@ -1318,9 +1463,9 @@ disk, or a filesystem where locking does not work.
 
 **When it is safe to ignore.** When nothing runs concurrently.
 
-## STORE-METADATA-INVALID {#store-metadata-invalid}
+### STORE-METADATA-INVALID {#store-metadata-invalid}
 
-*Decorator.*
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/reporting.py:Notices.metadata_invalid @4b14c4a0 -->
 **What happened.** Cash found an entry but could not read its metadata, so it
@@ -1334,3 +1479,14 @@ interrupted write.
 
 **When it is safe to ignore.** Usually. Look into it if it persists after
 `cache_clear()`.
+
+## Related
+
+- [Exceptions and warnings](api/exceptions.md): the warning classes, and
+  filtering many codes at once by class.
+- [Seeing what cash did](how-it-works/inspecting.md): `explain()` and the
+  other ways to ask why a call hit or missed.
+- [Annotations](annotations.md): `# @cash:assume-safe` and the other
+  `# @cash:` directives.
+- [Configuration](getting-started/configuration.md): the settings the
+  `CONFIG-` codes are about.
