@@ -12,8 +12,10 @@ the determinism test the guide warns about passed on broken code; under
 ``CASH_DISABLE`` / ``CASH_CACHE_DIR`` in the environment reached them.
 
 Each case runs a real script in a fresh interpreter, so the pool starts from
-a parent in the state a user's program is in. Executions are counted with
-``os.write`` to a file, which a cache hit cannot replay.
+a parent in the state a user's program is in. Each execution creates a file
+of its own, which a cache hit cannot replay; appending a byte to one shared
+file lost a count on Windows, where two workers' appends can land on the same
+offset.
 """
 
 from __future__ import annotations
@@ -37,17 +39,13 @@ _SCRIPT = textwrap.dedent("""
 
 
     def runs():
-        try:
-            return os.path.getsize(os.environ["COUNTER"])
-        except FileNotFoundError:
-            return 0
+        return len(os.listdir(os.environ["COUNTER"]))
 
 
     @cash.cache(assume_safe=True)
     def draw(n):
-        fd = os.open(os.environ["COUNTER"], os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-        os.write(fd, b"x")
-        os.close(fd)
+        name = os.path.join(os.environ["COUNTER"], os.urandom(8).hex())
+        os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
         time.sleep(0.15)                      # past the persistence floor
         return os.urandom(8).hex()            # the bug under test: n is ignored
 
@@ -110,10 +108,11 @@ _SCRIPT = textwrap.dedent("""
 def _run(tmp_path, method, kind, scenario, **env_extra):
     script = tmp_path / "job.py"
     script.write_text(_SCRIPT, encoding="utf-8")
+    (tmp_path / "runs").mkdir()
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env.update(
         CASH_CACHE_DIR=str(tmp_path / ".cash"),
-        COUNTER=str(tmp_path / "runs.bin"),
+        COUNTER=str(tmp_path / "runs"),
         OTHER_DIR=str(tmp_path / "other-cache"),
         PYTHONDONTWRITEBYTECODE="1",
     )
