@@ -42,6 +42,8 @@ Skip it for:
 - Results that depend on something cash cannot see, such as a table in a
   database, unless you give them a `ttl` or an explicit dependency.
 
+<span id="cash-vs-the-alternatives-youve-tried"></span>
+
 ## Compared with other tools
 
 ✓ yes, ~ partly (the numbered note under the table says how far), ✗ no.
