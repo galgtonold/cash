@@ -98,6 +98,14 @@ time. See [What gets cached](notebook_caching_api.md#what-gets-cached).
 `no-cache` also gives a random draw a fresh value each run; see
 [Randomness](known-limitations.md#randomness).
 
+`no-cache` acts only on the runs that carry it and deletes nothing. If the
+statement was cached before you added it, removing the directive brings that
+stored value back, which is intended: the statement is cached again, and a
+value already stored is used. To replace the stored value, run the statement
+once with `# @cash:ttl=0`, which treats it as expired and computes it afresh,
+or clear the notebook's entries with
+[`cash clear --function notebook`](cli.md#cash-clear-path-all).
+
 ### `# @cash:ttl=N`
 
 The stored result expires `N` seconds after it was written; the next run
