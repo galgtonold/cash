@@ -269,12 +269,17 @@
 
 /* ─── Mermaid diagrams ───────────────────────────────────────────────── *
  * Material renders each diagram into a closed shadow root, so no rule here
- * reaches the SVG itself; colours come from the --md-mermaid-* tokens above. */
+ * reaches the SVG itself; colours come from the --md-mermaid-* tokens above.
+ * A wide diagram scaled down to the column became unreadable (5px labels on
+ * a phone). docs/javascripts/mermaid-sizing.js gives each SVG a minimum
+ * width of min(its natural width, 560px); a diagram wider than the column
+ * scrolls sideways here instead of shrinking below that. */
 
 .md-typeset .mermaid {
   background: var(--cash-bg);
   text-align: center;
   margin: 1em 0;
+  overflow-x: auto;
 }
 
 /* ─── Why Cash? page blocks ──────────────────────────────────────────── *

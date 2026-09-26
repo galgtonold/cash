@@ -72,6 +72,7 @@ extra_css:
 
 extra_javascript:
   - javascripts/badge-iframe-resize.js
+  - javascripts/mermaid-sizing.js
   - javascripts/why-cash-matrix.js
   - javascripts/invalidation-playground.js
   - javascripts/cacheability-checker.js
