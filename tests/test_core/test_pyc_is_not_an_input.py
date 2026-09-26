@@ -29,26 +29,30 @@ import cash
 
 @cash.cache
 def load(n):
-    print("[RUN] load", file=sys.stderr)  # @cash:assume-safe
+    sys.stderr.write("[RUN] load\\n")  # @cash:assume-safe
     time.sleep(0.15)  # @cash:assume-safe
     return list(range(n))
 
 
 @cash.cache
 def f(n):
-    print("[RUN] f", file=sys.stderr)  # @cash:assume-safe
+    sys.stderr.write("[RUN] f\\n")  # @cash:assume-safe
     time.sleep(0.15)  # @cash:assume-safe
     return sum(load(n))
 
 
 @cash.cache
 def g(n):
-    print("[RUN] g", file=sys.stderr)  # @cash:assume-safe
+    sys.stderr.write("[RUN] g\\n")  # @cash:assume-safe
     time.sleep(0.15)  # @cash:assume-safe
     return len(load(n)) + 1  # G_BODY
 """
 
 MAIN = "import mod\nprint(mod.f(200_000), mod.g(200_000))\n"
+
+# Each marker goes out in one write. CASH_DEBUG logs to stderr from the
+# background writer too, and print() writes the text and the newline apart,
+# so a log line could land between them: "[RUN] gcash.storage: ...".
 
 
 def _run(proj):
