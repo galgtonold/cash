@@ -9,9 +9,17 @@ KEY-OPAQUE-CALLABLE about ``lock.acquire`` and ``lock.release``.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.timeout(90),
+    # ipykernel watches its output descriptors only on Linux and macOS, so a
+    # Windows kernel never holds the lock this test is about.
+    pytest.mark.skipif(sys.platform == "win32", reason="ipykernel watches output descriptors only on Linux and macOS"),
+]
 
 _SETUP = (
     "import logging, warnings\n"
