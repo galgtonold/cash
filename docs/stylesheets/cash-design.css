@@ -862,3 +862,15 @@ a.cash-cta-card:hover {
 iframe.cash-badge {
   color-scheme: light;
 }
+
+/* ─── Warnings page chips ────────────────────────────────────────────── *
+ * Each warning code on the Warnings page carries the path it comes from and
+ * its warning class. mkdocs_hooks.py adds the path's .cash-path modifier to
+ * the path chip, so it matches the chip under each page's H1. */
+.md-typeset .md-tag.cash-warning-class {
+  font-family: var(--cash-font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--cash-ink-2);
+  background: var(--cash-bg-section);
+}

@@ -48,6 +48,10 @@ rely on it); the site shows it as a small path chip under the H1, with the
 audience line beside it. On the home page it is dropped, and on the Project
 pages only the audience line stays: "both paths" tells those readers nothing.
 
+The Warnings page marks each code with the path it comes from
+(``<span class="md-tag cash-warning-path">notebook</span>``); the same
+``cash-path--<path>`` class as the chip is added, so the two look alike.
+
 Printed output
 --------------
 A code block titled ``Output`` (```` ```text title="Output" ````) is what a
@@ -95,6 +99,9 @@ _APPLIES_BOX = re.compile(
     re.MULTILINE,
 )
 _PATH_LABELS = {"decorator": "Decorator", "notebook": "Notebook", "both paths": "Both paths"}
+
+# The path tag of a code on the Warnings page.
+_WARNING_PATH_TAG = re.compile(r'<span class="md-tag cash-warning-path">(?P<path>decorator|notebook|both paths)</span>')
 
 # A titled code block whose title starts with "Output".
 _OUTPUT_BLOCK = re.compile(r'<div class="(?P<cls>[^"]*\bhighlight\b[^"]*)"><span class="filename">Output\b')
@@ -151,6 +158,17 @@ def mark_output_blocks(html: str) -> str:
     """Give code blocks titled "Output" the ``cash-output`` and ``no-copy`` classes."""
     return _OUTPUT_BLOCK.sub(
         lambda m: f'<div class="{m.group("cls")} cash-output no-copy"><span class="filename">Output', html
+    )
+
+
+def mark_warning_paths(html: str) -> str:
+    """Give each Warnings-page path tag the chip class of its path."""
+    return _WARNING_PATH_TAG.sub(
+        lambda m: (
+            f'<span class="md-tag cash-warning-path cash-path '
+            f'cash-path--{m.group("path").replace(" ", "-")}">{m.group("path")}</span>'
+        ),
+        html,
     )
 
 
@@ -238,5 +256,5 @@ def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:
 
 
 def on_post_page(output: str, *, page, config, **kwargs) -> str:
-    """mkdocs hook: fix badge iframe paths and mark output blocks."""
-    return mark_output_blocks(rewrite_badge_paths(output, page.url))
+    """mkdocs hook: fix badge iframe paths, mark output blocks and path tags."""
+    return mark_warning_paths(mark_output_blocks(rewrite_badge_paths(output, page.url)))

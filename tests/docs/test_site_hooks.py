@@ -98,6 +98,14 @@ def test_output_blocks_lose_the_copy_button():
     assert '<div class="language-python highlight"><span class="filename">demo.py</span>' in out
 
 
+def test_warning_path_tags_get_the_chip_class():
+    html = '<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">X</span>'
+    assert hooks.mark_warning_paths(html) == (
+        '<span class="md-tag cash-warning-path cash-path cash-path--both-paths">both paths</span> '
+        '<span class="md-tag cash-warning-class">X</span>'
+    )
+
+
 # --- Repository files -----------------------------------------------------------
 
 

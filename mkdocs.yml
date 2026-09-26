@@ -53,9 +53,11 @@ copyright: cash is released under the <a href="https://github.com/galgtonold/cas
 exclude_docs: |
   superpowers/
 
-# Build-time fixes. badge_paths rewrites root-absolute /_badges/ iframe srcs to
-# page-relative URLs so they resolve under Read the Docs' /en/<version>/ prefix,
-# and the docnum markers (<!-- docnum:... -->) are stripped, keeping the value.
+# Build-time fixes, each described in mkdocs_hooks.py: badge iframe paths made
+# page-relative, docnum markers and "# test:inject:" lines stripped, the
+# "Applies to" box turned into a path chip under the H1, printed-output
+# blocks and Warnings-page path tags marked for their own look, repository
+# files included (<!-- include: CHANGELOG.md -->) and nav cross-links added.
 hooks:
   - mkdocs_hooks.py
 
