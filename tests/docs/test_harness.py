@@ -91,6 +91,34 @@ def test_run_page_surfaces_exec_errors_with_location():
         broken.unlink()
 
 
+def test_run_page_puts_logging_back(tmp_path):
+    """A page's ``basicConfig``, handlers and levels are process-wide, and
+    stayed for every later test on the worker."""
+    import logging
+
+    from tests.docs._harness import run_page
+
+    page = tmp_path / "page_that_logs.md"
+    page.write_text(
+        "# Logs\n\n```python\nimport logging, sys\n"
+        "logging.basicConfig(level=logging.DEBUG, stream=sys.stdout, force=True)\n"
+        'logging.getLogger("cash-test-page-new").addHandler(logging.StreamHandler(sys.stdout))\n'
+        'logging.getLogger("cash-test-page-old").setLevel(logging.DEBUG)\n'
+        'logging.getLogger("cash-test-page-old").propagate = False\n'
+        "logging.disable(logging.INFO)\n```\n",
+        encoding="utf-8",
+    )
+    root, old = logging.getLogger(), logging.getLogger("cash-test-page-old")
+    before = (root.handlers[:], root.level, old.level, old.propagate, logging.root.manager.disable)
+
+    result = run_page(page)
+
+    assert result.tested_fences == 1
+    assert "cash-test-page-new" in logging.root.manager.loggerDict, "the page did not run"
+    assert (root.handlers, root.level, old.level, old.propagate, logging.root.manager.disable) == before
+    assert logging.getLogger("cash-test-page-new").handlers == []
+
+
 def test_infer_claims_finds_cached_functions():
     from tests.docs._harness import infer_claims
 

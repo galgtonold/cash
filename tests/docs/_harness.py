@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import linecache
+import logging
 import operator
 import os
 import re
@@ -548,6 +550,49 @@ def _strip_magic_lines(source: str) -> str:
     return "".join(out)
 
 
+@contextlib.contextmanager
+def logging_restored():
+    """Put the process's logging back as it was once the page has run.
+
+    A page may call ``logging.basicConfig``, add a handler or set a level, and
+    all of that is process-wide: it stayed for every later test on the worker.
+    Restored for the root logger and every logger that existed before: its
+    handlers, filters, level, ``propagate`` and ``disabled``, and
+    ``logging.disable``. A logger the page created loses the handlers the page
+    gave it (a library's ``NullHandler`` stays). Handlers the page made are
+    closed, so a file handler does not stay open.
+    """
+    manager = logging.root.manager
+    loggers = [logging.root, *(lg for lg in manager.loggerDict.values() if isinstance(lg, logging.Logger))]
+    saved = [(lg, lg.handlers[:], lg.filters[:], lg.level, lg.propagate, lg.disabled) for lg in loggers]
+    known = {id(lg) for lg in loggers}
+    handlers_before = {id(h) for lg in loggers for h in lg.handlers}
+    disable = manager.disable
+    try:
+        yield
+    finally:
+        made: list[logging.Handler] = []
+        for lg in list(manager.loggerDict.values()):
+            if isinstance(lg, logging.Logger) and id(lg) not in known:
+                added = [
+                    h for h in lg.handlers if id(h) not in handlers_before and not isinstance(h, logging.NullHandler)
+                ]
+                for h in added:
+                    lg.removeHandler(h)
+                made.extend(added)
+        for lg, handlers, filters, level, propagate, disabled in saved:
+            made.extend(h for h in lg.handlers if id(h) not in handlers_before)
+            lg.handlers[:] = handlers
+            lg.filters[:] = filters
+            lg.propagate = propagate
+            lg.disabled = disabled
+            lg.setLevel(level)
+        logging.disable(disable)
+        for h in {id(h): h for h in made}.values():
+            with contextlib.suppress(Exception):
+                h.close()
+
+
 def run_page(
     md_path: Path,
     namespace_overrides: dict[str, Any] | None = None,
@@ -561,7 +606,19 @@ def run_page(
     fences or fences whose first non-empty, non-comment line is a magic
     command (``%foo`` or ``%%foo``). Set ``use_ipy=False`` to force the
     plain ``exec()`` path; ``use_ipy=True`` forces the IPython path.
+
+    Logging is put back afterwards (`logging_restored`).
     """
+    with logging_restored():
+        return _run_page(md_path, namespace_overrides, strict_claims, use_ipy)
+
+
+def _run_page(
+    md_path: Path,
+    namespace_overrides: dict[str, Any] | None,
+    strict_claims: bool,
+    use_ipy: "str | bool",
+) -> PageResult:
     fences = extract_fences(md_path)
 
     if use_ipy == "auto":

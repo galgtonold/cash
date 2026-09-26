@@ -7,23 +7,8 @@ import logging
 import os
 import sys
 
-import pytest
-
 from cash import _log
 from cash._log import JsonFormatter, setup_logging
-
-
-@pytest.fixture(autouse=True)
-def _restore_cash_logger():
-    """Leave the ``cash`` logger and cash's record of its handlers as found."""
-    cash_logger = logging.getLogger("cash")
-    handlers, level = list(cash_logger.handlers), cash_logger.level
-    own, level_set = list(_log._OWN_HANDLERS), _log._LEVEL_SET
-    yield
-    cash_logger.handlers[:] = handlers
-    cash_logger.setLevel(level)
-    _log._OWN_HANDLERS[:] = own
-    _log._LEVEL_SET = level_set
 
 
 class TestJsonFormatter:

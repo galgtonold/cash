@@ -6,6 +6,7 @@ with proper isolation between tests.
 """
 
 import itertools
+import logging
 import os
 import shutil
 import sys
@@ -397,6 +398,36 @@ def _main_module_put_back():
     yield
     if sys.modules.get("__main__") is not _MAIN:
         sys.modules["__main__"] = _MAIN
+
+
+@pytest.fixture(autouse=True)
+def _cash_logger_put_back():
+    """Leave the ``cash`` logger, and cash's record of its own handlers, as
+    the test found them.
+
+    ``Cash(debug=True)``, ``cash.configure(debug=True)`` or ``verbose=True``
+    give the ``cash`` logger a level and a ``StreamHandler`` on the
+    ``sys.stderr`` of that moment, which under pytest is the test's capture
+    file. Both outlived the test: cash's debug lines went to a dead capture
+    for the rest of the worker, and a later test that passed a logger to a
+    cached function reached that handler. Handlers the test added are closed.
+    """
+    cash_logger = logging.getLogger("cash")
+    handlers, level, propagate = cash_logger.handlers[:], cash_logger.level, cash_logger.propagate
+    log_module = sys.modules.get("cash._log")
+    own = list(log_module._OWN_HANDLERS) if log_module else []
+    level_set = log_module._LEVEL_SET if log_module else None
+    yield
+    for handler in cash_logger.handlers:
+        if handler not in handlers:
+            handler.close()
+    cash_logger.handlers[:] = handlers
+    cash_logger.setLevel(level)
+    cash_logger.propagate = propagate
+    log_module = sys.modules.get("cash._log")
+    if log_module is not None:
+        log_module._OWN_HANDLERS[:] = own
+        log_module._LEVEL_SET = level_set
 
 
 # ---------------------------------------------------------------------------
