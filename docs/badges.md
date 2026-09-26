@@ -23,10 +23,11 @@ was not stored, why.
 
 ## Anatomy
 
-In this cell the upstream `df` and `features` came from the cache and `preds`
-ran again, because its input changed:
+In this cell `df`, from an earlier cell, and `features` came from the cache,
+and `preds` ran again because its input changed. The badge is shown open here,
+with its parts numbered as in the list below; in a notebook it starts closed.
 
-<iframe class="cash-badge" src="/_badges/anatomy_hero.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: a CACHED cell, opened, parts numbered" src="/_badges/anatomy_open.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 <!-- claim: cash/notebook/badge_renderer/view_builder.py:_compute_stats @f3f0282b, cash/notebook/badge_renderer/view_builder.py:_overhead_section @4ab027d7 -->
 1. **Header.** The cell's status (`CACHED` here), total time and **net** saving,
@@ -70,17 +71,19 @@ The header's counters (`EXEC`, `NOT CACHED`, `CACHED`, `WARN`) count rows, so
 came from the cache. [`%cash_status`](magics.md#cash_status) reports the same
 states by their enum names: `COMPUTED` for EXECUTED and `RESTORED` for CACHED.
 
-<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: CACHED" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<p class="cash-badge-caption">Click a badge to open it.</p>
 
-<iframe class="cash-badge" src="/_badges/status_skipped.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: EXECUTED" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: SKIPPED" src="/_badges/status_skipped.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<iframe class="cash-badge" src="/_badges/status_warning.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: MIXED loop" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<iframe class="cash-badge" src="/_badges/status_error.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: WARNING" src="/_badges/status_warning.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+<iframe class="cash-badge" title="cash badge example: ERROR" src="/_badges/status_error.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 ### Randomness pills
 
@@ -95,14 +98,14 @@ redrawn. The text badge shows the same pills as `[seed]`, `[random]` and
 
 ### First time seeing this code
 
-<iframe class="cash-badge" src="/_badges/miss_first_time.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: first time seeing this code" src="/_badges/miss_first_time.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 Cash has no entry for this statement yet. Any edit to a statement gives it a new
 key. The next run with the same code shows `CACHED`.
 
 ### Input lineage changed
 
-<iframe class="cash-badge" src="/_badges/miss_input_lineage.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: input lineage changed" src="/_badges/miss_input_lineage.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 A variable this statement reads (`features` here) was produced by a different
 run than last time. If the upstream statement ran again, everything that reads
@@ -119,7 +122,7 @@ reads or the function's own code.
 
 ### File changed
 
-<iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: file changed" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 A file the statement read (through `pd.read_csv`, `np.load`, `open` and the
@@ -141,14 +144,14 @@ cap and how to raise it.
 
 ### Function source changed
 
-<iframe class="cash-badge" src="/_badges/miss_function_source_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: function source changed" src="/_badges/miss_function_source_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 A function the statement calls, directly or through other functions, was
 edited. The `FUNCTION_CHANGED` upstream row names it (`score_rows` here).
 
 ### Module reloaded
 
-<iframe class="cash-badge" src="/_badges/miss_module_reloaded.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: module reloaded" src="/_badges/miss_module_reloaded.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 A local `.py` module you import was edited, and cash reloaded it in your kernel
 (plain Jupyter needs `%autoreload` for that). Only statements that use code that
@@ -168,7 +171,7 @@ reason.
 
 ### Side effects
 
-<iframe class="cash-badge" src="/_badges/not_cached_side_effect.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: NOT CACHED, side effect" src="/_badges/not_cached_side_effect.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 <!-- claim: cash/notebook/badge_renderer/view_builder.py:map_status @b33b69ae -->
 A cache hit would skip the effect, so cash runs the statement every time. The
@@ -186,7 +189,7 @@ runs a search, mark it [`# @cash:assume-safe`](annotations.md#cashassume-safe).
 
 ### In-place mutation
 
-<iframe class="cash-badge" src="/_badges/not_cached_mutation.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: NOT CACHED, in-place mutation" src="/_badges/not_cached_mutation.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 The statement changes an object made in an earlier cell (`out.append(...)`,
 `d[k] = v`, `df.sort_values(inplace=True)`) instead of producing a new value.

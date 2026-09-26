@@ -117,8 +117,52 @@ def main() -> int:
         doc = _wrap_standalone(badge_html, title=name)
         (args.out / f"{name}.html").write_text(doc, encoding="utf-8")
         print(f"wrote {name}.html ({len(doc):,} bytes)")
+        if name == "anatomy_hero":
+            open_doc = _wrap_standalone(_numbered_open(badge_html), title="anatomy_open")
+            (args.out / "anatomy_open.html").write_text(open_doc, encoding="utf-8")
+            print(f"wrote anatomy_open.html ({len(open_doc):,} bytes)")
 
     return 0
+
+
+# The "Anatomy" section of docs/badges.md explains the badge part by part in a
+# numbered list. ``anatomy_open`` is the anatomy_hero badge rendered open, with
+# the same numbers on the parts. Each entry is (markup, what follows it, marker
+# number): the marker goes in right after the markup, where it is followed by
+# the given text. Keep the numbers in step with that list.
+_ANATOMY_MARKERS = (
+    ('<summary class="c3-summary">', "", 1),
+    ('<div class="c3-upstream-head-cell">', "", 2),
+    ('<div class="c3-section">', "CURRENT CELL", 3),
+    ('<pre class="c3-code">', "preds = ", 5),
+    ('<div class="c3-section">', "DECORATOR CACHE", 4),
+    ('<div class="c3-ovh-cell">', "", 6),
+    ('report incorrect caching behaviour">', "", 7),
+)
+
+_ANATOMY_MARKER_CSS = (
+    "<style>.anat-n{display:inline-flex;align-items:center;justify-content:center;"
+    "box-sizing:border-box;min-width:16px;height:16px;padding:0 4px;margin-right:6px;"
+    "border-radius:8px;background:#2f5bd3;color:#fff;font:600 10px/1 system-ui,sans-serif;"
+    "vertical-align:middle;flex:0 0 auto;white-space:nowrap}</style>"
+)
+
+
+def _numbered_open(badge_html: str) -> str:
+    """The badge with its panel open and a numbered marker on each part."""
+    opened = badge_html.replace('<details class="c3-card"', '<details class="c3-card" open', 1)
+    if opened == badge_html:
+        raise SystemExit('anatomy_open: no <details class="c3-card"> to open')
+    pos = 0
+    for markup, followed_by, number in _ANATOMY_MARKERS:
+        # In document order: 5 (a row of CURRENT CELL) comes before header 4.
+        at = opened.find(markup + followed_by, pos)
+        if at < 0:
+            raise SystemExit(f"anatomy_open: marker {number}: {markup + followed_by!r} not found; the markup changed")
+        end = at + len(markup)
+        opened = opened[:end] + f'<span class="anat-n">{number}</span>' + opened[end:]
+        pos = end
+    return _ANATOMY_MARKER_CSS + opened
 
 
 # A standalone HTML wrapper that:

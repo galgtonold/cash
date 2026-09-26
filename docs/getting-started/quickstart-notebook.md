@@ -36,14 +36,16 @@ df = pd.read_csv("large_dataset.csv")
 On the first run the load runs, and the badge above the output says
 `EXECUTED`:
 
-<iframe class="cash-badge" src="/_badges/quickstart_first_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: first run, EXECUTED" src="/_badges/quickstart_first_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+<p class="cash-badge-caption">Click a badge to open it.</p>
 
 ## 3. Run it again
 
 Now the badge says `CACHED`: cash restored `df` instead of reading the file
 again.
 
-<iframe class="cash-badge" src="/_badges/quickstart_second_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: second run, CACHED" src="/_badges/quickstart_second_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 From here on:
 

@@ -66,7 +66,9 @@ result = daily.rolling(7).mean()   # edit: only this runs again
 
 Every cell shows a [badge](badges.md) with one row per statement:
 
-<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: CACHED" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+<p class="cash-badge-caption">Click a badge to open it.</p>
 
 ## What gets cached
 

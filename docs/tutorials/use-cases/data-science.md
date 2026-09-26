@@ -30,9 +30,11 @@ print(f"Customers: {len(customers)}, Transactions: {len(transactions)}")
 ```
 
 Cash tracks both files. Change `customers.csv` and the statements that read it
-run again, and the badge names the file:
+run again. Open the badge and the row names the file:
 
-<iframe class="cash-badge" src="/_badges/miss_file_changed_customers.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: customers.csv changed" src="/_badges/miss_file_changed_customers.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+<p class="cash-badge-caption">Click a badge to open it.</p>
 
 ### Cell 3: clean
 
@@ -114,7 +116,7 @@ notebook again:
 - In cell 4 the `groupby` is `CACHED`; only the merge runs.
 - Cells 5 and 6 run, because `df` changed.
 
-<iframe class="cash-badge" src="/_badges/workflows_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: the notebook after one changed line" src="/_badges/workflows_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 The loads and the aggregation, the slow part, cost nothing on this run.
 
