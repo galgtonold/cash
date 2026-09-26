@@ -833,6 +833,21 @@ a.cash-cta-card:hover {
   overflow-wrap: anywhere;
 }
 
+/* ─── Read the Docs version box ──────────────────────────────────────── *
+ * The version box Read the Docs adds is fixed to the bottom-right corner.
+ * On a phone or tablet it sat on top of code, diagrams and search results,
+ * so it is hidden there (the version is in the URL). On a desktop the table
+ * of contents gets room at its end, so its last entry can scroll clear of
+ * the box. */
+@media screen and (max-width: 76.2344em) {
+  readthedocs-flyout {
+    display: none !important;
+  }
+}
+.md-sidebar--secondary .md-sidebar__inner {
+  padding-bottom: 4rem;
+}
+
 /* ─── Badge example frames ───────────────────────────────────────────── *
  * The badge examples are light cards, as a notebook shows them. In dark
  * mode the page's color-scheme is dark; a frame whose document is light
