@@ -16,12 +16,16 @@ its own terms, so this section explains them separately.
   it reads: a fingerprint of how each variable was produced.
 
 ```mermaid
-flowchart LR
-    D["<code>@cash.cache</code> call"] --> DK["Decorator key<br/>function : state : dynamic : args"]
-    N["Notebook statement<br/>under <code>%cash_on</code>"] --> NK["Statement key<br/>source + input lineages"]
-    DK --> SH["Shared parts<br/>value hashers · effect rules · file freshness"]
-    NK --> SH
-    SH --> B[("Cache backend<br/>RAM tier, then disk tier")]
+flowchart TB
+    D["@cash.cache call"]
+    N["Notebook statement"]
+    DK["Decorator key:<br/>function, state,<br/>dynamic, args"]
+    NK["Statement key:<br/>source,<br/>input lineages"]
+    SH["Shared: hashers,<br/>effect rules,<br/>file checks"]
+    B[("Backend:<br/>RAM, then disk")]
+    D --> DK --> SH
+    N --> NK --> SH
+    SH --> B
 ```
 
 ## What the two engines share

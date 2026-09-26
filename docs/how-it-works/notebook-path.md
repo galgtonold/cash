@@ -9,6 +9,26 @@ stored result or runs it and stores what it produced.
 
 ## What happens when you run a cell
 
+```mermaid
+flowchart TB
+    A["Run a cell"]
+    U["Upstream check:<br/>restore or re-run<br/>cells above"]
+    S{"Safe to cache<br/>the statement?"}
+    K{"Stored and<br/>still fresh?"}
+    R1["Run it,<br/>store nothing"]
+    H["Restore variables,<br/>replay output"]
+    R2["Run it, store<br/>if worth it"]
+    BD["One badge row<br/>per statement"]
+    A --> U --> S
+    S -->|No| R1
+    S -->|Yes| K
+    K -->|Yes| H
+    K -->|No| R2
+    R1 --> BD
+    H --> BD
+    R2 --> BD
+```
+
 <!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @2561f548, cash/notebook/statement/processor.py:StatementProcessor.process_statement @04870aa4 -->
 1. **Inputs.** Cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above

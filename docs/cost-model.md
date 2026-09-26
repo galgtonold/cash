@@ -144,7 +144,25 @@ tier in front, and mark values you would rather not fetch remotely
 ## How the decision is made
 
 <!-- claim: cash/cost_model.py:_TYPE_TO_FAMILY @674b9d86, cash/cost_model.py:resolve_family @91ef972a, cash/cost_model.py:_resolve_backend @d6308bba, cash/cost_model.py:_KNOWN_BACKENDS @3f31251c -->
-Three checks run in order:
+A statement that took 10 ms or more goes through three checks in order:
+
+```mermaid
+flowchart TB
+    A["Statement took<br/>10 ms or more"]
+    M{"Quick to read<br/>back from memory?"}
+    D{"Over 0.1 s, and<br/>disk read-back 20%<br/>faster than compute?"}
+    W{"At most 128 MiB<br/>per second saved?"}
+    N0["Not stored"]
+    RAM["Memory only"]
+    DISK["Memory and disk"]
+    A --> M
+    M -->|No| N0
+    M -->|Yes| D
+    D -->|No| RAM
+    D -->|Yes| W
+    W -->|No| RAM
+    W -->|Yes| DISK
+```
 
 1. **Store it at all?** Cash predicts how long reading the value back from the
    first tier (memory, by default) would take, and refuses when that exceeds

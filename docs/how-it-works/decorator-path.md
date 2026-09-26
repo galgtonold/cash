@@ -8,19 +8,20 @@ Every call to a decorated function takes the same route:
 ```mermaid
 flowchart TD
     A["Call f(args)"] --> B{"Key built?"}
-    B -->|"No: unhashable argument or default, or the key build failed"| W["Warn, run uncached"]
+    B -->|No| W["Warn, run uncached"]
     B -->|Yes| C{"Entry stored?"}
-    C -->|No| D["Run the body, store the result"]
+    C -->|No| D["Run the body,<br/>store the result"]
     C -->|Yes| E{"ttl expired?"}
     E -->|Yes| D
-    E -->|No| F{"Files it read unchanged?"}
+    E -->|No| F{"Files it read<br/>unchanged?"}
     F -->|No| D
-    F -->|Yes| G["Return the stored value"]
+    F -->|Yes| G["Return the<br/>stored value"]
 ```
 
-The rest of this page explains each box. For the parameters (`ttl=`,
-`file_depends_on=`, `depends_on=`, `assume_safe=` and the rest), see the
-[decorator guide](../decorator.md).
+The rest of this page explains each box, and
+[when there is no key](#when-there-is-no-key) lists why a key can fail to
+build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
+`assume_safe=` and the rest), see the [decorator guide](../decorator.md).
 
 ## The key
 
