@@ -19,6 +19,7 @@ from cash.config import (
     CashConfig,
     TierConfig,
     _load_toml_layer,
+    _tier_key_docs,
     create_default_config,
 )
 
@@ -68,6 +69,17 @@ def test_the_template_carries_the_field_docs_and_every_layer(tmp_path):
     # The disk cap's docstring, which says how the disk tier really evicts.
     assert "(GDSF)" in text
     assert "LRU eviction" not in text
+
+
+def test_every_tier_key_is_described_in_the_docstring_and_the_template(tmp_path):
+    """TierConfig's Attributes section is the one description of each key:
+    the API reference renders it and the template copies it."""
+    docs = _tier_key_docs()
+    assert list(docs) == [f.name for f in fields(TierConfig)]
+    assert all(docs.values())
+    text = open(create_default_config(str(tmp_path / "c.toml")), encoding="utf-8").read()
+    assert "#   region: s3 tier: AWS region" in text
+    assert "#   wal_mode: sqlite tier: accepted but not used" in text
 
 
 def test_an_existing_file_is_kept_unless_forced(tmp_path):

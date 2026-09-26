@@ -116,12 +116,26 @@ plugins:
             signature_crossrefs: true
             # Preserve source order so we don't shuffle related methods.
             members_order: source
-            # Use the table layout for Args/Returns/Raises — denser than
-            # the spaced list layout.
-            docstring_section_style: table
+            # Parameters, returns and raises as a list: a name, its type and
+            # the description under it. The table layout squeezed the Type
+            # column to four or five lines, and on a phone the Description
+            # column sat off-screen.
+            docstring_section_style: list
             # Members default to one level under the class/function, so
             # H2 class -> H3 method renders naturally.
             heading_level: 2
+            # Wrap long signatures at 60 characters, one parameter per line,
+            # instead of one line that runs off the right edge. Formatting
+            # needs ruff (or black) installed, so ruff is in the docs extra.
+            line_length: 60
+            # One signature for an overloaded function, not one per overload.
+            show_overloads: false
+            # The constructor's parameters belong to the class: no separate
+            # __init__ entry, and no private or dunder members.
+            merge_init_into_class: true
+            filters: ["!^_"]
+            # No "class-attribute instance-attribute" chips on every field.
+            show_labels: false
 
 markdown_extensions:
   - pymdownx.highlight:

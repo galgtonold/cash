@@ -133,71 +133,71 @@ class TierConfig:
     comes from the top-level setting of the same meaning (``cache_dir``,
     ``max_cache_size``, ``redis_host``, ...). Set tiers in a config file
     (``[[tool.cash.tiers]]``) or with ``CASH_TIER_<N>_<KEY>`` variables.
+
+    Attributes:
+        type: Backend type: ``"memory"``, ``"file"``, ``"sqlite"``,
+            ``"redis"`` or ``"s3"``.
+        max_size_bytes: memory, file and sqlite tiers: size cap in bytes
+            (or a size such as ``"2GB"``). In a tiered stack, a value
+            bigger than this skips the tier. Unset, a memory tier is sized
+            to the machine and a file or sqlite tier uses
+            ``max_cache_size``.
+        default_ttl: file and sqlite tiers: TTL in seconds for entries
+            stored without one. A ``ttl=`` on the decorator takes
+            precedence.
+        max_entries: memory tier: entry-count cap. Defaults to
+            ``max_memory_entries``.
+        cache_dir: file and sqlite tiers: the cache directory. Defaults to
+            ``cache_dir``.
+        compress: file tier: gzip each entry. Defaults to ``compress``.
+        flush_interval: file tier: seconds between metadata flushes.
+            Defaults to ``flush_interval``.
+        db_path: sqlite tier: path to the database file. Defaults to a file
+            inside ``cache_dir``.
+        wal_mode: sqlite tier: accepted but not used; a tier built from
+            configuration always uses WAL journal mode.
+        host: redis tier: server hostname. Defaults to ``redis_host``.
+        port: redis tier: server port. Defaults to ``redis_port``.
+        db: redis tier: database number. Defaults to ``redis_db``.
+        password: redis tier: password. Defaults to ``redis_password``.
+        prefix: redis and s3 tiers: key prefix. Defaults to
+            ``redis_prefix`` or ``s3_prefix``.
+        bucket: s3 tier: bucket name. Defaults to ``s3_bucket``.
+        region: s3 tier: AWS region, such as ``"us-east-1"``. Defaults to
+            ``s3_region``.
     """
 
+    # The Attributes section above is the one description of each key: the
+    # API reference renders it, and the config template reads it
+    # (_tier_key_docs).
     type: str
-    """Backend type: ``"memory"``, ``"file"``, ``"sqlite"``, ``"redis"`` or
-    ``"s3"``."""
 
     # memory / file / sqlite shared:
     max_size_bytes: int | None = None
-    """memory, file and sqlite tiers: size cap in bytes (or a size such as
-    ``"2GB"``). In a tiered stack, a value bigger than this skips the
-    tier. Unset, a memory tier is sized to the machine and a file or
-    sqlite tier uses ``max_cache_size``."""
-
     default_ttl: int | None = None
-    """file and sqlite tiers: TTL in seconds for entries stored without one.
-    A ``ttl=`` on the decorator takes precedence."""
 
     # memory:
     max_entries: int | None = None
-    """memory tier: entry-count cap. Defaults to ``max_memory_entries``."""
 
     # file:
     cache_dir: str | None = None
-    """file and sqlite tiers: the cache directory. Defaults to ``cache_dir``."""
-
     compress: bool | None = None
-    """file tier: gzip each entry. Defaults to ``compress``."""
-
     flush_interval: int | None = None
-    """file tier: seconds between metadata flushes. Defaults to
-    ``flush_interval``."""
 
     # sqlite:
     db_path: str | None = None
-    """sqlite tier: path to the database file. Defaults to a file inside
-    ``cache_dir``."""
-
     wal_mode: bool | None = None
-    """sqlite tier: accepted but not used; a tier built from configuration
-    always uses WAL journal mode."""
 
     # redis:
     host: str | None = None
-    """redis tier: server hostname. Defaults to ``redis_host``."""
-
     port: int | None = None
-    """redis tier: server port. Defaults to ``redis_port``."""
-
     db: int | None = None
-    """redis tier: database number. Defaults to ``redis_db``."""
-
     password: str | None = None
-    """redis tier: password. Defaults to ``redis_password``."""
-
     prefix: str | None = None
-    """redis and s3 tiers: key prefix. Defaults to ``redis_prefix`` or
-    ``s3_prefix``."""
 
     # s3:
     bucket: str | None = None
-    """s3 tier: bucket name. Defaults to ``s3_bucket``."""
-
     region: str | None = None
-    """s3 tier: AWS region, such as ``"us-east-1"``. Defaults to
-    ``s3_region``."""
 
     def __post_init__(self) -> None:
         if self.type not in _SUPPORTED_TIER_TYPES:
@@ -1253,6 +1253,27 @@ def _field_docs(cls: type) -> dict[str, str]:
     return docs
 
 
+def _tier_key_docs() -> dict[str, str]:
+    """Each ``TierConfig`` key's entry in its docstring's Attributes section.
+
+    Empty when docstrings are stripped (``python -OO``).
+    """
+    doc = inspect.cleandoc(TierConfig.__doc__ or "")
+    section = doc.partition("\nAttributes:\n")[2]
+    docs: dict[str, str] = {}
+    name = None
+    for line in section.splitlines():
+        entry = re.match(r"    (\w+): (.*)", line)
+        if entry:
+            name = entry[1]
+            docs[name] = entry[2]
+        elif name and line.startswith("        "):
+            docs[name] += " " + line.strip()
+        else:
+            break
+    return docs
+
+
 def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -1294,10 +1315,10 @@ def _default_config_text() -> str:
         lines += ["", *_comment(docs.get(f.name, ""))]
         lines.append(f"# {f.name} = " + ("(unset)" if value is None else _toml_value(value)))
 
-    tier_docs = _field_docs(TierConfig)
+    tier_docs = _tier_key_docs()
     lines += ["", *_comment(docs.get("tiers", "")), "#", "# Keys of a [[cash.tiers]] table:"]
     for f in fields(TierConfig):
-        first = " ".join(tier_docs.get(f.name, "").split("\n\n")[0].split())
+        first = tier_docs.get(f.name, "")
         lines += _comment(textwrap.fill(f"{f.name}: {first}", 72, initial_indent="  ", subsequent_indent="      "))
     lines += ["#", *_comment(_TIER_EXAMPLE)]
     return "\n".join(lines) + "\n"

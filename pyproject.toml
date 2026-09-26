@@ -110,6 +110,8 @@ docs = [
     "mkdocstrings[python]>=0.24",
     # Old page URLs forward to the pages that replaced them.
     "mkdocs-redirects>=1.2",
+    # mkdocstrings wraps long API signatures only when ruff (or black) is installed.
+    "ruff",
 ]
 # Packages the docs examples import. tests/docs stubs them by monkeypatching the
 # real module, so they have to be installed.
