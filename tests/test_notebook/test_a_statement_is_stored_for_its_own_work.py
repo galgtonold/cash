@@ -11,6 +11,8 @@ cost, which a hit is credited with, stays the whole cost.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
@@ -65,6 +67,23 @@ def _call_seconds(backend, name):
         if str(meta.get("key", "")).startswith("call:") and str(meta.get("function")).rsplit(".", 1)[-1] == name:
             return meta["execution_time"]
     raise AssertionError(f"no cached call to {name!r}")
+
+
+def _loop_count_for(seconds):
+    """How many empty loop turns take about *seconds* here, timed on the same
+    function body the cell defines; the fastest of three runs, so a busy
+    moment while measuring does not shrink the count."""
+    ns: dict = {}
+    exec("def spin(n):\n    for _ in range(n):\n        pass\n", ns)
+    n = 1_000_000
+    took = min(_timed(ns["spin"], n) for _ in range(3))
+    return max(1, int(n * seconds / took))
+
+
+def _timed(fn, n):
+    start = time.perf_counter()
+    fn(n)
+    return time.perf_counter() - start
 
 
 def _setup(magics):
@@ -215,11 +234,14 @@ def test_a_call_under_the_persistence_floor_is_the_statements_work(tiers, mock_s
     left out of what storing the statement saves."""
     magics, ram, disk = tiers
     _setup(magics)
-    # Far under the floor: a slow runner's sleep(0.05) took over 0.1 s.
-    run_cash_cell(magics, "def quick(x):\n    time.sleep(0.02)\n    return list(x)")
+    # Far under the floor. Not a sleep: macOS runners coalesce timers, and
+    # there even sleep(0.02) took 0.12-0.16 s. A counted loop takes the same
+    # CPU time however the OS schedules wake-ups.
+    n = _loop_count_for(0.035)
+    run_cash_cell(magics, f"def quick(x):\n    for _ in range({n}):\n        pass\n    return list(x)")
     run_cash_cell(magics, "b = quick(a) + [1]")
     quick_s = _call_seconds(ram, "quick")
-    assert quick_s < COMPUTE_FLOOR_S, f"quick() took {quick_s:.3f}s, not under the floor this tests"
+    assert 0.01 < quick_s < COMPUTE_FLOOR_S, f"quick() took {quick_s:.3f}s, not the range this tests"
     meta, value = _entry(ram, "quick(a) + [1]")
     assert value is not None and value["variables"]["b"][-1] == 1
     assert meta["store_time"] >= quick_s, meta
