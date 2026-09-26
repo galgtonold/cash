@@ -8,6 +8,7 @@ with proper isolation between tests.
 import itertools
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -657,11 +658,33 @@ def pytest_terminal_summary(terminalreporter):
     for nodeid, longrepr in _RERUN_FAILURES:
         tr.write_line("")
         tr.write_line(f"--- {nodeid}", bold=True)
-        # The assertion line is what carries the diagnostic; the frames above
-        # it are the same every time and would bury the summary.
-        lines = [ln for ln in longrepr.splitlines() if ln.startswith("E ")]
-        for ln in (lines or longrepr.splitlines())[-6:]:
+        for ln in _retry_evidence(longrepr):
             tr.write_line(f"    {ln.strip()}")
+
+
+#: A traceback entry's location line, ``path/to/file.py:123: in func``.
+_FRAME_LOCATION = re.compile(r"^\S.*?\.py:\d+: ")
+
+
+def _retry_evidence(longrepr: str) -> list[str]:
+    """The lines of a retried-away failure worth printing.
+
+    The assertion line carries the diagnostic of a failed assertion; the
+    frames above it are the same every time and would bury the summary. A
+    timeout's message says only how long pytest waited, so for one the
+    frames it was stuck in come first, each with its source line under
+    ``--tb=short``: where it hung is the whole finding.
+    """
+    lines = longrepr.splitlines()
+    errors = [ln for ln in lines if ln.startswith("E ")]
+    if not any("Timeout" in ln for ln in errors):
+        return (errors or lines)[-6:]
+    frames = []
+    for i, ln in enumerate(lines):
+        if _FRAME_LOCATION.match(ln):
+            code = lines[i + 1].strip() if i + 1 < len(lines) and lines[i + 1].startswith("    ") else ""
+            frames.append(f"{ln.strip()}  {code}".rstrip())
+    return frames[-8:] + errors[-2:]
 
 
 # ---------------------------------------------------------------------------
