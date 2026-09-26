@@ -94,6 +94,25 @@ module's shape list matching the brief's four-shapes-plus-one-size-variant
 structure; see the report for the numbers and why they matter for the
 unrelated-edit case.)
 
+Where the size variant's calls live, and why they once failed on a busy box
+-----------------------------------------------------------------------------
+A 5ms call clears the call cost floor but not the disk tier's 0.1s persistence
+floor, so its entry is held by the RAM tier alone. The ``.entry`` files on disk
+are the cells' statements, the same four whether these tests pass or fail;
+they say nothing about the calls.
+
+These four tests used to fail only inside a full parallel suite, never alone
+and never under CPU load: 100 of 100 calls re-ran, or a part of them. That was
+the RAM tier's memory-pressure check, which reads the WHOLE MACHINE's memory,
+and a parallel suite on a Windows box ran it above 90%. The first check under
+pressure took its share of a tier of a few kilobytes, then held the tier at
+what was left, so every call entry written after it displaced an earlier one.
+A tier that small now keeps its entries, since giving them back relieves
+nothing (``storage/test_a_loop_restores_under_memory_pressure.py`` pins it
+with the machine's memory reported full). CPU load cannot fail them through
+a clock either: every call sleeps 5ms against the 3ms call cost floor, and
+load only makes a call slower.
+
 Unrelated-edit confound, found while calibrating this module
 -------------------------------------------------------------
 The probe for an unrelated upstream edit re-running a loop
@@ -147,27 +166,6 @@ _SLEEP_SMALL = 0.3
 _SLEEP_LARGE = 0.005
 _N_LARGE = 100
 
-# These fail only from inside a full parallel suite on a genuinely loaded box
-# -- not under synthetic CPU load, not when this file runs alone beside one.
-# The mechanism is not diagnosed (see the commit that added `_why`), so they
-# are retried rather than left to redden every slow run.
-#
-# Scoped three ways so this cannot become a blanket "retry until green":
-#   * only_rerun is their OWN assertion text. Any other failure in the same
-#     test -- the `cold == N` harness sanity check, an error, a timeout --
-#     still fails on the first attempt.
-#   * a deterministic regression fails all three attempts and still reports
-#     FAILED. Only an intermittent one is absorbed.
-#   * a retried failure is NOT discarded: tests/conftest.py prints its text
-#     under "failures that passed on a retry", which is where the on-disk
-#     evidence `_why` collects will show up.
-#
-# The delay is a guess, not a measurement: it is long enough to outrun a brief
-# scheduling spike and nowhere near long enough to outrun a slow run, which is
-# what the failures actually correlate with. If the rerun report shows these
-# still burning all three attempts, retrying is the wrong tool for them.
-LOAD_SENSITIVE = pytest.mark.flaky(reruns=2, reruns_delay=5, only_rerun=["re-ran"])
-
 SETUP = "import cash\n%cash_on\nimport time"
 SETUP_OFF = "import cash\nimport time"
 
@@ -208,12 +206,11 @@ def _n(path):
 def _why(work_dir):
     """What cash left on DISK, for use in a failure message.
 
-    The four shape-A-large cases fail only on a genuinely loaded machine, and
-    only from inside a full parallel suite -- not under synthetic CPU load, not
-    when this file runs alone beside one. Each real occurrence is therefore
-    rare and not summonable, and a bare "re-ran 100 calls" cannot tell "nothing
-    was ever stored" from "entries were stored and then not found". The entry
-    count separates those. Reading the directory perturbs nothing.
+    Tells "nothing was ever stored" from "stored and then not found" for a
+    call that reaches disk (the 0.3s calls). A 5ms call never does: its entry
+    is in the RAM tier only, so for the shape-A-large cases the count is the
+    cells' statements whatever happened to the calls. Reading the directory
+    perturbs nothing.
     """
     cache_dir = work_dir / ".cash"
     if not cache_dir.exists():
@@ -422,7 +419,6 @@ def test_shape_a_small_oracle_no_caching(nb_runner, tmp_path):
 # ===========================================================================
 
 
-@LOAD_SENSITIVE
 def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
     """Mutation: raising call_unit._COST_FLOOR_S above 5ms would make this
     fail even harder (more of the small-shape tests would join it);
@@ -443,7 +439,6 @@ def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
     )
 
 
-@LOAD_SENSITIVE
 def test_shape_a_large_append(nb_runner, tmp_path):
     """Same underlying mechanism as the unchanged-rerun case above -- see
     that test's mutation note."""
@@ -461,7 +456,6 @@ def test_shape_a_large_append(nb_runner, tmp_path):
     assert warm == 1, f"append re-ran {warm} calls, expected 1 (only the new item) [{_why(tmp_path)}]"
 
 
-@LOAD_SENSITIVE
 def test_shape_a_large_reorder(nb_runner, tmp_path):
     """Same underlying mechanism as the unchanged-rerun case above."""
     counter = tmp_path / "calls.log"
@@ -478,7 +472,6 @@ def test_shape_a_large_reorder(nb_runner, tmp_path):
     assert warm == 0, f"reorder re-ran {warm} calls, expected 0 [{_why(tmp_path)}]"
 
 
-@LOAD_SENSITIVE
 def test_shape_a_large_unrelated_edit(nb_runner, tmp_path):
     """Same underlying mechanism as the unchanged-rerun case above."""
     counter = tmp_path / "calls.log"
