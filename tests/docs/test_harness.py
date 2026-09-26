@@ -331,6 +331,38 @@ def test_extract_fences_reads_indented_fences(tmp_path):
     assert fences[1].is_nb_cell
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "```python",
+        "```python { .nb-cell }",
+        '```python { title="mylib/_cache.py" }',
+        '```python title="mylib/_cache.py"',
+        '```python title="demo.py" hl_lines="2 3" linenums="1"',
+        '```{ .python title="demo.py" }',
+        "```{.python .nb-cell}",
+    ],
+)
+def test_extract_fences_reads_every_python_fence_header(tmp_path, header):
+    """A titled fence renders as Python, so it is run, and its test:skip stays on it."""
+    page = tmp_path / "titled.md"
+    page.write_text(
+        f'<!-- test:skip reason="first" -->\n{header}\nx = 1\n```\n\n```python\ny = 2\n```\n',
+        encoding="utf-8",
+    )
+    fences = extract_fences(page)
+    assert [f.code for f in fences] == ["x = 1", "y = 2"]
+    assert [f.skip_reason for f in fences] == ["first", None]
+    assert fences[0].is_nb_cell == (".nb-cell" in header)
+
+
+@pytest.mark.parametrize("header", ["```pythonx", "```py", '```text title="Output"', "```{ .text }"])
+def test_extract_fences_ignores_other_languages(tmp_path, header):
+    page = tmp_path / "other.md"
+    page.write_text(f"{header}\nx = 1\n```\n", encoding="utf-8")
+    assert extract_fences(page) == []
+
+
 def test_every_pending_fence_entry_still_matches_a_fence():
     """PENDING_FENCES only shrinks: an entry whose fence was fixed or removed must go."""
     from tests.docs._harness import _REPO_ROOT, PENDING_FENCES

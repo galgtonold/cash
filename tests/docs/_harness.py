@@ -44,8 +44,25 @@ _ENV_ARTIFACT_WARNING_NAMES: frozenset[str] = frozenset({"CashNotebookDiscoveryW
 
 # An opening ```python line, at any indent: fences nested in a content tab
 # (``=== "Notebook"``), an admonition or a list item are indented, and they
-# are as much a part of the page as the ones at column 0.
-_FENCE_OPEN_RE = re.compile(r"^(?P<indent>[ \t]*)```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$")
+# are as much a part of the page as the ones at column 0. Every header form
+# superfences renders as Python code counts, so a fence with a title is run
+# like one without: ```python, ```python { .nb-cell title="x" },
+# ```python title="x" hl_lines="2" and ```{ .python title="x" }. A form this
+# missed would render as code but go untested, and a <!-- test:skip --> above
+# it would attach to the next fence instead.
+_FENCE_OPEN_RE = re.compile(
+    r"""^(?P<indent>[ \t]*)```[ \t]*
+    (?:
+        python
+        (?P<attrs>
+            [ \t]+\{[^}]*\}
+          | (?:[ \t]+[^\s{}"'=]+(?:=(?:"[^"]*"|'[^']*'|[^\s"']+))?)*
+        )
+      | (?P<braced>\{[ \t]*\.python(?:[ \t][^}]*)?\})
+    )
+    [ \t]*$""",
+    re.VERBOSE,
+)
 
 
 @dataclass
@@ -155,7 +172,7 @@ def extract_fences(md_path: Path) -> list[Fence]:
         line = lines[i]
         m = _FENCE_OPEN_RE.match(line)
         if m:
-            attrs = m.group("attrs").strip()
+            attrs = (m.group("attrs") or m.group("braced") or "").strip()
             indent = len(m.group("indent"))
             start_line = i + 1  # 1-based
             body_lines: list[str] = []
