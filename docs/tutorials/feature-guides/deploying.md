@@ -109,7 +109,7 @@ call with the same arguments at once, use a bare `RedisBackend`.
 - **Prove the tests, not the cache.** Run the suite once with `CASH_DISABLE=1`,
   and give each run its own cache folder. See
   [Testing your code](testing-your-code.md).
-- <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4 -->
+- <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662 -->
   **Fail the build on side effects.** `@cash.cache(strict=True)` raises
   `CashImpureFunctionError` on the first call of a function with a side effect
   cash would skip on a hit. It honours `# @cash:assume-safe` on lines you have

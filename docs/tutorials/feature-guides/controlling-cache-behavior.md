@@ -157,7 +157,7 @@ def announce(text):
 receipt = announce("model trained")
 ```
 
-<!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @9d937d1c -->
+<!-- claim: cash/purity.py:stateful @afae9270, cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @9d937d1c -->
 Without the marker, a slow `announce` call is cached and a re-run skips the
 message: cash does not look inside `announce` for a chat client. Three things to
 know:

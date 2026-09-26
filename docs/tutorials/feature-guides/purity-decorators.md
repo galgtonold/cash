@@ -28,7 +28,7 @@ it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what
 
 ## `@cash.pure`: trust this helper
 
-<!-- claim: cash/purity.py:pure @f53a99f5, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @c6b18c26 -->
+<!-- claim: cash/purity.py:pure @26a3db86, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @c6b18c26 -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. cash then stops reporting it:
@@ -70,7 +70,7 @@ A built-in or C function can't take the marker, so this raises
 
 ## `@cash.stateful`: this helper has an effect that matters
 
-<!-- claim: cash/purity.py:stateful @f86f4e92 -->
+<!-- claim: cash/purity.py:stateful @afae9270 -->
 Mark a helper `@cash.stateful` when calling it does something a cache hit must
 not skip silently: it posts a notification, writes to a database, updates a
 model registry. A cached function that calls it warns
@@ -111,7 +111,7 @@ cash.stateful(pd.DataFrame.to_sql)   # writes to a database
 
 ## `cash.opaque`: leave a class out of the key
 
-<!-- claim: cash/__init__.py:opaque @679c15ff, cash/decorator/arg_hashing.py:is_opaque @c98ecac3 -->
+<!-- claim: cash/__init__.py:opaque @f07932e6, cash/decorator/arg_hashing.py:is_opaque @c98ecac3 -->
 A class or function of yours passed as an argument is keyed by its code, so an
 edit to it recomputes the call. For a class whose code does not affect the
 result (a marker type, a vendored class that changes for unrelated reasons),

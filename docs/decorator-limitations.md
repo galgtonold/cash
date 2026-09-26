@@ -65,7 +65,7 @@ fit([1, 2, 3])   # _fit hits: log and verbose are not in its key
 The wrapper's own work runs on every call, so the log line appears on a hit
 too, which a logger inside the cached body would not do.
 
-<!-- claim: cash/core.py:Cash.register_hasher @f48a324b -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
 For an argument **type** that never affects a result, a hasher that returns a
 constant does the same without a wrapper. Every logger then counts as the same
 value:

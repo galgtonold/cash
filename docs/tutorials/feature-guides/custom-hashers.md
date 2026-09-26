@@ -39,7 +39,7 @@ def evaluate(model, data):
     return model.weights @ data
 ```
 
-<!-- claim: cash/core.py:Cash.register_hasher @f48a324b, cash/source_norm.py:callable_identity @f9ec85f7 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/source_norm.py:callable_identity @f9ec85f7 -->
 From now on, every `MyModel` argument is identified by `hash_model(model)`,
 and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
 `Cash(...)` instance, call `app.register_hasher(...)` instead.
