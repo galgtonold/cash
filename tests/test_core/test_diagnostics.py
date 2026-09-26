@@ -32,7 +32,7 @@ def test_every_code_follows_the_slug_rule(code):
 
 def test_doc_url_points_at_the_stable_docs():
     url = doc_url("CACHE-THRASH")
-    assert url == ("https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash")
+    assert url == ("https://cash-lib.readthedocs.io/en/latest/warnings/#cache-thrash")
 
 
 def test_doc_url_rejects_an_unregistered_code():
@@ -51,7 +51,7 @@ def test_the_rendered_message_carries_code_fix_and_link():
     text = format_diagnostic("CACHE-THRASH", "the cache is full at its 500 MB cap.", "raise max_cache_size.")
     assert text.startswith("[CACHE-THRASH] the cache is full at its 500 MB cap.")
     assert "\n  Fix: raise max_cache_size." in text
-    assert text.endswith("\n  https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash")
+    assert text.endswith("\n  https://cash-lib.readthedocs.io/en/latest/warnings/#cache-thrash")
 
 
 def test_the_code_reaches_the_handler_as_an_attribute():

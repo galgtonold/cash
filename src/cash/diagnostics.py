@@ -28,7 +28,9 @@ import os
 import sys
 import warnings
 
-_DOCS_BASE = "https://cash-lib.readthedocs.io/en/stable/warnings/"
+# /en/latest/, not /en/stable/: the stable build is only rebuilt at a release,
+# so a warning code documented since then would link to a missing anchor.
+_DOCS_BASE = "https://cash-lib.readthedocs.io/en/latest/warnings/"
 
 #: The installed package directory. A frame whose file lives under this is Cash
 #: reporting on itself; anything else is the caller's own code.
@@ -289,7 +291,7 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
         foo.py:12: CashCacheIneffectiveWarning: [CACHE-THRASH] the cache is
         full at its 500 MB cap.
           Fix: raise max_cache_size, or cache fewer values.
-          https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash
+          https://cash-lib.readthedocs.io/en/latest/warnings/#cache-thrash
 
     *what* is one sentence of what happened; *fix* is one imperative sentence.
     Everything else belongs in the doc section the link points at, so the

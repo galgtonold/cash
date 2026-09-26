@@ -1215,7 +1215,7 @@ def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
 # ---------------------------------------------------------------------------
 
 
-_CONFIG_DOCS_URL = "https://cash-lib.readthedocs.io/en/stable/getting-started/configuration/"
+_CONFIG_DOCS_URL = "https://cash-lib.readthedocs.io/en/latest/getting-started/configuration/"
 
 #: The ``[[cash.tiers]]`` example in the template: a RAM tier in front of Redis.
 _TIER_EXAMPLE = """\
