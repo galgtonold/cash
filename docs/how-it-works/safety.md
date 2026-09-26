@@ -33,6 +33,36 @@ draw keeps its first value.
 
 ## In a notebook
 
+### Try it: will this statement be cached?
+
+Click a statement to see the verdict and the reason. The dot next to each one
+gives the verdict:
+<span class="cash-cc-dot ok" style="display:inline-block"></span> cached,
+<span class="cash-cc-dot warn" style="display:inline-block"></span> cached
+with a warning,
+<span class="cash-cc-dot no" style="display:inline-block"></span> not cached.
+The sections below explain each rule.
+
+<div class="cash-cacheability-checker" markdown="0">
+  <table>
+    <thead><tr><th>Statement</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td><code>df = pd.read_csv('data.csv')</code></td><td>Cached — the file is tracked</td></tr>
+      <tr><td><code>result = df.groupby('k').sum()</code></td><td>Cached — nothing is changed in place</td></tr>
+      <tr><td><code>total += 1</code></td><td>Cached — the change is the statement's own output</td></tr>
+      <tr><td><code>data.append(4)</code></td><td>Not cached — changes a variable it does not produce</td></tr>
+      <tr><td><code>del lookup['stale']</code></td><td>Not cached — a deletion with no output</td></tr>
+      <tr><td><code>x = np.random.randn(100)</code></td><td>Cached + warning — unseeded</td></tr>
+      <tr><td><code>model.fit(X, y)</code></td><td>Not cached unless <code>@cash:cache-fit</code></td></tr>
+      <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — writes a file</td></tr>
+      <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — sends a request</td></tr>
+      <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same request through a client object</td></tr>
+      <tr><td><code>r = requests.get(url)</code></td><td>Cached — a read</td></tr>
+      <tr><td><code>tenant = os.getenv('TENANT')</code></td><td>Cached — the value is part of the key</td></tr>
+    </tbody>
+  </table>
+</div>
+
 ### The mutation problem
 
 A stored value is a snapshot. If a statement changes a value in place, the
@@ -183,23 +213,3 @@ Two kinds of value are refused after the statement runs, because restoring a
 copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base, and a
 matplotlib `Figure`/`Axes`, which would come back detached from pyplot.
-
-<div class="cash-cacheability-checker" markdown="0">
-  <table>
-    <thead><tr><th>Statement</th><th>Verdict</th></tr></thead>
-    <tbody>
-      <tr><td><code>df = pd.read_csv('data.csv')</code></td><td>Cached — the file is tracked</td></tr>
-      <tr><td><code>result = df.groupby('k').sum()</code></td><td>Cached — nothing is changed in place</td></tr>
-      <tr><td><code>total += 1</code></td><td>Cached — the change is the statement's own output</td></tr>
-      <tr><td><code>data.append(4)</code></td><td>Not cached — changes a variable it does not produce</td></tr>
-      <tr><td><code>del lookup['stale']</code></td><td>Not cached — a deletion with no output</td></tr>
-      <tr><td><code>x = np.random.randn(100)</code></td><td>Cached + warning — unseeded</td></tr>
-      <tr><td><code>model.fit(X, y)</code></td><td>Not cached unless <code>@cash:cache-fit</code></td></tr>
-      <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — writes a file</td></tr>
-      <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — sends a request</td></tr>
-      <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same request through a client object</td></tr>
-      <tr><td><code>r = requests.get(url)</code></td><td>Cached — a read</td></tr>
-      <tr><td><code>tenant = os.getenv('TENANT')</code></td><td>Cached — the value is part of the key</td></tr>
-    </tbody>
-  </table>
-</div>
