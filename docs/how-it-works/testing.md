@@ -94,5 +94,6 @@ python scripts/fails_first.py <your new test file>
 
 - [Contributing](../contributing.md): setup, and which tests to run for a
   change.
-- [Writing cache-safe cells](../known-limitations.md): the cases cash is
-  known to get wrong or not see.
+- [Writing cache-safe cells](../known-limitations.md) and
+  [Decorator limitations](../decorator-limitations.md): the cases cash is
+  known to get wrong or not see, in a notebook and with `@cash.cache`.
