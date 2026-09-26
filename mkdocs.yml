@@ -37,6 +37,7 @@ theme:
     - navigation.sections
     - navigation.expand
     - navigation.top
+    - navigation.footer
     - toc.follow
     - search.suggest
     - search.highlight
@@ -44,6 +45,8 @@ theme:
     - content.code.annotate
     - content.tabs.link
   font: false  # Use system font stacks (per cash design system), not Roboto.
+
+copyright: cash is released under the <a href="https://github.com/galgtonold/cash/blob/main/LICENSE">MIT License</a>. Copyright &copy; 2025-2026 Cash Contributors.
 
 # Working notes (specs / plans) live under docs/superpowers/ and are
 # gitignored. Skip them entirely so `mkdocs build --strict` stays clean.
