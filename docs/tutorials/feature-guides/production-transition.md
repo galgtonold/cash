@@ -20,8 +20,7 @@ folder.
 3. **Decorate the function** with `@cash.cache`.
 4. **Call it** from a script, a job, or back in the notebook.
 
-```python
-# pipeline.py
+```python { title="pipeline.py" }
 import cash
 import pandas as pd
 

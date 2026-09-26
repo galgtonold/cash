@@ -76,7 +76,7 @@ was stored, so there is nothing to explain.
 When a value is too big to be worth storing, the row detail (and the text badge)
 gives the arithmetic:
 
-```text
+```text title="Output"
 Restoring 'big_frame' (412 MB DataFrame) would take ~0.71s vs 0.85s compute
 (serializing, <20% savings) — use @cash:persist to force
 ```

@@ -24,7 +24,7 @@ print(load.explain(5))
 
 For a function in `demo.py`, that prints:
 
-```
+```text title="Output"
 [HIT] demo.load - hit
   cache_dir: /home/me/project/.cash
   cache_key: demo.load:c57a56db...::99622373...

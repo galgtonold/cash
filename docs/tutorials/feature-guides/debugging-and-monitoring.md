@@ -17,7 +17,7 @@ to see what cash re-ran in earlier cells. [Reading the badge](../../badges.md)
 lists every status and reason. For headless runs, `%cash_badge print` gives the
 same as text:
 
-```text
+```text title="Output"
 [Cash] EXECUTED (0.21s)
   EXECUTED: result = featurize(df)  (0.20s) -> RAM+DISK
     sub-call featurize(df): 0/1 hit - changed: df
@@ -49,7 +49,7 @@ timing and cell identification.
 Here `df` was changed upstream, so `result = featurize(df)` ran again
 (lines shortened):
 
-```text
+```text title="Output"
 [cash.notebook.cache_key] [CACHE_KEY] Input 'df' resolved to: 70e3a0edf794526b...
 [cash.notebook.cache_key] [CACHE_KEY] Input 'featurize' resolved to: 8ca7ecb57d08c0ae...
 [cash.notebook.cache_key] [CACHE_KEY] Code: result = featurize(df)... | source_hash: 6c5677ce1711... | input_hashes: ['70e3a0edf794...', '8ca7ecb57d08...'] | ... | cache_key: stmt:ffd3d255253e...
@@ -67,7 +67,7 @@ input that moved.
 `%cash_stats` summarises this kernel session: cells run, statements computed,
 restored and skipped, the hit rate, and time saved.
 
-```text
+```text title="Output"
 Cash Session Statistics
   (since this kernel started; a restart resets them)
 ----------------------------------------

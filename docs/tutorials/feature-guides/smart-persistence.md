@@ -19,7 +19,7 @@ them.
 With `%cash_badge print` each row shows where its result went. Here `slow`
 takes 0.3 s and `mid` 0.05 s:
 
-```text
+```text title="Output"
 [Cash] EXECUTED (0.37s)
   EXECUTED: a = slow(1)  (0.30s) -> RAM+DISK
     sub-call slow(1): 0/1 hit
@@ -33,7 +33,7 @@ takes 0.3 s and `mid` 0.05 s:
 
 After a restart, the same cell restores `a` and runs `b` and `c` again:
 
-```text
+```text title="Output"
 [Cash] CACHED (1 restored, 2 ran; 0.06s, saved 0.29s)
   CACHED: a = slow(1)  (saved 0.30s)
   EXECUTED: b = mid(2)  (0.05s) -> RAM

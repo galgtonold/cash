@@ -205,7 +205,7 @@ before and after, and runs the call every time from then on.
 
 ### Unstable key
 
-```text
+```text title="Output"
   NOT CACHED: model = fit(features, y)  (4.20s) - unstable key (`features` changed each run)
 ```
 
@@ -225,7 +225,7 @@ fix that one.
 
 ### Input variable missing lineage
 
-```text
+```text title="Output"
   NOT CACHED: segments = load(DATA)  (2.10s) - Input variable missing lineage
 ```
 

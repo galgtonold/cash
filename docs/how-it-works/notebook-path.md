@@ -105,7 +105,7 @@ cached as one unit ([cost model](../cost-model.md)).
 When a statement calls a `@cash.cache` function, the statement's badge lists
 the function with how many of its calls were served from its own cache:
 
-```
+```text title="Output"
 [Cash] EXECUTED (0.02s)
   EXECUTED: r2 = [f(i) for i in range(6)]  (0.01s) -> RAM
   @cash.cache:

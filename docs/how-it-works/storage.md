@@ -55,7 +55,9 @@ Cash says how big the disk cache may grow when caching starts, once per
 process and cache folder. The line names the folder, the cap and the rule that
 set it, so a cache of many GiB is never a surprise:
 
-    caching in /work/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
+```text title="Output"
+caching in /work/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
+```
 
 When the 8 GiB floor or the 100 GiB ceiling decided, it says that instead, and
 a cap you set reads `(set by max_cache_size)`.
@@ -158,7 +160,9 @@ notice, not a warning: a cache at its cap is doing its job.
     <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._flush_pending_writes @52688dae -->
     A line at the end of the cell whose results filled the cache:
 
-        [cash] The cache in /work/.cash reached its 26.0 GiB cap, so cash removed 41 entries (2.6 GiB), ...
+    ```text title="Output"
+    [cash] The cache in /work/.cash reached its 26.0 GiB cap, so cash removed 41 entries (2.6 GiB), ...
+    ```
 
 <!-- claim: cash/backends/eviction_log.py:EvictionLog.record @cc6659e6, cash/backends/file_eviction.py:FileEvictor.clear @03ded076, cash/backends/eviction_log.py:EvictionLog.MAX_NOTES == 10000, cash/backends/file_backend.py:FileBackend.eviction_note @7f6d5fd0 -->
 Cash also notes each entry the cap removes: a hash of its key, when, how long
