@@ -56,6 +56,14 @@ def reset_cash_state(tmp_path, monkeypatch):
     cash.configure(cache_dir=str(tmp_path / ".cash"))
     yield
     cash.reset_session()
+    # A page that shows logging (``%cash_debug on``, ``setup_logging``) leaves
+    # cash's handler on the process-wide "cash" logger, and reset_session()
+    # does not take it off. ``%cash_debug on`` writes to whatever sys.stdout is
+    # at the time, so a later test on the worker that reads captured stdout
+    # got the debug lines of its own calls mixed into it.
+    from cash import _log
+
+    _log.disable()
 
 
 @pytest.fixture(autouse=True)
