@@ -156,6 +156,10 @@ markdown_extensions:
   - toc:
       permalink: true
 
+# Each page is listed once. mkdocs_hooks.py adds one cross-link that is not
+# a nav entry of its own: "Why did it miss?" under Decorator > Start opens
+# how-it-works/inspecting.md, so a decorator user asking why a call missed
+# finds the answer in their tab.
 nav:
   - Home:
     - Home: index.md
@@ -164,19 +168,23 @@ nav:
     - FAQ: faq.md
     - For coding agents: for-coding-agents.md
   - Decorator:
-    - Quick start: getting-started/quickstart-script.md
-    - "@cash.cache guide": decorator.md
-    - Testing your code: tutorials/feature-guides/testing-your-code.md
-    - Class methods: tutorials/feature-guides/caching-class-methods.md
-    - File dependencies: tutorials/feature-guides/custom-file-sources.md
-    - Dynamic dependencies: tutorials/feature-guides/dynamic-dependencies.md
-    - Custom hashers: tutorials/feature-guides/custom-hashers.md
-    - Purity markers: tutorials/feature-guides/purity-decorators.md
-    - Iterators: tutorials/feature-guides/iterator-caching.md
-    - Async functions: tutorials/feature-guides/async-caching.md
-    - Threads and processes: tutorials/feature-guides/thread-safety.md
-    - Caching over a grid: tutorials/feature-guides/caching-over-a-grid.md
-    - Deploying: tutorials/feature-guides/deploying.md
+    - Start:
+      - Quick start: getting-started/quickstart-script.md
+      - "@cash.cache guide": decorator.md
+    - What goes into the key:
+      - Class methods: tutorials/feature-guides/caching-class-methods.md
+      - File dependencies: tutorials/feature-guides/custom-file-sources.md
+      - Dynamic dependencies: tutorials/feature-guides/dynamic-dependencies.md
+      - Custom hashers: tutorials/feature-guides/custom-hashers.md
+      - Purity markers: tutorials/feature-guides/purity-decorators.md
+    - Kinds of functions:
+      - Iterators: tutorials/feature-guides/iterator-caching.md
+      - Async functions: tutorials/feature-guides/async-caching.md
+      - Threads and processes: tutorials/feature-guides/thread-safety.md
+    - Going to production:
+      - Testing your code: tutorials/feature-guides/testing-your-code.md
+      - Caching over a grid: tutorials/feature-guides/caching-over-a-grid.md
+      - Deploying: tutorials/feature-guides/deploying.md
     - Use cases:
       - LLM API calls: tutorials/use-cases/llm-api-calls.md
       - Data engineering: tutorials/use-cases/data-engineering.md
@@ -186,19 +194,15 @@ nav:
     - Notebook guide: notebook_caching_api.md
     - Reading the badge: badges.md
     - Controlling caching: tutorials/feature-guides/controlling-cache-behavior.md
-    - Annotations: annotations.md
     - Restarts and persistence: tutorials/feature-guides/smart-persistence.md
     - Cost model: cost-model.md
-    - Debugging: tutorials/feature-guides/debugging-and-monitoring.md
+    - Debugging a notebook: tutorials/feature-guides/debugging-and-monitoring.md
     - Writing cache-safe cells: known-limitations.md
-    - Magic commands: magics.md
     - Moving to a module: tutorials/feature-guides/production-transition.md
     - "Use case: data science": tutorials/use-cases/data-science.md
   - Both paths:
-    - Configuration: getting-started/configuration.md
     - Choosing a backend: tutorials/feature-guides/choosing-a-backend.md
     - Sharing a cache: tutorials/feature-guides/sharing-caches.md
-    - Command-line interface: cli.md
     - Coming from other caches: migration_guide.md
   - How it works:
     - Overview: how-it-works/overview.md
@@ -209,25 +213,30 @@ nav:
     - Knowing when not to cache: how-it-works/safety.md
     - Where your cache lives: how-it-works/storage.md
     - Seeing what cash did: how-it-works/inspecting.md
+  # Everything a returning reader looks up, in one tab.
   - Reference:
+    - Settings: getting-started/configuration.md
+    - Command-line interface: cli.md
+    - Magic commands: magics.md
+    - Annotations: annotations.md
+    - Warnings: warnings.md
     - API:
       - Overview: api/index.md
       - Cash class: api/cash.md
       - Backends: api/backends.md
       - Internals: api/backend_internals.md
       - Purity markers: api/purity.md
-      - Configuration: api/config.md
+      - Configuration API: api/config.md
       - Data sources: api/data_sources.md
       - Exceptions and warnings: api/exceptions.md
       - Notebook integration: api/notebook.md
       - Inspection tools: api/inspection.md
-    - Warnings: warnings.md
     - Glossary: glossary.md
-    - Benchmarks: benchmarks.md
-    - Versioning: versioning.md
   - Project:
-    - Contributing: contributing.md
+    - Versioning: versioning.md
+    - Benchmarks: benchmarks.md
     - How cash is tested: how-it-works/testing.md
+    - Contributing: contributing.md
 
 extra:
   social:

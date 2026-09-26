@@ -53,6 +53,12 @@ Printed output
 A code block titled ``Output`` (```` ```text title="Output" ````) is what a
 program prints, not code to type. It gets the ``cash-output`` class for its own
 look in ``cash-design.css`` and ``no-copy``, which drops Material's copy button.
+
+Nav cross-links
+---------------
+mkdocs lists a page once. ``on_nav`` adds the entries in ``_NAV_CROSS_LINKS``:
+a link in one nav section to a page that lives in another, such as "Why did it
+miss?" in the Decorator tab opening the inspecting page of How it works.
 """
 
 from __future__ import annotations
@@ -79,6 +85,12 @@ _PATH_LABELS = {"decorator": "Decorator", "notebook": "Notebook", "both paths": 
 
 # A titled code block whose title starts with "Output".
 _OUTPUT_BLOCK = re.compile(r'<div class="(?P<cls>[^"]*\bhighlight\b[^"]*)"><span class="filename">Output\b')
+
+#: (tab, section, label, page): a nav link under tab > section to a page listed
+#: elsewhere in the nav.
+_NAV_CROSS_LINKS = [
+    ("Decorator", "Start", "Why did it miss?", "how-it-works/inspecting.md"),
+]
 
 
 def strip_docnum_markers(markdown: str) -> str:
@@ -143,6 +155,32 @@ def _top_section(page) -> str | None:
     """Title of the nav tab the page sits in (``"Project"``), if any."""
     ancestors = getattr(page, "ancestors", None) or []
     return ancestors[-1].title if ancestors else None
+
+
+def add_nav_cross_links(items, files, links=_NAV_CROSS_LINKS) -> None:
+    """Append each cross-link to its nav section; fail if either end is gone."""
+    from mkdocs.structure.nav import Link
+
+    for tab, section, label, src in links:
+        target = files.get_file_from_path(src)
+        parent = None
+        children = items
+        for title in (tab, section):
+            parent = next((i for i in children if getattr(i, "is_section", False) and i.title == title), None)
+            if parent is None:
+                break
+            children = parent.children
+        if parent is None or target is None:
+            raise ValueError(f"nav cross-link {label!r}: no section {tab} > {section} or no page {src}")
+        link = Link(label, target.url)
+        link.parent = parent
+        parent.children.append(link)
+
+
+def on_nav(nav, *, config, files, **kwargs):
+    """mkdocs hook: add the nav cross-links."""
+    add_nav_cross_links(nav.items, files)
+    return nav
 
 
 def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:

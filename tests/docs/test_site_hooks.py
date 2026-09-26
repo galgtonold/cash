@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from tests.docs._harness import _apply_inject_comments
 
@@ -93,3 +96,23 @@ def test_output_blocks_lose_the_copy_button():
     out = hooks.mark_output_blocks(html)
     assert '<div class="language-text highlight cash-output no-copy"><span class="filename">Output</span>' in out
     assert '<div class="language-python highlight"><span class="filename">demo.py</span>' in out
+
+
+# --- Nav cross-links --------------------------------------------------------------
+
+
+def test_the_cross_link_lands_in_its_section():
+    nav = pytest.importorskip("mkdocs.structure.nav")
+    start = nav.Section("Start", [])
+    tab = nav.Section("Decorator", [start])
+    files = SimpleNamespace(get_file_from_path=lambda src: SimpleNamespace(url="how-it-works/inspecting/"))
+    hooks.add_nav_cross_links([tab], files)
+    (link,) = start.children
+    assert (link.title, link.url, link.parent) == ("Why did it miss?", "how-it-works/inspecting/", start)
+
+
+def test_a_missing_section_fails_the_build():
+    pytest.importorskip("mkdocs.structure.nav")
+    files = SimpleNamespace(get_file_from_path=lambda src: SimpleNamespace(url="x/"))
+    with pytest.raises(ValueError, match="Why did it miss"):
+        hooks.add_nav_cross_links([], files)
