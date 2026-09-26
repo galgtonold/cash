@@ -366,20 +366,26 @@ def _warn_weak_token(url: str, detail: str) -> None:
 
 
 def _http_headers(url: str, timeout: float) -> Any:
-    """Response headers for *url*, via HEAD with a one-byte GET fallback."""
+    """Response headers for *url*, via HEAD with a one-byte GET fallback.
+
+    Through an opener built here, which reads the proxy settings in effect
+    now. ``urllib.request.urlopen`` reuses one opener that read them at the
+    first ``urlopen`` in the process, so a proxy set later was ignored.
+    """
     import urllib.error
     import urllib.request
 
+    opener = urllib.request.build_opener()
     request = urllib.request.Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return response.headers
     except urllib.error.HTTPError as exc:
         if exc.code not in _HEAD_REJECTED:
             raise
         logger.debug("[REMOTE] HEAD %s rejected with %s; retrying ranged GET", url, exc.code)
     ranged = urllib.request.Request(url, method="GET", headers={"Range": "bytes=0-0"})
-    with urllib.request.urlopen(ranged, timeout=timeout) as response:
+    with opener.open(ranged, timeout=timeout) as response:
         return response.headers
 
 

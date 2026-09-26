@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import types
+import urllib.request
 import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -52,6 +53,7 @@ class _Origin:
         self.last_modified: str | None = None
         self.allow_head = True
         self.requests: list[str] = []
+        self.paths: list[str] = []
 
 
 @pytest.fixture
@@ -61,6 +63,7 @@ def origin():
     class Handler(BaseHTTPRequestHandler):
         def _respond(self, body: bytes | None):
             state.requests.append(self.command)
+            state.paths.append(self.path)
             if self.command == "HEAD" and not state.allow_head:
                 # What a presigned URL or a strict CDN does: the method is
                 # refused, not the object.
@@ -106,6 +109,26 @@ class TestHttpToken:
 
         origin.etag = '"v2"'
         assert source.state_token() != first, "a changed ETag must move the token"
+
+    def test_a_proxy_set_after_an_earlier_request_is_used(self, origin, monkeypatch):
+        """``urllib.request.urlopen`` keeps one opener per process, with the
+        proxy settings of the first ``urlopen``. A request made before the
+        proxy is set must not freeze them: the object is still asked through
+        the proxy set now. The local server plays the proxy."""
+        monkeypatch.setattr(urllib.request, "_opener", None)
+        for name in ("http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        with urllib.request.urlopen("data:,x") as primed:
+            assert primed.read() == b"x"
+        assert urllib.request._opener is not None, "the process-wide opener was not built"
+
+        proxy = origin.url.rsplit("/", 1)[0]
+        for name in ("http_proxy", "HTTP_PROXY"):
+            monkeypatch.setenv(name, proxy)
+        remote = "http://data.invalid/data.csv"
+
+        assert RemoteFileDataSource(remote).state_token() == 'etag:"v1"'
+        assert origin.paths == [remote]
 
     def test_head_is_the_request_made(self, origin):
         RemoteFileDataSource(origin.url).state_token()
