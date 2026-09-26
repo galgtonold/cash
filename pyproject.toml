@@ -108,6 +108,8 @@ docs = [
     "mkdocs-material>=9.0",
     "mkdocstrings[python]>=0.24",
     "mkdocs-mermaid2-plugin>=1.2",
+    # Old page URLs forward to the pages that replaced them.
+    "mkdocs-redirects>=1.2",
 ]
 # Packages the docs examples import. tests/docs stubs them by monkeypatching the
 # real module, so they have to be installed.

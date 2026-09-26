@@ -1,5 +1,9 @@
 site_name: Cash Documentation
-site_url: https://cash-lib.readthedocs.io/
+# Read the Docs sets READTHEDOCS_CANONICAL_URL to the version's own root
+# (https://cash-lib.readthedocs.io/en/latest/). The canonical tags, the
+# sitemap and the 404 page's asset links are all built from site_url, so it
+# must carry the /en/<version>/ prefix, not just the domain.
+site_url: !ENV [READTHEDOCS_CANONICAL_URL, "https://cash-lib.readthedocs.io/en/latest/"]
 site_description: A Python cache that re-runs only what changed.
 site_author: Cash Contributors
 repo_url: https://github.com/galgtonold/cash
@@ -57,6 +61,12 @@ extra_javascript:
 plugins:
   - search
   - autorefs
+  # Pages that moved keep working: the old URL (still linked from PyPI and
+  # the 0.11.0 README) forwards to the page that replaced it.
+  - redirects:
+      redirect_maps:
+        getting-started/quickstart.md: index.md
+        api/experimental.md: api/inspection.md
   - mermaid2:
       arguments:
         theme: base
