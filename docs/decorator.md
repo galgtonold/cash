@@ -202,21 +202,56 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 
 ## What invalidates an entry
 
-With a bare `@cash.cache`, a call recomputes when any input below changed. The
-left column is tracked for you. The right column is not, and says what to do.
+With a bare `@cash.cache`, a call recomputes when anything in the first list
+changed. The second list is what cash does not see, and what to do about it.
 
 <!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
-| Tracked: a change recomputes | Not tracked: what to do |
-|---|---|
-| The **arguments**, by content and type. Equal values share an entry | **Library code** (`site-packages`, the standard library). Pin versions |
-| The function's **own code**. Comments, docstrings and formatting are ignored | What a **server or database** returns. Set `ttl=` ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) |
-| The code of every **helper it calls**, transitively, in your project or your own installed package | The **clock**, a random UUID, or the whole environment (`os.environ.copy()`). Pass the value as an argument ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) |
-| **Module globals** read by the function or its helpers, parameter defaults, and captured variables | **Code picked at run time** (`getattr(mod, name)()`, a dict built in the body). Name it with `depends_on=` |
-| Another **cached function** it calls or passes on (`pool.map(inner, xs)`) | A file read by a reader cash does not know. Use `file_depends_on=` |
-| **Your class or function passed as an argument** or held in an argument or global, also inside a library object (a transformer in an sklearn pipeline), and what that code reads | The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...). Changing them keeps entries |
-| A **file** read by a [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked), by content, or declared with `file_depends_on=`. Also a file it looked for and did not find, once it appears, and one it found without reading, once it is gone | |
-| An **environment variable** read by literal name (`os.getenv("TENANT")`, `"DEBUG" in os.environ`) and the working directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) | |
-| Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed `ttl` | |
+<div class="grid cards" markdown>
+
+-   **Tracked for you: a change recomputes**
+
+    ---
+
+    - The **arguments**, by content and type. Equal values share an entry.
+    - The function's **own code**. Comments, docstrings and formatting are
+      ignored.
+    - The code of every **helper it calls**, transitively, in your project or
+      your own installed package.
+    - **Module globals** read by the function or its helpers, parameter
+      defaults, and captured variables.
+    - Another **cached function** it calls or passes on
+      (`pool.map(inner, xs)`).
+    - **Your class or function passed as an argument** or held in an argument
+      or global, also inside a library object (a transformer in an sklearn
+      pipeline), and what that code reads.
+    - A **file** read by a
+      [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked),
+      by content, or declared with `file_depends_on=`. Also a file it looked
+      for and did not find, once it appears, and one it found without
+      reading, once it is gone.
+    - An **environment variable** read by literal name (`os.getenv("TENANT")`,
+      `"DEBUG" in os.environ`) and the working directory (`os.getcwd()`,
+      `Path.cwd()`, `os.path.abspath(p)`).
+    - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
+      `ttl`.
+
+-   **Not tracked: what to do**
+
+    ---
+
+    - **Library code** (`site-packages`, the standard library): pin versions.
+    - What a **server or database** returns: set `ttl=`
+      ([`KEY-NETWORK-READ`](warnings.md#key-network-read)).
+    - The **clock**, a random UUID, or the whole environment
+      (`os.environ.copy()`): pass the value as an argument
+      ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)).
+    - **Code picked at run time** (`getattr(mod, name)()`, a dict built in the
+      body): name it with `depends_on=`.
+    - A file read by a reader cash does not know: use `file_depends_on=`.
+    - The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...):
+      changing them keeps entries.
+
+</div>
 
 File reads need no annotation. `pd.read_csv`, `open()`, `np.load` and the other
 tracked readers record each file with the entry, and every lookup checks that
