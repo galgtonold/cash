@@ -134,6 +134,31 @@ def test_the_def_line_waives_function_scoped_findings_only(tmp_path):
     assert kinds, "the def-line waiver must not swallow line-anchored findings"
 
 
+class _Plain:
+    def run(self, uid):
+        sink({"not audited": uid})
+        return uid
+
+
+class _Audited:
+    def run(self, uid):
+        sink({"not audited": uid})  # @cash:assume-safe
+        return uid
+
+
+def test_two_methods_alike_but_for_the_waiver_are_analyzed_apart():
+    """The analyzer memoises reports by the function's text. The key's form of
+    it drops the waiver, so the second of two same-named methods in one
+    module was handed the first one's report: the waived one warned, or the
+    unwaived one did not, depending on which ran first."""
+    analyzer = PurityAnalyzer()
+    assert analyzer.analyze(_Plain.run).issues, "control: the unwaived method is reported"
+    assert analyzer.analyze(_Audited.run).issues == ()
+    analyzer = PurityAnalyzer()
+    assert analyzer.analyze(_Audited.run).issues == ()
+    assert analyzer.analyze(_Plain.run).issues
+
+
 def test_strict_mode_honours_the_annotation(tmp_path):
     def audited(uid):
         sink({"audited": uid})  # @cash:assume-safe

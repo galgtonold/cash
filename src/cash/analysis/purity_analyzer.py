@@ -80,7 +80,6 @@ from ..source_norm import (
     callable_identity,
     compiled_identity,
     extension_file_digest,
-    normalize_source_for_hash,
     own_source,
 )
 from ..tracking.function_tracker import is_local_module
@@ -2627,17 +2626,19 @@ def _qualname_of(func: Callable[..., Any]) -> str:
 def _try_source_hash(func: Callable[..., Any]) -> str | None:
     """Memo key for the analyzer's own report cache -- NOT a cache key.
 
-    Deliberately the un-stripped form, unlike every channel that goes through
-    ``source_identity_digest``. Nothing downstream keys on this, so folding
-    the decorator in only means two spellings of one function get analyzed
-    twice instead of once, and the narrower input keeps this from quietly
-    becoming a correctness surface.
+    Deliberately the raw text, unlike every channel that goes through
+    ``source_identity_digest``. Nothing downstream keys on this, so a comment
+    or a reformat only means a function is analyzed again. The normalized
+    form drops what the key ignores and the report does not: a waiver, the
+    ``# @cash:assume-safe`` comment.
+    Two methods named alike in one module, one of them waived, shared one
+    report, and the second got the first one's findings.
     """
     try:
         src = inspect.getsource(func)
     except SOURCE_RETRIEVAL_ERRORS:
         return None
-    return hashlib.sha256(normalize_source_for_hash(src).encode("utf-8")).hexdigest()
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()
 
 
 def _find_first_function_def(tree: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
