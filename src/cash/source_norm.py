@@ -50,7 +50,7 @@ import types
 import psutil
 
 from ._memo import COMPILED_MODULES, LruMemo
-from .analysis.annotations import ANNOTATION_PATTERN
+from .analysis.annotations import ANNOTATION_PATTERN, waiver_items
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .tracking.tracker_context import untracked
 from .value_types import IMMUTABLE_PRIMS
@@ -157,6 +157,38 @@ def _annotation_atom(comment: str) -> str | None:
         return None
     value = match.group(2)
     return f"@cash:{directive}" + (f"={value}" if value else "")
+
+
+class _WaiverUnwrapper(ast.NodeTransformer):
+    """Take ``with cash.assume_safe():`` out, leaving its body in its place."""
+
+    def __init__(self) -> None:
+        self.changed = False
+
+    def visit_With(self, node: ast.With) -> ast.AST | list[ast.stmt]:
+        self.generic_visit(node)
+        waivers = {id(item) for item in waiver_items(node)}
+        if not waivers:
+            return node
+        self.changed = True
+        node.items = [item for item in node.items if id(item) not in waivers]
+        return node if node.items else node.body
+
+
+def drop_waiver_blocks(tree: ast.AST) -> bool:
+    """Unwrap every ``with cash.assume_safe():`` in *tree*, in place; True
+    when there was one.
+
+    The block waives purity findings and does nothing else, so, like the
+    ``# @cash:assume-safe`` comment (`_WAIVERS`), it is prose to the key:
+    wrapping lines in it, and the indent that comes with it, keeps every
+    stored result. Matched by spelling (`waiver_items`), since a notebook's
+    simulation digests a function from its text alone; a waiver imported
+    under another name moves the key once, the safe direction.
+    """
+    unwrapper = _WaiverUnwrapper()
+    unwrapper.visit(tree)
+    return unwrapper.changed
 
 
 _DOCSTRING_OWNERS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -307,8 +339,9 @@ def strip_docstrings(source: str) -> str:
 def normalize_source_for_hash(source: str) -> str:
     """Return a canonical form of *source* for hashing.
 
-    The code as ``ast.unparse`` renders it, docstrings dropped, followed by
-    the ``# @cash:`` directives in order. Everything a formatter decides is
+    The code as ``ast.unparse`` renders it, docstrings and ``with
+    cash.assume_safe():`` wrappers dropped (`drop_waiver_blocks`), followed
+    by the ``# @cash:`` directives in order. Everything a formatter decides is
     gone that way, not only comments, blank lines and indentation: quote
     style, escapes and string prefixes, implicit string concatenation, a
     trailing comma, grouping parentheses, line breaks and backslash
@@ -335,6 +368,9 @@ def normalize_source_for_hash(source: str) -> str:
     text = textwrap.dedent(source)
     try:
         tree = ast.parse(text)
+        if "assume_safe" in text:
+            # First: a string the block opened with is a docstring without it.
+            drop_waiver_blocks(tree)
         drop_docstrings(tree)
         code = ast.unparse(tree)
     except Exception:  # noqa: BLE001 - never raise from inside a hasher
@@ -1152,8 +1188,9 @@ def _module_text_identity(raw: bytes) -> bytes:
     are prose, the same as comments.
 
     And ``@cash:`` directives stay, because they are instructions TO cash --
-    ``# @cash:assume-safe`` on a line waives a purity check, and cash's own
-    diagnostic says "@cash: directives are part of its source identity".
+    ``# @cash:assume-safe`` on a line waives a purity check. (A function's
+    own identity drops that one, `_WAIVERS`; a module's keeps every
+    directive, the direction that errs toward re-running.)
 
     Each is kept as its WHOLE line, in source order, which anchors it to the
     code it annotates: moving ``# @cash:assume-safe`` from one function to

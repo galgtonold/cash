@@ -84,7 +84,7 @@ from ..source_norm import (
 )
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
-from .annotations import audited_lines
+from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, called_names, resolve_callee
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .mutations import PANDAS_INPLACE_METHODS
@@ -2064,7 +2064,8 @@ class PurityAnalyzer:
             # Drop what THIS function's source says it has already audited.
             # Filtered per function, against that function's own source, so a
             # waiver written in a helper covers the helper and nothing else.
-            _drop_audited(all_issues, own_issues_from, src)
+            audited, function_scope = _waived_lines(src, tree, func)
+            _drop_audited(all_issues, own_issues_from, audited, function_scope)
             # Only now, after the waivers matched against the function's own
             # source: report lines as the FILE numbers them. Relative to the
             # decorator line, "line 4" sent users to the wrong line.
@@ -2173,7 +2174,6 @@ class PurityAnalyzer:
                 for layer in layers:
                     stack.append((layer, depth + 1, False, reported))
 
-            audited = audited_lines(src)[0] if "@cash:" in src else frozenset()
             for call_node in visitor.called_callable_nodes + visitor.impure_call_nodes:
                 site_path = _call_site_path(_callee_chain(call_node.func))
                 if site_path is not None:
@@ -2290,13 +2290,24 @@ def get_analyzer() -> PurityAnalyzer:
         return _global_analyzer
 
 
-def _drop_audited(issues: list[PurityIssue], start: int, src: str) -> None:
-    """Remove issues in ``issues[start:]`` that *src* waives, in place."""
-    # Substring test before the line scan: almost no function carries one of
-    # these, and this runs for every function the analyzer walks.
-    if "@cash:" not in src:
-        return
-    audited, function_scope = audited_lines(src)
+def _waived_lines(src: str, tree: ast.AST, func: Any) -> tuple[frozenset[int], bool]:
+    """The lines of *src* a waiver covers, and whether one covers the function.
+
+    ``# @cash:assume-safe`` (`audited_lines`) and the lines inside a ``with
+    cash.assume_safe():`` block (`assume_safe_block_lines`), both numbered
+    as *src* and *tree* are. Only the comment on the ``def`` line waives the
+    function-scoped findings: a block is lines, and they carry none.
+    """
+    # Substring test before the line scan: almost no function carries a
+    # comment waiver, and this runs for every function the analyzer walks.
+    marked, function_scope = audited_lines(src) if "@cash:" in src else (frozenset(), False)
+    if "with" in src:
+        marked = marked | assume_safe_block_lines(tree, func)
+    return marked, function_scope
+
+
+def _drop_audited(issues: list[PurityIssue], start: int, audited: frozenset[int], function_scope: bool) -> None:
+    """Remove issues in ``issues[start:]`` that the waivers cover, in place."""
     if not audited and not function_scope:
         return
     kept = [issue for issue in issues[start:] if not (issue.line in audited if issue.line else function_scope)]
@@ -2630,7 +2641,7 @@ def _try_source_hash(func: Callable[..., Any]) -> str | None:
     ``source_identity_digest``. Nothing downstream keys on this, so a comment
     or a reformat only means a function is analyzed again. The normalized
     form drops what the key ignores and the report does not: a waiver, the
-    ``# @cash:assume-safe`` comment.
+    ``# @cash:assume-safe`` comment or a ``with cash.assume_safe():`` block.
     Two methods named alike in one module, one of them waived, shared one
     report, and the second got the first one's findings.
     """

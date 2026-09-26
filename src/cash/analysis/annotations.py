@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
+import types
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
@@ -20,6 +24,9 @@ __all__ = [
     "extract_annotations_for_statements",
     "ASSUME_SAFE_RE",
     "audited_lines",
+    "assume_safe_block_lines",
+    "is_assume_safe_block",
+    "waiver_items",
 ]
 
 
@@ -296,6 +303,10 @@ def get_statement_annotations(full_source: str, node: ast.AST) -> CacheAnnotatio
     end_line = node.end_lineno or start_line
 
     statement_level = parse_annotations_in_range(source_lines, start_line, end_line)
+    if is_assume_safe_block(node):
+        # ``with cash.assume_safe():`` runs as one statement here, as any
+        # ``with`` does, so it waives as the comment anywhere inside it would.
+        statement_level = statement_level.merge(CacheAnnotation(assume_safe=True))
 
     # Cell-level directives reach TOP-LEVEL statements only (``col_offset == 0``).
     # A statement nested in a control body must NOT pick them up implicitly: the
@@ -336,6 +347,8 @@ def extract_annotations_for_statements(full_source: str) -> dict[int, CacheAnnot
             start_line = node.lineno
             end_line = getattr(node, "end_lineno", start_line) or start_line
             ann = cell_level.merge(parse_annotations_in_range(source_lines, start_line, end_line))
+            if is_assume_safe_block(node):
+                ann = ann.merge(CacheAnnotation(assume_safe=True))
 
             if ann.has_directives():
                 annotations[start_line] = ann
@@ -381,3 +394,163 @@ def audited_lines(src: str) -> tuple[frozenset[int], bool]:
         lines[i - 1].lstrip().startswith(("def ", "async def ")) for i in marked if 1 <= i <= len(lines)
     )
     return frozenset(marked), function_scope
+
+
+# ``with cash.assume_safe():`` -- the same waiver for every line of a block.
+#
+# The comment is prose to Python, so a typo in it waives nothing and says
+# nothing. The block is a call: an editor completes it, a type checker checks
+# it, and a misspelling fails on the first run. The runtime half, which waives
+# the effects the first call is seen to perform, is in `cash.effect_observer`.
+
+#: The name of the waiver, as the spelling-only match reads it.
+_WAIVER_NAME = "assume_safe"
+
+
+def _dotted_parts(expr: ast.expr) -> list[str] | None:
+    """``["cash", "assume_safe"]`` for ``cash.assume_safe``; None for anything
+    but a name or a chain of attributes on one."""
+    parts: list[str] = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None
+    parts.append(expr.id)
+    return parts[::-1]
+
+
+def _waiver_call_parts(expr: ast.expr) -> list[str] | None:
+    """The dotted name a no-argument call is made on: ``["cash",
+    "assume_safe"]`` for ``cash.assume_safe()``; None for anything else."""
+    if not isinstance(expr, ast.Call) or expr.args or expr.keywords:
+        return None
+    return _dotted_parts(expr.func)
+
+
+def waiver_items(node: ast.With) -> list[ast.withitem]:
+    """The items of *node* spelled as the waiver: ``assume_safe()`` called with
+    no arguments, bare or as an attribute (``cash.assume_safe()``,
+    ``c.assume_safe()``), bound to no ``as`` name.
+
+    By spelling alone. The cache key uses this, and it has only text to go
+    on: a notebook's simulation digests a function from its text before
+    anything is imported, and it must agree with the live function.
+    """
+    found = []
+    for item in node.items:
+        if item.optional_vars is not None:
+            continue
+        parts = _waiver_call_parts(item.context_expr)
+        if parts is not None and parts[-1] == _WAIVER_NAME:
+            found.append(item)
+    return found
+
+
+def is_assume_safe_block(node: ast.AST) -> bool:
+    """Is *node* a ``with`` statement whose items include the waiver?
+
+    By spelling (`waiver_items`): the notebook path decides a statement's
+    annotation from its text, the same way on a run and in the simulation.
+    """
+    return isinstance(node, ast.With) and bool(waiver_items(node))
+
+
+def _names_bound_for(func: Any, tree: ast.AST) -> dict[str, Any]:
+    """What names in *func*'s body resolve to besides its globals: its
+    closure cells, and the modules and names its own ``import`` lines bind."""
+    namespace: dict[str, Any] = {}
+    code = getattr(func, "__code__", None)
+    for name, cell in zip(getattr(code, "co_freevars", ()) or (), getattr(func, "__closure__", None) or ()):
+        try:
+            namespace[name] = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.partition(".")[0]
+                module = sys.modules.get(alias.name if alias.asname else top)
+                if module is not None:
+                    namespace[alias.asname or top] = module
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            module = sys.modules.get(node.module)
+            for alias in node.names:
+                if alias.name == "*" or module is None:
+                    continue
+                value = vars(module).get(alias.name, sys.modules.get(f"{node.module}.{alias.name}"))
+                if value is not None:
+                    namespace[alias.asname or alias.name] = value
+    return namespace
+
+
+def _resolves_to(parts: list[str], bound: dict[str, Any], globals_: dict[str, Any], target: object) -> bool:
+    """Does the dotted name *parts* name *target*, its first part looked up
+    in *bound* and then in *globals_*?
+
+    Attributes are read from modules only, and from their ``__dict__``: a
+    module's ``__getattr__`` or an object's property never runs for this.
+    """
+    missing = object()
+    obj = bound.get(parts[0], missing)
+    if obj is missing:
+        obj = globals_.get(parts[0], missing)
+    for attr in parts[1:]:
+        if not isinstance(obj, types.ModuleType):
+            return False
+        obj = vars(obj).get(attr, missing)
+    return obj is target
+
+
+def assume_safe_block_lines(tree: ast.AST, func: Any = None) -> frozenset[int]:
+    """Line numbers inside a ``with cash.assume_safe():`` block in *tree*.
+
+    The lines of the block's body, in *tree*'s own numbering, which for a
+    function is the frame `audited_lines` uses. An item written after the
+    waiver on the ``with`` line is inside the block, as Python nests it:
+    ``with cash.assume_safe(), open(p, "w") as fh:`` opens the file there.
+    One written before it is not.
+
+    With *func*, the call must name ``cash.assume_safe`` in *func*'s
+    namespace, however it was imported (``cash.assume_safe``, ``c.`` after
+    ``import cash as c``, a ``from cash import assume_safe as waive`` name);
+    a function of the user's own that happens to be called ``assume_safe``
+    waives nothing. Without *func*, the spelling decides (`waiver_items`).
+    """
+    candidates: list[tuple[ast.With, list[tuple[int, list[str]]]]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With) or not node.body:
+            continue
+        calls = [
+            (index, parts)
+            for index, item in enumerate(node.items)
+            if item.optional_vars is None and (parts := _waiver_call_parts(item.context_expr)) is not None
+        ]
+        if calls:
+            candidates.append((node, calls))
+    if not candidates:
+        return frozenset()
+    resolves: Callable[[list[str]], bool]
+    if func is None:
+
+        def resolves(parts: list[str]) -> bool:
+            return parts[-1] == _WAIVER_NAME
+
+    else:
+        from ..effect_observer import assume_safe
+
+        bound = _names_bound_for(func, tree)
+        globals_ = getattr(func, "__globals__", None) or {}
+
+        def resolves(parts: list[str]) -> bool:
+            return _resolves_to(parts, bound, globals_, assume_safe)
+
+    lines: set[int] = set()
+    for node, calls in candidates:
+        first = next((index for index, parts in calls if resolves(parts)), None)
+        if first is None:
+            continue
+        inner = node.items[first + 1 :]
+        start = inner[0].context_expr.lineno if inner else node.body[0].lineno
+        lines.update(range(start, (node.end_lineno or node.body[-1].lineno) + 1))
+    return frozenset(lines)

@@ -15,8 +15,7 @@ Docstrings are prose too, the module's own included, and do not count.
 
 What must still count is the part nobody should have to think about twice:
 ``@cash:`` directives, which are instructions to cash --
-``# @cash:assume-safe`` waives a purity check, and cash's own diagnostic says
-directives are part of a function's source identity.
+``# @cash:assume-safe`` waives a purity check.
 """
 
 import os

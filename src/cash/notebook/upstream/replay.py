@@ -79,12 +79,13 @@ class StatementReplay:
         put ``# @cash:no-cache-calls`` on a comprehension, and its calls were
         cached whenever a cell below repaired it. The repair has the
         statement's code, keyed as the simulator keys it; the directive is read
-        from its cell as a direct run reads it. Only statements that carry one.
+        from its cell as a direct run reads it. Only statements that carry one;
+        a ``with cash.assume_safe():`` statement carries ``assume-safe``.
         """
 
         found: dict[str, Any] = {}
         for cell in notebook_cells or ():
-            if "@cash:" not in cell:
+            if "@cash:" not in cell and "assume_safe" not in cell:
                 continue
             tree = parse_cell_source(cell)
             if tree is None:

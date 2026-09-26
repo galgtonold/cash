@@ -194,7 +194,7 @@ def test_the_warning_names_the_defining_file(tmp_path):
         cached({"x": 0})
     text = "\n".join(str(w.message) for w in rec if "IMPURE-SIDE-EFFECTS" in str(w.message))
     assert os.path.basename(__file__) in text, text
-    assert "changes the function's key once" in text
+    assert "No waiver changes the function's cache key" in text
 
 
 # -- printed once -------------------------------------------------------------

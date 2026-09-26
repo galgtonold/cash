@@ -414,11 +414,12 @@ class GlobalsFold:
                     mutating_methods_only=True,
                 )
                 suspected = unsafe_uses_of(tree, candidates) - hard
-                provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
+                provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func, tree))
                 # Suspected only on waived lines (`LEDGER.record(r)  #
-                # @cash:assume-safe`): the audited effect moves it on every
-                # call, so keying on it made every hit impossible and demoting
-                # it warned about the very line that was audited.
+                # @cash:assume-safe`, or inside `with cash.assume_safe():`):
+                # the audited effect moves it on every call, so keying on it
+                # made every hit impossible and demoting it warned about the
+                # very line that was audited.
                 hard |= suspected - provisional
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:

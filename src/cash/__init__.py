@@ -10,8 +10,9 @@
   are in ``cash.notebook.ipython``, the statement processor in
   ``cash.notebook.statement``.
 
-Purity decorators (``pure``, ``stateful``, ``is_pure``, ``is_stateful``) are
-part of the public API; import them from ``cash``, e.g. ``from cash import pure``.
+Purity decorators (``pure``, ``stateful``, ``is_pure``, ``is_stateful``) and
+the ``assume_safe`` block are part of the public API; import them from
+``cash``, e.g. ``from cash import pure``.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
 from .core import CacheExplanation, Cash
 from .data_source import DataSource
+from .effect_observer import assume_safe
 from .exceptions import (
     AmbiguousCellError,
     CacheBackendError,
@@ -298,6 +300,7 @@ __all__ = [
     "stateful",
     "is_pure",
     "is_stateful",
+    "assume_safe",
     # Configuration (stable)
     "get_config",
     "CashConfig",

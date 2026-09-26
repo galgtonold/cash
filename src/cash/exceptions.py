@@ -149,7 +149,8 @@ class CashImpureFunctionError(CashError):
     finding. The message lists each reason.
 
     Fix: call the code directly, mark an audited helper with `pure`, or
-    accept the risk with ``@cash.cache(assume_safe=True)``.
+    accept the risk: for some lines with ``with cash.assume_safe():``, for
+    the whole function with ``@cash.cache(assume_safe=True)``.
     """
 
 
@@ -200,6 +201,7 @@ class CashImpurityWarning(CashCacheIneffectiveWarning):
     result is returned and none of that happens. Log calls are not
     reported. A subclass of `CashCacheIneffectiveWarning`.
 
-    Fix: move the side effect out, mark an audited helper with `pure`, or
-    pass ``assume_safe=True``. Turn it into an error to fail CI.
+    Fix: move the side effect out, mark an audited helper with `pure`, wrap
+    the audited lines in ``with cash.assume_safe():``, or pass
+    ``assume_safe=True``. Turn it into an error to fail CI.
     """

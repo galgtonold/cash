@@ -424,7 +424,8 @@ class PurityChecks:
                 fix="pass the value in as an argument and return the new one, "
                 "instead of reaching out and rewriting it; or, if a cache hit "
                 "may skip the change (a bill, a log), put "
-                "`# @cash:assume-safe` on the line named.",
+                "`# @cash:assume-safe` on the line named, or "
+                "`with cash.assume_safe():` around it.",
             )
 
     def refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
@@ -632,7 +633,9 @@ class PurityChecks:
 
         * ``assume_safe=True`` -- the user audited this function and said so;
           ``# @cash:assume-safe`` on a line that led to an effect waives that
-          effect alone (see ``EffectObserver.record_effect``).
+          effect alone, and an effect performed while a ``with
+          cash.assume_safe():`` block is open is waived too (see
+          ``EffectObserver.record_effect``).
         * the static findings already name that KIND of effect -- a write the
           analyzer listed is not news when the observer sees it too. Only the
           kinds they cover are dropped, so a static finding about a log line
@@ -670,7 +673,8 @@ class PurityChecks:
             "'argument mutation' line means an object the CALLER still "
             "holds stops being changed. If it is incidental, put "
             "`# @cash:assume-safe` on the line named (any line of yours on "
-            "the way to it counts); @cash.cache(assume_safe=True) waives "
+            "the way to it counts) or run it inside `with "
+            "cash.assume_safe():`; @cash.cache(assume_safe=True) waives "
             "the whole function instead, including effects added later.",
         )
 
@@ -696,7 +700,8 @@ class PurityChecks:
                 f"connected to a server, so its result depends on an answer "
                 f"the cache key cannot see. Set ttl= to say how old a served "
                 f"answer may be, or put `# @cash:assume-safe` on the line of "
-                f"yours that led to it.\n{summary}"
+                f"yours that led to it (or `with cash.assume_safe():` around "
+                f"it).\n{summary}"
             )
         self._notices.warn_once(
             CashImpurityWarning,
@@ -712,7 +717,8 @@ class PurityChecks:
             "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
             "(a date, a version) as an argument, so it reaches the key. If "
             "the answer never changes, say so with `# @cash:assume-safe` on "
-            "the line of yours that led to the connection.",
+            "the line of yours that led to the connection, or `with "
+            "cash.assume_safe():` around it.",
             once_per_version=True,
         )
 
@@ -835,10 +841,10 @@ class PurityChecks:
                 f"runtime value, so cash cannot tell when it changes and a cached "
                 f"result could be silently stale. Caching correctness cannot be "
                 f"guaranteed for this function.\nPut `# @cash:assume-safe` on "
-                f"the line named below to accept the risk for that statement "
-                f"alone, pass @cash.cache(assume_safe=True) to waive the whole "
-                f"function, or refactor to a statically-named "
-                f"call.\n{untrackable_summary}"
+                f"the line named below (or `with cash.assume_safe():` around "
+                f"it) to accept the risk for that statement alone, pass "
+                f"@cash.cache(assume_safe=True) to waive the whole function, or "
+                f"refactor to a statically-named call.\n{untrackable_summary}"
             )
 
         # Ambient reads get their own warning, not the side-effects one. The
@@ -867,7 +873,8 @@ class PurityChecks:
                 fix="pass the value in as an argument -- `f(now=datetime.now())` "
                 "-- so it reaches the cache key and a new value means a new "
                 "entry. If freezing it is what you want, say so with "
-                "`# @cash:assume-safe` on that line.",
+                "`# @cash:assume-safe` on that line, or `with "
+                "cash.assume_safe():` around it.",
                 once_per_version=True,
             )
         # A network or database read gets its own advisory too, for the same
@@ -892,7 +899,7 @@ class PurityChecks:
                 "`@cash.cache(ttl=3600)` -- or pass what makes the answer new "
                 "(a date, a version) as an argument, so it reaches the key. If "
                 "the answer never changes, say so with `# @cash:assume-safe` "
-                "on that line.",
+                "on that line, or `with cash.assume_safe():` around it.",
                 once_per_version=True,
             )
         if not issues:
@@ -906,7 +913,8 @@ class PurityChecks:
                 f"@cash.cache(strict=True) on {func_name}: purity issues "
                 f"detected. Fix the function, mark callees with "
                 f"@pure / @stateful, put `# @cash:assume-safe` on the lines you "
-                f"have audited, or relax to assume_safe=True.\n{summary}"
+                f"have audited (or `with cash.assume_safe():` around them), or "
+                f"relax to assume_safe=True.\n{summary}"
             )
         # mode == "warn"
         self._notices.warn_once(
@@ -926,10 +934,10 @@ class PurityChecks:
                     else ""
                 )
                 + "go down the list and put `# @cash:assume-safe` on each line "
-                "you have audited, or refactor; @cash.cache(assume_safe=True) "
-                "waives the whole function instead, including anything added "
-                "to it later. The first annotation changes the function's key "
-                "once: @cash: directives are part of its source identity."
+                "you have audited, or `with cash.assume_safe():` around "
+                "several, or refactor; @cash.cache(assume_safe=True) waives "
+                "the whole function instead, including anything added to it "
+                "later. No waiver changes the function's cache key."
             ),
             once_per_version=True,
         )

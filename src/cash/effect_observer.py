@@ -55,6 +55,7 @@ may be a test's fake). The observer only records; the decorator decides.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import linecache
@@ -75,6 +76,15 @@ logger = logging.getLogger(__name__)
 #: dispatch-dynamically shape, same isolation properties.
 active_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
     "_cash_active_observer", default=None
+)
+
+
+#: The observer whose effects a ``with cash.assume_safe():`` block open now
+#: waives: the one active when the block was entered. Holding the observer,
+#: not a flag, keeps the waiver to the call it was written in: a cached call
+#: made inside the block opens its own observer, which this does not name.
+waived_observer: contextvars.ContextVar["EffectObserver | None"] = contextvars.ContextVar(
+    "_cash_waived_observer", default=None
 )
 
 
@@ -132,6 +142,60 @@ def line_waived(filename: str, lineno: int) -> bool:
         return True
     above = linecache.getline(filename, lineno - 1)
     return above.lstrip().startswith("#") and bool(ASSUME_SAFE_RE.search(above))
+
+
+class _AssumeSafe(contextlib.AbstractContextManager):
+    """What `assume_safe` returns. One contextvar set and reset, and only
+    while a cached call is being observed; nothing at all otherwise."""
+
+    def __init__(self) -> None:
+        self._tokens: list[contextvars.Token | None] = []
+
+    def __enter__(self) -> None:
+        observer = active_observer.get()
+        self._tokens.append(None if observer is None else waived_observer.set(observer))
+
+    def __exit__(self, *exc_info: Any) -> None:
+        token = self._tokens.pop() if self._tokens else None
+        if token is not None:
+            reset_in_any_context(waived_observer, token)
+
+
+def assume_safe() -> contextlib.AbstractContextManager[None]:
+    """Waive cash's purity findings for the lines inside the block.
+
+    Inside a ``@cash.cache`` function, ``with cash.assume_safe():`` says the
+    effects in the block are fine to skip on a cache hit, and that what the
+    block reads may be frozen in the stored result. It waives what
+    ``# @cash:assume-safe`` waives on one line, for every line in the block,
+    and the effects the first call is seen to perform while the block runs,
+    including those of helpers it calls. Findings the comment cannot waive
+    stay.
+
+    It is not part of the cache key: adding or removing the block, and the
+    indent it brings, keeps the stored results. (Imported under another
+    name, ``from cash import assume_safe as waive``, it still waives, but
+    adding it recomputes once.) Outside a cached call it does nothing. Use
+    the line comment for one line and ``@cash.cache(assume_safe=True)`` for
+    the whole function.
+
+    Returns:
+        A context manager. Its ``as`` value is ``None``.
+
+    Examples:
+        ```python
+        import cash
+
+        @cash.cache
+        def total(rows):
+            result = sum(rows)
+            with cash.assume_safe():
+                with open("audit.log", "a") as fh:
+                    fh.write(f"summed {len(rows)} rows\n")
+            return result
+        ```
+    """
+    return _AssumeSafe()
 
 
 def _on_connect(args: tuple) -> None:
@@ -283,7 +347,9 @@ class EffectObserver:
     def record_effect(self, kind: str, detail: str) -> None:
         """Record an effect performed on the stack right now, naming the user's
         line that led to it -- unless ``# @cash:assume-safe`` waives any line
-        on the way.
+        on the way, or a ``with cash.assume_safe():`` block entered during
+        this observed call is open (`waived_observer`), whatever code the
+        effect is in.
 
         The effect itself happens inside a library, where no waiver can be
         written; the user's code that called into it can carry one, the same
@@ -291,6 +357,8 @@ class EffectObserver:
         way to quiet an observed effect was ``assume_safe=True``, which also
         silences every effect added to the function later.
         """
+        if waived_observer.get() is self:
+            return
         sites = self._user_sites()
         if any(line_waived(filename, lineno) for filename, lineno in sites):
             return

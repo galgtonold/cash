@@ -110,8 +110,9 @@ class CodeArgs:
         The cached function's own body refuses such a line
         (``untrackable_dep``); a method of an argument's class was never
         analysed, and ``getattr(MOD, name)()`` there served a stale result in
-        silence. ``# @cash:assume-safe`` on the line waives it, as it does in
-        the function itself.
+        silence. ``# @cash:assume-safe`` on the line, or a ``with
+        cash.assume_safe():`` block around it, waives it, as in the function
+        itself.
         """
         if _EXPLAINING.get():
             return
@@ -140,7 +141,8 @@ class CodeArgs:
             fix = (
                 "call what it needs by name, or name it with "
                 "@cash.cache(depends_on=[...]); put `# @cash:assume-safe` on that "
-                "line once you have checked a stale result cannot matter."
+                "line, or `with cash.assume_safe():` around it, once you have "
+                "checked a stale result cannot matter."
             )
             log_diagnostic(logger, "KEY-DYNAMIC-DEPENDENCY", what, fix)
             warn_diagnostic(CashImpurityWarning, "KEY-DYNAMIC-DEPENDENCY", what, fix)

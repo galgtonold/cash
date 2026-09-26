@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.annotations import assume_safe_block_lines
 from ..analysis.purity_analyzer import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
@@ -81,8 +82,9 @@ def unsafe_uses_of(
     ALIASES`, `d = ALIASES; d.get(v)` and a bare read all tracked
     correctly, which is what made it so hard to believe.
 
-    ``waived`` skips uses on a ``# @cash:assume-safe`` line: the effect
-    there was audited as one a hit may lose (see `waived_use_filter`).
+    ``waived`` skips uses on a ``# @cash:assume-safe`` line or inside a
+    ``with cash.assume_safe():`` block: the effect there was audited as one
+    a hit may lose (see `waived_use_filter`).
     """
     unsafe: set[str] = set()
     write_methods: frozenset[str] = frozenset()
@@ -122,18 +124,20 @@ def unsafe_uses_of(
     return frozenset(unsafe)
 
 
-def waived_use_filter(func: Callable) -> Callable[[ast.AST], bool] | None:
-    """A predicate: is a node of *func*'s dedented source on a waived line?
+def waived_use_filter(func: Callable, tree: ast.AST) -> Callable[[ast.AST], bool] | None:
+    """A predicate: is a node of *tree*, *func*'s dedented source, on a waived line?
 
-    Line numbers in that tree count from the ``def``; the waiver is read
-    from the file. ``None`` when the file position is unknown.
+    Line numbers in that tree count from the ``def``. A comment waiver is
+    read from the file, a ``with cash.assume_safe():`` block from *tree*.
+    ``None`` when neither can waive anything.
     """
+    blocks = assume_safe_block_lines(tree, func)
     try:
         filename = inspect.getsourcefile(func) or inspect.getfile(func)
         first = inspect.getsourcelines(func)[1]
     except SOURCE_RETRIEVAL_ERRORS:
-        return None
-    if not filename:
+        filename, first = None, 1
+    if not filename and not blocks:
         return None
 
     offset = max(first, 1) - 1
@@ -143,7 +147,7 @@ def waived_use_filter(func: Callable) -> Callable[[ast.AST], bool] | None:
         if start is None:
             return False
         end = getattr(node, "end_lineno", None) or start
-        return any(line_waived(filename, offset + n) for n in range(start, end + 1))
+        return any(n in blocks or (filename and line_waived(filename, offset + n)) for n in range(start, end + 1))
 
     return waived
 
@@ -335,7 +339,7 @@ class CaptureAnalysis:
                 mutating_methods_only=True,
             )
             suspected = unsafe_uses_of(tree, freevars) - result
-            provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func))
+            provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func, tree))
             # Only on waived lines: as for globals (`GlobalsFold.read_global_data_names`).
             result = result | (suspected - provisional)
         self._use_cache[code] = (result, provisional)
