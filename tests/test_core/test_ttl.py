@@ -198,7 +198,10 @@ def test_an_entry_expired_under_the_tier_default_says_so(temp_cache_dir, monkeyp
 
     c = _tiered(monkeypatch, temp_cache_dir, 5)
     c.cache(assume_safe=True)(body)(1)
-    c.backend.backends[-1]._writes.wait_all()
+    # The end of that run. Waiting for the entry's write alone is not enough:
+    # the record of the keys this run stored, which is how the next run tells
+    # an expired entry from one never stored, is written by a writer of its own.
+    c.shutdown()
     fresh = _tiered(monkeypatch, temp_cache_dir, 5)  # a new process: no RAM copy
     f = fresh.cache(assume_safe=True)(body)
     clock[0] += 9
