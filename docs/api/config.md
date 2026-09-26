@@ -22,7 +22,6 @@ from cash import CashConfig, get_config, create_default_config
 ::: cash.config.TierConfig
     options:
       show_if_no_docstring: true
-      members: true
       filters: ["!^_"]
 
 ---
