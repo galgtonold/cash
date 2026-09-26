@@ -67,11 +67,14 @@ The one exception is a value too big for every disk tier's size cap: it stays in
 RAM for this process, and
 [`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big) says so.
 
+### Cache folder
+
 <!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @edf1f957 -->
-**The folder is `.cash` at your project root.** Cash starts at the running
-script and walks up to the first directory that holds a `setup.py`, a
-`setup.cfg`, a `.git`, or a `pyproject.toml` that declares a project (a
-`[project]`, `[build-system]`, `[tool.poetry]` or `[tool.cash]` table). So
+The cache folder (the cache directory) is `.cash` at your project root.
+cash starts at the running script and walks up to the first directory that
+holds a `setup.py`, a `setup.cfg`, a `.git`, or a `pyproject.toml` that
+declares a project (a `[project]`, `[build-system]`, `[tool.poetry]` or
+`[tool.cash]` table). So
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
 started it, from any directory. A script with no project above it caches next
 to itself. An installed tool run from outside any project caches per user, in
@@ -89,9 +92,12 @@ To choose the folder yourself, highest priority first:
 `CASH_CACHE_DIR=/var/cache/myapp python run.py` needs no code change, and an
 absolute path leaves no doubt about where entries go.
 
-<!-- claim: cash/config.py:CashConfig.max_cache_size == None -->
-**The disk cap is automatic.** By default the disk tier may use a quarter of
-the room on its volume, and the RAM tier a fifth of memory. `cash info` prints
+### Cache size limit
+
+<!-- claim: cash/config.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
+The disk cap is automatic. By default the disk tier may use a quarter of
+the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
+memory. `cash info` prints
 both numbers (`Max size: auto -- disk 8.0 GiB, RAM 3.1 GiB`). When the disk
 tier is full, cash evicts the entries worth least per byte first: cheap to
 recompute, large, and rarely read. Set `max_cache_size` (or
@@ -107,8 +113,10 @@ entries it logs how much it removed:
 cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
 ```
 
+### Clearing the cache
+
 <!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @a08b9044, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
-**Clearing.** Pick the narrowest tool that does the job:
+Pick the narrowest tool that does the job:
 
 | To remove | Run |
 |---|---|

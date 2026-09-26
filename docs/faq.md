@@ -31,6 +31,15 @@
     [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is). To clear it, run
     `cash clear --all` or delete the folder.
 
+??? question "How big can the cache get, and how do I limit it?"
+    By default the disk cache may use a quarter of the free room on its
+    volume, between 8 GiB and 100 GiB. When it is full, cash evicts the
+    entries that are cheapest to recompute per byte. `cash info` prints the
+    cap in use. To pin it, set `max_cache_size`, for example
+    `CASH_MAX_CACHE_SIZE=20GB` or `max_cache_size = "20GB"` under
+    `[tool.cash]` in `pyproject.toml`. See
+    [Where your cache lives](how-it-works/storage.md#when-the-disk-fills-up).
+
 ??? question "Is my cache still valid after I upgrade cash?"
     Cash clears a local cache written in an older, incompatible format by
     itself, and treats any entry it cannot read as a miss. An upgrade can cost
