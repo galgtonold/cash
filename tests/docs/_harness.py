@@ -96,7 +96,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: so the list only shrinks: when a page is fixed, delete its entries.
 PENDING_FENCES: dict[str, dict[str, str]] = {
     "docs/for-coding-agents.md": {
-        "@cash.cache(assume_safe=True)": "fragment: needs `import cash` and a scikit-learn import",
+        "# fit()'s discarded return": "fragment: needs `import cash` and a scikit-learn import",
     },
 }
 

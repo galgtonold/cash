@@ -58,4 +58,4 @@ def test_cash_help_survives_a_legacy_codepage_console():
     assert cp.returncode == 0, f"cash.help() crashed under cp1252 stdout:\n{cp.stderr}"
     assert "UnicodeEncodeError" not in cp.stderr
     # The prose still has to arrive -- degrading the glyphs must not blank the page.
-    assert "guide for coding agents" in cp.stdout
+    assert "# For coding agents" in cp.stdout

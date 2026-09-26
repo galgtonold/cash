@@ -318,7 +318,7 @@ def _render_reference_badge() -> list[str]:
 def _agent_guide_badge_block() -> list[str]:
     """The fenced ``[Cash] ...`` transcript from docs/for-coding-agents.md."""
     page = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "for-coding-agents.md").read_text(encoding="utf-8")
-    blocks = re.findall(r"^```\n(\[Cash\] .*?)^```", page, re.M | re.S)
+    blocks = re.findall(r"^```[^\n]*\n(\[Cash\] .*?)^```", page, re.M | re.S)
     assert len(blocks) == 1, f"expected exactly one [Cash] transcript in for-coding-agents.md, found {len(blocks)}"
     return [ln for ln in blocks[0].splitlines() if ln.strip()]
 

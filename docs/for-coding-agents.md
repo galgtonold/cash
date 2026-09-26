@@ -1,4 +1,4 @@
-# Using cash — a guide for coding agents
+# For coding agents
 
 cash caches slow Python results so notebooks and scripts re-run fast. Use it
 **only** on slow, deterministic work. This page is also what `cash.help()`
@@ -36,7 +36,7 @@ returns.
 
 The text badge, one line per statement:
 
-```
+```text title="Output"
 [Cash] CACHED (2 restored, 1 ran; 0.01s, saved 0.15s) - 1 not cached
   CACHED: df = pd.read_csv('sales.csv')  (saved 0.07s)
   CACHED: summary = df.groupby('region').sum()  (saved 0.08s)
@@ -66,7 +66,8 @@ the output it printed, so a print marker shows up either way. A cached
 4. **ML: return the model, never a bare `.fit()`.** `model.fit(X, y)` alone
    changes the model in place and returns nothing to cache. Do:
    ```python
-   @cash.cache(assume_safe=True)   # fit()'s discarded return trips the purity check; safe here
+   # fit()'s discarded return trips the purity check; safe here
+   @cash.cache(assume_safe=True)
    def train(X, y):
        m = RandomForestClassifier(random_state=42)
        m.fit(X, y)
@@ -84,11 +85,11 @@ the output it printed, so a print marker shows up either way. A cached
 The comment goes directly above the statement, no blank line, lowercase:
 
 ```
-# @cash:no-cache        never cache (timestamps, side effects, fresh values)
-# @cash:persist         write a cheap value to disk so it survives a restart
+# @cash:no-cache        never cache (timestamps, side effects, IDs)
+# @cash:persist         keep a cheap value across a restart (disk)
 # @cash:ttl=300         expire after N seconds (integer)
-# @cash:allow-random    hide the unseeded-draw warning (the draw is still frozen)
-# @cash:no-cache-calls  stop caching the slow CALL inside a statement (on by default)
+# @cash:allow-random    hide the unseeded-draw warning (still frozen)
+# @cash:no-cache-calls  stop caching the slow call inside a statement
 # @cash:cache-fit       cache a bare estimator.fit(X, y) (off by default)
 ```
 
@@ -106,4 +107,15 @@ Default: annotate nothing.
 - **Cache-safe cells:** rebind instead of changing an object from an earlier
   cell (`df = df.assign(c=...)`, not `df['c'] = ...`); seed in the same cell
   as the draw; pass state in and out of functions. Full list:
-  [Writing cache-safe cells](https://cash-lib.readthedocs.io/en/stable/known-limitations/).
+  [Writing cache-safe cells](https://cash-lib.readthedocs.io/en/latest/known-limitations/).
+  For `@cash.cache`:
+  [Known limitations of `@cash.cache`](https://cash-lib.readthedocs.io/en/latest/decorator-limitations/).
+
+## Related
+
+- [The `@cash.cache` guide](https://cash-lib.readthedocs.io/en/latest/decorator/):
+  every parameter, and how to see what cash did.
+- [Annotations](https://cash-lib.readthedocs.io/en/latest/annotations/): every
+  `# @cash:` comment and what it changes.
+- [Warnings](https://cash-lib.readthedocs.io/en/latest/warnings/): every
+  warning code, what it means and the fix.
