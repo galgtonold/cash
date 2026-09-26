@@ -145,6 +145,9 @@ dev = [
     "fakeredis>=2.0",
     # test_sdist_contents.py builds an sdist to check what it ships.
     "build",
+    # test_an_in_project_extension_helper_keys_its_build.py compiles a C
+    # extension with build_ext, which finds the compiler on every OS.
+    "setuptools",
     # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
     # test_comm_reply_during_execution.py pumps the kernel event loop from inside
