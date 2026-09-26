@@ -140,7 +140,7 @@ through a helper or a loop over a list of paths.
 
 ### Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @a7b91171, cash/notebook/server_discovery.py:_collect_running_servers @1929f93c, cash/notebook/server_discovery.py:_search_servers_for_notebook @27ad2def -->
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @a7b91171, cash/notebook/server_discovery.py:_collect_running_servers @1929f93c, cash/notebook/server_discovery.py:_search_servers_for_notebook @e0bf82ad -->
 To simulate, cash needs the notebook's current cells. It tries, in order:
 cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have

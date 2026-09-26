@@ -74,7 +74,7 @@ def _serving(monkeypatch, server, sessions):
         def __exit__(self, *a):
             return False
 
-    monkeypatch.setattr(sd.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    monkeypatch.setattr(sd, "_open_sessions", lambda req: _Resp())
     yield
 
 

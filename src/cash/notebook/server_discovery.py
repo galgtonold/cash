@@ -15,6 +15,7 @@ shared state for the lifetime of a kernel session.  All callers go through
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -25,7 +26,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
@@ -336,6 +337,32 @@ def _collect_running_servers() -> list[dict]:
     return servers
 
 
+def _is_loopback(url: str) -> bool:
+    """True when *url* names this machine by a loopback address or ``localhost``."""
+    host = urlsplit(url).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _open_sessions(req: urllib.request.Request):
+    """Open a ``/api/sessions`` request, bypassing any proxy for this machine.
+
+    urllib sends even ``127.0.0.1`` through ``http_proxy`` unless ``no_proxy``
+    names it, and a proxy cannot reach the kernel's own loopback interface, so
+    a local server would look unreachable. A server on another host (a
+    JupyterHub whose single-user servers run elsewhere) keeps the
+    environment's proxy settings, which it may need.
+    """
+    if _is_loopback(req.full_url):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=_SESSIONS_TIMEOUT_S)
+    return urllib.request.urlopen(req, timeout=_SESSIONS_TIMEOUT_S)
+
+
 def _search_servers_for_notebook(kernel_id: str) -> str | None:
     """Query running Jupyter servers to find the notebook matching kernel_id."""
     for server in _collect_running_servers():
@@ -348,7 +375,7 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
             req = urllib.request.Request(url)
             if token:
                 req.add_header("Authorization", f"token {token}")
-            with urllib.request.urlopen(req, timeout=_SESSIONS_TIMEOUT_S) as response:
+            with _open_sessions(req) as response:
                 sessions = json.loads(response.read().decode())
                 for session in sessions:
                     if session["kernel"]["id"] == kernel_id:

@@ -45,13 +45,16 @@ class _StubServer:
 
     def __init__(self, sessions: list[dict], token: str | None = None) -> None:
         self.auth_headers: list[str | None] = []
+        self.paths: list[str] = []
         stub = self
 
         class _Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 auth = self.headers.get("Authorization")
                 stub.auth_headers.append(auth)
-                if self.path.split("?")[0] != "/api/sessions":
+                # Through a proxy the path is the whole URL.
+                stub.paths.append(self.path)
+                if not self.path.split("?")[0].endswith("/api/sessions"):
                     self.send_error(404)
                     return
                 if token is not None and auth != f"token {token}":
@@ -112,9 +115,6 @@ def runtime_dir(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "ipykernel", kernel)
     monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)
     monkeypatch.delenv("JUPYTERHUB_API_TOKEN", raising=False)
-    # A developer's HTTP proxy must not carry the localhost requests.
-    monkeypatch.setenv("no_proxy", "*")
-    monkeypatch.setenv("NO_PROXY", "*")
     sd.invalidate_notebook_path_cache()
     yield runtime
     sd.invalidate_notebook_path_cache()
@@ -277,3 +277,39 @@ def test_a_server_named_by_two_files_is_asked_once(runtime_dir, serve, tmp_path)
 
     assert sd.get_notebook_path() is None
     assert stub.auth_headers == [None], "the server was not asked exactly once"
+
+
+def _proxy_env(monkeypatch, proxy_url: str) -> None:
+    """Route plain-HTTP requests through *proxy_url*, with no bypass list."""
+    for name in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.setenv(name, proxy_url)
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+def test_a_local_server_is_reached_past_an_http_proxy(runtime_dir, serve, tmp_path, monkeypatch, host):
+    """A proxy cannot reach the kernel's own loopback interface, and urllib
+    would send even 127.0.0.1 through ``http_proxy`` unless ``no_proxy`` names
+    it. Here the proxy is dead, so a request through it fails."""
+    stub = serve()
+    root = tmp_path / "work"
+    url = stub.url.replace("127.0.0.1", host)
+    _write_server_file(runtime_dir, "jpserver-4242.json", url=url, root=root)
+    _proxy_env(monkeypatch, _closed_port_url())
+
+    assert sd.get_notebook_path() == os.path.join(str(root), NB_PATH)
+    assert stub.paths == ["/api/sessions"]
+
+
+def test_a_server_on_another_host_still_goes_through_the_proxy(runtime_dir, serve, tmp_path, monkeypatch):
+    """The control arm: a JupyterHub server on another host may need the
+    proxy, so its request goes there. The stub plays the proxy and answers."""
+    proxy = serve()
+    root = tmp_path / "home"
+    remote = "http://jupyterhub.invalid:8000/user/ada/"
+    _write_server_file(runtime_dir, "jpserver-4242.json", url=remote, root=root, token="tok")
+    _proxy_env(monkeypatch, proxy.url)
+
+    assert sd.get_notebook_path() == os.path.join(str(root), NB_PATH)
+    assert proxy.paths == [remote + "api/sessions"]
