@@ -312,62 +312,90 @@
 }
 .cash-cta-card.secondary h3 { color: var(--cash-ochre); }
 
-/* §5 Comparison matrix — sortable table. */
-/* Fit all columns on screen: the material wrapper otherwise shrinks to content
- * and the nowrap headers blow the table past the viewport. Force the table to
- * fill the column, fix the layout, give the label column the room and let the
- * icon columns share the rest with wrapping headers. */
-.md-typeset .cash-matrix-table .md-typeset__scrollwrap,
+/* Comparison matrix on Why cash? — sortable (docs/javascripts/why-cash-matrix.js).
+ * Columns: Capability, the two cash columns (2 and 3), then the other tools.
+ * The capability column takes what the tool columns leave and wraps; tool
+ * columns size to their header and never break a word ("% c a s h _ o n",
+ * one letter per line, came from fixed column widths). Cells are a mark
+ * (.cash-mx-yes / -partly / -no) with a footnote number for "partly". On a
+ * narrow screen the table scrolls sideways with the capability column kept
+ * in view. */
 .md-typeset .cash-matrix-table .md-typeset__table {
   display: block;
   width: 100%;
-  overflow-x: visible;        /* material scrolls wide tables; we make ours fit */
 }
 .md-typeset .cash-matrix-table table {
-  table-layout: fixed !important;
-  width: 100% !important;
-  min-width: 0 !important;     /* defeat material's per-table min width */
-  font-size: 12px;
+  width: 100%;
+  font-size: 13px;
 }
 .md-typeset .cash-matrix-table table th,
 .md-typeset .cash-matrix-table table td {
-  min-width: 0 !important;     /* defeat the per-cell min width that forced 120px */
-  overflow-wrap: anywhere;
+  min-width: 0;               /* Material gives every th 5rem */
+  text-align: center;
+  padding: 6px 6px;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .md-typeset .cash-matrix-table table th {
   cursor: pointer;
   user-select: none;
-  white-space: normal;        /* let long tool names wrap so all columns fit */
   vertical-align: bottom;
-  text-align: center;
-  line-height: 1.2;
-  padding: 8px 3px;
+  line-height: 1.25;
+  white-space: normal;        /* "Manual pickle" may wrap between words */
 }
 .md-typeset .cash-matrix-table table th[aria-sort="ascending"]::after  { content: " ▲"; color: var(--cash-green); }
 .md-typeset .cash-matrix-table table th[aria-sort="descending"]::after { content: " ▼"; color: var(--cash-green); }
 .md-typeset .cash-matrix-table table td {
-  text-align: center;
   font-variant-numeric: tabular-nums;
-  padding: 6px 2px;
 }
 .md-typeset .cash-matrix-table table th:first-child,
 .md-typeset .cash-matrix-table table td:first-child {
-  width: 26% !important;
   text-align: left;
   font-weight: 500;
-  padding-left: 8px;
+  white-space: normal;
+  min-width: 11em;
+  position: sticky;
+  left: 0;
+  background: var(--cash-bg);
+  z-index: 1;
 }
-/* The 7 tool columns share the rest evenly (26% + 7×10.5% ≈ 100%). */
-.md-typeset .cash-matrix-table table th:not(:first-child),
-.md-typeset .cash-matrix-table table td:not(:first-child) {
-  width: 10.5% !important;
+.md-typeset .cash-matrix-table table th:first-child {
+  background: var(--cash-bg-section);
 }
-/* The cash column is the answer — tint it and colour its header. */
-.md-typeset .cash-matrix-table table th:last-child,
-.md-typeset .cash-matrix-table table td:last-child {
+/* The cash columns are the answer: tint them and colour their headers. */
+.md-typeset .cash-matrix-table table th:nth-child(2),
+.md-typeset .cash-matrix-table table td:nth-child(2),
+.md-typeset .cash-matrix-table table th:nth-child(3),
+.md-typeset .cash-matrix-table table td:nth-child(3) {
   background: var(--cash-green-bg);
 }
-.md-typeset .cash-matrix-table table th:last-child { color: var(--cash-green); }
+.md-typeset .cash-matrix-table table th:nth-child(2),
+.md-typeset .cash-matrix-table table th:nth-child(3),
+.md-typeset .cash-matrix-table table th:nth-child(2) code,
+.md-typeset .cash-matrix-table table th:nth-child(3) code {
+  color: var(--cash-green);
+}
+.md-typeset .cash-mx {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+.md-typeset .cash-mx-yes    { color: var(--cash-green); }
+.md-typeset .cash-mx-partly { color: var(--cash-ochre); }
+.md-typeset .cash-mx-no     { color: var(--cash-ink-5); }
+.md-typeset .cash-matrix-table sup {
+  font-size: 10px;
+  margin-left: 1px;
+}
+.md-typeset ol.cash-matrix-notes {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--cash-ink-2);
+}
+.md-typeset ol.cash-matrix-notes li {
+  margin-bottom: 0.25em;
+}
 .cash-matrix-row-hidden { display: none; }
 
 /* ─── Notebook cell code blocks ─────────────────────────────────────── *

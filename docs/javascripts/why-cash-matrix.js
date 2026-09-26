@@ -12,19 +12,21 @@
 (function () {
   "use strict";
 
-  function rankCell(text) {
-    // Sort order: Yes best, Partly middle, No worst, n/a last; anything else
-    // (e.g. a capability name) sorts alphabetically.
-    var t = text.trim().toLowerCase();
-    if (t === "yes") return 0;
-    if (t === "partly") return 1;
-    if (t === "no") return 2;
-    if (t === "n/a") return 3;
+  // Sort order: Yes best, Partly middle, No worst, n/a last; anything else
+  // (e.g. a capability name) sorts alphabetically. A cell's mark is a
+  // <span class="cash-mx" aria-label="Yes|Partly|No">; a cell without one
+  // is read as text ("n/a", or a plain "Yes").
+  var RANKS = { "yes": 0, "partly": 1, "no": 2, "n/a": 3 };
+
+  function rankCell(cell) {
+    var mark = cell.querySelector(".cash-mx[aria-label]");
+    var t = (mark ? mark.getAttribute("aria-label") : cell.textContent).trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(RANKS, t)) return RANKS[t];
     return t;
   }
 
   function compareCells(a, b) {
-    var ra = rankCell(a), rb = rankCell(b);
+    var ra = a ? rankCell(a) : "", rb = b ? rankCell(b) : "";
     if (typeof ra === "number" && typeof rb === "number") return ra - rb;
     if (typeof ra === "number") return -1;
     if (typeof rb === "number") return 1;
@@ -56,9 +58,7 @@
 
     function sortBy(colIdx, dir) {
       var sorted = originalOrder.slice().sort(function (r1, r2) {
-        var c1 = r1.cells[colIdx] ? r1.cells[colIdx].textContent : "";
-        var c2 = r2.cells[colIdx] ? r2.cells[colIdx].textContent : "";
-        var cmp = compareCells(c1, c2);
+        var cmp = compareCells(r1.cells[colIdx], r2.cells[colIdx]);
         return dir === "descending" ? -cmp : cmp;
       });
       sorted.forEach(function (r) { tbody.appendChild(r); });
