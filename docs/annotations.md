@@ -1,3 +1,8 @@
+---
+search:
+  boost: 2
+---
+
 # Annotations
 
 !!! info "Applies to: notebook"
@@ -11,27 +16,27 @@ shows when to reach for each one; this page is the reference.
 
 | Directive | Effect |
 |---|---|
-| `# @cash:persist` | Store the result on disk, even if it is too cheap to be stored otherwise. |
-| `# @cash:no-cache` | Run the statement every time. Wins over every other directive. |
-| `# @cash:ttl=N` | Treat the stored result as expired after `N` seconds. |
-| `# @cash:allow-random` | Silence the unseeded-randomness warning. Does not change caching. |
-| `# @cash:cache-fit` | Cache a bare estimator fit such as `clf.fit(X, y)`. |
-| `# @cash:no-cache-calls` | Stop caching the calls inside the statement. |
-| `# @cash:assume-safe` | Cache the statement despite a side effect that is harmless to skip. |
+| [`# @cash:persist`](#cashpersist) | Store the result on disk, even if it is too cheap to be stored otherwise. |
+| [`# @cash:no-cache`](#cashno-cache) | Run the statement every time. Wins over every other directive. |
+| [`# @cash:ttl=N`](#cashttln) | Treat the stored result as expired after `N` seconds. |
+| [`# @cash:allow-random`](#cashallow-random) | Silence the unseeded-randomness warning. Does not change caching. |
+| [`# @cash:cache-fit`](#cashcache-fit) | Cache a bare estimator fit such as `clf.fit(X, y)`. |
+| [`# @cash:assume-safe`](#cashassume-safe) | Cache the statement despite a side effect that is harmless to skip. |
+| [`# @cash:no-cache-calls`](#call-level-caching-default-and-cashno-cache-calls) | Stop caching the calls inside the statement. |
 
 <!-- test:skip reason="illustrative: train_model, fetch_quotes and data are the reader's own" -->
 ```python { .nb-cell }
 # @cash:persist
-features = build_features(data)   # stored on disk, so it survives a restart
+features = build_features(data)  # on disk: survives a restart
 
 # @cash:ttl=300
-quotes = fetch_quotes("AAPL")     # fetched again after five minutes
+quotes = fetch_quotes("AAPL")  # fetched again after five minutes
 ```
 
 ## Where to put them
 
 <!-- claim: cash/analysis/annotations.py:parse_annotations_in_range @27219e63 -->
-- **Above the statement.** Cash reads the comment lines directly above a
+- **Above the statement.** cash reads the comment lines directly above a
   statement, walking up until a blank line or a line of code. Plain comments in
   between are fine; a blank line ends the search.
 - **At the end of the line.** `x = expensive()  # @cash:persist` works too.
@@ -49,11 +54,11 @@ quotes = fetch_quotes("AAPL")     # fetched again after five minutes
 # @cash:persist
 # builds the lookup table used below
 # @cash:ttl=3600
-table = build_table(raw)          # persist and ttl both apply
+table = build_table(raw)  # persist and ttl both apply
 
 # @cash:persist
 
-model = train(table)              # not applied: the blank line breaks it
+model = train(table)  # not applied: the blank line breaks it
 ```
 
 <!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @b10e0cdc -->
@@ -137,7 +142,7 @@ directive and has no such caveat.
 ### `# @cash:assume-safe`
 
 <!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
-Cash runs a statement with a side effect every time, and it judges effects by
+cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached
 and a hit returns the stored answer without sending the request:
@@ -155,7 +160,7 @@ stale.
 ### `# @cash:no-cache-calls` { #call-level-caching-default-and-cashno-cache-calls }
 
 <!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @b55376b5 -->
-Cash also caches the expensive **calls inside** a statement, by default and with
+cash also caches the expensive **calls inside** a statement, by default and with
 no directive. That is what keeps work cached where the statement itself cannot
 be: in `results.append(compute(x))` the append runs every time, but `compute(x)`
 is served from the cache. `no-cache-calls` turns this off for a statement, a
@@ -177,7 +182,7 @@ the same call in another cell is served too. Inside a comprehension each element
 is part of the key. Builtins, classes and method calls (`model.predict(x)`) are
 not cached this way. Calls show on the badge tagged `[intercepted]`:
 
-```text
+```text title="Output"
   @cash.cache:
     compute() [intercepted]: 2/3 cached (0.402s)
 ```
@@ -190,26 +195,41 @@ The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it
 and `no-cache` switches them off.
 
 !!! warning "A cached call skips effects cash cannot see"
-    Cash does not serve a call from the cache when it sees the function change
+    cash does not serve a call from the cache when it sees the function change
     an argument, draw random numbers or write a file, and it restores a change
-    the function makes to a global. Any other effect is skipped on a hit. Use `no-cache-calls` on the statement, or
-    mark the function [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers),
+    the function makes to a global. Any other effect is skipped on a hit. Use
+    `no-cache-calls` on the statement, or mark the function [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers),
     when you are not sure.
 
 ## Common mistakes
 
 <!-- test:skip reason="illustrative: each directive here is misplaced or misspelled" -->
 ```python { .nb-cell }
-# @Cash:persist             # ignored: @cash: must be lower case
+# ignored: @cash: must be lower case
+# @Cash:persist
 model = train()
 
 # @cash:persist
 
-model = train()             # ignored: a blank line breaks the link
+# ignored: a blank line breaks the link
+model = train()
 
 model = train()
-# @cash:persist             # applies to the next statement, not this one
+# @cash:persist
+# ^ applies to the statement below, not the one above
 
-# @cash:perist              # typo: warns ANNOT-UNKNOWN-DIRECTIVE, then ignored
+# typo: warns ANNOT-UNKNOWN-DIRECTIVE, then ignored
+# @cash:perist
 model = train()
 ```
+
+## Related
+
+- [Controlling caching](tutorials/feature-guides/controlling-cache-behavior.md):
+  when to reach for each directive, with worked cells.
+- [Magic commands](magics.md): the notebook-wide switches, such as
+  `%cash_on ttl=N` and `%cash_persist`.
+- [Warnings](warnings.md#annot-codes): what `ANNOT-TTL-INVALID` and
+  `ANNOT-UNKNOWN-DIRECTIVE` mean.
+- [Writing cache-safe cells](known-limitations.md): what cash cannot see in
+  a cell, and the directive that covers it.
