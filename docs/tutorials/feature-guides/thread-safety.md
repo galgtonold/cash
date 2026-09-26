@@ -79,20 +79,40 @@ one worker computes is a hit for the other workers, for the parent, and for the
 next run.
 
 <!-- claim: cash/_active.py:publish_settings @035400df, cash/_active.py:_arrive @ea2f94f8 -->
-That holds for settings changed in code, too. A worker started after
-`cash.configure(...)`, or inside `with cash.disabled():`, runs with those
-settings: `configure(cache_dir=...)` moves the workers' cache with the
-parent's, and under `cash.disabled()` every cached call in a worker runs its
-body. This works for every start method: fork, spawn (the default on Windows
-and macOS), forkserver (the default on Linux from Python 3.14) and joblib's
-workers. `CASH_*` variables set before the run reach them as well.
+Settings changed in code reach the workers too. A pool created inside
+`with cash.disabled():` runs every cached call's body:
 
-A worker keeps the settings it started with. A pool created before the change
-keeps its workers' old settings, and so does a pool whose workers started
-inside a `disabled()` block and are used after it. joblib keeps its workers
-between `Parallel` calls, so a `with cash.disabled():` around the second call
-does not reach them. Create the pool inside the block, or set `CASH_DISABLE=1`
-for the whole run.
+```python { title="sweep.py" }
+from multiprocessing import Pool
+
+import cash
+
+@cash.cache
+def simulate(seed):
+    return seed * 2
+
+if __name__ == "__main__":
+    with Pool(4) as pool:
+        # computed once; later runs and the other workers get hits
+        results = pool.map(simulate, range(8))
+
+    with cash.disabled():
+        with Pool(4) as pool:
+            # created inside the block: every body runs
+            fresh = pool.map(simulate, range(8))
+```
+
+- `cash.configure(...)` before the pool starts reaches the workers the same
+  way: `configure(cache_dir=...)` moves their cache with the parent's.
+- This works for every start method: fork, spawn (the default on Windows and
+  macOS), forkserver (the default on Linux from Python 3.14) and joblib's
+  workers. `CASH_*` variables set before the run reach them as well.
+- **A worker keeps the settings it started with.** A pool created before the
+  change keeps its old settings, and so does a pool whose workers started
+  inside a `disabled()` block and are used after it.
+- joblib keeps its workers between `Parallel` calls, so a
+  `with cash.disabled():` around the second call does not reach them. Create
+  the pool inside the block, or set `CASH_DISABLE=1` for the whole run.
 
 <!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @a7a12595 -->
 A file a worker reads for a cached call in the parent is a dependency of that
@@ -117,12 +137,14 @@ Each process keeps some things to itself:
 
 <!-- claim: cash/decorator/script_pickling.py:expose_script_function @f20865df, cash/core.py:Cash.__reduce__ @98bbf40f -->
 For **joblib**, keep the script's work behind `if __name__ == "__main__":`.
-Cash sends a cached function from the running script to the workers by name,
+cash sends a cached function from the running script to the workers by name,
 and each worker imports the script to find it. Without the guard, that import
-runs your script again, so cash stops with a message asking for the guard. A
-cached function defined in a module you import always works, and so does
-`Parallel(prefer="threads")`. A script run as `python -m pkg.mod` is not sent
-this way: move its cached functions into a module it imports.
+runs your script again, so cash stops with a message asking for the guard.
+
+- A cached function defined in a module you import always works, and so does
+  `Parallel(prefer="threads")`.
+- A script run as `python -m pkg.mod` is not sent this way: move its cached
+  functions into a module it imports.
 
 ## Related
 
