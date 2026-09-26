@@ -14,7 +14,7 @@ def _reset_discovery_state():
 
     ``get_notebook_path`` short-circuits to None on a recent failed probe
     (the negative cache), and that check runs BEFORE the VS Code /
-    ipynbname probes. Any test here that drives discovery to failure would
+    server probes. Any test here that drives discovery to failure would
     otherwise leave the negative cache set and make a later test see None no
     matter what it patches -- an order-dependent failure this module hit for
     real once its tests stopped being randomised into a lucky order.

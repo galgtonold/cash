@@ -21,7 +21,9 @@ These tests pin the fix:
 
 from __future__ import annotations
 
+import sys
 import time
+import types
 import warnings
 
 import pytest
@@ -40,24 +42,36 @@ def _reset_discovery_state(monkeypatch):
 
 
 @pytest.fixture
-def failing_discovery(monkeypatch):
+def kernel_with_id(monkeypatch):
+    """A kernel whose connection file carries an id, so discovery reaches the
+    server search; not VS Code, so that is the only probe."""
+    kernel = types.ModuleType("ipykernel")
+    kernel.get_connection_file = lambda: "/runtime/kernel-abc123.json"
+    monkeypatch.setitem(sys.modules, "ipykernel", kernel)
+    monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)
+
+
+def _serve_path(monkeypatch, path):
+    """Make the server search answer *path*; return its call counter."""
+    counter = {"n": 0}
+
+    def _search(kernel_id):
+        counter["n"] += 1
+        return path
+
+    monkeypatch.setattr(sd, "_search_servers_for_notebook", _search)
+    return counter
+
+
+@pytest.fixture
+def failing_discovery(monkeypatch, kernel_with_id):
     """Model a slow-failing discovery: count probes of the underlying primitive.
 
     ``get_notebook_path()`` is left intact (the negative cache under test wraps
-    it); only the primitives it calls are patched to fail, and the ipynbname
-    probe counts invocations so a test can assert how many times discovery
-    actually ran.
+    it); only the server search it calls is patched to fail, and it counts
+    invocations so a test can assert how many times discovery actually ran.
     """
-    counter = {"n": 0}
-
-    def _slow_fail():
-        counter["n"] += 1
-        return None
-
-    monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)
-    monkeypatch.setattr(sd, "_try_ipynbname_path", _slow_fail)
-    monkeypatch.setattr(sd, "_search_servers_for_notebook", lambda kid: None)
-    return counter
+    return _serve_path(monkeypatch, None)
 
 
 # ---------------------------------------------------------------------------
@@ -141,15 +155,8 @@ def test_negative_ttl_is_short():
 # ---------------------------------------------------------------------------
 
 
-def test_success_resolves_and_is_cached(monkeypatch):
-    probes = {"n": 0}
-
-    def _resolve():
-        probes["n"] += 1
-        return "C:/nb/analysis.ipynb"
-
-    monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)
-    monkeypatch.setattr(sd, "_try_ipynbname_path", _resolve)
+def test_success_resolves_and_is_cached(monkeypatch, kernel_with_id):
+    probes = _serve_path(monkeypatch, "C:/nb/analysis.ipynb")
 
     assert sd.get_notebook_path() == "C:/nb/analysis.ipynb"
     assert sd.get_notebook_path() == "C:/nb/analysis.ipynb"
@@ -163,7 +170,7 @@ def test_success_after_failure_supersedes_negative(failing_discovery, monkeypatc
 
     # Server comes up; %cash_on invalidates the caches.
     sd.invalidate_notebook_path_cache()
-    monkeypatch.setattr(sd, "_try_ipynbname_path", lambda: "C:/nb/late.ipynb")
+    _serve_path(monkeypatch, "C:/nb/late.ipynb")
 
     assert sd.get_notebook_path() == "C:/nb/late.ipynb", "resolvable path was shadowed by stale negative"
 
@@ -220,9 +227,8 @@ def test_checker_resolve_emits_warning_when_not_found(failing_discovery):
     assert len(discovery_warnings) == 1
 
 
-def test_no_warning_when_path_resolves(monkeypatch):
-    monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)
-    monkeypatch.setattr(sd, "_try_ipynbname_path", lambda: "C:/nb/ok.ipynb")
+def test_no_warning_when_path_resolves(monkeypatch, kernel_with_id):
+    _serve_path(monkeypatch, "C:/nb/ok.ipynb")
 
     class _Shell:
         user_ns: dict = {}

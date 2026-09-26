@@ -89,8 +89,6 @@ classifiers = [
 dependencies = [
     # Sizes the RAM tier from the machine's memory and watches memory pressure.
     "psutil>=5.0,<8",
-    # One more way to find the running notebook's file.
-    "ipynbname>=0.1",
     # Reads [tool.cash]; the standard library has a TOML parser only from 3.11.
     "tomli>=1.1; python_version < '3.11'",
 ]

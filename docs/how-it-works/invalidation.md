@@ -140,12 +140,14 @@ through a helper or a loop over a list of paths.
 
 ### Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970 -->
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @a7b91171, cash/notebook/server_discovery.py:_collect_running_servers @1929f93c, cash/notebook/server_discovery.py:_search_servers_for_notebook @27ad2def -->
 To simulate, cash needs the notebook's current cells. It tries, in order:
 cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have
-not saved. Otherwise it reads the saved `.ipynb`, found through VS Code's
-notebook variable, the `ipynbname` package or the Jupyter server API. See
+not saved. Otherwise it reads the saved `.ipynb`. VS Code tells the kernel
+which file that is; elsewhere cash asks the running Jupyter server
+(JupyterLab, Jupyter Notebook or JupyterHub) which notebook this kernel
+belongs to, also when the kernel runs in an environment of its own. See
 [editing without saving](../known-limitations.md#editing-without-saving).
 
 If none of these works (a plain IPython shell, for example), upstream checking

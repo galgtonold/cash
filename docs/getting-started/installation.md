@@ -10,8 +10,8 @@ cash needs Python 3.10 or newer. One install gives you everything cash needs:
 pip install cash-lib
 ```
 
-The notebook path also needs IPython or Jupyter. In JupyterLab, the install
-adds a small extension (`cash-live-cells`) that sends your unsaved cells to
+cash does not install Jupyter or IPython: the notebook path runs in the
+kernel you already use. In JupyterLab, the install adds a small extension (`cash-live-cells`) that sends your unsaved cells to
 the kernel, so cash sees your latest edits without a save.
 
 ## Packages for specific features

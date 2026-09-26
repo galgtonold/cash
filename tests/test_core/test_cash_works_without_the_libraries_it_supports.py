@@ -1,11 +1,12 @@
 """``import cash`` must work without the libraries cash only works *with*.
 
-``pip install cash-lib`` installs cash's own dependencies (psutil, ipynbname,
-and tomli on Python 3.10) and nothing it merely supports: pandas, polars,
-pyarrow, numpy, matplotlib, ipywidgets, redis and boto3 are there only when
-the user already uses them. IPython arrives with ipynbname's kernel stack, but
-the decorator must not need it either (the notebook layering rule), so it is
-blocked too. It broke once -- ``statement/restore.py`` grew a module-level
+``pip install cash-lib`` installs cash's own dependencies (psutil, and tomli
+on Python 3.10) and nothing it merely supports: pandas, polars, pyarrow,
+numpy, matplotlib, ipywidgets, redis and boto3 are there only when the user
+already uses them. Nor does it install IPython or the Jupyter kernel stack
+(ipykernel, jupyter_client, jupyter_core, traitlets): a notebook's kernel
+brings them, and the decorator must not need them (the notebook layering
+rule), so they are blocked too. It broke once -- ``statement/restore.py`` grew a module-level
 ``from IPython.display import ...`` that sits on the ``import cash`` chain
 (``__init__`` → ``core`` → ``notebook`` → ``upstream`` → ``statement`` →
 ``restore``), and a plain script raised::
@@ -37,9 +38,13 @@ import textwrap
 import pytest
 
 # The import names of the libraries cash supports but does not install, plus
-# IPython (see the module docstring).
+# IPython and the kernel stack (see the module docstring).
 BLOCKED_MODULES = [
     "IPython",
+    "ipykernel",
+    "jupyter_client",
+    "jupyter_core",
+    "traitlets",
     "ipywidgets",
     "matplotlib",
     "numpy",

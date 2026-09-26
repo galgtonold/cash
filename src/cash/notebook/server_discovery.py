@@ -14,6 +14,7 @@ shared state for the lifetime of a kernel session.  All callers go through
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -22,7 +23,6 @@ import sys
 import time as _time
 import urllib.error
 import urllib.request
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
@@ -78,9 +78,9 @@ _NOTEBOOK_PATH_CACHE_TTL: float = 300.0  # seconds (5 minutes)
 
 # Negative (not-found) cache for notebook path discovery.
 #
-# Discovery that FAILS is even more expensive than one that succeeds: a stale or
-# dead Jupyter runtime entry makes ``ipynbname`` / ``list_running_servers`` block
-# on a network round-trip until it times out, then returns nothing.  The
+# Discovery that FAILS is even more expensive than one that succeeds: a stale
+# Jupyter runtime entry whose address accepts but never answers makes the
+# sessions request wait out its timeout, then returns nothing.  The
 # upstream checker resolves the path many times per cell, so without this cache
 # a single ``run_all`` under slow-failing discovery would pay that timeout
 # dozens of times.
@@ -246,55 +246,93 @@ def _try_vscode_path() -> str | None:
     return None
 
 
-def _try_ipynbname_path() -> str | None:
-    """Return notebook path via the ipynbname package, or None.
+# How long one server gets to answer ``/api/sessions``. A live local server
+# answers in milliseconds. A stale runtime entry usually costs nothing (its port
+# refuses the connection at once); only an address that accepts and never
+# answers waits this out. A false "no server" is the costlier mistake -- it
+# turns upstream tracking off and shows the not-found advisory -- while a slow
+# failure is paid at most once per negative-cache window, so this stays well
+# above a live server's latency rather than as short as possible.
+_SESSIONS_TIMEOUT_S: float = 1.0
 
-    ``ipynbname.path()`` raises whatever its internal probing hits when no
-    discoverable Jupyter server backs the kernel — notably ``IndexError`` from
-    its ``_get_kernel_id`` (indexing an empty running-servers list) under Google
-    Colab and other server-less runtimes. Discovery is best-effort, so ANY
-    failure here must degrade to "no path found" rather than propagate: an
-    uncaught error aborts the whole notebook-path resolution and trips the
-    upstream pipeline's broad failure handler, which disables caching for the
-    cell ("Cash auto-caching failed: list index out of range").
+# Server info files a running server writes into the Jupyter runtime dir:
+# ``jpserver-<pid>.json`` for jupyter_server (JupyterLab 3+, Notebook 7),
+# ``nbserver-<pid>.json`` for the classic notebook server.
+_SERVER_FILE_PATTERNS = ("jpserver-*.json", "nbserver-*.json")
+
+
+def _jupyter_runtime_dir() -> Path | None:
+    """The Jupyter runtime dir, where running servers leave their info files.
+
+    Found through ``jupyter_core``, which every kernel has (ipykernel depends
+    on it), unlike ``jupyter_server`` and ``notebook``, which live in the
+    server's environment and are usually missing from a kernel registered
+    from an environment of its own.
     """
     try:
-        # ipynbname imports the notebook/jupyter_server packages internally, so
-        # suppress the same third-party import-time warnings here too.
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=SyntaxWarning)
-            warnings.filterwarnings("ignore", category=DeprecationWarning)
-            import ipynbname
+        from jupyter_core.paths import jupyter_runtime_dir
 
-            return str(ipynbname.path())
-    except Exception:  # noqa: BLE001 - a discovery library must never crash cash
-        logger.debug("[UTILS] ipynbname could not be imported or failed")
-    return None
+        return Path(jupyter_runtime_dir())
+    except Exception as e:  # noqa: BLE001 - discovery is best-effort
+        logger.debug("[UTILS] no Jupyter runtime dir: %s", e)
+        return None
 
 
-def _collect_running_servers() -> list:
-    """Return all running Jupyter server descriptors from all server packages."""
-    servers: list = []
-    # Importing these third-party server packages can emit warnings we neither
-    # control nor want in the user's cell output — notably a ``SyntaxWarning:
-    # invalid escape sequence '\/'`` from the (deprecated) ``notebook`` package's
-    # banner on Python 3.12+, seen on Colab. cash triggers the import only for
-    # discovery, so swallow those import-time warnings.
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=SyntaxWarning)
-        warnings.filterwarnings("ignore", category=DeprecationWarning)
+def _pid_alive(pid: object) -> bool:
+    """False only when *pid* names a process that is known to be gone."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return True
+    try:
+        import psutil
+
+        return psutil.pid_exists(pid)
+    except Exception:  # noqa: BLE001 - an unknown answer must not demote a server
+        return True
+
+
+def _collect_running_servers() -> list[dict]:
+    """The servers described in the Jupyter runtime dir, most likely first.
+
+    Reads the info files directly instead of asking ``jupyter_server`` /
+    ``notebook`` to list them: those packages see the same files but are
+    rarely installed where the kernel runs. Files that are empty or not JSON
+    (a server still writing, or one that died mid-write) are skipped.
+
+    Order: servers whose process is alive first, then newest file first, so a
+    live server is asked before the leftovers of dead ones. A dead process's
+    file is kept rather than dropped, since a server in another process
+    namespace can look dead from here. One entry per URL: a dead server's
+    file can name the port a newer server now listens on, and asking there
+    with the old entry would join the wrong root directory.
+    """
+    runtime_dir = _jupyter_runtime_dir()
+    if runtime_dir is None:
+        return []
+    try:
+        info_files = [f for pattern in _SERVER_FILE_PATTERNS for f in runtime_dir.glob(pattern)]
+    except OSError as e:
+        logger.debug("[UTILS] cannot list the Jupyter runtime dir %s: %s", runtime_dir, e)
+        return []
+    ranked: list[tuple[bool, float, dict]] = []
+    for info_file in info_files:
         try:
-            from jupyter_server import serverapp
-
-            servers.extend(list(serverapp.list_running_servers()))
-        except (ImportError, AttributeError):
-            logger.debug("[UTILS] jupyter_server not available")
-        try:
-            from notebook import notebookapp
-
-            servers.extend(list(notebookapp.list_running_servers()))
-        except (ImportError, AttributeError):
-            logger.debug("[UTILS] notebook.notebookapp not available")
+            mtime = info_file.stat().st_mtime
+            info = json.loads(info_file.read_bytes())
+        except (OSError, ValueError) as e:
+            logger.debug("[UTILS] skipping server file %s: %s", info_file, e)
+            continue
+        if not isinstance(info, dict) or not isinstance(info.get("url"), str):
+            logger.debug("[UTILS] skipping server file %s: no url", info_file)
+            continue
+        ranked.append((_pid_alive(info.get("pid")), mtime, info))
+    ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    servers: list[dict] = []
+    seen: set[str] = set()
+    for _, _, info in ranked:
+        url = info["url"].rstrip("/")
+        if url not in seen:
+            seen.add(url)
+            servers.append(info)
     return servers
 
 
@@ -303,11 +341,14 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
     for server in _collect_running_servers():
         try:
             url = server["url"].rstrip("/") + "/api/sessions"
-            token = server.get("token", "")
+            # A JupyterHub single-user server writes no token into its info
+            # file. The kernel inherits the hub's API token from that server's
+            # environment, and the server accepts it.
+            token = server.get("token") or os.environ.get("JUPYTERHUB_API_TOKEN", "")
             req = urllib.request.Request(url)
             if token:
                 req.add_header("Authorization", f"token {token}")
-            with urllib.request.urlopen(req, timeout=2) as response:
+            with urllib.request.urlopen(req, timeout=_SESSIONS_TIMEOUT_S) as response:
                 sessions = json.loads(response.read().decode())
                 for session in sessions:
                     if session["kernel"]["id"] == kernel_id:
@@ -329,7 +370,7 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
                             )
                             continue
                         return os.path.join(root_dir, notebook_path)
-        except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException) as exc:
             # KeyError is handled apart, below. A missing key is a SCHEMA
             # mismatch, not a transport failure, and reporting it as "failed
             # to query" sends the reader hunting the network while the
@@ -342,6 +383,14 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
         except KeyError as exc:
             logger.debug(
                 "[UTILS] Session payload from %s is missing key %s -- unrecognised Jupyter server schema",
+                server.get("url", "?"),
+                exc,
+            )
+        except (TypeError, AttributeError) as exc:
+            # Something answered that is not a Jupyter server (a stale entry's
+            # port reused by another service): wrong shape, same verdict.
+            logger.debug(
+                "[UTILS] Session payload from %s has an unrecognised shape: %s",
                 server.get("url", "?"),
                 exc,
             )
@@ -373,9 +422,9 @@ def get_notebook_path() -> str | None:
     Priority:
 
     1. VS Code injected variable ``__vsc_ipynb_file__``
-    2. ``ipynbname`` package
-    3. Jupyter Server REST API
-    4. ``None`` (upstream checking disabled gracefully)
+    2. The Jupyter servers listed in the runtime dir, asked over their REST
+       API (``/api/sessions``) which session runs this kernel
+    3. ``None`` (upstream checking disabled gracefully)
     """
     global _cached_notebook_path, _cached_notebook_path_time, _negative_cache_time
     now = _time.monotonic()
@@ -403,9 +452,6 @@ def get_notebook_path() -> str | None:
         return None
 
     if result := _try_vscode_path():
-        return _cache_and_return(result)
-
-    if result := _try_ipynbname_path():
         return _cache_and_return(result)
 
     try:

@@ -49,11 +49,10 @@ def test_kernel_id_parse_is_total(filename, expected):
 
 @pytest.fixture
 def _isolated_discovery(monkeypatch):
-    """Neutralise caches and the earlier probes so the ipykernel branch is hit."""
+    """Neutralise caches and the earlier probe so the ipykernel branch is hit."""
     monkeypatch.setattr(sd, "_cached_notebook_path", None, raising=False)
     monkeypatch.setattr(sd, "_negative_cache_time", 0.0, raising=False)
     monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)
-    monkeypatch.setattr(sd, "_try_ipynbname_path", lambda: None)
 
 
 def _fake_ipykernel(monkeypatch, connection_file):
