@@ -125,7 +125,9 @@ can be stored in memory and on disk while skipping a Redis tier limited to
 keeps it in memory if it fits and warns once
 ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)).
 
-## When the disk fills up
+<span id="when-the-disk-fills-up"></span>
+
+## Cache size limit and eviction
 
 <!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @290394ae -->
 Only a write can start eviction. After each write to disk, the background
