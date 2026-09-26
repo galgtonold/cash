@@ -136,7 +136,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 
 <!-- claim: cash/core.py:Cash.cache @2d082328 -->
 **What happened.** You put `@cash.cache` on an async generator (an
-`async def` that `yield`s). Cash does not cache those, so it returned your
+`async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.
 
 **Why it matters.** Every call runs the whole body.
@@ -160,7 +160,7 @@ entries. The message says how many.
 their arguments is served the result you meant to clear.
 
 **What to do.** On Windows, a file cannot be removed while another process has
-it open: a reader, a virus scanner, a search indexer. Cash retries briefly
+it open: a reader, a virus scanner, a search indexer. cash retries briefly
 first. Close whatever holds the cache folder and clear again, or run
 `cash clear --function NAME` once it has let go.
 
@@ -172,7 +172,7 @@ result. For freeing space only, the entries go at the next clear.
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/backends/cache_dir.py:warn_if_unwritable @2d37cc7a -->
-**What happened.** Cash could not create a file in its cache directory: a
+**What happened.** cash could not create a file in its cache directory: a
 read-only mount, missing permissions, or a path that no longer exists. The
 message names the directory and the OS error. On Windows without long paths
 it is also a directory whose path is too long for an entry: entry names are
@@ -322,7 +322,7 @@ stopped. A new kernel re-runs the loop from where storing stopped.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/effectiveness.py:CUMULATIVE_WASTE_SECONDS == 2.0 -->
-**What happened.** Cash times what it spends on each call (building the key,
+**What happened.** cash times what it spends on each call (building the key,
 the lookup, storing the result) and compares it with the function's own run
 time. For this function, caching has lost more than two seconds in total so
 far. The message gives the numbers and names the costliest argument.
@@ -473,7 +473,7 @@ A setting cash found but could not act on. Every code here starts `CONFIG-`.
 
 <!-- claim: cash/config.py:_resolve_config @21f63b6a -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
-does not exist. Cash used the other configuration layers.
+does not exist. cash used the other configuration layers.
 
 **Why it matters.** None of the file's settings apply. Usual causes: a wheel
 that did not include the file, or a path relative to the working directory.
@@ -497,7 +497,7 @@ before passing it.
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
-**What happened.** Cash could not use part of its configuration:
+**What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
   setting keeps its default);
@@ -524,7 +524,7 @@ the line.
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/config.py:_load_toml_config @9d135d5c, cash/config.py:_warn_toml_unreadable @b0598e4e -->
-**What happened.** Cash found a config file with a `[tool.cash]` or `[cash]`
+**What happened.** cash found a config file with a `[tool.cash]` or `[cash]`
 table but has no TOML parser. Python 3.10 has none built in.
 
 **Why it matters.** Every setting in that file is ignored, `cache_dir`
@@ -576,7 +576,7 @@ The function does something a cache hit will not repeat. Every code here starts 
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-**What happened.** Cash watched the first (missing) call and saw it reach
+**What happened.** cash watched the first (missing) call and saw it reach
 outside its return value: a `file write`, a `subprocess`, or an `argument
 mutation` (an object you passed in changed). A connection to a server is a read
 the key cannot see, reported as [KEY-NETWORK-READ](#key-network-read).
@@ -618,7 +618,7 @@ what it holds when called (an instance memoising into `self`, a library
 wrapper filling its cache) is not reported: cash just stops folding what it
 holds, after one extra miss.
 
-**Why it matters.** A hit skips the change, so a counter stops counting. Cash
+**Why it matters.** A hit skips the change, so a counter stops counting. cash
 also stops folding that variable into the key, so a change you make to it
 elsewhere no longer invalidates the entry.
 
@@ -822,7 +822,7 @@ tells two such functions apart.
 
 <!-- claim: cash/decorator/registry.py:FunctionRegistry._register_declared_callable_dep @cdef7cb8, cash/decorator/registry.py:warn_inert_dependency @6242cef6 -->
 **What happened.** A callable in `depends_on=` has no source and no Python
-bytecode (a builtin, a NumPy ufunc, or an installed compiled extension). Cash
+bytecode (a builtin, a NumPy ufunc, or an installed compiled extension). cash
 can key it only by its name, so the declaration does next to nothing. An
 extension built inside your project (`build_ext --inplace`, an editable
 install) does not warn: it is keyed by the content of its built file.
@@ -863,7 +863,7 @@ that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,
 line and argument.
 
-**Why it matters.** Cash cannot follow the call, so editing the function it
+**Why it matters.** cash cannot follow the call, so editing the function it
 lands on will not invalidate the entry. (The same line in the cached
 function's own body raises `CashImpureFunctionError` instead.)
 
@@ -1014,7 +1014,7 @@ after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
 
 <!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @ede4d2d0 -->
-**Why it matters.** Cash keys that code by what is actually running, so
+**Why it matters.** cash keys that code by what is actually running, so
 results in this process are correct, and they are not reused after a restart
 on the new code.
 
@@ -1110,7 +1110,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-**What happened.** Cash hit an internal error while processing the cell,
+**What happened.** cash hit an internal error while processing the cell,
 stepped aside, and let IPython run it normally. The message names the
 exception.
 
@@ -1132,7 +1132,7 @@ cell, that cell is never cached.
 message gives its number (counting code cells from the top, not the `[7]`
 execution count) and quotes its first line.
 
-**Why it matters.** Cash skips that cell, so cells that use its output are no
+**Why it matters.** cash skips that cell, so cells that use its output are no
 longer invalidated when it changes.
 
 **What to do.** Fix the cell, then re-run it and the cells below that use it.
@@ -1145,7 +1145,7 @@ If it is not code, delete it or make it a markdown cell.
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
 <!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @f1dad161 -->
-**What happened.** Cash could not find which notebook file this kernel runs,
+**What happened.** cash could not find which notebook file this kernel runs,
 so cross-cell tracking is off for the session. Cells are still cached and
 restored.
 
@@ -1245,7 +1245,7 @@ another machine gives a different frozen value.
 
 <!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @2471d11d -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
-`random`, `numpy.random` or `torch` stream, because Cash rewinds those streams
+`random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
 (`rng = np.random.default_rng()`) is not rewound, so it changes on every run.
 The message for a generator draw says both.
@@ -1331,7 +1331,7 @@ still changes the key.
 
 <!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @bc945f69 -->
 **What happened.** Reading a remote file's state failed. The message names
-the URL and the exception. Cash recomputed rather than serve an unchecked
+the URL and the exception. cash recomputed rather than serve an unchecked
 result.
 
 **Why it matters.** While it lasts, every call recomputes and leaves an entry
@@ -1374,7 +1374,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 **What happened.** A chunk of a large iterator result failed to write. The
 message names the chunk, the backend and the exception.
 
-**Why it matters.** Cash treats an entry with a missing chunk as absent, so
+**Why it matters.** cash treats an entry with a missing chunk as absent, so
 every call recomputes until a write succeeds.
 
 **What to do.** Call `f.cache_clear()`, then fix the cause: a full disk,
@@ -1452,7 +1452,7 @@ has finished.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483 -->
-**What happened.** Cash could not take the per-key lock that stops two
+**What happened.** cash could not take the per-key lock that stops two
 callers computing the same thing at once, and went ahead without it.
 
 **Why it matters.** Concurrent calls with the same arguments may each compute
@@ -1468,7 +1468,7 @@ disk, or a filesystem where locking does not work.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/reporting.py:Notices.metadata_invalid @4b14c4a0 -->
-**What happened.** Cash found an entry but could not read its metadata, so it
+**What happened.** cash found an entry but could not read its metadata, so it
 treated the entry as missing and recomputed.
 
 **Why it matters.** Little: one recompute per entry.

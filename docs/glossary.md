@@ -4,6 +4,9 @@
     Each term is tagged with the path it belongs to: decorator, notebook, or
     both.
 
+Short definitions of the terms the rest of these docs use, each with a
+link to the page that explains it in full.
+
 <div class="cash-glossary" markdown="1">
 
 ## Annotation
@@ -142,7 +145,7 @@ recomputes. `@cash.cache(ttl=3600)`, `%cash_on ttl=3600`, or
 
 ## Unseeded randomness
 
-*Both.* A random draw with no fixed seed. Cash caches it like any other
+*Both.* A random draw with no fixed seed. cash caches it like any other
 result, so a hit replays the same draw, and it warns. Seed the generator, or
 skip caching for a fresh draw. `allow_random=True` (decorator) and
 `# @cash:allow-random` (notebook) only hide the warning.
@@ -150,8 +153,16 @@ See [Writing cache-safe cells](known-limitations.md).
 
 ## Upstream simulation
 
-*Notebook.* Cash's dry run over the cells above the one you run. It works out
+*Notebook.* cash's dry run over the cells above the one you run. It works out
 what to restore and what to re-run so the cell sees what a top-to-bottom run
 would give it. See [The notebook path](how-it-works/notebook-path.md).
 
 </div>
+
+## Related
+
+- [Overview](how-it-works/overview.md): how the terms fit together, for
+  both paths.
+- [FAQ](faq.md): short answers to the questions these terms come up in.
+- [Warnings](warnings.md): every warning code, grouped by what it is
+  about.

@@ -1,8 +1,14 @@
+---
+search:
+  boost: 2
+---
+
 # Magic commands
 
 !!! info "Applies to: notebook"
     Notebooks with `%cash_on`. The canonical reference for all **9** magics.
 
+Every `%cash_*` command, what it takes, and what it prints.
 `import cash` registers the magics; `%load_ext cash` also works. `%cash_help`
 lists them in the notebook, and `%cash_help NAME` prints one magic's usage.
 
@@ -190,3 +196,14 @@ a name (`badge`, `cash_badge` or `%cash_badge`), prints that magic's full usage.
 %cash_help
 %cash_help badge
 ```
+
+## Related
+
+- [Annotations](annotations.md): the `# @cash:` comments that change how
+  one statement is cached.
+- [Notebook guide](notebook_caching_api.md): turning caching on and what
+  gets cached.
+- [Debugging](tutorials/feature-guides/debugging-and-monitoring.md): reading
+  the output of `%cash_debug` and `%cash_stats`.
+- [Configuration](getting-started/configuration.md): the settings
+  `%cash_debug` and `%cash_persist` change.

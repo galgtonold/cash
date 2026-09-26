@@ -37,3 +37,11 @@ Pin cash like any dependency you rely on, for example
 `cash-lib<!-- docnum:version_pin -->~=0.11.0<!-- /docnum -->` to take patch
 releases but not <!-- docnum:version_next_minor -->0.12<!-- /docnum -->, and
 read the CHANGELOG before you move to a new minor release.
+
+## Related
+
+- [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md):
+  what changed in each release, removals first.
+- [Where your cache lives](how-it-works/storage.md): the cache directory an
+  upgrade may clear.
+- [API reference](api/index.md): the names the public API covers.
