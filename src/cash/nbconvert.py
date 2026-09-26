@@ -47,10 +47,10 @@ except ImportError:
 
 
 class CashStripPreprocessor(Preprocessor):
-    """
-    Preprocessor that strips cash-specific outputs from notebook cells.
+    """Preprocessor that strips cash-specific outputs from notebook cells.
 
-    This removes:
+    It removes:
+
     - the cell badges cash displays (HTML outputs carrying the badge markup)
     - cash's debug lines from stream outputs: its log records
       (``cash.<module>: ...`` / ``[cash.<module>] ...``)
@@ -59,10 +59,8 @@ class CashStripPreprocessor(Preprocessor):
     Every other output is left exactly as it was: a user's own HTML, and
     printed lines that merely mention "DEBUG" or "Cash:", are kept.
 
-    Usage:
-        jupyter nbconvert --to html \\
-            --Exporter.preprocessors='["cash.nbconvert.CashStripPreprocessor"]' \\
-            notebook.ipynb
+    Name it in the ``--Exporter.preprocessors`` option of
+    ``jupyter nbconvert``.
     """
 
     #: What every badge's HTML contains right after its ``<style>`` block
