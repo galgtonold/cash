@@ -10,6 +10,7 @@ For both paths: the storage classes. Choosing a backend through
 enough; build one yourself for tests or an unusual stack, and pass it as
 `Cash(backend=...)` or `Cash(backends=[...])`.
 
+<!-- test:long-lines reason="install line, being rewritten" -->
 ```python
 from cash import (
     FileBackend,

@@ -18,6 +18,7 @@ the kernel, so cash sees your latest edits without a save.
 
 Install only what you need:
 
+<!-- test:long-lines reason="install line, being rewritten" -->
 ```bash
 pip install "cash-lib[pandas]"      # pandas + pyarrow, for stable DataFrame hashing
 pip install "cash-lib[polars]"      # polars support

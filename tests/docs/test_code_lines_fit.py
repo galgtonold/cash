@@ -111,19 +111,11 @@ def _violations() -> dict[str, list[tuple[int, int, str]]]:
     return found
 
 
-_VIOLATIONS = _violations()
-_COUNT = sum(len(v) for v in _VIOLATIONS.values())
-
-
-@pytest.mark.xfail(
-    bool(_VIOLATIONS),
-    reason=f"{_COUNT} code lines over {MAX_LINE} characters on {len(_VIOLATIONS)} pages still to shorten",
-    strict=True,
-)
 def test_every_code_line_in_the_docs_fits():
+    violations = _violations()
     report = "\n".join(
         f"{page}:{n}: {length} chars: {line.strip()[:60]}"
-        for page, lines in _VIOLATIONS.items()
+        for page, lines in violations.items()
         for n, length, line in lines
     )
-    assert not _VIOLATIONS, f"code lines over {MAX_LINE} characters:\n{report}"
+    assert not violations, f"code lines over {MAX_LINE} characters:\n{report}"
