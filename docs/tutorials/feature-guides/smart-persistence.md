@@ -75,7 +75,7 @@ To store a result on disk however quick it was, mark the statement:
 <!-- test:skip reason="illustrative: build_lookup and raw are the reader's own" -->
 ```python { .nb-cell }
 # @cash:persist
-lookup = build_lookup(raw)     # 50 ms, but needed right after every restart
+lookup = build_lookup(raw)  # 50 ms, but needed after every restart
 ```
 
 `%cash_persist on` does the same for every statement until `%cash_persist off`.

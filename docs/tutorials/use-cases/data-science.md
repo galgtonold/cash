@@ -39,8 +39,12 @@ run again, and the badge names the file:
 <!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 customers = customers.dropna(subset=["email", "signup_date"])
-customers = customers.assign(signup_date=pd.to_datetime(customers["signup_date"]))
-transactions = transactions.assign(date=pd.to_datetime(transactions["date"]))
+customers = customers.assign(
+    signup_date=pd.to_datetime(customers["signup_date"])
+)
+transactions = transactions.assign(
+    date=pd.to_datetime(transactions["date"])
+)
 ```
 
 Each statement is cached on its own. Change the `dropna` and only it, and what
@@ -76,9 +80,13 @@ features = ["total_spend", "avg_spend", "tx_count"]
 X = df[features].fillna(0)
 y = df["churned"]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
 
-model = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train, y_train)
+model = RandomForestClassifier(
+    n_estimators=100, random_state=42
+).fit(X_train, y_train)
 ```
 
 The fitted model is cached like any other value, keyed on the data and the

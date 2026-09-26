@@ -95,7 +95,10 @@ variables, or with `cash.configure(...)` in the first cell, before `%cash_on`:
 <!-- test:skip reason="illustrative: the first cell of a notebook with two settings" -->
 ```python { .nb-cell }
 import cash
-cash.configure(min_cache_savings_pct=0.5, min_cache_fixed_budget_seconds=0.1)
+cash.configure(
+    min_cache_savings_pct=0.5,
+    min_cache_fixed_budget_seconds=0.1,
+)
 %cash_on
 ```
 

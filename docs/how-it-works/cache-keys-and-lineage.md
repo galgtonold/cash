@@ -69,21 +69,24 @@ For other types, register a hasher; see
 ### The statement key
 
 <!-- claim: cash/notebook/cache_key.py:compute_cache_key @c2321118 -->
-Every statement key is built by one function, from these parts:
+Every statement key is built by one function. It joins these parts with
+colons, in this order, and hashes the result:
 
-```
-combined  = source_hash                      # the statement's own text, normalised
-          + ":" + input_lineages             # one lineage per input, ordered by variable name
-          + [":" + func_source_hashes]       # "name:hash" per called function, sorted
-          + [":" + module_source_hashes]     # "name:hash" per local module read, sorted
-          + ":occ" + occurrence_index        # 0-based; tells a repeated statement apart
-          + [":callees:" + callee_globals]   # "name:lineage" per global a called function reads
-          + [":env:" + environment_reads]    # a digest per os.getenv("NAME"), os.environ["NAME"], os.getcwd()
+| Part | What it holds |
+|---|---|
+| Source | A hash of the statement's own text, normalised. |
+| Inputs | One lineage per input variable, ordered by variable name. |
+| Called functions | `name:hash` per function it calls, sorted. |
+| Local modules | `name:hash` per local module it reads, sorted. |
+| Occurrence | `occ` and a 0-based index, which tells a statement repeated in the cell apart. |
+| Callee globals | `callees:`, then `name:lineage` per global a called function reads. |
+| Environment | `env:`, then a digest per `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` it reads. |
 
-cache_key = namespace + ":" + SHA256(combined)
-```
+The key is `namespace:` followed by the SHA-256 of the joined parts, for
+example `stmt:ffd3d255…`.
 
-- Bracketed parts are left out when empty.
+- Called functions, local modules, callee globals and environment reads are
+  left out when there are none.
 - The namespace is `stmt` for a statement and `call` for a
   [call inside a statement](../annotations.md#call-level-caching-default-and-cashno-cache-calls),
   so the two never collide.
@@ -122,16 +125,19 @@ and the lineage of everything that fed into it. Edit `a`, and `lineage(a)`
 changes; `c` was built from `a`, so `lineage(c)` changes too, and so on down
 the chain. You declare no dependencies.
 
-```
-lineage(x) = SHA256(
-    source_hash                                  # of the statement that produced x
-    + ":" + sorted(lineage(i) for i in inputs)   # sorted by hash here, unlike the key
-    + [file_component]                           # "path:mtime:size" per file read
-    + [func_source_hashes]                       # called functions, sorted
-    + [module_source_hashes]                     # local modules, sorted
-    + [value_digest]                             # x's content, if its statement is no-cache
-)
-```
+`lineage(x)` is the SHA-256 of these parts:
+
+| Part | What it holds |
+|---|---|
+| Source | A hash of the statement that produced `x`. |
+| Inputs | The lineage of each input, sorted by hash (the key orders them by name). |
+| Files | `path:mtime:size` per file read. |
+| Called functions | Their source hashes, sorted. |
+| Local modules | Their source hashes, sorted. |
+| Value | A digest of `x`'s content, only when its statement is `no-cache`. |
+
+Files, called functions, local modules and the value are left out when there
+are none.
 
 ```python { .nb-cell }
 a = 1

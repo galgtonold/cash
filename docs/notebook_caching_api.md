@@ -44,9 +44,9 @@ result, run again:
 
 <!-- test:skip reason="illustrative: references data.csv" -->
 ```python { .nb-cell }
-df     = pd.read_csv("data.csv")       # cached
-daily  = df.resample("D").mean()       # cached
-result = daily.rolling(7).mean()       # edit this line: only it runs again
+df = pd.read_csv("data.csv")       # cached
+daily = df.resample("D").mean()    # cached
+result = daily.rolling(7).mean()   # edit: only this runs again
 ```
 
 - **Functions you call are tracked.** Edit a function, or a helper it calls, even
@@ -139,9 +139,9 @@ keeping. See [Where your cache lives](how-it-works/storage.md#where-the-cache-fo
 From a terminal in the notebook's folder, or from a cell with a leading `!`:
 
 ```bash
-cash info                    # where the cache is and how big
-cash inspect                 # entries by size, with the time each one saves
-cash clear --all             # delete the whole cache
+cash info          # where the cache is and how big
+cash inspect       # entries by size, with the time each saves
+cash clear --all   # delete the whole cache
 ```
 
 After `cash clear`, restart the kernel so it does not keep using values it has in

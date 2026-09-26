@@ -102,7 +102,8 @@ def stamp(x):
     time.sleep(0.2)
     return x, time.time()
 
-s = stamp(1)      # re-run: the same time.time() as the first run, no warning
+# re-run: the same time.time() as the first run, no warning
+s = stamp(1)
 ```
 
 **Fix:** pass the time in (`stamp(1, now=time.time())`), or put
@@ -138,8 +139,10 @@ y.append(3)            # x or z?
 
 <!-- test:skip reason="illustrative: contrasts in-place mutation with rebinding across cells" -->
 ```python { .nb-cell }
-df["score"] = expensive(df)          # df came from an earlier cell: runs every time
-df = df.assign(score=expensive(df))  # cached
+# df came from an earlier cell: runs every time
+df["score"] = expensive(df)
+# cached
+df = df.assign(score=expensive(df))
 ```
 
 A statement that changes an object made in an earlier cell runs every time. The
@@ -159,9 +162,9 @@ in and return it.
 
 <!-- test:skip reason="illustrative: needs an isolated re-run of a cell above the mutation" -->
 ```python { .nb-cell }
-s = pd.Series(np.arange(200_000, dtype=float))   # cell 1
-out = summarize(s)                                # cell 2: re-run this alone...
-s.iloc[0] = 1e9                                   # cell 3: ...and it does not see this
+s = pd.Series(np.arange(200_000, dtype=float))  # cell 1
+out = summarize(s)  # cell 2: re-run this alone...
+s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
 Cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
@@ -183,13 +186,13 @@ An isolated re-run raises `KeyError`, because it reads the renamed frame.
 
 <!-- test:skip reason="illustrative: cross-cell class-variable accumulator" -->
 ```python { .nb-cell }
-class Widget:                    # cell 1
+class Widget:          # cell 1
     count = 0
     def __init__(self):
         Widget.count += 1
 w0 = Widget()
 
-w = Widget()                     # cell 2: each re-run pushes count higher
+w = Widget()           # cell 2: each re-run pushes count higher
 ```
 
 This needs the counter to be changed from both cells; one cell is fine.
@@ -226,8 +229,8 @@ value, or computes a new body-local variable, before the cached work is not seen
 <!-- test:skip reason="illustrative: pull() stands in for a slow call keyed only by the loop variable" -->
 ```python { .nb-cell }
 for q in [[1], [1]]:           # two iterations, equal when bound
-    q.append(len(accm))        # now different, but the key was taken already
-    accm.append(pull(handle))  # the second iteration gets the first's result
+    q.append(len(accm))        # now different: too late for the key
+    accm.append(pull(handle))  # 2nd iteration gets the 1st's result
 ```
 
 **Fix:** make the distinguishing value part of the `for` target:

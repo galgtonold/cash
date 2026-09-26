@@ -104,10 +104,10 @@ bookkeeping can cost more than it saves there.
 From a terminal in the notebook's folder, or a cell starting with `!`:
 
 ```bash
-cash info                         # where the cache is, its size and settings
-cash inspect                      # entries by size, with the time each saves
-cash inspect --function NAME      # one function's entries
-cash clear --all                  # delete the whole cache
+cash info                     # the cache's place, size, settings
+cash inspect                  # entries by size, with time saved
+cash inspect --function NAME  # one function's entries
+cash clear --all              # delete the whole cache
 ```
 
 After a `cash clear`, restart the kernel. See the [CLI reference](../../cli.md).
