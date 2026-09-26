@@ -49,7 +49,7 @@ forever. Give the statement a lifetime in seconds:
 <!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
 # @cash:ttl=60
-price = fetch_price("AAPL")    # served from the cache for a minute, then fetched again
+price = fetch_price("AAPL")    # cached for a minute, then fetched again
 ```
 
 `%cash_on ttl=3600` in the first cell sets a default lifetime for every
@@ -68,6 +68,17 @@ live = fetch_price("AAPL")     # runs every time, nothing stored
 
 The badge shows a plain `EXECUTED` row. It also gives a random draw a new value
 each run (see [Randomness](../../known-limitations.md#randomness)).
+
+`no-cache` applies only while the comment is there, and it leaves an entry
+stored earlier alone. Remove the comment and the next run restores that entry,
+if there is one, even though the no-cache runs saw a newer value. That is on
+purpose: without the comment you are fine with the statement being cached
+again, so cash uses the value it has.
+
+To replace the stored value with a fresh one, run the statement once with
+`# @cash:ttl=0` instead. The old entry counts as expired, the statement runs,
+and its result is stored for the runs after you remove the comment. To drop
+everything, run `cash clear --all` and restart the kernel.
 
 ## Keep a cheap result across restarts: `persist`
 
@@ -142,7 +153,8 @@ def announce(text):
 
 <!-- test:expect-badge rerun=EXECUTED -->
 ```python { .nb-cell }
-receipt = announce("model trained")    # badge: NOT CACHED - Calls @stateful function
+# badge: NOT CACHED - Calls @stateful function
+receipt = announce("model trained")
 ```
 
 <!-- claim: cash/purity.py:stateful @f86f4e92, cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @9d937d1c -->
