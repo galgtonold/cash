@@ -25,14 +25,16 @@ pressure below is what makes it one of ten. The machine's memory is reported
 at 95% by patching the backend's psutil, so what cash decides does not depend
 on what else is running.
 
-The tier still gives back its SHARE, and holds flat after that: the least
-valuable bytes go, and those are the loop's statement entries (each holds the
-growing dict) long before the tiny results of the ``work`` calls inside them.
-So an identical re-run may run a few iterations again, each served its
-``work(k)`` from the call cache in milliseconds -- "6 cached, 4 ran (0.02s),
-sub-call work(k): 4/4 hit" is the tier doing its job, not the bug. What the
-bug did was re-run the WORK, so that is what is counted, with a counter the
-cached function cannot replay.
+A tier that holds more than 16 MiB still gives back its SHARE, and holds
+flat after that: the least valuable bytes go, and those are the loop's
+statement entries (each holds the growing dict) long before the tiny results
+of the ``work`` calls inside them. So an identical re-run may run a few
+iterations again, each served its ``work(k)`` from the call cache in
+milliseconds -- "6 cached, 4 ran (0.02s), sub-call work(k): 4/4 hit" is the
+tier doing its job, not the bug. What the bug did was re-run the WORK, so that
+is what is counted, with a counter the cached function cannot replay. A tier
+as small as this test's gives nothing back at all: its share would relieve
+nothing (``InMemoryBackend._PRESSURE_KEEPS_BYTES``).
 
 Nothing here goes past RAM (``RAM_ONLY``): an iteration that also reached disk
 restores from there whatever the RAM tier did, and whether one does depends on
@@ -130,3 +132,39 @@ def test_a_ten_iteration_loop_redoes_none_of_its_work_under_pressure(nb_runner, 
     )
     loop = next(line for line in raw.splitlines() if "LOOP x10" in line)
     assert "cached" in loop, "the RAM tier emptied itself: no iteration of the loop restored:\n" + raw
+
+
+#: 5 ms a call: past the call cost floor, so each call is stored, and far below
+#: the disk tier's 0.1 s floor, so the RAM tier is the only place it is kept.
+CHEAP = """import time
+
+def compute(v):
+    _count(COUNTER)
+    time.sleep(0.005)
+    return v * 10
+"""
+
+CHEAP_LOOP = "out = []\nfor t in list(range(1, 101)):\n    out.append(compute(t))\nprint('N', len(out))"
+
+
+def test_a_loop_of_cheap_calls_keeps_them_when_the_session_starts_under_pressure(nb_runner, tmp_path):
+    """The machine is full from the first write, as a parallel test run left it.
+
+    The pressure check fired while the tier held a few entries, took its share
+    of those few hundred bytes and then held the tier at what was left, so each
+    new call entry displaced an earlier one: an identical re-run ran all 100
+    calls again. A tier this small cannot relieve any machine, so it keeps
+    them.
+    """
+    counter = tmp_path / "compute_calls.log"
+    nb_runner.create_notebook([SETUP, COUNT + "\n" + CHEAP.replace("COUNTER", repr(str(counter))), CHEAP_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert counter.stat().st_size == 100, "the first run should run compute() for every item"
+
+    nb_runner.run_cell(3)
+    ran = counter.stat().st_size - 100
+    assert "N 100" in nb_runner.get_output(3)
+    assert ran == 0, (
+        f"an identical re-run under memory pressure ran compute() {ran} of 100 times:\n" + nb_runner.get_raw_output(3)
+    )

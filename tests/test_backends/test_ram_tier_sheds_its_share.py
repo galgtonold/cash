@@ -103,6 +103,43 @@ class TestPressureThatIsNotOurs:
         assert _held(b, "costly"), "the 30 s result went before 1 ms ones"
 
 
+class TestATierTooSmallToRelieveAnything:
+    """The machine is over its target by gigabytes and this tier holds kilobytes.
+
+    Its share of the overshoot is a few hundred bytes, which relieves nothing.
+    Holding it flat at the size it had when the pressure began is worse: a
+    session that starts on a full machine then keeps only the few entries it
+    held at the first check, and every later write displaces one of them. A
+    loop of 100 calls at 5 ms each re-ran all 100 on an identical re-run.
+    """
+
+    def test_a_session_started_under_pressure_keeps_its_small_entries(self, machine):
+        machine.percent = 95.0  # full before the first write, and it stays full
+        b = InMemoryBackend(max_memory_percent=0.9)  # the default check interval
+        for i in range(100):
+            b.set("call%03d" % i, i * 10, {"execution_time": 0.005})
+
+        held = len(b._store)
+        assert held == 100, "a tier of a few kilobytes gave %d of 100 entries to pressure 2 GB over its target" % (
+            100 - held
+        )
+
+    def test_shedding_stops_at_the_bytes_that_could_relieve_nothing(self, machine):
+        """A tier just over that line gives back what lies above it, not its
+        whole share, and then holds at the line rather than below it."""
+        b = _tier()
+        keep = InMemoryBackend._PRESSURE_KEEPS_BYTES
+        for i in range(keep // MB + 1):  # its share would be ~3 MB; ~0.2 MB lies above the line
+            _put(b, "k%03d" % i, MB, 1.0)
+
+        machine.percent = 99.0  # the largest share there is
+        for i in range(50):
+            _put(b, "new%03d" % i, MB, 1.0)
+
+        assert b._current_size_bytes >= keep - MB, "pressure took the tier below the size it keeps"
+        assert b._current_size_bytes <= keep + MB, "the tier grew past what it keeps while under pressure"
+
+
 class TestPressureThatIsOurs:
     """This tier IS most of the memory in use."""
 

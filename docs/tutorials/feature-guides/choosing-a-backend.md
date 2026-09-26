@@ -138,6 +138,9 @@ A dictionary in this process: everything is gone when the process ends. It
 evicts on three triggers: `max_entries` (least recently used first),
 `max_size_bytes`, and system memory above `max_memory_percent` (default 90%).
 The last two evict the least valuable entries per byte first.
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._PRESSURE_KEEPS_BYTES == 16777216 -->
+Memory pressure never takes the dictionary below 16 MiB, since that little
+would relieve no machine, and every entry given back is computed again.
 
 Values are copied in and out, so a cached value is held **twice** in RAM: once
 as your variable and once in the cache. That copy is what keeps a later change

@@ -98,6 +98,16 @@ class InMemoryBackend(CacheBackend):
     #: below the nine points between the 90% trigger and the 81% target.
     _PRESSURE_WORSENED_POINTS = 2.0
 
+    #: What memory pressure never takes the tier below, and what it may grow to
+    #: while the pressure lasts. A share is at most a fifth of the tier (the
+    #: overshoot over the memory in use, with the target at 81%), so below
+    #: this it would free at most ~3 MiB, which relieves no machine, while
+    #: every entry it drops is recomputed. Holding the tier at a smaller
+    #: footprint was worse than the share: a session that began on a full
+    #: machine kept the few entries it had at the first check, and a loop of
+    #: 100 calls of 5 ms re-ran all 100 on an identical re-run.
+    _PRESSURE_KEEPS_BYTES = 16 * 1024**2
+
     #: Types whose instances cannot be mutated, so SHARING one between the
     #: stored entry and the caller is safe. Exact-type membership, never
 
@@ -434,7 +444,7 @@ class InMemoryBackend(CacheBackend):
 
         The first check of a pressure episode: its proportional share of the
         overshoot. Every later one: whatever it has grown past the level the
-        first one left.
+        first one left. Neither goes below `_PRESSURE_KEEPS_BYTES`.
         """
         total = getattr(mem, "total", None)
         percent = getattr(mem, "percent", None)
@@ -457,7 +467,7 @@ class InMemoryBackend(CacheBackend):
         overshoot = in_use - total * target_percent
         if overshoot <= 0 or in_use <= 0:
             return 0.0
-        return min(float(own), overshoot * min(1.0, own / in_use))
+        return min(float(max(0, own - self._PRESSURE_KEEPS_BYTES)), overshoot * min(1.0, own / in_use))
 
     def _shed(self, nbytes: float) -> None:
         """Drop the least valuable entries until *nbytes* are freed."""
@@ -478,7 +488,7 @@ class InMemoryBackend(CacheBackend):
                 self._gdsf_clock = max(self._gdsf_clock, priority)
             if freed:
                 self._try_malloc_trim()
-        self._pressure_floor = self._current_size_bytes
+        self._pressure_floor = max(self._current_size_bytes, self._PRESSURE_KEEPS_BYTES)
 
     def _touch(self, key: str) -> None:
         """Record a write or read: it re-bases the entry's GDSF priority."""
