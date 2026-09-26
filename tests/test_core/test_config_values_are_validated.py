@@ -87,7 +87,6 @@ def test_a_bad_toml_value_is_reported_and_skipped(tmp_path):
     """From a file: say so (CONFIG-INVALID) and carry on with the default."""
     project = tmp_path / "pyproject.toml"
     project.write_text('[tool.cash]\nmax_cache_size = "lots"\ncompress = true\n', encoding="utf-8")
-    pytest.importorskip("tomllib" if __import__("sys").version_info >= (3, 11) else "tomli")
     with pytest.warns(UserWarning, match=r"\[CONFIG-INVALID\].*max_cache_size"):
         cfg = get_config(project_config_path=str(project), user_config_path=None)
     assert cfg.max_cache_size is None, "the invalid value was stored"
@@ -95,7 +94,6 @@ def test_a_bad_toml_value_is_reported_and_skipped(tmp_path):
 
 
 def test_a_size_string_in_toml_is_read(tmp_path):
-    pytest.importorskip("tomllib" if __import__("sys").version_info >= (3, 11) else "tomli")
     project = tmp_path / "pyproject.toml"
     project.write_text('[tool.cash]\nmax_cache_size = "512MiB"\n', encoding="utf-8")
     cfg = get_config(project_config_path=str(project), user_config_path=None)
@@ -239,7 +237,6 @@ def test_an_empty_cache_dir_in_code_raises(tmp_path, empty):
 
 
 def test_an_empty_cache_dir_in_a_file_is_reported_and_skipped(tmp_path):
-    pytest.importorskip("tomllib" if __import__("sys").version_info >= (3, 11) else "tomli")
     project = tmp_path / "pyproject.toml"
     project.write_text('[tool.cash]\ncache_dir = ""\n', encoding="utf-8")
     with pytest.warns(UserWarning, match=r"\[CONFIG-INVALID\].*cache_dir"):

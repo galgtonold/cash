@@ -278,7 +278,7 @@ class CashMagics(InspectionMagicsMixin, Magics):
         # helper treats a ``**kwargs`` signature as "accepts every parameter".
         # Our proxies are ``(*args, **kwargs)``, so bare they would claim to
         # accept ``cell_id`` even against an IPython too old to have it (<8.3,
-        # which ``[notebook]``'s ``ipython>=8.0`` floor still allows) — ipykernel
+        # which cash does not rule out) — ipykernel
         # would then pass ``cell_id=...``, our forward would raise TypeError
         # before ``execute_reply`` was sent, and the cell would hang at ``[*]``.
         # ``functools.wraps`` sets ``__wrapped__``, which ``inspect.signature``

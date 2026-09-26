@@ -106,17 +106,21 @@ def installed_tool(tmp_path_factory):
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     dist = _write_distribution(base / "dist")
-    # `tomllib` is 3.11+ and cash has no required dependencies, so on 3.10 a
-    # bare install cannot read a [tool.cash] section at all -- which is what
-    # CONFIG-TOML-UNREADABLE now says out loud. The project-wins arm below is
-    # about config PRECEDENCE, not about whether a parser exists, so give the
-    # environment one.
-    extra = ["tomli"] if sys.version_info < (3, 11) else []
+    # cash's own dependencies, minus ipynbname: it pulls in the whole kernel
+    # stack, which a console script never touches and this install would
+    # download for nothing.
+    deps = ["psutil>=5.0,<8", *(["tomli>=1.1"] if sys.version_info < (3, 11) else [])]
     install = subprocess.run(
-        [str(python), "-m", "pip", "install", "-q", repo_root, str(dist), *extra],
+        [str(python), "-m", "pip", "install", "-q", "--no-deps", repo_root, str(dist)],
         capture_output=True,
         text=True,
     )
+    if install.returncode == 0:
+        install = subprocess.run(
+            [str(python), "-m", "pip", "install", "-q", *deps],
+            capture_output=True,
+            text=True,
+        )
     if install.returncode != 0:
         pytest.skip(f"could not build the probe distribution:\n{install.stderr[-2000:]}")
 

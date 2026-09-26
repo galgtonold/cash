@@ -1,9 +1,8 @@
 """Capturing a statement's output as it runs, and showing it afterwards.
 
 ``capture_output`` is the only IPython name this module needs at import time,
-and it resolves it on first use: base ``cash`` has no dependencies (IPython
-lives in the ``[notebook]`` extra) and this module is on the ``import cash``
-chain.
+and it resolves it on first use: the decorator does not need IPython, and
+this module is on the ``import cash`` chain.
 """
 
 from __future__ import annotations
@@ -211,8 +210,7 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
 
     Still resolved for real when a capture is actually requested, so a genuine
     display attempt keeps working; the stub below is used only when IPython is
-    genuinely absent (base ``cash`` declares no dependencies -- IPython lives
-    in the ``[notebook]`` extra).
+    genuinely absent (the decorator runs without IPython).
     """
     global _CAPTURE_OUTPUT
     if _CAPTURE_OUTPUT is None:

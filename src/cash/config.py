@@ -537,23 +537,6 @@ def _did_you_mean(key: str, valid: Any) -> str:
     return f" Did you mean `{match[0]}`?" if match else ""
 
 
-def _warn_toml_unreadable(path: Path) -> None:
-    """Say that a config file was found and is being ignored."""
-    _config_notice(
-        "CONFIG-TOML-UNREADABLE",
-        f"cash found {path} but cannot read it: this is Python "
-        f"{sys.version_info.major}.{sys.version_info.minor}, whose standard "
-        f"library has no TOML parser, and `tomli` is not installed. Every "
-        f"setting in that file is being ignored, including cache_dir -- so "
-        f"cash is running on defaults that the file was written to change.",
-        "pip install tomli -- or cash-lib[toml], which `cash-lib[all]` "
-        "includes (cash keeps no required dependencies, so a bare install "
-        "cannot pull one in for you) -- or set the values through CASH_* "
-        "environment variables instead, or run on Python 3.11+ where the "
-        "parser is in the standard library.",
-    )
-
-
 _CASH_SECTION_RE = re.compile(r"^\s*(\[\s*(tool\s*\.\s*)?cash\s*[\].]|tool\s*\.\s*cash\s*\.)", re.MULTILINE)
 
 
@@ -601,21 +584,10 @@ def _load_toml_layer(path: Path) -> tuple[dict[str, Any], str]:
     """`_load_toml_config`, plus which of the ``TOML_*`` outcomes it was."""
     if not path.exists():
         return {}, TOML_MISSING
-    try:
-        import tomllib  # type: ignore[import-not-found]
-    except ImportError:
-        try:
-            import tomli as tomllib  # type: ignore[no-redef]
-        except ImportError:
-            # ``tomllib`` is 3.11+, and cash has no required dependencies by
-            # design, so on 3.10 without ``tomli`` there is nothing that can
-            # read this file, and every setting in it would be silently
-            # ignored. Said only when the file may hold cash settings: nearly
-            # every project has a pyproject.toml, and a notice about one with
-            # no [tool.cash] would teach people to filter it out.
-            if _may_hold_cash_settings(path):
-                _warn_toml_unreadable(path)
-            return {}, TOML_UNREADABLE
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:  # cash depends on tomli there
+        import tomli as tomllib
 
     try:
         with open(path, "rb") as f:

@@ -2,10 +2,10 @@
 
 Two rules are in tension here, and this file pins both:
 
-1. **The modules must IMPORT without IPython** — base ``cash`` declares
-   ``dependencies = []`` and ``statement/`` sits on the ``import cash`` chain,
-   so an unguarded module-level IPython import breaks a bare
-   ``pip install cash-lib`` (guarded by
+1. **The modules must IMPORT without IPython** — the decorator does not need
+   IPython and ``statement/`` sits on the ``import cash`` chain, so an
+   unguarded module-level IPython import breaks ``import cash`` wherever
+   IPython is missing (guarded by
    ``tests/test_core/test_bare_install_no_optional_deps.py``).
 2. **A genuine display attempt must RAISE** — ``processor.py`` used to satisfy
    rule 1 with module-level ``try/except ImportError`` stubs where
@@ -61,7 +61,7 @@ _SCRIPT = textwrap.dedent(
     else:  # pragma: no cover - the blocker is broken
         raise AssertionError("blocker failed to block IPython")
 
-    # --- Phase 1: both modules must still IMPORT (bare install) ----------
+    # --- Phase 1: both modules must still IMPORT without IPython ----------
     from cash.notebook.statement.capture import replay_outputs
     from cash.notebook.statement.processor import StatementProcessor  # noqa: F401 - the import is the check
     from cash.notebook.statement.restore import StatementRestorer
@@ -120,7 +120,7 @@ def no_ipython_run(tmp_path_factory):
 
 
 def test_statement_modules_import_without_ipython(no_ipython_run):
-    """Rule 1: importing them must NOT need IPython (do not re-break a bare install)."""
+    """Rule 1: importing them must NOT need IPython (do not re-break `import cash`)."""
     assert "PHASE1_IMPORT_OK" in no_ipython_run.stdout, no_ipython_run.stdout
 
 

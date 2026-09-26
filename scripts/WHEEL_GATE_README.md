@@ -35,7 +35,7 @@ restored on a cache hit and so cannot witness a silent re-run.
    release hygiene — or accepts `--wheel <path>`.
 2. Creates a **fresh venv on a short path** (`<gate root>/venv`; deep repo
    paths blow MAX_PATH 260 and yield bogus `ModuleNotFoundError`) and installs
-   `<wheel>[all]` + `pandas numpy scikit-learn jupyter-server jupyter-client
+   `<wheel>` + `pandas pyarrow numpy scikit-learn jupyter-server jupyter-client
    nbformat ipykernel`. **Never** installs into the developer's Python.
 3. Registers a **unique `wheelgate` kernelspec into the venv**
    (`ipykernel install --sys-prefix`, never `--user`) so the kernel can only
@@ -124,7 +124,7 @@ The default fast suite collects the shim and **skips it in ~0.02 s**.
 | step | cold | with `--reuse-venv` |
 |------|------|---------------------|
 | wheel build | ~1–2 min | n/a (`--wheel`) |
-| venv create + `pip install [all]` + sklearn/jupyter | ~2–3 min | skipped |
+| venv create + `pip install <wheel>` + sklearn/jupyter | ~2–3 min | skipped |
 | seven scenarios (each: real server boot, most with a restart) | ~4–6 min | ~4–6 min |
 | **total** | **~8–11 min** | **~4–6 min** |
 

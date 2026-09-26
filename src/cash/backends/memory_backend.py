@@ -12,6 +12,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+import psutil
+
 from cash.exceptions import CacheBackendError
 
 from .. import _plain_data
@@ -21,11 +23,6 @@ from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 
 logger = logging.getLogger(__name__)
-
-try:
-    import psutil
-except ImportError:
-    psutil = None  # type: ignore[assignment]
 
 __all__ = ["InMemoryBackend"]
 
@@ -564,8 +561,6 @@ def _memory_reading() -> Any | None:
     ``NameError``. Logged once per process: a check that cannot run stays
     that way, and a line per ten writes would say nothing new.
     """
-    if psutil is None:
-        return None
     try:
         mem = psutil.virtual_memory()
         percent = mem.percent

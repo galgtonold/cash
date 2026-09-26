@@ -3,7 +3,7 @@
 A single 1 GiB ``max_cache_size`` used to cap *every* tier, so the disk tier
 was pinned at one medium DataFrame and persist-heavy workloads thrashed
 (write an entry, immediately LRU-evict it — slower than no cache). These
-tests pin the pure clamp arithmetic, the psutil-absent fallback, that the
+tests pin the pure clamp arithmetic, the unreadable-RAM fallback, that the
 factory now gives the RAM and disk tiers *different* machine-scaled caps, and
 that an explicit ``max_cache_size`` still wins.
 """
@@ -52,7 +52,7 @@ class TestAdaptiveDiskCap:
 
 
 # ---------------------------------------------------------------------------
-# Pure RAM-cap policy — clamps + psutil-absent fallback.
+# Pure RAM-cap policy — clamps + unreadable-RAM fallback.
 # ---------------------------------------------------------------------------
 
 
@@ -69,8 +69,8 @@ class TestAdaptiveRamCap:
         # 64 GiB RAM: 0.20·64 = 12.8 GiB → clamped to the 4 GiB ceiling.
         assert ac.adaptive_ram_cap(64 * _GIB) == 4 * _GIB
 
-    def test_psutil_absent_fallback(self):
-        # None (psutil unavailable) → the fixed 1 GiB fallback, no import.
+    def test_unreadable_total_fallback(self):
+        # None (the total could not be read) → the fixed 1 GiB fallback.
         assert ac.adaptive_ram_cap(None) == ac.RAM_FALLBACK == _GIB
 
     def test_zero_total_fallback(self):
@@ -109,18 +109,11 @@ class TestResolvers:
         monkeypatch.setattr(ac, "_total_system_ram", lambda: 16 * _GIB)
         assert ac.resolve_ram_cap() == int(0.20 * 16 * _GIB)
 
-    def test_resolve_ram_cap_psutil_import_absent(self, monkeypatch):
-        # Simulate psutil being unimportable (a bare install).
-        import builtins
+    def test_resolve_ram_cap_when_psutil_cannot_read_memory(self, monkeypatch):
+        def broken():
+            raise OSError("no /proc/meminfo")
 
-        real_import = builtins.__import__
-
-        def blocked_import(name, *a, **k):
-            if name == "psutil":
-                raise ImportError("blocked")
-            return real_import(name, *a, **k)
-
-        monkeypatch.setattr(builtins, "__import__", blocked_import)
+        monkeypatch.setattr(ac.psutil, "virtual_memory", broken)
         assert ac._total_system_ram() is None
         assert ac.resolve_ram_cap() == ac.RAM_FALLBACK
 

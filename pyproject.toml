@@ -82,27 +82,20 @@ classifiers = [
     "Framework :: Jupyter",
     "Framework :: IPython",
 ]
-dependencies = []
+# One install gives everything cash itself needs. Libraries cash only works
+# with (pandas, polars, redis, boto3, matplotlib, ...) are not listed: they are
+# there when the user already uses them, and cash names the package to install
+# when a feature needs one that is missing.
+dependencies = [
+    # Sizes the RAM tier from the machine's memory and watches memory pressure.
+    "psutil>=5.0,<8",
+    # One more way to find the running notebook's file.
+    "ipynbname>=0.1",
+    # Reads [tool.cash]; the standard library has a TOML parser only from 3.11.
+    "tomli>=1.1; python_version < '3.11'",
+]
 
 [project.optional-dependencies]
-memory = ["psutil>=5.0,<7"]
-pandas = ["pandas", "pyarrow>=13.0"]
-ipynbname = ["ipynbname>=0.1"]
-redis = ["redis>=4.0,<6"]
-s3 = ["boto3>=1.26,<2"]
-polars = ["polars>=1.0,<3"]
-notebook = ["ipython>=8.0,<10"]
-viz = [
-    "matplotlib>=3.5,<4",
-    "ipywidgets>=7.0,<9",
-]
-# Reading `[tool.cash]` needs a TOML parser, which the stdlib has only from 3.11.
-toml = ["tomli>=1.1; python_version < '3.11'"]
-# Composed from the other extras, so each version bound is declared once. The
-# contributor extras (dev, docs, docs-test) stay out.
-all = [
-    "cash-lib[ipynbname,memory,notebook,pandas,polars,redis,s3,toml,viz]",
-]
 docs = [
     "mkdocs>=1.5",
     # 9.5 draws mermaid diagrams itself and has navigation.footer and toc.follow.

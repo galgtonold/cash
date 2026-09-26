@@ -47,6 +47,8 @@ import textwrap
 import tokenize
 import types
 
+import psutil
+
 from ._memo import COMPILED_MODULES, LruMemo
 from .analysis.annotations import ANNOTATION_PATTERN
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -856,41 +858,9 @@ def _process_start_time() -> float:
 
     started: float | None = None
     try:
-        import psutil  # type: ignore[import-not-found]
-
         started = float(psutil.Process().create_time())
-    except Exception:  # noqa: BLE001 - optional dependency, any failure
+    except Exception:  # noqa: BLE001 - no start time just falls back to cash's import time
         started = None
-    if started is None and sys.platform == "win32":
-        try:
-            # Local: Windows only.
-            import ctypes
-            from ctypes import wintypes
-
-            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            creation, exit_, kernel, user = (wintypes.FILETIME() for _ in range(4))
-            k32.GetCurrentProcess.restype = wintypes.HANDLE
-            if k32.GetProcessTimes(
-                k32.GetCurrentProcess(),
-                ctypes.byref(creation),
-                ctypes.byref(exit_),
-                ctypes.byref(kernel),
-                ctypes.byref(user),
-            ):
-                ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-                started = ticks / 1e7 - 11644473600.0  # FILETIME epoch -> Unix
-        except Exception:  # noqa: BLE001 - no start time just falls back to the next source
-            started = None
-    if started is None and os.path.exists("/proc/self/stat"):
-        try:
-            with open("/proc/self/stat", encoding="ascii") as fh:
-                fields = fh.read().rsplit(")", 1)[1].split()
-            start_ticks = int(fields[19])  # field 22 overall
-            with open("/proc/stat", encoding="ascii") as fh:
-                btime = next(int(line.split()[1]) for line in fh if line.startswith("btime"))
-            started = btime + start_ticks / os.sysconf("SC_CLK_TCK")
-        except Exception:  # noqa: BLE001 - no start time just falls back to the next source
-            started = None
     if started is None:
         # cash's own import time. Misses only a file edited in the gap between
         # this process starting and cash being imported -- normally the first

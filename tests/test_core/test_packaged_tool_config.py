@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import time
 import warnings
 from types import SimpleNamespace
@@ -23,10 +22,6 @@ from cash import config as cash_config
 from cash.config import get_config
 
 pytestmark = [pytest.mark.core]
-
-needs_toml = pytest.mark.skipif(
-    sys.version_info < (3, 11) and not __import__("importlib").util.find_spec("tomli"), reason="no TOML parser"
-)
 
 
 def test_a_config_file_that_does_not_exist_is_named(tmp_path, monkeypatch):
@@ -39,7 +34,6 @@ def test_a_config_file_that_does_not_exist_is_named(tmp_path, monkeypatch):
     assert said and str(missing) in said[0], [str(w.message) for w in rec]
 
 
-@needs_toml
 def test_settings_outside_a_cash_table_are_named_not_read(tmp_path, monkeypatch):
     """A config file's settings live under [cash]; top-level keys are not read,
     and cash says so rather than running on defaults without a word."""
@@ -54,7 +48,6 @@ def test_settings_outside_a_cash_table_are_named_not_read(tmp_path, monkeypatch)
     assert said and "[cash]" in said[0] and "max_cache_size" in said[0], [str(w.message) for w in rec]
 
 
-@needs_toml
 def test_a_home_relative_cache_dir_in_a_config_file_is_expanded(tmp_path, monkeypatch):
     monkeypatch.delenv("CASH_CACHE_DIR", raising=False)  # it would win over the file
     home = tmp_path / "home"
@@ -68,7 +61,6 @@ def test_a_home_relative_cache_dir_in_a_config_file_is_expanded(tmp_path, monkey
     assert os.path.normcase(cfg.cache_dir) == os.path.normcase(str(home / "crunch-cache")), cfg.cache_dir
 
 
-@needs_toml
 def test_cash_info_shows_what_a_tools_config_file_resolves_to(tmp_path, capsys, monkeypatch):
     from cash.__main__ import cmd_info
 

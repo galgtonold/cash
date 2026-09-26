@@ -27,10 +27,6 @@ from cash.config import get_config, parse_size
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
-needs_toml = pytest.mark.skipif(
-    sys.version_info < (3, 11) and not __import__("importlib").util.find_spec("tomli"), reason="no TOML parser"
-)
-
 
 def _codes(record, code):
     return [str(w.message) for w in record if f"[{code}]" in str(w.message)]
@@ -42,7 +38,6 @@ def _clean_env(**extra):
     return env
 
 
-@needs_toml
 def test_a_misspelled_key_is_named_with_the_setting_it_meant(tmp_path):
     project = tmp_path / "pyproject.toml"
     project.write_text(
@@ -57,7 +52,6 @@ def test_a_misspelled_key_is_named_with_the_setting_it_meant(tmp_path):
     assert cfg.max_cache_size is None
 
 
-@needs_toml
 def test_a_pyproject_without_a_cash_table_is_not_cash_s_to_check(tmp_path):
     project = tmp_path / "pyproject.toml"
     project.write_text('[project]\nname = "p"\n[tool.black]\nline-length = 88\n', encoding="utf-8")
@@ -68,7 +62,6 @@ def test_a_pyproject_without_a_cash_table_is_not_cash_s_to_check(tmp_path):
     assert "project" not in cfg._source, "a file with no cash settings was counted"
 
 
-@needs_toml
 def test_a_bad_value_is_said_once_however_often_the_config_is_resolved(tmp_path):
     project = tmp_path / "pyproject.toml"
     project.write_text('[tool.cash]\ncompress = "yes please"\n', encoding="utf-8")
@@ -79,7 +72,6 @@ def test_a_bad_value_is_said_once_however_often_the_config_is_resolved(tmp_path)
     assert len(_codes(rec, "CONFIG-INVALID")) == 1, [str(w.message) for w in rec]
 
 
-@needs_toml
 def test_a_byte_order_mark_is_named(tmp_path):
     project = tmp_path / "pyproject.toml"
     project.write_bytes(b"\xef\xbb\xbf[tool.cash]\ncompress = true\n")
@@ -105,7 +97,6 @@ def test_a_size_is_shown_in_the_unit_it_was_written_in(written, shown):
     assert format_size(parse_size(written)) == shown
 
 
-@needs_toml
 def test_cash_info_lists_every_setting_and_where_it_came_from(tmp_path):
     (tmp_path / "pyproject.toml").write_text('[tool.cash]\ndisable = true\nmax_cache_size = "2GB"\n', encoding="utf-8")
     out = subprocess.run(
@@ -136,7 +127,6 @@ def test_explain_names_the_cache_it_read(tmp_path):
     assert f"cache_dir: {answer.cache_dir}" in str(answer)
 
 
-@needs_toml
 @pytest.mark.parametrize("workers", [[], ["-n", "2"]], ids=["serial", "xdist"])
 def test_pytest_from_above_the_project_uses_the_project_config(tmp_path, workers):
     if workers:

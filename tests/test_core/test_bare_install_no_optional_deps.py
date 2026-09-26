@@ -1,31 +1,31 @@
-"""A bare ``pip install cash-lib`` must be importable and usable.
+"""``import cash`` must work without the libraries cash only works *with*.
 
-``pyproject.toml`` declares ``dependencies = []`` on purpose: pure-decorator
-users get no notebook stack, and IPython lives behind the ``[notebook]`` extra.
-Nothing enforced that, and it broke — ``statement/restore.py`` grew a
-module-level ``from IPython.display import ...`` that sits on the ``import
-cash`` chain (``__init__`` → ``core`` → ``notebook`` → ``upstream`` →
-``statement`` → ``restore``), so a bare install raised::
+``pip install cash-lib`` installs cash's own dependencies (psutil, ipynbname,
+and tomli on Python 3.10) and nothing it merely supports: pandas, polars,
+pyarrow, numpy, matplotlib, ipywidgets, redis and boto3 are there only when
+the user already uses them. IPython arrives with ipynbname's kernel stack, but
+the decorator must not need it either (the notebook layering rule), so it is
+blocked too. It broke once -- ``statement/restore.py`` grew a module-level
+``from IPython.display import ...`` that sits on the ``import cash`` chain
+(``__init__`` → ``core`` → ``notebook`` → ``upstream`` → ``statement`` →
+``restore``), and a plain script raised::
 
     >>> import cash
     ModuleNotFoundError: No module named 'IPython'
 
-The whole rest of the suite runs with IPython importable (the dev env has it,
-and the ``[all]`` extra pulls it in transitively via ``ipywidgets``), so no
-existing test could ever catch this. This one can.
+The rest of the suite runs with all of them importable (the dev env has
+them), so no other test could catch this. This one can.
 
 **Why a subprocess + meta_path finder**, rather than poking ``sys.modules``:
 ``cash`` — and very likely IPython, numpy, and friends — are already imported
 by the time this test runs, so an in-process hack would be testing an already
 warm module graph. A fresh interpreter with an import blocker installed
 *before* the first ``import cash`` is the only way to genuinely exercise the
-cold, dependency-free path.
+cold path.
 
-**Why block more than IPython:** ``dependencies = []`` means *every* name in
-``[project.optional-dependencies]`` is optional. Blocking the whole set turns
-this into a real bare-install simulation, so any future stray top-level import
-of numpy/pandas/ipywidgets/... is caught by the same guard rather than needing
-a new test each time.
+**Why block more than IPython:** blocking the whole set means any future
+stray top-level import of numpy/pandas/ipywidgets/... is caught by the same
+guard rather than needing a new test each time.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ import textwrap
 
 import pytest
 
-# Every distribution named in [project.optional-dependencies] in pyproject.toml,
-# plus the import names they provide. A bare install has NONE of these.
+# The import names of the libraries cash supports but does not install, plus
+# IPython (see the module docstring).
 BLOCKED_MODULES = [
     "IPython",
     "ipywidgets",
@@ -48,13 +48,11 @@ BLOCKED_MODULES = [
     "pyarrow",
     "redis",
     "boto3",
-    "psutil",
-    "ipynbname",
 ]
 
 _SCRIPT = textwrap.dedent(
     '''
-    """Run in a fresh interpreter with every optional dependency made
+    """Run in a fresh interpreter with the libraries cash only works with made
     unimportable. Prints PHASE markers that the parent test asserts on."""
     import io
     import sys
@@ -64,7 +62,7 @@ _SCRIPT = textwrap.dedent(
 
 
     class _BlockOptionalDeps:
-        """meta_path finder that makes the optional deps look uninstalled.
+        """meta_path finder that makes the blocked libraries look uninstalled.
 
         Raising ModuleNotFoundError (an ImportError subclass) keeps genuine
         `try: import numpy / except ImportError:` feature-detection working,
@@ -139,7 +137,7 @@ _SCRIPT = textwrap.dedent(
 
 @pytest.fixture(scope="module")
 def bare_install_run(tmp_path_factory):
-    """Run the no-optional-deps script once; hand its output to each test."""
+    """Run the blocked-libraries script once; hand its output to each test."""
     script = tmp_path_factory.mktemp("bare_install") / "bare_install_check.py"
     script.write_text(_SCRIPT.format(blocked=sorted(BLOCKED_MODULES)), encoding="utf-8")
 
@@ -152,8 +150,8 @@ def bare_install_run(tmp_path_factory):
     )
     if proc.returncode != 0:
         pytest.fail(
-            "cash is not usable without its optional dependencies "
-            "(a bare `pip install cash-lib` would be broken).\n"
+            "cash is not usable without the libraries it only works with "
+            "(a plain `pip install cash-lib` would be broken).\n"
             f"--- exit code: {proc.returncode}\n"
             f"--- stdout ---\n{proc.stdout}\n"
             f"--- stderr ---\n{proc.stderr}"
@@ -162,7 +160,7 @@ def bare_install_run(tmp_path_factory):
 
 
 def test_import_cash_without_optional_deps(bare_install_run):
-    """`import cash` must work with zero optional dependencies installed."""
+    """`import cash` must work without any of the libraries cash only works with."""
     assert "PHASE1_IMPORT_OK" in bare_install_run.stdout, bare_install_run.stdout
 
 

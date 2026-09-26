@@ -227,9 +227,6 @@ redis_host = "redis.example.com"
 commented out at its default. It will not overwrite an existing file unless
 you pass `force=True`.
 
-On Python 3.10, reading TOML needs `tomli`: install `cash-lib[toml]`
-([`CONFIG-TOML-UNREADABLE`](../warnings.md#config-toml-unreadable)).
-
 ### A config file named in code
 
 <!-- test:expect-warning reason="the example names a file the docs harness does not create, so CONFIG-FILE-MISSING (described below) is exactly what cash should say" -->

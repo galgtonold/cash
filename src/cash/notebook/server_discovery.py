@@ -268,7 +268,7 @@ def _try_ipynbname_path() -> str | None:
 
             return str(ipynbname.path())
     except Exception:  # noqa: BLE001 - a discovery library must never crash cash
-        logger.debug("[UTILS] ipynbname not available or failed")
+        logger.debug("[UTILS] ipynbname could not be imported or failed")
     return None
 
 
@@ -373,7 +373,7 @@ def get_notebook_path() -> str | None:
     Priority:
 
     1. VS Code injected variable ``__vsc_ipynb_file__``
-    2. ``ipynbname`` package (if installed)
+    2. ``ipynbname`` package
     3. Jupyter Server REST API
     4. ``None`` (upstream checking disabled gracefully)
     """

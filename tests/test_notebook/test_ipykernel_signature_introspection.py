@@ -14,9 +14,8 @@ otherwise ipykernel is told "accepts anything", passes ``cell_id=...``, cash
 forwards it to an original that rejects it, and the resulting ``TypeError``
 escapes before ``execute_reply`` is sent: the cell hangs at ``[*]`` forever.
 
-That combination is reachable on cash's own supported floor: ``[notebook]``
-allows ``ipython>=8.0``, and IPython only grew ``cell_id`` on ``run_cell_async``
-in **8.3** — so IPython 8.0/8.1/8.2 + any ipykernel that introspects (6.x and
+That combination is reachable: cash does not pin IPython, and IPython only
+grew ``cell_id`` on ``run_cell_async`` in **8.3** — so IPython 8.0/8.1/8.2 + any ipykernel that introspects (6.x and
 7.x both do) is a bricked kernel.
 
 These tests run ipykernel's REAL introspection helper rather than a
@@ -33,8 +32,7 @@ from traitlets.config import Configurable
 
 from cash.notebook.ipython.magics import CashMagics
 
-# ipykernel is a dev/runtime companion, not a hard dependency of the [notebook]
-# extra — skip rather than fail the bare-install matrix.
+# Skip rather than fail where ipykernel is not installed.
 kernelbase = pytest.importorskip("ipykernel.kernelbase")
 _accepts_parameters = kernelbase._accepts_parameters
 
@@ -152,7 +150,7 @@ class _NullEvents:
 
 
 class TestLegacyIPythonShell:
-    """IPython 8.0-8.2 (allowed by [notebook]) + an introspecting ipykernel."""
+    """IPython 8.0-8.2 + an introspecting ipykernel."""
 
     @pytest.mark.parametrize("hook", ["run_cell", "run_cell_async"])
     def test_cash_does_not_claim_cell_id_on_a_shell_that_rejects_it(self, hook, cash_instance):

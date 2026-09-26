@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @9c9e1bfe -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @59543677 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -51,7 +51,7 @@ its warning class.
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
 | [Caching](#cache-codes) | `CACHE-` | 15 | Caching happened, or refused to, and it is worth saying. |
-| [Configuration](#config-codes) | `CONFIG-` | 4 | A setting cash found but could not act on. |
+| [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 16 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 4 | Notebook-wide machinery rather than one statement. |
@@ -464,7 +464,6 @@ A setting cash found but could not act on. Every code here starts `CONFIG-`.
 |---|---|---|
 | [CONFIG-FILE-MISSING](#config-file-missing) | both | `Cash(config_path=...)` names a missing file |
 | [CONFIG-INVALID](#config-invalid) | both | a setting or config file cash cannot use |
-| [CONFIG-TOML-UNREADABLE](#config-toml-unreadable) | both | no TOML parser on Python 3.10 |
 | [CONFIG-UNKNOWN-KEY](#config-unknown-key) | both | a config key that is not a setting |
 
 ### CONFIG-FILE-MISSING {#config-file-missing}
@@ -496,7 +495,7 @@ before passing it.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @045509b5, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
+<!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @f94a029d, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
 **What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -518,23 +517,6 @@ then check with `cash info`.
 
 **When it is safe to ignore.** When the default is what you want. Then delete
 the line.
-
-### CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
-
-<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
-
-<!-- claim: cash/config.py:_load_toml_config @9d135d5c, cash/config.py:_warn_toml_unreadable @b0598e4e -->
-**What happened.** cash found a config file with a `[tool.cash]` or `[cash]`
-table but has no TOML parser. Python 3.10 has none built in.
-
-**Why it matters.** Every setting in that file is ignored, `cache_dir`
-included, so cash runs on defaults.
-
-**What to do.** Install `cash-lib[toml]` (it adds `tomli`), set the values
-through `CASH_*` environment variables, or use Python 3.11 or newer.
-
-**When it is safe to ignore.** When that file is not meant for this
-environment.
 
 ### CONFIG-UNKNOWN-KEY {#config-unknown-key}
 

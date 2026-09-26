@@ -20,9 +20,8 @@ the same session because their callers ensure they don't collide.
 
 Replayed output goes through :func:`~cash.notebook.statement.capture.replay_outputs`,
 which imports ``IPython.display`` only when there is rich output to show.
-Base ``cash`` has no dependencies (IPython lives in the ``[notebook]`` extra)
-and this module is on the ``import cash`` chain, so it must import without
-IPython; a genuine display attempt without it raises rather than rendering
+The decorator does not need IPython and this module is on the ``import cash``
+chain, so it must import without IPython; a genuine display attempt without it raises rather than rendering
 nothing. Both are pinned by ``tests/test_notebook/test_display_without_ipython.py``.
 """
 

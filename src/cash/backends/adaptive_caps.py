@@ -15,11 +15,6 @@ Both are clamped to sane floors/ceilings. The arithmetic lives in the pure
 already-measured numbers), so every clamp branch is unit-testable without
 touching the real machine; the ``resolve_*`` wrappers read the machine and
 delegate.
-
-``psutil`` is an *optional* dependency (bare-install guard), so the
-RAM source guards its import and falls back to a fixed cap when it is
-missing — importing psutil unconditionally here would make a bare
-``pip install cash-lib`` unimportable.
 """
 
 from __future__ import annotations
@@ -27,6 +22,8 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +56,7 @@ DISK_SAFETY = 0.8
 RAM_FRACTION = 0.20
 RAM_FLOOR = 512 * _MIB
 RAM_CEILING = 4 * _GIB
-# Used only when psutil is unavailable (bare install) — a sane middle value
-# that never imports psutil just to size the RAM tier.
+# Used only when the machine's total RAM cannot be read -- a sane middle value.
 RAM_FALLBACK = _GIB
 
 
@@ -120,9 +116,8 @@ def _gib(n: int) -> str:
 def adaptive_ram_cap(total_ram_bytes: int | None) -> int:
     """RAM-tier cap in bytes, derived from *total_ram_bytes*.
 
-    Pure and deterministic. ``None`` (psutil unavailable) yields the fixed
-    :data:`RAM_FALLBACK`, so a bare install never imports psutil to size the
-    RAM tier.
+    Pure and deterministic. ``None`` (the total could not be read) yields the
+    fixed :data:`RAM_FALLBACK`.
 
     Worked example: 16 GiB RAM → ~3.2 GiB (0.20·16, within [512 MiB, 4 GiB]).
     """
@@ -156,15 +151,7 @@ def free_bytes_on_volume(path: str) -> int:
 
 
 def _total_system_ram() -> int | None:
-    """Total physical RAM in bytes, or ``None`` when psutil is unavailable.
-
-    Guarded import: psutil is optional. A bare install falls back
-    to the fixed RAM cap rather than crashing on the missing dependency.
-    """
-    try:
-        import psutil
-    except ImportError:
-        return None
+    """Total physical RAM in bytes, or ``None`` when psutil cannot read it."""
     try:
         return int(psutil.virtual_memory().total)
     except Exception:  # any psutil failure → fixed fallback

@@ -168,7 +168,6 @@ def test_python_m_cash_targets_the_project_you_stand_in(tmp_path):
 def a_cache_in_a_file_tier_s_own_dir(tmp_path):
     """A project whose file tier sets its own ``cache_dir``: the library
     writes there, not to the top-level ``cache_dir``."""
-    pytest.importorskip("tomllib" if sys.version_info >= (3, 11) else "tomli")
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "demo"\nversion = "0"\n\n'
         '[[tool.cash.tiers]]\ntype = "memory"\n\n'

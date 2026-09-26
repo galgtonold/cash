@@ -199,9 +199,6 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # is not valid TOML; ignored, defaults apply
         "CONFIG-UNKNOWN-KEY",  # a [tool.cash] / cash config key that is not a
         # setting, so it does nothing (usually a typo)
-        "CONFIG-TOML-UNREADABLE",  # a config file exists but nothing can parse it
-        # (Python 3.10 without `tomli`), so every
-        # setting in it is being ignored
         "CONFIG-FILE-MISSING",  # Cash(config_path=...) names a file that does
         # not exist, so none of its settings apply
         # -- IMPURE: the function does something a cache hit will not repeat ----

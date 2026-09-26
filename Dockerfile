@@ -8,10 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cash with all extras
+# Install cash with the contributor tools
 WORKDIR /app
 COPY . /app/
-RUN pip install --no-cache-dir -e ".[all,dev]"
+RUN pip install --no-cache-dir -e ".[dev]"
 
 # Install Jupyter
 RUN pip install --no-cache-dir jupyterlab
