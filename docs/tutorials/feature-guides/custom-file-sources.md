@@ -208,7 +208,7 @@ bound earlier by `from my_lib import read_data` keeps the original. Pass
   paths, calls that read them recompute.
 - **Timestamps put back by hand.** On Windows, a same-size edit that restores
   the original modification time is not seen; see
-  [Known limitations](../../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
+  [Known limitations](../../decorator-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
 
 ## Related
 

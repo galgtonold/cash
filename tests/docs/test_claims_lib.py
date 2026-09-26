@@ -92,9 +92,9 @@ def test_published_pages_excludes_superpowers():
     rels = {p.relative_to(Path(__file__).resolve().parents[2] / "docs").as_posix() for p in published_pages()}
     assert not any(r.startswith("superpowers/") for r in rels)
     assert "index.md" in rels
-    assert (
-        len(rels) == 66
-    )  # +1: warnings.md, +1: testing-your-code.md, +2: split quickstart and deploying.md, +4: Project pages
+    # +1: warnings.md, +1: testing-your-code.md, +2: split quickstart and
+    # deploying.md, +4: Project pages, +1: decorator-limitations.md
+    assert len(rels) == 67
 
 
 # --------------------------------------------------------------------------- #

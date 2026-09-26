@@ -70,4 +70,5 @@ through the same hasher. See [Iterators](iterator-caching.md).
 ## Related
 
 - [Custom hashers](custom-hashers.md)
-- [The `@cash.cache` guide](../../decorator.md#methods-and-self)
+- [Methods and `self`](../../decorator-limitations.md#methods-and-self):
+  the limits of hashing `self`.

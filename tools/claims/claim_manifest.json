@@ -67,6 +67,10 @@
     "anchors": 12,
     "audited": "2026-07-27"
   },
+  "docs/decorator-limitations.md": {
+    "anchors": 4,
+    "audited": "2026-09-26"
+  },
   "docs/decorator.md": {
     "anchors": 36,
     "audited": "2026-07-27"

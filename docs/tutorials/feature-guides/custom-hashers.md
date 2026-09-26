@@ -12,7 +12,7 @@ your own type when:
 - **It can't be pickled** (it holds a lock, a socket, a C handle). Cash warns
   [`KEY-UNHASHABLE-ARG`](../../warnings.md#key-unhashable-arg) and runs the call
   uncached; see
-  [Arguments cash cannot hash](../../decorator.md#arguments-cash-cannot-hash).
+  [Arguments cash cannot hash](../../decorator-limitations.md#arguments-cash-cannot-hash).
 - **Pickling it is slow**, and a few fields identify it.
 - **Equal instances pickle differently**, so every call misses.
 
@@ -156,5 +156,6 @@ plain registration for it works.
 ## Related
 
 - [Class methods](caching-class-methods.md): hashing `self`.
-- [The `@cash.cache` guide](../../decorator.md#arguments-cash-cannot-hash)
+- [Arguments cash cannot hash](../../decorator-limitations.md#arguments-cash-cannot-hash):
+  what to do when a type cannot be pickled at all.
 - [File dependencies](custom-file-sources.md)

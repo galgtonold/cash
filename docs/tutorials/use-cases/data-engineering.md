@@ -136,7 +136,7 @@ or each keeps its own cache. See [Deploying](../feature-guides/deploying.md) and
 - **Don't change arguments in place.** A step that runs
   `df.fillna(0, inplace=True)` on its input is not stored, so it runs every
   time. Copy first, as `normalize` does; see
-  [Results cash refuses to store](../../decorator.md#results-cash-refuses-to-store).
+  [Results cash refuses to store](../../decorator-limitations.md#results-cash-refuses-to-store).
 - **Create clients at module level.** Database connections, S3 clients and Spark
   sessions are not results. Build them once, outside cached functions.
 - **Pass the clock in.** A step that reads `datetime.now()` stores the first
