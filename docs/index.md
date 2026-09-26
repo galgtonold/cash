@@ -82,8 +82,8 @@ Try it in your browser with no install:
 pip install cash-lib
 ```
 
-That installs everything cash needs. The few packages specific features need,
-such as `redis` for the Redis backend, are listed in
+That one install is all cash needs. A few features, such as the Redis
+backend, need a package of their own; see
 [Installation](getting-started/installation.md).
 
 !!! danger "Only load caches you trust"

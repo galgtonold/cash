@@ -6,7 +6,7 @@ Two rules are in tension here, and this file pins both:
    IPython and ``statement/`` sits on the ``import cash`` chain, so an
    unguarded module-level IPython import breaks ``import cash`` wherever
    IPython is missing (guarded by
-   ``tests/test_core/test_bare_install_no_optional_deps.py``).
+   ``tests/test_core/test_cash_works_without_the_libraries_it_supports.py``).
 2. **A genuine display attempt must RAISE** — ``processor.py`` used to satisfy
    rule 1 with module-level ``try/except ImportError`` stubs where
    ``publish_display_data`` was a silent no-op. Rich output would then vanish

@@ -61,7 +61,7 @@ _SCRIPT = textwrap.dedent(
     BLOCKED = set({blocked!r})
 
 
-    class _BlockOptionalDeps:
+    class _BlockSupportedLibraries:
         """meta_path finder that makes the blocked libraries look uninstalled.
 
         Raising ModuleNotFoundError (an ImportError subclass) keeps genuine
@@ -80,7 +80,7 @@ _SCRIPT = textwrap.dedent(
             return None
 
 
-    sys.meta_path.insert(0, _BlockOptionalDeps())
+    sys.meta_path.insert(0, _BlockSupportedLibraries())
     # Drop anything already pulled in by site/sitecustomize before we start.
     for _name in list(sys.modules):
         if _name.split(".")[0] in BLOCKED:
@@ -159,12 +159,12 @@ def bare_install_run(tmp_path_factory):
     return proc
 
 
-def test_import_cash_without_optional_deps(bare_install_run):
+def test_import_cash_without_supported_libraries(bare_install_run):
     """`import cash` must work without any of the libraries cash only works with."""
     assert "PHASE1_IMPORT_OK" in bare_install_run.stdout, bare_install_run.stdout
 
 
-def test_decorator_round_trip_without_optional_deps(bare_install_run):
+def test_decorator_round_trip_without_supported_libraries(bare_install_run):
     """The decorator must actually cache — 2nd call is a HIT, not a recompute."""
     line = next(line for line in bare_install_run.stdout.splitlines() if line.startswith("PHASE2_ROUNDTRIP"))
     _, first, second, n_calls, hits = line.split()
@@ -174,7 +174,7 @@ def test_decorator_round_trip_without_optional_deps(bare_install_run):
     assert hits == "1", f"cash did not record a cache hit: {line}"
 
 
-def test_cli_entry_point_without_optional_deps(bare_install_run):
+def test_cli_entry_point_without_supported_libraries(bare_install_run):
     """The `cash` console script (cash.__main__:main) must run."""
     line = next(line for line in bare_install_run.stdout.splitlines() if line.startswith("PHASE3_CLI"))
     assert "cash" in line and line.strip() != "PHASE3_CLI", line

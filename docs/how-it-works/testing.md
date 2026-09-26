@@ -15,7 +15,7 @@ yourself. Figures on this page are derived from the repository by
 
 ## The suites
 
-**<!-- docnum:tests_total -->~11,400<!-- /docnum --> tests** in
+**<!-- docnum:tests_total -->~11,350<!-- /docnum --> tests** in
 <!-- docnum:test_files -->~1,140<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
@@ -70,7 +70,8 @@ function, not the functions it calls.
 
 ## Packaging
 
-The suites run against an editable install with every optional dependency.
+The suites run against an editable install with the `dev` extra, which adds
+every library cash works with (pandas, polars, redis and the rest).
 `scripts/wheel_gate.py` checks the package a user gets: it builds a wheel,
 installs it into a fresh virtual environment, and drives a real Jupyter server
 through kernel restarts. It is run by hand; CI skips it.

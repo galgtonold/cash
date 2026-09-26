@@ -19,13 +19,19 @@ the kernel, so cash sees your latest edits without a save.
 cash works with the libraries you already use, such as pandas and polars,
 and does not install them. A few features need a package of their own:
 
-| Feature | Install |
+| Feature | Package |
 | --- | --- |
-| Redis backend | `pip install redis` |
-| S3 backend | `pip install boto3` |
-| Tracking `s3://` or `gs://` reads | `pip install s3fs` or `pip install gcsfs` |
-| Storing pandas DataFrames as Parquet (otherwise they are pickled) | `pip install pyarrow` |
-| The `cash.show_stats()` dashboard in Jupyter | `pip install ipywidgets matplotlib` |
+| Redis backend | `redis` |
+| S3 backend | `boto3` |
+| Tracking `s3://` or `gs://` reads | `s3fs` or `gcsfs` |
+| Storing pandas DataFrames as Parquet (otherwise they are pickled) | `pyarrow` |
+| The `cash.show_stats()` dashboard in Jupyter | `ipywidgets` and `matplotlib` |
+
+Install the one you need with pip, for example the Redis client:
+
+```bash
+pip install redis
+```
 
 When a backend or a remote read needs a package you do not have, the error
 names the package to install.

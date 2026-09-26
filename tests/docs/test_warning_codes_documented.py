@@ -154,7 +154,8 @@ def cash_warning_categories() -> set[str]:
       anything ``import cash`` pulls in, including a class defined dynamically;
     * the **static** closure over every ``class`` statement under ``src/cash``
       catches one defined in a module that ``import cash`` does not reach --
-      an optional-dependency backend, say -- which the runtime walk cannot see.
+      a backend whose client library is not installed, say -- which the
+      runtime walk cannot see.
       Iterated to a fixed point, so a subclass whose file happens to be read
       before its base's is still found.
     """
