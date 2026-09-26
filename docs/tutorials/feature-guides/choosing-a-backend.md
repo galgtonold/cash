@@ -185,9 +185,7 @@ app = Cash(backend=S3Backend(
 
 One object per entry. Reading an entry's metadata fetches only its first 8 KB.
 Every miss is a GET and every write a PUT, both billed and both tens of
-milliseconds, so put S3 last in a tier stack.
-
-S3 does not delete expired
+milliseconds, so put S3 last in a tier stack. S3 does not delete expired
 entries by itself: cash skips them on read, and a bucket lifecycle rule or
 `cash.cleanup()` removes them. Install the extra:
 `pip install "cash-lib[s3]"`.

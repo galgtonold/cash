@@ -16,28 +16,20 @@ the kernel, so cash sees your latest edits without a save.
 
 ## Optional extras
 
-Install only what you need, in quotes so the shell leaves the brackets alone:
+Install only what you need:
 
 ```bash
-pip install "cash-lib[pandas]"
-# several at once:
-pip install "cash-lib[pandas,notebook]"
+pip install "cash-lib[pandas]"      # pandas + pyarrow, for stable DataFrame hashing
+pip install "cash-lib[polars]"      # polars support
+pip install "cash-lib[notebook]"    # IPython, for %cash_on and the other magics
+pip install "cash-lib[memory]"      # psutil, for memory-aware cache budgets
+pip install "cash-lib[redis]"       # Redis backend, for a cache shared between machines
+pip install "cash-lib[s3]"          # S3 backend (boto3)
+pip install "cash-lib[ipynbname]"   # one more way to find the running notebook's file
+pip install "cash-lib[viz]"         # matplotlib + ipywidgets, for the cash.show_stats() dashboard
+pip install "cash-lib[toml]"        # tomli, to read [tool.cash] in pyproject.toml on Python 3.10
+pip install "cash-lib[all]"         # all of the above
 ```
-
-<!-- test_documented_install_extras_exist checks these names: cash-lib[pandas,polars,notebook,memory,redis,s3,ipynbname,viz,toml,all] -->
-
-| Extra | What it adds | You need it when |
-|---|---|---|
-| `pandas` | pandas and pyarrow | you want stable DataFrame hashing |
-| `polars` | polars | you use polars |
-| `notebook` | IPython | you use `%cash_on` and the other magics |
-| `memory` | psutil | you want memory-aware cache budgets |
-| `redis` | the Redis client | you share a cache between machines through Redis |
-| `s3` | boto3 | you store the cache in S3 |
-| `ipynbname` | ipynbname | you want one more way to find the running notebook's file |
-| `viz` | matplotlib and ipywidgets | you use the `cash.show_stats()` dashboard |
-| `toml` | tomli, on Python 3.10 only | you set `[tool.cash]` in `pyproject.toml` on Python 3.10 |
-| `all` | all of the above | you want everything |
 
 `[all]` is exactly the extras above. The contributor extras (`dev`, `docs`,
 `docs-test`) are not part of it; see [Contributing](../contributing.md).
