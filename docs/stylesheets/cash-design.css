@@ -15,6 +15,12 @@
  *   4. Adopt the spec ink scale for body text.
  *   5. Use cash-green for links so the brand voice carries through the
  *      reading experience.
+ *
+ * Dark mode: mkdocs.yml offers Material's `slate` scheme beside the light
+ * `default` one. Every colour below comes from a --cash-* token, and the
+ * `[data-md-color-scheme="slate"]` block redefines the tokens for a dark
+ * ground, so no rule needs a dark twin. Never write a colour value into a
+ * rule: add a token and give it a dark value too.
  */
 
 /* ─── Tokens ─────────────────────────────────────────────────────────── */
@@ -75,6 +81,41 @@
   --cash-radius-code:  3px;
 }
 
+/* Dark (slate) values of the same tokens. The brand green and ochre are
+ * lifted so they read on a dark ground; surfaces and ink follow Material's
+ * slate palette. */
+[data-md-color-scheme="slate"] {
+  --cash-green:        #4db38a;
+  --cash-green-bg:     #15291f;
+  --cash-ochre:        #e0a940;
+  --cash-ochre-bg:     #2b2413;
+
+  --cash-mixed:        #7fa7d6;
+  --cash-info:         #6ea8fe;
+  --cash-info-bg:      #17233a;
+  --cash-info-rule:    #2b3d5e;
+  --cash-warn:         #ffb74d;
+  --cash-warn-fg:      #d9bba9;
+  --cash-warn-bg:      #2b2815;
+  --cash-changed:      #ff8a50;
+  --cash-changed-bg:   #2f1d11;
+  --cash-danger:       #ef6f62;
+  --cash-danger-bg:    #2d1616;
+
+  --cash-bg:           var(--md-default-bg-color);
+  --cash-bg-section:   var(--md-code-bg-color);
+  --cash-bg-nested:    hsla(232, 15%, 17%, 1);
+
+  --cash-ink:          #e3e5ea;
+  --cash-ink-2:        #c5c9d2;
+  --cash-ink-3:        #a6abb6;
+  --cash-ink-4:        #878d99;
+  --cash-ink-5:        #6f7582;
+
+  --cash-rule:         #2f3441;
+  --cash-rule-strong:  #3d4352;
+}
+
 /* ─── mkdocs-material variable overrides ─────────────────────────────── *
  * Material exposes design tokens as `--md-*` CSS variables. By mapping
  * them onto our `--cash-*` tokens we keep material's responsive logic
@@ -104,6 +145,32 @@
   --md-accent-fg-color--transparent: rgba(153, 99, 0, 0.1);
   --md-accent-bg-color:            #ffffff;
   --md-accent-bg-color--light:     rgba(255, 255, 255, 0.7);
+}
+/* Dark: a deeper green header (white text still passes), and the lifted
+ * ochre for hover and focus accents. */
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color:           #0b4d37;
+  --md-primary-fg-color--light:    #1d6b50;
+  --md-primary-fg-color--dark:     #063826;
+  --md-typeset-a-color:            var(--cash-green);
+}
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color:            #e0a940;
+  --md-accent-fg-color--transparent: rgba(224, 169, 64, 0.12);
+  --md-accent-bg-color:            #1e2129;
+}
+
+/* Mermaid diagrams: Material draws them from these variables, so they follow
+ * the colour scheme. Nodes are cash-green, edges cash-ochre, and edge labels
+ * sit on the page background so a line never runs through their text.
+ * Material sets these on <body> (`:root > *`), hence the body selector. */
+[data-md-color-scheme] {
+  --md-mermaid-font-family:    var(--cash-font-sans);
+  --md-mermaid-node-bg-color:  var(--cash-green-bg);
+  --md-mermaid-node-fg-color:  var(--cash-green);
+  --md-mermaid-edge-color:     var(--cash-ochre);
+  --md-mermaid-label-bg-color: var(--cash-bg);
+  --md-mermaid-label-fg-color: var(--cash-ink);
 }
 
 /* ─── Body typography ────────────────────────────────────────────────── */
@@ -201,44 +268,13 @@
 }
 
 /* ─── Mermaid diagrams ───────────────────────────────────────────────── *
- * The mkdocs-mermaid2-plugin renders SVGs with `display: inline` and a
- * baked-in inline `style="max-width: 512px"`. The first collapses the
- * bounding box; the second pins every diagram to a tiny size regardless
- * of viewport. Both need `!important` to defeat the inline style. */
+ * Material renders each diagram into a closed shadow root, so no rule here
+ * reaches the SVG itself; colours come from the --md-mermaid-* tokens above. */
 
 .md-typeset .mermaid {
   background: var(--cash-bg);
   text-align: center;
   margin: 1em 0;
-}
-
-.md-typeset .mermaid svg {
-  display: block !important;
-  margin: 0 auto !important;
-  /* The actual `width` is set per-diagram by docs/javascripts/
-     badge-iframe-resize.js — it reads mermaid's inline
-     `style.maxWidth` (the diagram's natural rendered width) and
-     applies that as `style.width`, so small diagrams stay small
-     instead of getting stretched up to the column width.
-     We only constrain the upper bound here. */
-  max-width: 100% !important;
-  height: auto !important;
-}
-
-.md-typeset .mermaid > div {
-  display: block;
-  margin: 0 auto;
-  max-width: 100%;
-}
-
-/* Edge label backgrounds are white by default (Mermaid injects an ID-scoped
-   style inside the SVG). Override both the span background and the rect fill
-   so the label text sits directly on the arrow without a white pill box. */
-.md-typeset .mermaid .edgeLabel {
-  background-color: transparent !important;
-}
-.md-typeset .mermaid .edgeLabel rect {
-  fill: none !important;
 }
 
 /* ─── Why Cash? page blocks ──────────────────────────────────────────── *
@@ -604,7 +640,7 @@
   letter-spacing: 0.04em;
   padding: 2px 6px;
   border-radius: var(--cash-radius-sm);
-  color: #fff;
+  color: var(--cash-bg);
 }
 .cash-cc-panel.ok .cash-cc-pill { background: var(--cash-green); }
 .cash-cc-panel.warn .cash-cc-pill { background: var(--cash-ochre); }
@@ -655,4 +691,14 @@ a.cash-cta-card {
 a.cash-cta-card:hover {
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.08);
   transform: translateY(-2px);
+}
+
+/* ─── Badge example frames ───────────────────────────────────────────── *
+ * The badge examples are light cards, as a notebook shows them. In dark
+ * mode the page's color-scheme is dark; a frame whose document is light
+ * would then be painted on an opaque white canvas the width of the column.
+ * Declaring the frame light keeps its canvas transparent, so only the card
+ * itself shows. */
+iframe.cash-badge {
+  color-scheme: light;
 }

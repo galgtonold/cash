@@ -1,6 +1,6 @@
 """Validate the mermaid diagrams embedded in the docs.
 
-``mkdocs build --strict`` does **not** parse mermaid: the ``mermaid2`` plugin
+``mkdocs build --strict`` does **not** parse mermaid: Material for MkDocs
 renders diagrams client-side, so a malformed diagram builds green and then
 shows up as a broken box on the page. These checks close that gap.
 

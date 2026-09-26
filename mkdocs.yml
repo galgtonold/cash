@@ -11,10 +11,23 @@ repo_name: cash
 
 theme:
   name: material
+  # Light and dark follow the reader's system setting until they pick one
+  # with the toggle in the header. cash-design.css holds the colours of both.
   palette:
-    scheme: default
-    primary: custom
-    accent: custom
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   features:
     - navigation.tabs
     - navigation.sections
@@ -73,24 +86,6 @@ plugins:
       redirect_maps:
         getting-started/quickstart.md: index.md
         api/experimental.md: api/inspection.md
-  - mermaid2:
-      arguments:
-        theme: base
-        themeVariables:
-          fontFamily: -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif
-          primaryColor: '#e6fffa'         # cash-green-bg — node fill
-          primaryTextColor: '#006644'     # cash-green — node text
-          primaryBorderColor: '#006644'   # cash-green — node border
-          lineColor: '#996300'            # cash-ochre — edges
-          secondaryColor: '#fffbe6'       # cash-ochre-bg — alt node fill
-          secondaryTextColor: '#996300'
-          secondaryBorderColor: '#996300'
-          tertiaryColor: '#eef8f4'        # light cash-green tint for subgraph containers
-          tertiaryTextColor: '#1a4d38'    # dark cash-green for subgraph labels
-          tertiaryBorderColor: '#4da888'  # medium cash-green — visible, on-brand
-          background: '#ffffff'
-          mainBkg: '#e6fffa'
-          edgeLabelBackground: '#ffffff'
   - mkdocstrings:
       handlers:
         python:
@@ -125,11 +120,13 @@ plugins:
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
+  # Material renders ```mermaid fences itself, in the page's colour scheme:
+  # the diagram colours are the --md-mermaid-* tokens in cash-design.css.
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:mermaid2.fence_mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - admonition

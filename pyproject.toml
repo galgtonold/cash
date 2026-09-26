@@ -105,9 +105,9 @@ all = [
 ]
 docs = [
     "mkdocs>=1.5",
-    "mkdocs-material>=9.0",
+    # 9.5 draws mermaid diagrams itself and has navigation.footer and toc.follow.
+    "mkdocs-material>=9.5",
     "mkdocstrings[python]>=0.24",
-    "mkdocs-mermaid2-plugin>=1.2",
     # Old page URLs forward to the pages that replaced them.
     "mkdocs-redirects>=1.2",
 ]
