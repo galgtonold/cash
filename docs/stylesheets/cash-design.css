@@ -711,6 +711,20 @@ a.cash-cta-card:hover {
   max-width: 80ch;
 }
 
+/* ─── Code in tables ─────────────────────────────────────────────────── *
+ * A setting, variable or class name in a table is a word to look up: it
+ * never breaks inside ("CASH_CACHE / _DIR"). The name column does not wrap
+ * at all; a table too wide for the screen scrolls sideways instead. */
+.md-typeset td code,
+.md-typeset th code {
+  word-break: normal;
+  overflow-wrap: normal;
+  hyphens: none;
+}
+.md-typeset td:first-child code {
+  white-space: nowrap;
+}
+
 /* ─── Badge example frames ───────────────────────────────────────────── *
  * The badge examples are light cards, as a notebook shows them. In dark
  * mode the page's color-scheme is dark; a frame whose document is light
