@@ -13,6 +13,8 @@ theme:
   name: material
   # overrides/main.html: the browser tab title comes from the page's H1.
   custom_dir: overrides
+  logo: assets/logo.svg
+  favicon: assets/favicon.png
   # Light and dark follow the reader's system setting until they pick one
   # with the toggle in the header. cash-design.css holds the colours of both.
   palette:
