@@ -158,4 +158,6 @@ plain registration for it works.
 - [Class methods](caching-class-methods.md): hashing `self`.
 - [Arguments cash cannot hash](../../decorator-limitations.md#arguments-cash-cannot-hash):
   what to do when a type cannot be pickled at all.
+- [An argument that does not change the result](../../decorator-limitations.md#an-argument-that-does-not-change-the-result):
+  a hasher that returns a constant, for a logger.
 - [File dependencies](custom-file-sources.md)

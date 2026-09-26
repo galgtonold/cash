@@ -33,6 +33,62 @@ cash.register_hasher(Store, hash_store)
 Never hash by `id()`: ids repeat across processes, so a later run could get
 another object's entry. See [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 
+## An argument that does not change the result
+
+<!-- claim: cash/core.py:Cash.cache @2d082328 -->
+Every argument is part of the key, and `@cash.cache` has no `ignore=`
+parameter. So a logger, a progress callback or a `verbose=` flag splits the
+cache: `fit(data, verbose=True)` misses after `fit(data)` ran.
+
+Keep such arguments out of the cached function. A thin wrapper takes them and
+calls a cached core with only the arguments that change the result:
+
+```python
+import logging
+import cash
+
+@cash.cache
+def _fit(data):
+    return sum(data) / len(data)
+
+def fit(data, log=None, verbose=False):
+    if verbose and log:
+        log.info("fitting %d rows", len(data))
+    return _fit(data)
+
+fit([1, 2, 3], log=logging.getLogger("a"), verbose=True)
+fit([1, 2, 3])   # _fit hits: log and verbose are not in its key
+# test:inject: assert _fit.cache_info()["hits"] == 1; _fit.cache_clear()
+# test:inject: _fit([1, 2, 3])  # first call after the clear
+```
+
+The wrapper's own work runs on every call, so the log line appears on a hit
+too, which a logger inside the cached body would not do.
+
+<!-- claim: cash/core.py:Cash.register_hasher @f48a324b -->
+For an argument **type** that never affects a result, a hasher that returns a
+constant does the same without a wrapper. Every logger then counts as the same
+value:
+
+```python
+import logging
+import cash
+
+cash.register_hasher(logging.Logger, lambda log: "any-logger")
+
+@cash.cache
+def fit_logged(data, log):
+    log.info("fitting %d rows", len(data))
+    return sum(data) / len(data)
+
+fit_logged([1, 2, 3], logging.getLogger("a"))   # first call: runs
+fit_logged([1, 2, 3], logging.getLogger("b"))   # cache hit
+```
+
+The hasher applies to every cached function in the process, so use it only
+for a type that is never input data. Don't do this for `bool` or `int`: a
+`verbose=` flag needs the wrapper.
+
 ## Methods and `self`
 
 `self` is an argument like any other, hashed by its state: two instances with

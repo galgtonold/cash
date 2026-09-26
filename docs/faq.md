@@ -71,6 +71,13 @@
     An argument (a lock, a socket, an open file) cannot be hashed, so the call
     runs uncached. See [the warning](warnings.md#key-unhashable-arg).
 
+??? question "How do I keep an argument such as a logger or a `verbose` flag out of the key?"
+    There is no `ignore=` parameter: every argument is in the key. Call a
+    cached core function from a thin wrapper that takes the extra arguments,
+    or, for a type such as `logging.Logger`, register a hasher that returns a
+    constant. See
+    [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result).
+
 ## Notebook
 
 ??? question "Do I need to change my notebook?"

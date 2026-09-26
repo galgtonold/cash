@@ -219,18 +219,19 @@ see [The decorator path](how-it-works/decorator-path.md).
 <!-- claim: cash/core.py:Cash.cache @2d082328 -->
 All parameters are keyword-only and optional:
 
-| Parameter | What it does |
-|---|---|
-| `ttl=` | Seconds an entry stays valid, or a `datetime.timedelta`. `None` (default): no expiry |
-| `cache_if=` | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
-| `depends_on=` | A callable or `DataSource` object, or a list of them, to add to the key. Anything else (a path: use `file_depends_on=`) raises `TypeError` |
-| `file_depends_on=` | A path or list of paths, tracked by content as if the body read them |
-| `dynamic_depends_on=` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
-| `frozen=` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
-| `strict=` | Raise `CashImpureFunctionError` on any purity finding. For CI |
-| `assume_safe=` | Silence purity findings and cache anyway |
-| `allow_random=` | Silence the unseeded-randomness warning |
-| `chunk_max_items=`, `chunk_max_bytes=` | Chunk size for iterator results (default 1,000,000 items, 1 GB) |
+| Parameter | Default | What it does |
+|---|---|---|
+| `ttl=` | `None`: no expiry | Seconds an entry stays valid, or a `datetime.timedelta` |
+| `cache_if=` | `None`: store every result | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
+| `depends_on=` | `None` | A callable or `DataSource` object, or a list of them, to add to the key. Anything else (a path: use `file_depends_on=`) raises `TypeError` |
+| `file_depends_on=` | `None` | A path or list of paths, tracked by content as if the body read them |
+| `dynamic_depends_on=` | `None` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
+| `frozen=` | `False` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
+| `strict=` | `False` | Raise `CashImpureFunctionError` on any purity finding. For CI |
+| `assume_safe=` | `False` | Silence purity findings and cache anyway |
+| `allow_random=` | `False` | Silence the unseeded-randomness warning |
+| `chunk_max_items=`, `chunk_max_bytes=` | 1,000,000 items, 1 GB | Chunk size for iterator results |
+| Leave an argument out of the key | | Not a parameter: every argument is in the key. See [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
 
 `strict=True` with `assume_safe=True` raises `ValueError`, and so does a
 negative, NaN or infinite `ttl=`; a `ttl=` that is not a number (a `"300"`
@@ -465,6 +466,8 @@ with its fix:
 
 - <a id="arguments-cash-cannot-hash"></a>[Arguments cash cannot hash](decorator-limitations.md#arguments-cash-cannot-hash):
   a lock, an open file, a connection.
+- [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result):
+  a logger or a `verbose=` flag.
 - <a id="methods-and-self"></a>[Methods and `self`](decorator-limitations.md#methods-and-self)
 - <a id="code-you-pass-as-an-argument"></a>[Code you pass as an argument](decorator-limitations.md#code-you-pass-as-an-argument)
 - <a id="reads-cash-cannot-see"></a>[Reads cash cannot see](decorator-limitations.md#reads-cash-cannot-see):
