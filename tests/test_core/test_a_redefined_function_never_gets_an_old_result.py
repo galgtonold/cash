@@ -32,6 +32,21 @@ def quiet():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _collect_only_this_tests_objects():
+    """Each round frees the dead version with a full ``gc.collect()``, which
+    walks every object in the process. Alone that is 60k objects and 1 s a
+    test; late in a pytest-xdist worker it is over a million, and 50 rounds
+    took 30 s, the whole per-test timeout. Frozen objects are left out of
+    every collection, so freezing what exists now makes each round walk only
+    what this test made, the dead versions included."""
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
+
+
 def test_a_rerun_cell_gets_its_own_result(tmp_path, quiet):
     c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
     module = types.ModuleType("redefined_cells_under_test")
