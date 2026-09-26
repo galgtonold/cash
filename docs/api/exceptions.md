@@ -31,7 +31,7 @@ catches them all.
 
 | Exception | Cause | Fix |
 |---|---|---|
-| `CashImpureFunctionError` | First call of a cached function that picks what to call at run time (`getattr(obj, name)()`, `eval`, `importlib.import_module`), or any purity finding under `strict=True`. | Call the code directly, mark an audited helper with `pure`, or pass `assume_safe=True`. |
+| `CashImpureFunctionError` | First call of a cached function that picks what to call at run time (`getattr(obj, name)()`, `eval`, `importlib.import_module`), or any purity finding under `strict=True`. | Call the code directly, mark an audited helper with `pure`, wrap the line in `with cash.assume_safe():`, or pass `assume_safe=True`. |
 | `DependencyNotFoundError` | A backend needs a package that is not installed. Also an `ImportError`. | Run the `pip install` the message names. |
 | `CacheBackendError` | A backend method you called could not reach its storage. A cached function warns instead. | Check the disk, server or credentials. |
 | `CacheSerializationError` | A stored entry could not be turned back into a value. | Clear the entry or the function; the next call recomputes. |

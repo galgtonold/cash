@@ -74,8 +74,9 @@ the output it printed, so a print marker shows up either way. A cached
        return m
    ```
 5. **Side effects run on the first call only.** A purity warning is advisory.
-   Put `# @cash:assume-safe` on each audited line; `assume_safe=True` waives the
-   whole function, including anything added later.
+   Put `# @cash:assume-safe` on each audited line, or wrap several in
+   `with cash.assume_safe():`; `assume_safe=True` waives the whole function,
+   including anything added later.
 6. **Verify with `f.explain(*args)`** (`[HIT]` / `[MISS]` and why) or
    `%cash_stats`. In a notebook, `f.cache_info()` resets whenever the defining
    cell re-runs.

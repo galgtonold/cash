@@ -12,7 +12,14 @@ to use each; line-level `# @cash:` comments are on
 [Annotations](../annotations.md).
 
 ```python
-from cash import pure, stateful, opaque, is_pure, is_stateful
+from cash import (
+    assume_safe,
+    is_pure,
+    is_stateful,
+    opaque,
+    pure,
+    stateful,
+)
 ```
 
 | Marker | With `@cash.cache` | In a notebook |
@@ -41,3 +48,15 @@ cash.stateful(pd.DataFrame.to_sql)  # pd is pandas
 ::: cash.is_pure
 
 ::: cash.is_stateful
+
+## Waiving findings for a block
+
+`assume_safe` is not a marker: it is a context manager for the lines of a
+`@cash.cache` function. It sits between `# @cash:assume-safe` on one line and
+`@cash.cache(assume_safe=True)` for the whole function;
+[Side effects](../decorator.md#side-effects) shows when to use which. In a
+notebook, keep to the comment (see
+[Annotations](../annotations.md#cashassume-safe)).
+
+<!-- claim: cash/effect_observer.py:assume_safe @aa4ceeea -->
+::: cash.assume_safe

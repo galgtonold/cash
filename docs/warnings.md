@@ -32,12 +32,14 @@ the class recipes are in
 For a decorated function, `f.cache_info()["warnings"]` keeps the last twenty
 warnings it raised, in case one scrolled past.
 
-For the warnings about what a cached function does, two waivers act on the
-code instead of the message. Each of those codes ends with a **Silencing it**
-line that says which of them it honours.
+For the warnings about what a cached function does, three waivers act on
+the code instead of the message. Each of those codes ends with a **Silencing
+it** line that says which of them it honours.
 
 - `# @cash:assume-safe` on a line waives that one finding and keeps the rest
   of the function checked.
+- `with cash.assume_safe():` waives what the comment waives, for every line
+  in the block, and the effects observed while the block runs.
 - `@cash.cache(assume_safe=True)` waives every finding in the function,
   including code added to it later.
 
@@ -393,8 +395,9 @@ later runs.
 **When it is safe to ignore.** When callers only read the result.
 
 **Silencing it.** Whole function: `@cash.cache(assume_safe=True)`. No line
-carries this finding, so `# @cash:assume-safe` does not apply. See [Silencing
-one code](#silencing-one-code).
+carries this finding, so neither `# @cash:assume-safe` nor
+`with cash.assume_safe():` applies. See [Silencing one
+code](#silencing-one-code).
 
 ### CACHE-THRASH {#cache-thrash}
 
@@ -576,23 +579,25 @@ arguments that take more than about 50 ms to hash, this check is skipped.
 **What to do.** If the effect is part of the job, split the function: cache the
 computation and do the writing in an uncached caller. For an argument
 mutation, return a modified copy instead. If the effect is incidental (a log
-file, a temp file), put `# @cash:assume-safe` on the line the message names.
+file, a temp file), put `# @cash:assume-safe` on the line the message names, or
+run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @ba9eb2a8 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
 reads back. Only the path this call took was watched, so an empty report does
 not prove the function is pure.
 
 **Silencing it.** Per line: `# @cash:assume-safe` on the line the message
-names (an argument mutation names no line). Whole function:
-`@cash.cache(assume_safe=True)`. See [Silencing one
+names (an argument mutation names no line). Per block:
+`with cash.assume_safe():` around the code that performs the effect. Whole
+function: `@cash.cache(assume_safe=True)`. See [Silencing one
 code](#silencing-one-code).
 
 ### IMPURE-SCOPE-MUTATION {#impure-scope-mutation}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @6045b36f -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @b448a4ef -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -611,14 +616,15 @@ updating shared state is the function's job, cache only the expensive part.
 or a log you are happy for a hit to skip.
 
 **Silencing it.** Per line: `# @cash:assume-safe` on the line the message
-names. `assume_safe=True` on the decorator does not silence this code; filter
-it by code if you must. See [Silencing one code](#silencing-one-code).
+names. Per block: `with cash.assume_safe():` around that line.
+`assume_safe=True` on the decorator does not silence this code; filter it by
+code if you must. See [Silencing one code](#silencing-one-code).
 
 ### IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798 -->
 **What happened.** Before the first call, cash read the source of the
 function and its helpers and found shapes that make a cached result doubtful.
 Each finding has a line number and a label:
@@ -655,7 +661,8 @@ def build_report(rows):
     return summarise(rows)
 ```
 
-On the `def` line, the comment waives findings about the whole body. A line
+On the `def` line, the comment waives findings about the whole body. For
+several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
@@ -667,9 +674,9 @@ not once per process. A run whose warning filters ignore it, or turn it into
 an error, does not count as having shown it, so a CI job that fails on it
 fails on every run.
 
-**Silencing it.** Per line: `# @cash:assume-safe`. Whole function:
-`@cash.cache(assume_safe=True)`. See [Silencing one
-code](#silencing-one-code).
+**Silencing it.** Per line: `# @cash:assume-safe`. Per block:
+`with cash.assume_safe():`. Whole function: `@cash.cache(assume_safe=True)`.
+See [Silencing one code](#silencing-one-code).
 
 ## Cache keys {#key-codes}
 
@@ -739,9 +746,9 @@ For an environment variable, write its name out.
 **When it is safe to ignore.** When freezing the value is the point, such as
 a timestamp of when the result was computed.
 
-**Silencing it.** Per line: `# @cash:assume-safe`. Whole function:
-`@cash.cache(assume_safe=True)`. See [Silencing one
-code](#silencing-one-code).
+**Silencing it.** Per line: `# @cash:assume-safe`. Per block:
+`with cash.assume_safe():`. Whole function: `@cash.cache(assume_safe=True)`.
+See [Silencing one code](#silencing-one-code).
 
 ### KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
 
@@ -839,7 +846,7 @@ no longer changes, remove `dynamic_depends_on=`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @477865a2 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @75c92654 -->
 **What happened.** An object you passed to a cached function carries code, and
 that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,
@@ -855,8 +862,9 @@ candidates with `depends_on=[...]`.
 **When it is safe to ignore.** When the functions it can pick never change.
 
 **Silencing it.** Per line: `# @cash:assume-safe` on the line the message
-names. `assume_safe=True` on the decorator does not silence this code, because
-the line is in an argument's code, not the function's. See [Silencing one
+names. Per block: `with cash.assume_safe():` around that line.
+`assume_safe=True` on the decorator does not silence this code, because the
+line is in an argument's code, not the function's. See [Silencing one
 code](#silencing-one-code).
 
 ### KEY-FROZEN-MUTATED {#key-frozen-mutated}
@@ -877,8 +885,9 @@ remove `frozen=True` or modify a copy.
 
 **When it is safe to ignore.** Never.
 
-**Silencing it.** Neither `# @cash:assume-safe` nor `assume_safe=True`
-silences this code. See [Silencing one code](#silencing-one-code).
+**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
+`with cash.assume_safe():` or `assume_safe=True`. See [Silencing one
+code](#silencing-one-code).
 
 ### KEY-FROZEN-NO-EFFECT {#key-frozen-no-effect}
 
@@ -921,7 +930,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @7f115c19 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @7f115c19 -->
 <!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -929,7 +938,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 is not reported: that file is tracked. Writes (`requests.post`, `INSERT`) are
 [IMPURE-SIDE-EFFECTS](#impure-side-effects) instead.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_observed_network @649a7be9 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_observed_network @23e868ea -->
 A fetch the source does not name (`requests.Session().get(url)`, `from
 requests import get`, a client library) is caught when the first call runs:
 the message then lists the `socket connect` and the line of yours that led to
@@ -956,8 +965,9 @@ A `ttl=` silences this warning. Under `strict=True` the call raises unless a
 **When it is safe to ignore.** When the answer never changes for the arguments
 you pass, such as a fetch by pinned version.
 
-**Silencing it.** Per line: `# @cash:assume-safe`. Whole function:
-`@cash.cache(assume_safe=True)`, or a `ttl=`. See [Silencing one
+**Silencing it.** Per line: `# @cash:assume-safe`. Per block:
+`with cash.assume_safe():`. Whole function: `@cash.cache(assume_safe=True)`,
+or a `ttl=`. See [Silencing one
 code](#silencing-one-code).
 
 ### KEY-OPAQUE-CALLABLE {#key-opaque-callable}
@@ -982,8 +992,9 @@ this code for every object of that type.
 **When it is safe to ignore.** When the compiled code it runs cannot change
 under you, as with a builtin such as `abs`.
 
-**Silencing it.** Neither `# @cash:assume-safe` nor `assume_safe=True`
-silences this code; `cash.opaque(TheType)` does. See [Silencing one
+**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
+`with cash.assume_safe():` or `assume_safe=True`. `cash.opaque(TheType)`
+does. See [Silencing one
 code](#silencing-one-code).
 
 ### KEY-SOURCE-CHANGED {#key-source-changed}
@@ -1075,8 +1086,9 @@ register a hasher for its type.
 changed: a client, a logger, a compiled pattern.
 
 **Silencing it.** Per line: `# @cash:assume-safe` on the line that reads the
-global. `assume_safe=True` on the decorator does not silence this code; filter
-it by code if you must. See [Silencing one code](#silencing-one-code).
+global. Per block: `with cash.assume_safe():` around that line.
+`assume_safe=True` on the decorator does not silence this code; filter it by
+code if you must. See [Silencing one code](#silencing-one-code).
 
 ## Notebook {#notebook-codes}
 

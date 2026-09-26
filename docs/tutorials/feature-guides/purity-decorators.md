@@ -15,13 +15,14 @@ that reading where you know better:
 | `@cash.stateful` | a helper whose side effect matters | Warns about every call to it; `strict=True` raises |
 | `cash.opaque` | a class passed as an argument | Its code is left out of the key |
 
-<!-- claim: cash/analysis/purity_analyzer.py:PurityAnalyzer._analyze_uncached @889571da -->
+<!-- claim: cash/analysis/purity_analyzer.py:PurityAnalyzer._analyze_uncached @271d3033 -->
 `@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
 marked helper's code is part of the key of every cached function that calls it,
 as an unmarked helper's is, so editing it recomputes them.
 
 To accept one side effect in one place, you don't need a marker: put
-`# @cash:assume-safe` on the line (see [Side effects](../../decorator.md#side-effects)).
+`# @cash:assume-safe` on the line, or wrap several lines in
+`with cash.assume_safe():` (see [Side effects](../../decorator.md#side-effects)).
 
 In a notebook, `@cash.stateful` has a stronger meaning (a statement that calls
 it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what-gets-cached).
@@ -152,7 +153,7 @@ carries the marker. They read the marker only; they don't analyse the code.
 ## Related
 
 - [Side effects](../../decorator.md#side-effects): what cash reports,
-  `# @cash:assume-safe`, `assume_safe=`, `strict=`.
+  `# @cash:assume-safe`, `with cash.assume_safe():`, `assume_safe=`, `strict=`.
 - [Custom hashers](custom-hashers.md): change how an argument is keyed, rather
   than whether code is.
 - [Purity markers reference](../../api/purity.md): the signatures.

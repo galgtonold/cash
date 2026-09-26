@@ -74,8 +74,9 @@ link to the page that has the details.
 ??? question "Why did `@cash.cache` raise `CashImpureFunctionError`?"
     The function picks what to run at runtime (`eval`, `exec`,
     `getattr(obj, name)()`, `importlib.import_module`), so cash cannot tell
-    when a result goes stale. Put `# @cash:assume-safe` on that line, pass
-    `assume_safe=True` for the whole function, or call the function by name.
+    when a result goes stale. Put `# @cash:assume-safe` on that line (or
+    `with cash.assume_safe():` around it), pass `assume_safe=True` for the
+    whole function, or call the function by name.
     See [Side effects](decorator.md#side-effects).
 
 ??? question "Why does a cache hit not print anything?"

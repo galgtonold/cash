@@ -289,7 +289,7 @@ All parameters are keyword-only and optional:
 | `dynamic_depends_on=` | `None` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
 | `frozen=` | `False` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
 | `strict=` | `False` | Raise `CashImpureFunctionError` on any purity finding. For CI |
-| `assume_safe=` | `False` | Silence purity findings and cache anyway |
+| `assume_safe=` | `False` | Silence purity findings and cache anyway. For some lines only, see [Side effects](#side-effects) |
 | `allow_random=` | `False` | Silence the unseeded-randomness warning |
 | `chunk_max_items=`, `chunk_max_bytes=` | 1,000,000 items, 1 GB | Chunk size for iterator results |
 | Leave an argument out of the key | | Not a parameter: every argument is in the key. See [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
@@ -429,7 +429,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
@@ -440,7 +440,7 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @45e537a1 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @ba9eb2a8 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @908e1e5a broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
@@ -470,14 +470,37 @@ The comment covers that statement only (put it on the opening line of a call
 that spans lines, or on the line above), so code added later is still checked.
 
 On the `def` line it covers findings about the whole body. In a helper it
-covers every caller of that helper. `assume_safe=True` silences the whole
-function instead, including code added after your review, so prefer the
-comment.
+covers every caller of that helper.
+
+<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @8b9e6cfa, cash/effect_observer.py:EffectObserver.record_effect @c18acbb6, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
+**Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
+what the comment waives, on every line inside the block. While the block runs,
+it also waives the effects cash observes, including those of helpers it calls.
+It is code, so your editor completes it and a typo fails on the first run. Like
+the comment, it is not part of the key: adding or removing it keeps the stored
+results.
+
+```python
+import cash
+
+@cash.cache
+def summarize(rows):
+    total = sum(rows)
+    with cash.assume_safe():
+        print(f"{len(rows)} rows")
+        print(f"total {total}")
+    return total
+
+summarize([1, 2, 3])  # prints on this first call only
+```
+
+`assume_safe=True` silences the whole function instead, including code added
+after your review, so prefer the comment or the block.
 
 **In CI**, `strict=True` turns every finding into `CashImpureFunctionError`, so
 caching a side-effecting function fails the build. It honours
-`# @cash:assume-safe` comments, and a network read passes once the function has
-a `ttl=`.
+`# @cash:assume-safe` comments and `with cash.assume_safe():` blocks, and a
+network read passes once the function has a `ttl=`.
 
 To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 `@cash.stateful`; see [Purity markers](tutorials/feature-guides/purity-decorators.md).

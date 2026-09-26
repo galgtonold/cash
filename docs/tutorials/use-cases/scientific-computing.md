@@ -35,7 +35,7 @@ a decorated result is always written to disk unless it exceeds the disk tier's
 size cap; see
 [Where results are stored](../../decorator.md#where-results-are-stored).
 
-<!-- claim: cash/source_norm.py:normalize_source_for_hash @a1b4e588 -->
+<!-- claim: cash/source_norm.py:normalize_source_for_hash @f8481d56 -->
 Editing a comment or the docstring of `simulate` re-runs nothing. Editing its
 code, or a helper it calls, re-runs every combination the next time you ask
 for it.

@@ -120,7 +120,8 @@ own; it is never split. To opt out of chunking, return a list.
   receives one hashes its contents. Return a list if you need `frozen=`.
 - **Side-effect checks apply as usual.** A generator that reads the clock
   (`time.time()`, `datetime.now()`) inside the loop gets the same warning as any
-  cached function, and `assume_safe=` and `strict=` work unchanged.
+  cached function, and `assume_safe=`, `with cash.assume_safe():` and
+  `strict=` work unchanged.
 - **Async generators are not cached**; see [Async functions](async-caching.md).
   A coroutine that *returns* a sync generator is cached like any iterator.
 

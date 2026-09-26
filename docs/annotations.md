@@ -165,6 +165,12 @@ the clock or calls `input()` still runs every time. It applies to its own
 statement, even at the top of a cell. Add `# @cash:ttl=N` when the answer can go
 stale.
 
+<!-- claim: cash/analysis/annotations.py:get_statement_annotations @7fbe4d48, cash/analysis/annotations.py:is_assume_safe_block @e4c86526 -->
+In a cell, use this comment rather than `with cash.assume_safe():`, the form
+made for `@cash.cache` functions. A `with` block runs as one statement, so
+wrapping lines in it caches them as one unit instead of one by one. It then
+waives the whole block, as the comment would anywhere inside it.
+
 ### `# @cash:no-cache-calls` { #call-level-caching-default-and-cashno-cache-calls }
 
 <!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @b55376b5 -->

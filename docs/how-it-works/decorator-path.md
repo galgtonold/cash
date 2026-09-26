@@ -139,12 +139,13 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @905c8662 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798 -->
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
 `CashImpureFunctionError`, because cash cannot tell when that code changes.
 The [decorator guide](../decorator.md#side-effects) covers
-`assume_safe` and the `# @cash:assume-safe` line marker.
+`assume_safe`, the `# @cash:assume-safe` line marker and the
+`with cash.assume_safe():` block.
 
 ## Storing and returning
 

@@ -2,10 +2,12 @@
 
 The waivers do not all reach every code: `assume_safe=True` does not silence
 IMPURE-SCOPE-MUTATION, a `# @cash:assume-safe` line cannot reach
-CACHE-RESULT-SHARED, and KEY-OPAQUE-CALLABLE answers to neither. A page that
-promised both waivers everywhere would send readers to one that does nothing,
-so every claim is run here: the code fires bare, and each waiver the page
-names silences it while each one it rules out does not.
+CACHE-RESULT-SHARED, and KEY-OPAQUE-CALLABLE answers to none of them. A page
+that promised every waiver everywhere would send readers to one that does
+nothing, so every claim is run here: the code fires bare, and each waiver the
+page names silences it while each one it rules out does not. A
+`with cash.assume_safe():` block reaches exactly the codes the line comment
+reaches, so the page names both or neither.
 """
 
 from __future__ import annotations
@@ -23,8 +25,9 @@ from cash import Cash
 
 PAGE = Path(__file__).resolve().parents[2] / "docs" / "warnings.md"
 
-#: code -> (module source, call). ``{W}`` is where the line waiver goes and
-#: ``{DEC}`` the decorator's arguments.
+#: code -> (module source, call). ``{W}`` is where the line waiver goes (the
+#: block waiver wraps that line and the lines indented under it) and ``{DEC}``
+#: the decorator's arguments.
 CASES: dict[str, tuple[str, str]] = {
     "CACHE-RESULT-SHARED": (
         """
@@ -161,15 +164,35 @@ def _silencing_line(code: str) -> str:
     return " ".join(m.group(1).split())
 
 
-def _documented(code: str) -> tuple[bool, bool]:
-    """(line waiver silences it, assume_safe=True silences it), as the page says."""
+def _documented(code: str) -> tuple[bool, bool, bool]:
+    """(line waiver silences it, block waiver silences it, assume_safe=True
+    silences it), as the page says."""
     line = _silencing_line(code)
-    return line.startswith("Per line:"), "Whole function: `@cash.cache(assume_safe=True)`" in line
+    return (
+        line.startswith("Per line:"),
+        "Per block: `with cash.assume_safe():`" in line,
+        "Whole function: `@cash.cache(assume_safe=True)`" in line,
+    )
+
+
+def _wrap_in_block(body: str) -> str:
+    """Put the ``{W}`` line, and the lines indented under it, in the block."""
+    lines = body.splitlines(keepends=True)
+    first = next(i for i, line in enumerate(lines) if "{W}" in line)
+    indent = len(lines[first]) - len(lines[first].lstrip())
+    end = first + 1
+    while end < len(lines) and len(lines[end]) - len(lines[end].lstrip()) > indent and lines[end].strip():
+        end += 1
+    inside = ["    " + line for line in lines[first:end]]
+    head = " " * indent + "with cash.assume_safe():\n"
+    return "import cash\n" + "".join(lines[:first]) + head + "".join(inside) + "".join(lines[end:])
 
 
 def _fires(tmp_path: Path, code: str, variant: str) -> bool:
     body, call = CASES[code]
     body = textwrap.dedent(body)
+    if variant == "block":
+        body = _wrap_in_block(body)
     body = body.replace("{W}", "  # @cash:assume-safe" if variant == "line" else "")
     body = body.replace("{DEC}", "(assume_safe=True)" if variant == "func" else "")
     body = body.replace("{FDEC}", ", assume_safe=True" if variant == "func" else "")
@@ -200,13 +223,20 @@ def test_the_code_fires_without_a_waiver(tmp_path, code):
 
 @pytest.mark.parametrize("code", sorted(CASES))
 def test_the_line_waiver_does_what_the_page_says(tmp_path, code):
-    per_line, _ = _documented(code)
+    per_line, _, _ = _documented(code)
     assert _fires(tmp_path, code, "line") is not per_line, _silencing_line(code)
 
 
 @pytest.mark.parametrize("code", sorted(CASES))
+def test_the_block_waiver_does_what_the_page_says(tmp_path, code):
+    per_line, per_block, _ = _documented(code)
+    assert per_block is per_line, f"the block reaches what the line reaches: {_silencing_line(code)}"
+    assert _fires(tmp_path, code, "block") is not per_block, _silencing_line(code)
+
+
+@pytest.mark.parametrize("code", sorted(CASES))
 def test_assume_safe_does_what_the_page_says(tmp_path, code):
-    _, whole = _documented(code)
+    _, _, whole = _documented(code)
     assert _fires(tmp_path, code, "func") is not whole, _silencing_line(code)
 
 

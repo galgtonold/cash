@@ -54,7 +54,7 @@ Most `# @cash:` comments do not steer a decorated function. Use these instead:
 | `# @cash:ttl=N` | `@cash.cache(ttl=N)` |
 | `# @cash:no-cache` | Leave the function undecorated. |
 | `# @cash:persist` | Nothing: every result is written to disk. |
-| `# @cash:assume-safe` | The same comment on a line in the function, or `assume_safe=True`. |
+| `# @cash:assume-safe` | The same comment on a line in the function, `with cash.assume_safe():` around several lines, or `assume_safe=True`. |
 | `# @cash:allow-random` | The same comment in the function, or `allow_random=True`. |
 | A file cash cannot see being read | `file_depends_on=` |
 

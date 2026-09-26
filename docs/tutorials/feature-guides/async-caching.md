@@ -32,8 +32,10 @@ asyncio.run(main())
 Everything else works as on a sync function, because the code around the body
 is shared: `ttl=`, `depends_on=`, `dynamic_depends_on=`, `file_depends_on=`,
 file reads inside the body, `cache_if=`, the side-effect checks with `strict=`
-and `assume_safe=`, and iterator results. `f.cache_info()`, `f.cache_clear()`
-and `f.explain()` are plain synchronous calls on an async function too.
+and `assume_safe=`, and iterator results. A `with cash.assume_safe():` block
+may hold an `await`, and waives only for the task it runs in. `f.cache_info()`,
+`f.cache_clear()` and `f.explain()` are plain synchronous calls on an async
+function too.
 
 ## Concurrent awaits
 

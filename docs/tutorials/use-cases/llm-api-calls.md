@@ -53,8 +53,9 @@ understanding once:
 - [`IMPURE-OBSERVED-EFFECTS`](../../warnings.md#impure-observed-effects), on
   the first call: it opened a network connection. A hit skips the request,
   which is the point, but cash can't know you want that. `# @cash:assume-safe`
-  on the line that makes the request accepts it. A `ttl=` does not silence this
-  warning. See [Side effects](../../decorator.md#side-effects).
+  on the line that makes the request accepts it, as does
+  `with cash.assume_safe():` around the request. A `ttl=` does not silence
+  this warning. See [Side effects](../../decorator.md#side-effects).
 
 Do the same for any SDK client a cached function reads, such as the OpenAI
 client below.
