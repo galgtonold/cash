@@ -400,3 +400,12 @@ to shows what ran.
 
 Limitations of `@cash.cache` functions, such as code passed as an argument, are in
 the [decorator guide](decorator.md#code-you-pass-as-an-argument).
+
+## Related
+
+- [Debugging](tutorials/feature-guides/debugging-and-monitoring.md): how to
+  find the input that moved.
+- [Knowing when to recompute](how-it-works/invalidation.md): what cash does
+  track.
+- [`@cash.cache` known limitations](decorator.md#known-limitations): the
+  decorator's own limits.

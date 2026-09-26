@@ -182,3 +182,12 @@ exists:
 A value that cannot be pickled at all ends up keyed on its memory address.
 The statement still runs and is stored, but that entry cannot be found again
 after a restart.
+
+## Related
+
+- [The decorator path](decorator-path.md#the-key): the decorator's key, part
+  by part.
+- [Knowing when to recompute](invalidation.md): which changes move a key or a
+  lineage.
+- [Custom hashers](../tutorials/feature-guides/custom-hashers.md): fingerprint
+  a type cash does not know.

@@ -154,3 +154,14 @@ A writer whose file the cell does not read is left alone. If an edit upstream
 changed what it would write, the badge adds a `STALE FILE: … not rewritten`
 line naming the statement to re-run. Before exporting, run the exporting cells
 themselves, or the last cell of the notebook.
+
+## Related
+
+- [Cache keys and lineage](cache-keys-and-lineage.md): what a statement's key
+  is made of.
+- [Knowing when to recompute](invalidation.md): how an edit above reaches the
+  cell you run.
+- [Knowing when not to cache](safety.md): which statements run every time, and
+  why.
+- [Restarts and persistence](../tutorials/feature-guides/smart-persistence.md):
+  what comes back after a restart.

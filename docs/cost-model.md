@@ -185,6 +185,11 @@ so an unknown type is stored less often rather than more. A small dataclass can
 be charged more than it really costs; convert it to a dict or mark it
 `# @cash:persist`.
 
-See also: [Where your cache lives](how-it-works/storage.md),
-[Benchmarks](benchmarks.md) for the measured numbers,
-[Restarts and persistence](tutorials/feature-guides/smart-persistence.md).
+## Related
+
+- [Where your cache lives](how-it-works/storage.md): the tiers, size caps and
+  eviction.
+- [Benchmarks](benchmarks.md): the measured read-back times behind the
+  predictions.
+- [Restarts and persistence](tutorials/feature-guides/smart-persistence.md):
+  what comes back after a kernel restart.

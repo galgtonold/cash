@@ -158,3 +158,13 @@ the body's `print` output.
 In a notebook, a statement that calls a decorated function shows that call's
 hits and misses on the statement's badge; see
 [the notebook path](notebook-path.md#decorated-functions-inside-a-cell).
+
+## Related
+
+- [`@cash.cache` guide](../decorator.md): every parameter, with examples.
+- [Knowing when to recompute](invalidation.md): which changes make a call
+  recompute.
+- [Where your cache lives](storage.md): where results are written and how
+  much is kept.
+- [Seeing what cash did](inspecting.md): `explain()` and `cache_info()` for a
+  call.

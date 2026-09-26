@@ -218,3 +218,14 @@ The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.
 Within one format, entry metadata tolerates fields it does not know.
+
+## Related
+
+- [Configuration](../getting-started/configuration.md): every setting,
+  including `cache_dir` and `max_cache_size`.
+- [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md):
+  SQLite, Redis and S3 tiers.
+- [Command-line interface](../cli.md): `cash info`, `cash inspect` and
+  `cash clear`.
+- [Cost model](../cost-model.md): which notebook results are worth writing to
+  disk.

@@ -159,3 +159,13 @@ and its history. See [Magic commands](../../magics.md).
 cash also records per-session hit and miss events in a small `analytics.db` in
 your user cache folder, which `cash.show_stats()` reads. Deleting it is always
 safe. `CASH_ANALYTICS=0` turns it off.
+
+## Related
+
+- [Reading the badge](../../badges.md): every status and reason.
+- [Writing cache-safe cells](../../known-limitations.md): changes cash cannot
+  see, with fixes.
+- [Magic commands](../../magics.md): every option of `%cash_debug`,
+  `%cash_stats` and `%cash_status`.
+- [Seeing what cash did](../../how-it-works/inspecting.md): the same tools
+  next to the decorator's.

@@ -166,7 +166,7 @@ Under papermill, nbconvert or CI:
 - Point `CASH_CACHE_DIR` at a folder your CI keeps between runs, or start clean
   with `cash clear --all`.
 
-## Where to go next
+## Related
 
 - [Reading the badge](badges.md): every status and reason.
 - [Controlling caching](tutorials/feature-guides/controlling-cache-behavior.md)

@@ -76,7 +76,7 @@ Most `# @cash:` comments do not steer a decorated function. Use these instead:
   nearest folder above it with `pyproject.toml` or `.git`); a notebook caches in its working
   directory. To share one folder, set `[tool.cash] cache_dir`.
 
-## Next
+## Related
 
 - [Decorator guide](../../decorator.md): every argument, what invalidates a
   result, and how to see what cash did.

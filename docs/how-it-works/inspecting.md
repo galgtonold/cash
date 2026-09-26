@@ -128,3 +128,13 @@ settings in force and what the cache holds, `cash inspect` lists entries by
 function and size, and `cash clear` deletes them. See
 [where the cache folder is](storage.md#where-the-cache-folder-is) and
 [the CLI page](../cli.md).
+
+## Related
+
+- [Reading the badge](../badges.md): every status and reason on a notebook
+  badge.
+- [Debugging](../tutorials/feature-guides/debugging-and-monitoring.md): a
+  step-by-step path when a notebook surprises you.
+- [Magic commands](../magics.md): `%cash_debug`, `%cash_stats` and
+  `%cash_provenance`.
+- [Command-line interface](../cli.md): every option of the `cash` command.

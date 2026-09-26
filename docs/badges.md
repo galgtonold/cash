@@ -239,7 +239,7 @@ paths get their lineage from the notebook, and a load such as
 that needs it (an `^EXECUTED` upstream row). To avoid reading that file twice,
 load data in a cell below the first cell.
 
-## See also
+## Related
 
 - [Debugging](tutorials/feature-guides/debugging-and-monitoring.md): the badge
   together with `%cash_debug` and `%cash_stats`.

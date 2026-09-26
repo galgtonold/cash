@@ -186,3 +186,14 @@ Three rules keep random draws right when you edit a seed:
     rewound and changes on every run. `# @cash:allow-random` only silences the
     warning; `# @cash:no-cache` on a line of its own makes the statement draw
     fresh every run. See [Randomness](../known-limitations.md#randomness).
+
+## Related
+
+- [Cache keys and lineage](cache-keys-and-lineage.md): the parts of a key that
+  a change moves.
+- [`@cash.cache` known limitations](../decorator.md#known-limitations):
+  changes the decorator does not see.
+- [Writing cache-safe cells](../known-limitations.md): changes a notebook does
+  not see, with fixes.
+- [Reading the badge](../badges.md#why-did-this-run-again): how the badge says
+  why a statement ran again.

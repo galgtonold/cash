@@ -55,7 +55,7 @@ From here on:
 - Change `large_dataset.csv` on disk and the statements that read it re-run.
 - Restart the kernel and run the cell: expensive results come back from disk.
 
-## What's next
+## Related
 
 - [Notebook guide](../notebook_caching_api.md#what-gets-cached): what cash caches, what it
   refuses, and why.

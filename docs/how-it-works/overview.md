@@ -60,12 +60,13 @@ Each path lists its own: for `@cash.cache`, the decorator guide's
 [known limitations](../decorator.md#known-limitations); for notebooks,
 [Writing cache-safe cells](../known-limitations.md).
 
-## Where to go next
+## Related
 
-- Decorator: [how `@cash.cache` decides](decorator-path.md), then
-  [where your cache lives](storage.md) and
-  [seeing what cash did](inspecting.md).
-- Notebook: [the notebook path](notebook-path.md),
-  [cache keys and lineage](cache-keys-and-lineage.md),
-  [knowing when to recompute](invalidation.md),
-  [knowing when not to cache](safety.md), then storage and inspecting.
+- [The decorator path](decorator-path.md): how `@cash.cache` builds a key
+  and decides to reuse a result.
+- [The notebook path](notebook-path.md): what happens to each statement when
+  you run a cell.
+- [Cache keys and lineage](cache-keys-and-lineage.md): what a key is made of.
+- [Where your cache lives](storage.md): the cache folder, size caps and
+  eviction.
+- [Seeing what cash did](inspecting.md): how to check a hit or a miss.

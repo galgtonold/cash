@@ -213,3 +213,14 @@ Two kinds of value are refused after the statement runs, because restoring a
 copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base, and a
 matplotlib `Figure`/`Axes`, which would come back detached from pyplot.
+
+## Related
+
+- [Notebook guide](../notebook_caching_api.md#what-gets-cached): the full table
+  of what is cached and what runs every time.
+- [Controlling caching](../tutorials/feature-guides/controlling-cache-behavior.md):
+  directives that change the verdict for one statement.
+- [`@cash.cache` guide](../decorator.md#side-effects): side effects and
+  `assume_safe` on the decorator.
+- [Writing cache-safe cells](../known-limitations.md): patterns cash cannot
+  see.
