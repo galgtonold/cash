@@ -27,7 +27,9 @@ link to the page that has the details.
     It depends on compute time against reload time, so cash quotes no
     multiplier. The first run is slightly slower; later runs skip the work.
     [Benchmarks](benchmarks.md) shows what a restore costs and how to work out
-    your own number.
+    your own number. A call through `@cash.cache` adds about a tenth of a
+    millisecond on a hit and a millisecond on a miss; see
+    [Per call of a decorated function](benchmarks.md#per-call-of-a-decorated-function).
 
 ??? question "Where is the cache, and how do I clear it?"
     In a `.cash/` folder, with a size cap. See

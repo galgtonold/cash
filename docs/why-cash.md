@@ -36,7 +36,9 @@ cash helps when the same slow work runs again:
 Skip it for:
 
 - Work that takes a few milliseconds. Storing and reloading costs more than
-  recomputing.
+  recomputing: a call through `@cash.cache` costs about a tenth of a
+  millisecond on a hit and a millisecond on a miss
+  ([Per call of a decorated function](benchmarks.md#per-call-of-a-decorated-function)).
 - Results that must differ on every run, such as timestamps or fresh random
   draws.
 - Results that depend on something cash cannot see, such as a table in a
