@@ -859,11 +859,10 @@ class PurityChecks:
                 func_name,
                 slot("ambient", format_issues_summary(ambient)),
                 f"@cash.cache on {func_name}: the body reads ambient state "
-                f"(the clock, the environment, the working directory, a fresh "
-                f"UUID). That value is not part of the cache key, so the first "
-                f"call's answer is what every later call gets back -- in this "
-                f"process and in every process "
-                f"after it.\n{format_issues_summary(ambient)}",
+                f"(the clock, the environment, a fresh UUID). That value is "
+                f"not part of the cache key, so the first call's answer is "
+                f"what every later call gets back -- in this process and in "
+                f"every process after it.\n{format_issues_summary(ambient)}",
                 code="KEY-AMBIENT-READ",
                 fix="pass the value in as an argument -- `f(now=datetime.now())` "
                 "-- so it reaches the cache key and a new value means a new "

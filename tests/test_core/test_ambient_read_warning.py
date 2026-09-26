@@ -151,6 +151,15 @@ def test_the_advice_is_about_the_key_not_about_side_effects(cash_instance):
     assert "argument" in text, f"the fix must name passing it in:\n{text}"
 
 
+def test_the_message_does_not_list_the_working_directory(cash_instance):
+    """``os.getcwd()`` is folded into the key and never reported, so a
+    message naming it among the frozen reads tells the reader to pass in a
+    value cash already keys on."""
+    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, _clock))
+    assert "KEY-AMBIENT-READ" in text, text
+    assert "working directory" not in text, text
+
+
 def test_the_frozen_value_is_what_the_warning_is_about(cash_instance, monkeypatch):
     """The hazard itself, so the warning is pinned to a real failure.
 
