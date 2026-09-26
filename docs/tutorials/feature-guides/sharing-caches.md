@@ -1,3 +1,8 @@
+---
+search:
+  boost: 2
+---
+
 # Sharing a cache
 
 !!! info "Applies to: both paths"
@@ -5,7 +10,7 @@
     another run's hits.
 
 When one person has computed a four-minute feature build, a shared cache lets
-everyone else get it as a hit. Cash has no export format: you share a cache by
+everyone else get it as a hit. cash has no export format: you share a cache by
 pointing everyone at the same backend.
 
 ## Keys have to match
@@ -18,7 +23,7 @@ function's code and its helpers, the arguments, and the data it reads. So:
   and name, so `features.build` imported from a shared package matches across
   machines. The same function pasted into a notebook cell is a different
   function and does not share entries with it.
-- **Same library and Python versions.** Cash keys your code, not your
+- **Same library and Python versions.** cash keys your code, not your
   dependencies, and entries are pickled. Pin versions, and let everyone who
   reads a shared store run the same Python.
 
@@ -78,9 +83,11 @@ even when the paths match.
 
 ## Data in object storage
 
-If the shared data lives in S3, GCS or Azure, the path problem goes away. Cash
+If the shared data lives in S3, GCS or Azure, the path problem goes away. cash
 tracks a remote read by the object's ETag, version id or generation, which is
-the same on every machine. That is automatic for reads cash sees, such as
+the same on every machine.
+
+That is automatic for reads cash sees, such as
 `pd.read_parquet("s3://bucket/key")`. For a read it can't see (through `boto3`,
 say), declare it with `depends_on=[RemoteFileDataSource(url)]`. Don't use
 `file_depends_on=` for a URL: it is treated as a missing local file. See
@@ -89,7 +96,7 @@ say), declare it with `depends_on=[RemoteFileDataSource(url)]`. Don't use
 ## The trust boundary
 
 !!! danger "A cache runs code: share it only with people you'd share code with"
-    Cash stores results with `pickle`, and loading a pickle can run any code.
+    cash stores results with `pickle`, and loading a pickle can run any code.
     Reading a shared cache is running code written by whoever filled it.
 
     - Fine: a team Redis inside your own infrastructure, a bucket only your
@@ -102,6 +109,7 @@ say), declare it with `depends_on=[RemoteFileDataSource(url)]`. Don't use
 
 ## Related
 
-- [Choosing a backend](choosing-a-backend.md)
+- [Choosing a backend](choosing-a-backend.md): which backend a shared cache
+  needs.
 - [Deploying](deploying.md): locking, workers and CI for decorated code.
 - [Cache keys and lineage](../../how-it-works/cache-keys-and-lineage.md): what goes into a key.

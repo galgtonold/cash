@@ -92,5 +92,11 @@ Click a column header to sort.
   (`mo.watch.file()`). marimo replaces Jupyter and stores notebooks as `.py`
   files; cash adds to the Jupyter, Colab or VS Code notebook you already have.
 
-To switch from one of these, see [Coming from other caches](migration_guide.md).
-Questions are answered in the [FAQ](faq.md).
+## Related
+
+- [Coming from other caches](migration_guide.md): your code before and after
+  switching from one of these tools.
+- [Decorator quick start](getting-started/quickstart-script.md) and
+  [notebook quick start](getting-started/quickstart-notebook.md): try the path
+  that fits.
+- [FAQ](faq.md): short answers to common questions.

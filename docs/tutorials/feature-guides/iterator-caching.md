@@ -5,7 +5,7 @@
     other one-pass iterators.
 
 A generator can be read only once, so storing the object itself would hand the
-next caller an empty iterator. Cash stores the **items** instead, in chunks, and
+next caller an empty iterator. cash stores the **items** instead, in chunks, and
 gives each later call a fresh iterator over them. Nothing needs switching on.
 
 ```python
@@ -18,12 +18,12 @@ def records(path):
         for line in f:
             yield line.strip()
 
-list(records("data.txt"))   # first call: reads the file, stores the items
+list(records("data.txt"))   # first call: reads, stores the items
 list(records("data.txt"))   # cache hit: replays the stored items
 ```
 
 <!-- claim: cash/decorator/iterators.py:is_one_shot_iterator @0ce938f7 -->
-Cash treats a result as an iterator when `iter(result) is result`: generators,
+cash treats a result as an iterator when `iter(result) is result`: generators,
 generator expressions, `map`, `filter`, `zip`, most of `itertools`, and your own
 iterator classes. Lists, tuples, dicts and ranges can be read many times and
 are cached as ordinary values.
@@ -32,7 +32,7 @@ are cached as ordinary values.
 
 <!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @0e824f20 broad="the loop, the tracker scope and the commit rule are one mechanism" -->
 On a miss you get each item as the function produces it, so caching does not
-delay the first item. Cash copies the items into chunks as they pass and
+delay the first item. cash copies the items into chunks as they pass and
 stores the result once the generator is exhausted. Files the generator reads
 while it runs are tracked, as in any cached function.
 
@@ -65,7 +65,7 @@ list(stream())                     # first call: computed and stored
 
 a = stream()                       # cached: a replay iterator
 b = stream()                       # cached, independent of a
-next(a), next(a), next(b)          # (0, 1, 0): only chunk 0 has been read
+next(a), next(a), next(b)          # (0, 1, 0): only chunk 0 read
 ```
 
 The replay supports `iter()`, `next()` and `close()`. Generator methods
@@ -75,7 +75,9 @@ running generator.
 <!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @64b46718, cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
 **A missing chunk is recomputed, never skipped.** A stored result is only
 served when all its chunks are present; otherwise the call runs the function
-again. If a chunk disappears while you are reading (another process cleared
+again.
+
+If a chunk disappears while you are reading (another process cleared
 the cache, the RAM tier evicted it), the rest of the run comes from the
 function, starting where the replay stopped. Where cash cannot recompute (a hit
 inside an async function), the loss raises. You never get a shortened result.
@@ -89,7 +91,9 @@ inside an async function), the loss raises. You never get a shortened result.
 | `chunk_max_bytes=` | `1_000_000_000` | this many bytes (estimated) |
 
 Whichever limit is reached first closes the chunk. With the defaults most
-results fit in one chunk. Lower `chunk_max_items` if callers often stop after a
+results fit in one chunk.
+
+Lower `chunk_max_items` if callers often stop after a
 few items, so a hit reads less. Lower `chunk_max_bytes` for large items such as
 arrays or frames. One item bigger than `chunk_max_bytes` becomes a chunk of its
 own; it is never split. To opt out of chunking, return a list.
@@ -122,6 +126,8 @@ own; it is never split. To opt out of chunking, return a list.
 
 ## Related
 
-- [The `@cash.cache` guide](../../decorator.md)
-- [Async functions](async-caching.md)
-- [Class methods](caching-class-methods.md): a method can return an iterator too.
+- [The `@cash.cache` guide](../../decorator.md): parameters, including
+  `chunk_max_items=` and `chunk_max_bytes=`.
+- [Async functions](async-caching.md): async generators are not cached.
+- [Class methods](caching-class-methods.md): a method can return an iterator
+  too.

@@ -46,5 +46,10 @@ import cash
 print(cash.__version__)
 ```
 
-Then follow the quick start for your path:
-[decorator](quickstart-script.md) or [notebook](quickstart-notebook.md).
+## Related
+
+- [Decorator quick start](quickstart-script.md): cache a slow function.
+- [Notebook quick start](quickstart-notebook.md): cache a notebook statement
+  by statement.
+- [Configuration](configuration.md): where the cache goes and how big it may
+  grow.

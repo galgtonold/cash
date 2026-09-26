@@ -16,14 +16,15 @@ table in a database, an HDF5 file read through `h5py`.
 ## A resolver
 
 A resolver takes the same arguments as the cached function and returns a
-`DataSource`. Cash calls it on every lookup and puts the source's
+`DataSource`. cash calls it on every lookup and puts the source's
 `state_token()` into the key, so the entry changes when the token does:
 
 ```python
 import cash
 from cash import DataSource
 
-CATALOG = {"features": 3, "labels": 1}   # stands in for a catalog service
+# stands in for a catalog service
+CATALOG = {"features": 3, "labels": 1}
 
 class DatasetVersion(DataSource):
     def __init__(self, name):
@@ -61,7 +62,7 @@ version, an ETag, a row count with a last-modified time, a digest.
 
 <!-- claim: cash/data_source.py:state_token_of @914de552 -->
 - **Return a value, not a `bool`.** A flag like "is it fresh?" has two states
-  and cannot tell one version from the next. Cash warns if it sees a `bool`.
+  and cannot tell one version from the next. cash warns if it sees a `bool`.
 - **Keep it cheap.** The resolver and the token run on every lookup, hits
   included, so their cost lands on every call.
 
@@ -72,7 +73,9 @@ The same class works in `depends_on=[...]` when the source is fixed; see
 `FileDataSource(path)` is the built-in source for a file. Its token is the
 file's **content digest**, the same check an automatically tracked read gets:
 a `touch` that leaves the bytes alone keeps the entry, and an edit recomputes
-even when it leaves the timestamp where it was. The digest is remembered per
+even when it leaves the timestamp where it was.
+
+The digest is remembered per
 file stat, so an unchanged file costs one `stat` per lookup.
 
 ## When the resolver fails
@@ -96,5 +99,7 @@ still invalidate, and `ttl=` still expires the entry.
 ## Related
 
 - [File dependencies](custom-file-sources.md): files cash tracks for you.
-- [Custom data sources](../../api/data_sources.md#custom-data-sources)
-- [The `@cash.cache` guide](../../decorator.md#file_depends_on-and-depends_on)
+- [Custom data sources](../../api/data_sources.md#custom-data-sources): the
+  `DataSource` reference.
+- [`depends_on=`](../../decorator.md#file_depends_on-and-depends_on): a fixed
+  dependency, named on the decorator.

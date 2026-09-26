@@ -3,7 +3,7 @@
 !!! info "Applies to: decorator"
     Code that puts `@cash.cache` on `async def` functions.
 
-`@cash.cache` works on `async def` functions with no extra option. Cash stores
+`@cash.cache` works on `async def` functions with no extra option. cash stores
 the awaited result, not the coroutine, and on a hit your `await` returns the
 stored value without running the body.
 
@@ -15,7 +15,8 @@ n = {"calls": 0}
 
 @cash.cache
 async def f(x):
-    n["calls"] += 1                # @cash:assume-safe (a counter for this demo)
+    # a counter for this demo
+    n["calls"] += 1                # @cash:assume-safe
     await asyncio.sleep(0.1)       # stands in for a request
     return x * x
 
@@ -54,7 +55,9 @@ async def fetch(uid):
     return {"id": uid}
 
 async def load_all():
-    return await asyncio.gather(fetch(1), fetch(2), fetch(2), fetch(3))   # fetch(2) runs once
+    return await asyncio.gather(
+        fetch(1), fetch(2), fetch(2), fetch(3)   # fetch(2) runs once
+    )
 
 asyncio.run(load_all())
 ```
@@ -70,9 +73,11 @@ async def stock_quote(symbol):
     return await price_api.get(symbol)
 
 async def demo_ttl():
-    await stock_quote("ACME")      # first call: cache miss, calls the API
+    await stock_quote("ACME")      # first call: calls the API
     await stock_quote("ACME")      # second call: cache hit
-    # test:inject: import time as _t; _saved_time = _t.time; _t.time = lambda: _saved_time() + 7200
+    # two hours later:
+    # test:inject: import time as _t; _saved_time = _t.time
+    # test:inject: _t.time = lambda: _saved_time() + 7200
     await stock_quote("ACME")      # cache miss: the ttl has passed
     # test:inject: _t.time = _saved_time
 
@@ -126,6 +131,8 @@ accept it.
 
 ## Related
 
-- [Threads and processes](thread-safety.md): `use_locking=True`.
+- [Threads and processes](thread-safety.md): `use_locking=True`, so
+  concurrent awaits of one key compute it once.
 - [Iterators](iterator-caching.md): what happens to a returned generator.
-- [LLM API calls](../use-cases/llm-api-calls.md)
+- [LLM API calls](../use-cases/llm-api-calls.md): caching paid requests, sync
+  or async.

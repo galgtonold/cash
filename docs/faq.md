@@ -3,6 +3,9 @@
 !!! info "Applies to: both paths"
     Short answers. Questions for one path are grouped under that path.
 
+Short answers to the questions people ask most, grouped by path, each with a
+link to the page that has the details.
+
 ## Both paths
 
 ??? question "Which path should I use?"
@@ -11,7 +14,7 @@
 
 ??? question "What if cash returns a stale value?"
     A result is recomputed when its code, a helper it calls, an input or a
-    data file it read changes. Cash cannot see a database table or a web page
+    data file it read changes. cash cannot see a database table or a web page
     change; give such results a `ttl`. See
     [Knowing when to recompute](how-it-works/invalidation.md).
 
@@ -41,7 +44,7 @@
     [Where your cache lives](how-it-works/storage.md#when-the-disk-fills-up).
 
 ??? question "Is my cache still valid after I upgrade cash?"
-    Cash clears a local cache written in an older, incompatible format by
+    cash clears a local cache written in an older, incompatible format by
     itself, and treats any entry it cannot read as a miss. An upgrade can cost
     you a recompute, never a wrong value. `cash clear --all` only frees space.
     See [Versioning](versioning.md).
@@ -56,7 +59,7 @@
     version: during 0.x a minor release can change the API.
 
 ??? question "Is loading a cache safe?"
-    Only if you trust whoever wrote it. Cash unpickles stored results, and
+    Only if you trust whoever wrote it. cash unpickles stored results, and
     unpickling can run code. See the trust model in
     [Backends](api/backends.md#security).
 
@@ -142,3 +145,10 @@
 ??? question "`cache_info()` on a decorated function reads zero in my notebook."
     Re-running the defining cell creates a new wrapper with fresh counters.
     Use `f.explain(...)` or `%cash_stats` instead.
+
+## Related
+
+- [Why cash?](why-cash.md): what each path does, and how cash compares with
+  other caches.
+- [Glossary](glossary.md): the words these answers use.
+- [Warnings](warnings.md): every warning code, with what to do about it.

@@ -148,6 +148,8 @@ runs your script again, so cash stops with a message asking for the guard.
 
 ## Related
 
-- [Async functions](async-caching.md)
-- [Deploying](deploying.md): workers, shared backends and locking in production.
-- [Choosing a backend](choosing-a-backend.md)
+- [Async functions](async-caching.md): locking for concurrent awaits.
+- [Deploying](deploying.md): workers, shared backends and locking in
+  production.
+- [Choosing a backend](choosing-a-backend.md): which backend locks across
+  processes.

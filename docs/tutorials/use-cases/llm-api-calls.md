@@ -15,7 +15,8 @@ import anthropic
 import cash
 
 client = anthropic.Anthropic()
-cash.register_hasher(anthropic.Anthropic, lambda c: "anthropic")   # see below
+# see "What you will see" below
+cash.register_hasher(anthropic.Anthropic, lambda c: "anthropic")
 
 @cash.cache
 def chat(prompt: str, model: str = "claude-sonnet-4-6"):
@@ -25,8 +26,9 @@ def chat(prompt: str, model: str = "claude-sonnet-4-6"):
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
 
-reply = chat("Explain monads in 3 sentences.")  # first call: hits the API
-reply = chat("Explain monads in 3 sentences.")  # cache hit: no request
+prompt = "Explain monads in 3 sentences."
+reply = chat(prompt)   # first call: hits the API
+reply = chat(prompt)   # cache hit: no request
 ```
 
 The prompt and the model are arguments, so changing either is a new key and a
@@ -44,7 +46,7 @@ understanding once:
 
 - [`KEY-UNHASHABLE-GLOBAL`](../../warnings.md#key-unhashable-global): `chat`
   reads the global `client`, which holds connections and can't be hashed.
-  Cash is telling you that swapping the client won't change the key. That is
+  cash is telling you that swapping the client won't change the key. That is
   fine here, because the arguments decide the answer. Registering a hasher for
   the client's type says so. If you point clients at different endpoints,
   return the endpoint URL instead of a constant.
@@ -107,8 +109,11 @@ def fetch(url: str) -> str:
 ## Counting what you saved
 
 ```python
-chat.cache_info()
-# {'hits': 1, 'misses': 1, 'hit_rate': 0.5, ...}
+print(chat.cache_info())
+```
+
+```text title="Output"
+{'hits': 1, 'misses': 1, 'hit_rate': 0.5, ...}
 ```
 
 Hits times your cost per request is what you didn't spend. A sudden drop in
@@ -130,6 +135,8 @@ Hits times your cost per request is what you didn't spend. A sudden drop in
 
 ## Related
 
-- [Async functions](../feature-guides/async-caching.md)
-- [The `@cash.cache` guide](../../decorator.md#ttl)
-- [Custom hashers](../feature-guides/custom-hashers.md)
+- [Async functions](../feature-guides/async-caching.md): the same pattern for
+  an async client.
+- [`ttl=`](../../decorator.md#ttl): how long a stored answer stays valid.
+- [Custom hashers](../feature-guides/custom-hashers.md): the hasher registered
+  for the client above.

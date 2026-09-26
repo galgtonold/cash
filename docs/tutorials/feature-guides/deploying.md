@@ -15,9 +15,12 @@ everywhere. Every setting has a `CASH_*` variable
 ([Configuration](../../getting-started/configuration.md) lists them all):
 
 ```bash
-export CASH_CACHE_DIR=/var/cache/myapp   # absolute: no doubt where entries go
-export CASH_MAX_CACHE_SIZE=20GB          # pin the disk cap on a shared volume
-export CASH_SUMMARY=1                    # one summary per run, in the job log
+# absolute: no doubt where entries go
+export CASH_CACHE_DIR=/var/cache/myapp
+# pin the disk cap on a shared volume
+export CASH_MAX_CACHE_SIZE=20GB
+# one summary per run, in the job log
+export CASH_SUMMARY=1
 ```
 
 `cash info`, run with the same environment, prints the folder, backend and cap
@@ -130,13 +133,14 @@ Own a private instance instead:
 
 <!-- claim: cash/core.py:Cash.__init__ @e183e4ae -->
 <!-- test:skip reason="illustrative: a two-file library layout" -->
-```python
-# mylib/_cache.py
+```python { title="mylib/_cache.py" }
 from cash import Cash
 
 cache = Cash(register_magic=False)
+```
 
-# mylib/features.py
+<!-- test:skip reason="illustrative: a two-file library layout" -->
+```python { title="mylib/features.py" }
 from mylib._cache import cache
 
 @cache.cache
@@ -158,8 +162,12 @@ def build_features(path):
 
 ## Related
 
-- [The `@cash.cache` guide](../../decorator.md)
-- [Threads and processes](thread-safety.md)
-- [Sharing a cache](sharing-caches.md)
-- [Choosing a backend](choosing-a-backend.md)
-- [Configuration](../../getting-started/configuration.md)
+- [The `@cash.cache` guide](../../decorator.md): where results go and what
+  invalidates them.
+- [Threads and processes](thread-safety.md): locking and worker processes.
+- [Sharing a cache](sharing-caches.md): one run's results as another
+  machine's hits.
+- [Choosing a backend](choosing-a-backend.md): file, SQLite, Redis, S3 and
+  tier stacks.
+- [Configuration](../../getting-started/configuration.md): every setting and
+  its `CASH_*` variable.

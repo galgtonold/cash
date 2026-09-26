@@ -86,7 +86,9 @@ app = Cash(backend=FileBackend(
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.evict @290394ae, cash/backends/file_eviction.py:FileEvictor.rebuild_queue @a5ec5c6f -->
 One file per entry in `cache_dir`, which you can inspect and delete by hand.
 The disk write runs on a background thread. Reads and writes stay fast as the
-folder fills, because the file name comes from the key. When the folder passes
+folder fills, because the file name comes from the key.
+
+When the folder passes
 `max_size_bytes`, entries are evicted down to 90% of it, least valuable per
 byte first: cheap to recompute, large, and rarely read go first.
 
@@ -183,7 +185,9 @@ app = Cash(backend=S3Backend(
 
 One object per entry. Reading an entry's metadata fetches only its first 8 KB.
 Every miss is a GET and every write a PUT, both billed and both tens of
-milliseconds, so put S3 last in a tier stack. S3 does not delete expired
+milliseconds, so put S3 last in a tier stack.
+
+S3 does not delete expired
 entries by itself: cash skips them on read, and a bucket lifecycle rule or
 `cash.cleanup()` removes them. Install the extra:
 `pip install "cash-lib[s3]"`.

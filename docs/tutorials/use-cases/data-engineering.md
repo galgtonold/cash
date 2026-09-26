@@ -29,7 +29,8 @@ def aggregate(df):
 
 def run(source):
     agg = aggregate(normalize(extract(source)))
-    agg.to_parquet("output.parquet")      # the write stays outside the cache
+    # the write stays outside the cache
+    agg.to_parquet("output.parquet")
 
 if __name__ == "__main__":
     run("s3://bucket/raw.parquet")
@@ -45,7 +46,9 @@ is a new argument for `normalize`, so everything downstream recomputes.
 Files read inside a step are tracked by content, with nothing to declare:
 pandas and polars readers, pyarrow's `csv`, `parquet`, `feather` and `json`
 readers, `open()`. An `s3://` or `gs://` read is tracked by the object's ETag or
-version. A `touch` that leaves the bytes alone does not invalidate. Readers
+version. A `touch` that leaves the bytes alone does not invalidate.
+
+Readers
 cash can't see (`h5py`, a `pyarrow.fs` file system) need
 `file_depends_on=`; see [File dependencies](../feature-guides/custom-file-sources.md).
 
@@ -108,11 +111,16 @@ load_day("2026-01-16")          # a different date: computes
 load_day("2026-01-15")          # cache hit
 
 print(load_day.cache_info())
-# {'hits': 1, 'misses': 2, 'hit_rate': 0.333..., ...}
+```
+
+```text title="Output"
+{'hits': 1, 'misses': 2, 'hit_rate': 0.333..., ...}
 ```
 
 On a re-run of processed dates, `hit_rate` should be close to 1.0; the step
-where it drops is where the re-run stopped being free. Log `cache_info()` at the
+where it drops is where the re-run stopped being free.
+
+Log `cache_info()` at the
 end of each run: a sudden drop is often the first sign that something upstream
 changed. `f.explain(...)` says why a call would miss, and `CASH_SUMMARY=1`
 prints a table for the whole run; see
@@ -129,7 +137,7 @@ or each keeps its own cache. See [Deploying](../feature-guides/deploying.md) and
 
 <!-- claim: cash/analysis/file_effects.py:SideEffectVisitor @07c1a65b broad="the write-detection claim is about the visitor as a whole" -->
 - **Keep writes out of cached steps.** `to_parquet` and `to_csv` are effects: a
-  hit would skip them. Cash warns if a cached step writes. Cache the step that
+  hit would skip them. cash warns if a cached step writes. Cache the step that
   builds the frame and write it outside, as `run` does above.
 - **Leave cheap steps undecorated.** Every cached result is written to disk. A
   rename that takes milliseconds isn't worth a 5 GB entry.
@@ -144,6 +152,8 @@ or each keeps its own cache. See [Deploying](../feature-guides/deploying.md) and
 
 ## Related
 
-- [File dependencies](../feature-guides/custom-file-sources.md)
-- [Dynamic dependencies](../feature-guides/dynamic-dependencies.md)
-- [Deploying](../feature-guides/deploying.md)
+- [File dependencies](../feature-guides/custom-file-sources.md): which reads
+  are tracked, and how to name the others.
+- [Dynamic dependencies](../feature-guides/dynamic-dependencies.md): a
+  dependency chosen by the arguments, such as one table per tenant.
+- [Deploying](../feature-guides/deploying.md): workers, shared caches and CI.

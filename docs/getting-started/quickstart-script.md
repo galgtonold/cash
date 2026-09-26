@@ -3,6 +3,9 @@
 !!! info "Applies to: decorator"
     Scripts, services and libraries that use `@cash.cache`.
 
+Cache a slow function with one decorator, then watch cash notice when a
+helper or a data file it depends on changes.
+
 ## 1. Install
 
 ```bash
@@ -89,12 +92,13 @@ import pandas as pd
 
 @cash.cache
 def load():
-    return pd.read_csv("data.csv")   # change data.csv and the next call recomputes
+    # change data.csv and the next call recomputes
+    return pd.read_csv("data.csv")
 ```
 
 cash tracks the files a decorated function reads, with nothing to declare.
 
-## What's next
+## Related
 
 - [`@cash.cache` guide](../decorator.md): every parameter, and what invalidates
   a result.

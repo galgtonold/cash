@@ -31,7 +31,7 @@ it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what
 <!-- claim: cash/purity.py:pure @f53a99f5, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @c6b18c26 -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
-arguments. Cash then stops reporting it:
+arguments. cash then stops reporting it:
 
 ```python
 import cash
@@ -49,8 +49,8 @@ shares((1, 2, 5))   # first call: computes
 shares((1, 2, 5))   # cache hit
 ```
 
-!!! warning "Cash does not check a `@pure` helper"
-    Cash takes the marker at its word: it reports nothing about the helper or
+!!! warning "cash does not check a `@pure` helper"
+    cash takes the marker at its word: it reports nothing about the helper or
     the functions it calls, even an effect it would otherwise warn about. For a
     helper in your own project you rarely need `@pure`: cash already reads it
     and reports only real findings.
@@ -85,14 +85,16 @@ import requests
 
 @cash.stateful
 def notify(message):
-    requests.post("https://hooks.example.com/runs", json={"text": message})
+    url = "https://hooks.example.com/runs"
+    requests.post(url, json={"text": message})
 
 @cash.cache
 def nightly_report(day):
     notify(f"report for {day} built")
     return {"day": day, "rows": 1000}
 
-nightly_report("2026-09-10")   # first call: warns about notify(), then caches
+# first call: warns about notify(), then caches
+nightly_report("2026-09-10")   # first call
 ```
 
 Here the fix is to move `notify` out of the cached function, so it runs on
@@ -123,8 +125,10 @@ class RenderTarget:
     def __init__(self, name):
         self.name = name
 
-VendorWidget = type("VendorWidget", (), {})   # stands in for a library class
-cash.opaque(VendorWidget)                     # for a class you can't decorate
+# stands in for a library class
+VendorWidget = type("VendorWidget", (), {})
+# for a class you can't decorate
+cash.opaque(VendorWidget)
 
 @cash.cache
 def render(target):
@@ -133,8 +137,10 @@ def render(target):
 
 Only the class's code leaves the key. An instance is still keyed by its data,
 so `render(RenderTarget("pdf"))` and `render(RenderTarget("svg"))` get separate
-entries, and editing `RenderTarget` recomputes neither. `cash.opaque` returns the class
-itself, so `isinstance` checks keep working. A subclass is not opaque unless you
+entries, and editing `RenderTarget` recomputes neither.
+
+`cash.opaque` returns the class itself, so `isinstance` checks keep working. A
+subclass is not opaque unless you
 mark it too, because it may have methods of its own that you edit. A
 `functools.partial` can't be marked.
 
@@ -145,6 +151,8 @@ carries the marker. They read the marker only; they don't analyse the code.
 
 ## Related
 
-- [Side effects](../../decorator.md#side-effects): what cash reports, `# @cash:assume-safe`, `assume_safe=`, `strict=`.
-- [Custom hashers](custom-hashers.md): change how an argument is keyed, rather than whether code is.
-- [Purity markers reference](../../api/purity.md).
+- [Side effects](../../decorator.md#side-effects): what cash reports,
+  `# @cash:assume-safe`, `assume_safe=`, `strict=`.
+- [Custom hashers](custom-hashers.md): change how an argument is keyed, rather
+  than whether code is.
+- [Purity markers reference](../../api/purity.md): the signatures.

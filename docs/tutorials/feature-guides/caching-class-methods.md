@@ -28,16 +28,17 @@ app = Cash()
 class Loader:
     def __init__(self, dataset_id, db):
         self.dataset_id = dataset_id
-        self.db = db                    # a connection: not part of the identity
+        # a connection: not part of the identity
+        self.db = db
 
     @app.cache
     def load(self, version):
         return self.db.query(self.dataset_id, version)
 
-app.register_hasher(
-    Loader,
-    lambda loader: hashlib.sha256(loader.dataset_id.encode()).hexdigest(),
-)
+def hash_loader(loader):
+    return hashlib.sha256(loader.dataset_id.encode()).hexdigest()
+
+app.register_hasher(Loader, hash_loader)
 ```
 
 Register it before the first call. The hasher then applies wherever a `Loader`
@@ -69,6 +70,7 @@ through the same hasher. See [Iterators](iterator-caching.md).
 
 ## Related
 
-- [Custom hashers](custom-hashers.md)
-- [Methods and `self`](../../decorator-limitations.md#methods-and-self):
-  the limits of hashing `self`.
+- [Custom hashers](custom-hashers.md): control how `self` and other arguments
+  are identified.
+- [Methods and `self`](../../decorator-limitations.md#methods-and-self): the
+  limits of hashing `self`.

@@ -18,17 +18,24 @@ def load_features():
 
 load_features()   # first call: reads the file
 load_features()   # cache hit
-# test:inject: pathlib.Path("data/features.csv").write_text("col1,col2\nnew1,new2\n")
+# edit data/features.csv, then ask why the next call would miss:
+# test:inject: _csv = pathlib.Path("data/features.csv")
+# test:inject: _csv.write_text("col1,col2\nnew1,new2\n")
 print(load_features.explain())
-# [MISS] __main__.load_features - file_changed
-#   ...
-#   changed_files:
-#     /home/you/project/data/features.csv: content changed
+```
+
+```text title="Output"
+[MISS] __main__.load_features - file_changed
+  ...
+  changed_files:
+    /home/you/project/data/features.csv: content changed
 ```
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
-hits. A same-size edit within the same second still recomputes. When a file's
+hits. A same-size edit within the same second still recomputes.
+
+When a file's
 size and timestamps have not moved, the check is one `stat` call, so a hit stays
 cheap. Files over 256 MiB are hashed in three sampled regions, and their
 modification time must match too. The full rule is in
@@ -37,7 +44,7 @@ modification time must match too. The full rule is in
 ## What's automatically tracked
 
 <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @56d3c684, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
-Cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
+cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks (the call recomputes
 once a missing file appears, or once a file it found is gone). The full reader list is under
@@ -47,7 +54,7 @@ A path passed by keyword counts the same as one passed by position.
 
 <!-- claim: cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
 A file opened for writing is not a dependency: the entry would then depend on
-its own output. Cash reports the write as a side effect instead
+its own output. cash reports the write as a side effect instead
 ([Side effects](../../decorator.md#side-effects)).
 
 <!-- claim: cash/tracking/read_classification.py:incidental_read @75e075c3 -->
@@ -83,7 +90,8 @@ from pyarrow import fs
 
 @cash.cache(file_depends_on="data/events.parquet")
 def load_events():
-    with fs.LocalFileSystem().open_input_file("data/events.parquet") as f:
+    local = fs.LocalFileSystem()
+    with local.open_input_file("data/events.parquet") as f:
         return pq.read_table(f).to_pandas()
 ```
 
@@ -121,8 +129,9 @@ download.
 def load_events(url):
     return pd.read_parquet(url)
 
-load_events("s3://bucket/events.parquet")   # first call: downloads, records the ETag
-load_events("s3://bucket/events.parquet")   # cache hit: one metadata request
+url = "s3://bucket/events.parquet"
+load_events(url)   # first call: downloads, records the ETag
+load_events(url)   # cache hit: one metadata request
 ```
 
 <!-- claim: cash/remote_source.py:_fsspec_token @e1bf519f, cash/remote_source.py:_listing_token @fe6b3d29 -->
@@ -147,7 +156,9 @@ For a read cash cannot see, such as one through `boto3`, declare it:
 ```python
 from cash import RemoteFileDataSource
 
-@cash.cache(depends_on=[RemoteFileDataSource("s3://bucket/events.parquet")])
+EVENTS = RemoteFileDataSource("s3://bucket/events.parquet")
+
+@cash.cache(depends_on=[EVENTS])
 def load_via_boto3():
     return read_via_boto3("bucket", "events.parquet")
 ```
@@ -180,9 +191,11 @@ def track_read_data(original, track_callback):
 app.register_file_handler("my_lib", "read_data", track_read_data)
 ```
 
-Cash calls your factory with the original function and a `track_callback`, and
+cash calls your factory with the original function and a `track_callback`, and
 installs the wrapper while a cached call runs. `func_name` may be a glob
-(`"read_*"`), and `module_name` may be dotted (`"my_lib.io"`). The wrapper
+(`"read_*"`), and `module_name` may be dotted (`"my_lib.io"`).
+
+The wrapper
 replaces the attribute on the module, so call `my_lib.read_data(...)`: a name
 bound earlier by `from my_lib import read_data` keeps the original. Pass
 `track_callback` an absolute path, or one relative to the current directory.
@@ -212,6 +225,9 @@ bound earlier by `from my_lib import read_data` keeps the original. Pass
 
 ## Related
 
-- [Dynamic dependencies](dynamic-dependencies.md): a dependency chosen by the arguments.
-- [Sharing a cache](sharing-caches.md)
-- [The `@cash.cache` guide](../../decorator.md)
+- [Dynamic dependencies](dynamic-dependencies.md): a dependency chosen by the
+  arguments.
+- [Sharing a cache](sharing-caches.md): file paths and remote reads across
+  machines.
+- [Known limitations](../../decorator-limitations.md#reads-cash-cannot-see):
+  reads cash cannot see.

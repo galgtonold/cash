@@ -5,7 +5,7 @@
     grid's resolution.
 
 When you tune a grid, you sometimes go back to a resolution you already ran and
-sometimes make it finer. Cash handles the two very differently, and one
+sometimes make it finer. cash handles the two very differently, and one
 question decides which: **does the new axis still contain the points you already
 computed?**
 
@@ -21,7 +21,8 @@ CALLS = []
 @app.cache(assume_safe=True)
 def field(axis):
     CALLS.append(len(axis))
-    return np.sin(np.arange(1, 400)[:, None] * axis[None, :]).sum(axis=0)
+    modes = np.arange(1, 400)[:, None]
+    return np.sin(modes * axis[None, :]).sum(axis=0)
 
 field(np.linspace(0.0, 1.0, 200))     # first call: computes
 field(np.linspace(0.0, 1.0, 100))     # a new grid: computes
@@ -56,7 +57,9 @@ bit**. Two constructions do:
 ```python
 # Extending the domain at a fixed step: the old axis is a prefix.
 dx = 1.0 / 200
-assert np.arange(0.0, 1.0, dx).tobytes() == np.arange(0.0, 2.0, dx)[:200].tobytes()
+short = np.arange(0.0, 1.0, dx)
+longer = np.arange(0.0, 2.0, dx)
+assert short.tobytes() == longer[:200].tobytes()
 
 # Doubling a linspace: every old point survives, between new ones.
 assert len(np.intersect1d(np.linspace(0.0, 1.0, 200),
@@ -77,18 +80,19 @@ CHUNK = 100
 @app.cache(assume_safe=True)
 def field_chunk(block):
     CALLS.append(len(block))
-    return np.sin(np.arange(1, 400)[:, None] * block[None, :]).sum(axis=0)
+    modes = np.arange(1, 400)[:, None]
+    return np.sin(modes * block[None, :]).sum(axis=0)
 
-axis = np.arange(0.0, 1.0, dx)                  # 200 points = 2 blocks
-field_chunk(axis[0:CHUNK])                      # first call: computes
-field_chunk(axis[CHUNK:2 * CHUNK])              # a new block: computes
+axis = np.arange(0.0, 1.0, dx)           # 200 points = 2 blocks
+field_chunk(axis[0:CHUNK])               # first call: computes
+field_chunk(axis[CHUNK:2 * CHUNK])       # a new block: computes
 
-wider = np.arange(0.0, 2.0, dx)                 # 400 points = 4 blocks
+wider = np.arange(0.0, 2.0, dx)          # 400 points = 4 blocks
 CALLS.clear()
-field_chunk(wider[0:CHUNK])                     # cache hit: same block
-field_chunk(wider[CHUNK:2 * CHUNK])             # cache hit
-field_chunk(wider[2 * CHUNK:3 * CHUNK])         # new territory: computes
-field_chunk(wider[3 * CHUNK:4 * CHUNK])         # computes
+field_chunk(wider[0:CHUNK])              # cache hit: same block
+field_chunk(wider[CHUNK:2 * CHUNK])      # cache hit
+field_chunk(wider[2 * CHUNK:3 * CHUNK])  # new territory: computes
+field_chunk(wider[3 * CHUNK:4 * CHUNK])  # computes
 assert CALLS == [CHUNK, CHUNK]
 ```
 
@@ -105,16 +109,17 @@ interleaved:
 ```python
 def field_split(axis, previous):
     new = np.setdiff1d(axis, previous)
-    old_values = field(previous)                      # cache hit: same axis as before
+    old_values = field(previous)  # cache hit: same axis as before
     out = np.empty(len(axis), dtype=old_values.dtype)
     out[np.searchsorted(axis, previous)] = old_values
     if len(new):
-        out[np.searchsorted(axis, new)] = field(new)  # computed: only the new points
+        # computed: only the new points
+        out[np.searchsorted(axis, new)] = field(new)
     return out
 
 CALLS.clear()
 field_split(np.linspace(0.0, 1.0, 399), coarse)
-assert CALLS == [199]                                 # 199 new, 200 reused
+assert CALLS == [199]  # 199 new, 200 reused
 ```
 
 The price: you must still have `previous`, bit for bit. Rebuilding it with the
@@ -134,3 +139,12 @@ One measurement: 800 points, 200,000 modes, a 1.18 s cold run.
 
 Don't bother when every coordinate changes, when a physical parameter changed
 rather than the grid, or when the computation is fast anyway.
+
+## Related
+
+- [Scientific computing](../use-cases/scientific-computing.md): parameter
+  sweeps, seeds and disk space for simulations.
+- [Custom hashers](custom-hashers.md): how arrays and other arguments become
+  part of the key.
+- [`frozen=` and large arguments](../../decorator.md#frozen-and-large-arguments):
+  when hashing a big argument costs more than it saves.

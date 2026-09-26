@@ -4,12 +4,12 @@
     Code that passes its own types to cached functions and needs to control how
     cash identifies them.
 
-Cash hashes every argument of a cached call to build the key. Built-in values
+cash hashes every argument of a cached call to build the key. Built-in values
 and most plain classes are pickled and hashed. pandas, numpy, polars, PyArrow,
 modin and dask values get content hashers of their own. Register a hasher for
 your own type when:
 
-- **It can't be pickled** (it holds a lock, a socket, a C handle). Cash warns
+- **It can't be pickled** (it holds a lock, a socket, a C handle). cash warns
   [`KEY-UNHASHABLE-ARG`](../../warnings.md#key-unhashable-arg) and runs the call
   uncached; see
   [Arguments cash cannot hash](../../decorator-limitations.md#arguments-cash-cannot-hash).
@@ -93,7 +93,12 @@ Hash the fields that decide the result:
 
 ```python
 def hash_dataset_config(cfg):
-    parts = (cfg.path, cfg.split, cfg.preprocessing_version, tuple(cfg.features))
+    parts = (
+        cfg.path,
+        cfg.split,
+        cfg.preprocessing_version,
+        tuple(cfg.features),
+    )
     return hashlib.sha256(repr(parts).encode()).hexdigest()
 
 cash.register_hasher(DatasetConfig, hash_dataset_config)
@@ -116,7 +121,7 @@ data changes.
 ## Overriding a built-in content hasher
 
 <!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7 broad="the list enumerates every type the builtin dispatcher recognises", cash/object_hashing.py:builtin_hash_family @ac9cffe9 -->
-Cash hashes these types by their full content, before it looks at your
+cash hashes these types by their full content, before it looks at your
 registrations:
 
 | Type | Hashed from |
@@ -144,7 +149,9 @@ cash.register_hasher(
 
 <!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
-share one entry, and the second call gets the first one's result. Override only
+share one entry, and the second call gets the first one's result.
+
+Override only
 when you hold an identity the value itself does not show, such as a dataset
 version or a content id, and when content hashing is slow **relative to the
 work**. An 800 MB array costs about 0.3 s to hash; that matters in a loop of
@@ -160,4 +167,5 @@ plain registration for it works.
   what to do when a type cannot be pickled at all.
 - [An argument that does not change the result](../../decorator-limitations.md#an-argument-that-does-not-change-the-result):
   a hasher that returns a constant, for a logger.
-- [File dependencies](custom-file-sources.md)
+- [File dependencies](custom-file-sources.md): how file arguments and reads
+  are tracked.

@@ -28,7 +28,9 @@ trajectory = simulate(n_steps=10_000, dt=0.01, alpha=0.5, seed=42)
 <!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5 -->
 The first call runs the simulation and writes the result to disk; every later
 call with the same four arguments, in this run or the next, loads it. Change
-`alpha` or `seed` and it runs again. Large results are stored like small ones:
+`alpha` or `seed` and it runs again.
+
+Large results are stored like small ones:
 a decorated result is always written to disk unless it exceeds the disk tier's
 size cap; see
 [Where results are stored](../../decorator.md#where-results-are-stored).
@@ -99,7 +101,7 @@ The seed must be an **argument**, and the generator local:
 ```python
 @cash.cache
 def sample(n: int, seed: int):
-    rng = np.random.default_rng(seed)     # good: seeded from an argument
+    rng = np.random.default_rng(seed)   # seeded from an argument
     return rng.standard_normal(n)
 ```
 
@@ -123,7 +125,8 @@ def analyse(trajectory): ...
 @cash.cache
 def reduce(analyses): ...
 
-def plot(summary): ...    # cheap, and a figure is an effect: leave it undecorated
+# cheap, and a figure is an effect: leave it undecorated
+def plot(summary): ...
 ```
 
 Edit `reduce`: `simulate` and `analyse` are hits, and only `reduce` and `plot`
@@ -170,6 +173,9 @@ run. Edit the simulation and everything after it recomputes, as it should.
 
 ## Related
 
-- [Caching over a grid](../feature-guides/caching-over-a-grid.md): reusing work when you refine a grid.
-- [Threads and processes](../feature-guides/thread-safety.md)
-- [Deploying](../feature-guides/deploying.md): running sweeps on a cluster or in CI.
+- [Caching over a grid](../feature-guides/caching-over-a-grid.md): reusing
+  work when you refine a grid.
+- [Threads and processes](../feature-guides/thread-safety.md): spreading a
+  sweep over worker processes.
+- [Deploying](../feature-guides/deploying.md): running sweeps on a cluster or
+  in CI.
