@@ -64,9 +64,13 @@ def run_notebook(
     if session is not None and not cash_enabled:
         raise ValueError("session is meaningless when cash_enabled is False")
 
+    # A new shell, so no state is carried from an earlier run. Not
+    # ``shell.reset()``: it deletes ``__spec__`` from the user module the shell
+    # installed as ``sys.modules["__main__"]``, and a notebook (or a later
+    # test in the same process) that starts a spawned process then fails in
+    # ``multiprocessing.spawn.get_preparation_data``.
+    InteractiveShell.clear_instance()
     shell = InteractiveShell.instance()
-    # Defensive: clear user_ns so a re-used singleton doesn't carry state.
-    shell.reset(new_session=True)
 
     # Drop the global Cash singleton + clear in-memory tracking state
     # so the next `%load_ext cash` (or our `_enable_cash` below) gets a

@@ -378,6 +378,27 @@ def disable_auto_magic_registration(monkeypatch):
     monkeypatch.setattr(Cash, "register_magic", lambda self: None)
 
 
+#: The process's own ``__main__``, as pytest started it.
+_MAIN = sys.modules["__main__"]
+
+
+@pytest.fixture(autouse=True)
+def _main_module_put_back():
+    """Put the process's ``__main__`` back after every test.
+
+    ``InteractiveShell.instance()`` installs the shell's user module as
+    ``sys.modules["__main__"]`` and ``clear_instance()`` leaves it there, and
+    ``shell.reset()`` deletes ``__spec__`` from it. A spawned process later in
+    the same worker then failed to start (``get_preparation_data`` reads
+    ``__main__.__spec__``): ``test_a_worker_process_is_one`` raised
+    ``AttributeError: module '__main__' has no attribute '__spec__'`` in a
+    full run, after the edit-effectiveness test's shell, and passed alone.
+    """
+    yield
+    if sys.modules.get("__main__") is not _MAIN:
+        sys.modules["__main__"] = _MAIN
+
+
 # ---------------------------------------------------------------------------
 # Unit tests never write into the checkout.
 #

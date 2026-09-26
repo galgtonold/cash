@@ -40,6 +40,27 @@ def test_run_notebook_propagates_variable_state_between_cells():
     assert len(timings) == 2  # second cell didn't raise
 
 
+def test_a_run_starts_from_an_empty_namespace():
+    run_notebook([CodeCell(index=0, notebook_cell_index=0, source="x = 42\n")], cash_enabled=False, cache_dir=None)
+    (timing,) = run_notebook(
+        [CodeCell(index=0, notebook_cell_index=0, source="assert 'x' not in globals()\n")],
+        cash_enabled=False,
+        cache_dir=None,
+    )
+    assert timing.error is None, timing.error
+
+
+def test_a_run_leaves_a_main_module_a_spawned_process_can_start_from():
+    """``shell.reset()`` deleted ``__spec__`` from the ``__main__`` the shell
+    installs, and ``multiprocessing``'s spawn reads it."""
+    import sys
+
+    cells = [CodeCell(index=0, notebook_cell_index=0, source="x = 1\n")]
+    run_notebook(cells, cash_enabled=False, cache_dir=None)
+    run_notebook(cells, cash_enabled=False, cache_dir=None)
+    assert hasattr(sys.modules["__main__"], "__spec__")
+
+
 def test_run_notebook_cash_on_captures_statement_metrics(tmp_path):
     cells = [
         CodeCell(index=0, notebook_cell_index=0, source="x = 1 + 1\n"),
