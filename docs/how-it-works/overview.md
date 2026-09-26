@@ -52,7 +52,9 @@ flowchart LR
 Both engines recompute when something they track changes, and both keep the
 first value of an unseeded random draw rather than drawing again. Some inputs
 are not tracked, such as a file opened through a reader Cash does not wrap.
-[Known limitations](../known-limitations.md) lists them.
+Each path lists its own: for `@cash.cache`, the decorator guide's
+[known limitations](../decorator.md#known-limitations); for notebooks,
+[Writing cache-safe cells](../known-limitations.md).
 
 ## Where to go next
 

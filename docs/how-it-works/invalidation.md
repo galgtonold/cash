@@ -4,8 +4,10 @@
     Anyone who wants to know which changes make Cash recompute, and how it notices them.
 
 Cash recomputes when something it tracks has changed since the result was
-stored. This page lists what it tracks and how it checks.
-[Known limitations](../known-limitations.md) lists what it does not see.
+stored. This page lists what it tracks and how it checks. What it does not
+see is listed per path: for `@cash.cache`, the decorator guide's
+[known limitations](../decorator.md#known-limitations); for notebooks,
+[Writing cache-safe cells](../known-limitations.md).
 
 ## What counts as a change
 
