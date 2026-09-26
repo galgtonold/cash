@@ -21,6 +21,7 @@ from .arg_hashing import is_opaque, plain_census
 from .code_identity import is_user_code_object
 
 if TYPE_CHECKING:
+    from .arg_hashing import ArgHasher
     from .code_identity import CodeIdentity
     from .frozen import FrozenResults
     from .globals_fold import GlobalsFold
@@ -80,8 +81,14 @@ class CodeArgs:
     """The user code an argument carries -- a class, a function, an instance
     of the user's own class -- folded into the state segment."""
 
-    def __init__(self, code: CodeIdentity, globals_fold: GlobalsFold, frozen: FrozenResults) -> None:
+    def __init__(self, code: CodeIdentity, globals_fold: GlobalsFold, frozen: FrozenResults, args: ArgHasher) -> None:
         self._code = code
+        # A value a registered hasher keys (`ArgHasher.keys_by_registration`)
+        # is not searched: the user has said what identifies it. The two
+        # registries are held too, to skip the question per element while
+        # they are empty; `ArgHasher.register_hasher` fills them in place.
+        self._args = args
+        self._registries = (args.override_hashers, args.type_hashers)
         self._globals = globals_fold
         self._frozen = frozen
         # A data global carries code the same way an argument does
@@ -252,7 +259,8 @@ class CodeArgs:
                 cls = self._instance_class_carrier(value, _seen)
                 if cls is not None:
                     yield cls
-                yield from self._iter_attribute_carriers(value, _depth, _seen)
+                if not self._keyed_by_registration(value):
+                    yield from self._iter_attribute_carriers(value, _depth, _seen)
                 return
             if id(value) not in _seen:
                 _seen.add(id(value))
@@ -301,7 +309,19 @@ class CodeArgs:
             cls = self._instance_class_carrier(value, _seen)
             if cls is not None:
                 yield cls
-            yield from self._iter_attribute_carriers(value, _depth, _seen)
+            # A value a registered hasher keys contributes its class's code
+            # and nothing it holds. `register_hasher(logging.Logger, ...)`
+            # still walked every logger, handler and stream in the process
+            # (a logger holds its manager), and a handler holding a bound
+            # builtin warned that its code was not in the key.
+            # Inline, not `_keyed_by_registration`: this runs per element.
+            if not ((self._registries[0] or self._registries[1]) and self._args.keys_by_registration(value)):
+                yield from self._iter_attribute_carriers(value, _depth, _seen)
+
+    def _keyed_by_registration(self, value: Any) -> bool:
+        """`ArgHasher.keys_by_registration`, skipped while nothing is registered."""
+        override, typed = self._registries
+        return bool(override or typed) and self._args.keys_by_registration(value)
 
     def _iter_attribute_carriers(self, value: Any, _depth: int, _seen: set):
         """Code carried by what an instance of the user's own class HOLDS.
@@ -385,6 +405,8 @@ class CodeArgs:
                 yield from self._find_user_code((v.func, *v.args, *v.keywords.values()), _depth + 1, _seen, budget)
             elif self._is_user_instance(v):
                 yield from self.iter_code_carriers(v, _depth, _seen)
+            elif self._keyed_by_registration(v):
+                continue
             else:
                 attrs = getattr(v, "__dict__", None)
                 if isinstance(attrs, dict) and attrs:

@@ -487,6 +487,25 @@ class ArgHasher:
         self._memo.clear()
         self._frame_memo.clear()
 
+    def keys_by_registration(self, value: Any) -> bool:
+        """Is *value* keyed by a hasher the user registered, rather than by
+        what it holds?
+
+        Not for code (a function, a method, a partial, a class): its code is
+        what it is, and a hasher registered for ``types.FunctionType`` must
+        not take every function's body out of the key.
+        """
+        if not (self.override_hashers or self.type_hashers) or isinstance(value, (type, *CODE_VALUE_TYPES)):
+            return False
+        try:
+            return any(
+                isinstance(value, type_)
+                for registry in (self.override_hashers, self.type_hashers)
+                for type_ in registry
+            )
+        except Exception:  # noqa: BLE001 - a lookup must never break a call
+            return False
+
     def warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
         """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out."""
         arg_type_name = self.first_unhashable_arg_type(args, kwargs)

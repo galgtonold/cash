@@ -383,7 +383,7 @@ class Cash:
         self._closures = ClosureFold(
             self._args, self._captures, self._helpers, self._globals, self._mutations, self._notices
         )
-        self._code_args = CodeArgs(self._code, self._globals, self._frozen)
+        self._code_args = CodeArgs(self._code, self._globals, self._frozen, self._args)
         self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
         self._files = FileDeps(self._registry, self._notices)
         self._purity = PurityChecks(

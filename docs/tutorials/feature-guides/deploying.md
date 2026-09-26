@@ -131,7 +131,7 @@ application's cache and configuration: the app's `cash.configure(...)` calls,
 its `[tool.cash]` table and its `CASH_*` variables all apply to your functions.
 Own a private instance instead:
 
-<!-- claim: cash/core.py:Cash.__init__ @e183e4ae -->
+<!-- claim: cash/core.py:Cash.__init__ @517e2b7e -->
 <!-- test:skip reason="illustrative: a two-file library layout" -->
 ```python { title="mylib/_cache.py" }
 from cash import Cash

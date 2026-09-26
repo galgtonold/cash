@@ -57,6 +57,14 @@ and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
   cover every function passed to any cached call. Pass what a closure captures
   as a plain argument instead.
 
+<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @a1ec058f, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @65143507 -->
+The hasher is the value's whole identity. The code of the value's class still
+counts when the class is yours, but cash does not search the value for code it
+holds: a function stored on an instance, or the handlers and streams a
+registered `logging.Logger` reaches. If the result depends on such code, make
+the hasher return something that changes with it, or name it with
+`@cash.cache(depends_on=[...])`.
+
 ## What makes a good hasher
 
 - **Deterministic across processes.** Same value, same string, in every run.
