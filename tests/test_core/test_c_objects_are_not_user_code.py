@@ -3,9 +3,9 @@
 A C type or callable whose ``__module__`` cannot be followed fell into the
 fallback meant for exec'd and notebook code, and counted as user code whose
 code could not be hashed. ``sys.stdout.write`` has no ``__module__``,
-``_thread.lock`` is not reachable as ``_thread.lock``, and ``_io`` calls
-itself ``io``. So a cached function reading a module-level logger whose
-handler holds a queue (and its ``threading.Condition``) warned
+``_thread.lock`` is not reachable as ``_thread.lock``, and up to Python 3.11
+``_io`` calls itself ``io``. So a cached function reading a module-level
+logger whose handler holds a queue (and its ``threading.Condition``) warned
 KEY-OPAQUE-CALLABLE about ``lock.acquire`` and ``lock.release``; in a Jupyter
 kernel ``logging.basicConfig()`` alone was enough.
 """
@@ -13,6 +13,7 @@ kernel ``logging.basicConfig()`` alone was enough.
 from __future__ import annotations
 
 import _io
+import importlib.machinery
 import io
 import logging
 import logging.handlers
@@ -86,6 +87,13 @@ def test_a_built_in_module_is_judged_by_its_spec_not_its_name():
     # Up to Python 3.11 _io names itself "io", which a name check would take for
     # a module with no file of its own; 3.12 and later name it "_io".
     assert is_user_code_module(sys.modules["_io"]) is False
+
+    # The same case on every version: a module under a name no built-in has.
+    renamed = types.ModuleType("_cash_test_renamed_builtin")
+    assert is_user_code_module(renamed), "control: a module with no file and no spec is a notebook's"
+    for origin in ("built-in", "frozen"):
+        renamed.__spec__ = importlib.machinery.ModuleSpec(renamed.__name__, None, origin=origin)
+        assert is_user_code_module(renamed) is False, origin
 
 
 _LOCK = threading.Lock()
