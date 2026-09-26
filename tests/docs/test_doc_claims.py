@@ -692,37 +692,26 @@ def test_every_public_exception_is_documented() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Install extras                                                              #
+# Install commands                                                            #
 # --------------------------------------------------------------------------- #
 #
-# ``pip install "cash-lib[typo]"`` does not install what the reader wanted --
-# modern pip warns and carries on, older pip is silent -- so a wrong extra in
-# the install instructions is a user who quietly lacks the integration they
-# were told to install. Cheap to check: the names are right there in
-# pyproject.toml.
+# ``pip install cash-lib`` installs everything cash itself needs, and cash has
+# no user extras. A ``cash-lib[...]`` in the docs is a leftover that pip
+# accepts with a warning (older pip in silence) while installing nothing the
+# reader was told they would get. A feature that needs another package names
+# that package directly (``pip install redis``).
 
-_EXTRA_RE = re.compile(r"cash-lib\[([\w,\-]+)\]")
+_EXTRA_RE = re.compile(r"cash-lib\[")
+_README_PAGES = (DOCS_ROOT.parent / "README.md", DOCS_ROOT.parent / "examples" / "README.md")
 
 
-def test_documented_install_extras_exist() -> None:
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-        import tomli as tomllib  # type: ignore[no-redef]
-
-    pyproject = DOCS_ROOT.parent / "pyproject.toml"
-    with pyproject.open("rb") as fh:
-        real = set(tomllib.load(fh)["project"].get("optional-dependencies", {}))
-
+def test_docs_install_cash_without_extras() -> None:
     problems: list[str] = []
-    for md in ALL_MD:
-        for m in _EXTRA_RE.finditer(md.read_text(encoding="utf-8")):
-            for name in m.group(1).split(","):
-                name = name.strip()
-                if name and name not in real:
-                    problems.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: cash-lib[{name}]")
+    for md in (*ALL_MD, *_README_PAGES):
+        for n, line in enumerate(md.read_text(encoding="utf-8").splitlines(), start=1):
+            if _EXTRA_RE.search(line):
+                problems.append(f"  {md.relative_to(DOCS_ROOT.parent).as_posix()}:{n}: {line.strip()}")
     assert not problems, (
-        "Docs tell users to install extras that pyproject.toml doesn't define:\n"
-        + "\n".join(sorted(set(problems)))
-        + f"\n\nDefined extras: {', '.join(sorted(real))}"
+        "cash has no install extras; install it with `pip install cash-lib` and name any "
+        "other package a feature needs directly:\n" + "\n".join(problems)
     )

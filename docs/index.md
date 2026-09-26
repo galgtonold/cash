@@ -38,7 +38,7 @@ slow_square(4)           # cache hit: instant, also in the next process
   function's source, and the source of the helpers it calls.
 - Files the function reads are tracked: change the file and the call recomputes.
 - Every result is written to disk, so a new process gets it back.
-- No required dependencies, no IPython.
+- Works in any Python script; no notebook needed.
 
 [Decorator quick start](getting-started/quickstart-script.md)
 
@@ -82,7 +82,8 @@ Try it in your browser with no install:
 pip install cash-lib
 ```
 
-Extras for pandas, polars, Redis, S3 and more are listed in
+That installs everything cash needs. The few packages specific features need,
+such as `redis` for the Redis backend, are listed in
 [Installation](getting-started/installation.md).
 
 !!! danger "Only load caches you trust"

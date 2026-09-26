@@ -29,8 +29,8 @@ function's code and its helpers, the arguments, and the data it reads. So:
 
 ## Point everyone at a shared backend
 
-Redis or S3, set per environment so no code changes. Install the extra you use
-(`pip install "cash-lib[redis]"` or `"cash-lib[s3]"`):
+Redis or S3, set per environment so no code changes. The Redis backend also
+needs `pip install redis`, the S3 backend `pip install boto3`:
 
 ```bash
 export CASH_BACKEND=redis

@@ -53,7 +53,7 @@ def install_cell() -> dict:
         "outputs": [],
         "source": [
             "# Colab does not ship cash: install it (a no-op when it is already there).\n",
-            f'%pip install -q "cash-lib[pandas]{version_pin()}"',
+            f'%pip install -q "cash-lib{version_pin()}"',
         ],
     }
 

@@ -4,10 +4,11 @@ Start with the live tour. It runs in your browser, with nothing to install:
 [open it in Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
 or [in Binder](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb).
 
-To run the others locally, install cash with pandas support:
+To run the others locally, install cash, plus pandas and pyarrow for the
+examples that use DataFrames:
 
 ```bash
-pip install "cash-lib[pandas]"
+pip install cash-lib pandas pyarrow
 ```
 
 In a notebook, judge each cell by its badge, not by the clock: CACHED means

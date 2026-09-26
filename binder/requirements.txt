@@ -1,6 +1,9 @@
 # Binder environment for examples/try_cash_binder.ipynb (the live feature tour).
-# cash-lib[pandas] pulls cash plus pandas, numpy and pyarrow. The pin is the
-# release this checkout describes (tests/docs/test_try_cash_notebooks_in_sync.py
-# checks it against src/cash/__init__.py), so the tour runs against the
-# version it was written for.
-cash-lib[pandas]~=0.11.0
+# The cash pin is the release this checkout describes
+# (tests/docs/test_try_cash_notebooks_in_sync.py checks it against
+# src/cash/__init__.py), so the tour runs against the version it was written
+# for. pandas brings the numpy the tour imports; pyarrow lets cash store
+# DataFrames as Parquet.
+cash-lib~=0.11.0
+pandas
+pyarrow

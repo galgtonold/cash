@@ -10,7 +10,6 @@ For both paths: the storage classes. Choosing a backend through
 enough; build one yourself for tests or an unusual stack, and pass it as
 `Cash(backend=...)` or `Cash(backends=[...])`.
 
-<!-- test:long-lines reason="install line, being rewritten" -->
 ```python
 from cash import (
     FileBackend,
@@ -19,7 +18,8 @@ from cash import (
     TieredBackend,
 )
 
-from cash.backends import RedisBackend, S3Backend  # pip install 'cash-lib[redis]' / 'cash-lib[s3]'
+# These two also need: pip install redis / pip install boto3
+from cash.backends import RedisBackend, S3Backend
 ```
 
 To write a backend of your own, see [Internals](backend_internals.md).

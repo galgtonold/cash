@@ -41,7 +41,7 @@ You use it in one of two ways:
 pip install cash-lib
 ```
 
-Extras for pandas, polars, Redis, S3 and more: see [installation](https://cash-lib.readthedocs.io/en/latest/getting-started/installation/).
+That installs everything cash needs. The few packages specific features need, such as `redis` for the Redis backend, are listed under [installation](https://cash-lib.readthedocs.io/en/latest/getting-started/installation/).
 
 ## Decorator
 

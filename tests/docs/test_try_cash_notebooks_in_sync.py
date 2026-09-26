@@ -55,12 +55,16 @@ def test_setup_cell_is_import_and_cash_on_alone():
 def test_install_pins_match_the_version():
     pin = _generator().version_pin()
     colab_install = _sources(COLAB)[1]
-    assert f'"cash-lib[pandas]{pin}"' in colab_install
+    assert f'"cash-lib{pin}"' in colab_install
     requirements = (ROOT / "binder" / "requirements.txt").read_text(encoding="utf-8")
-    pinned = [line for line in requirements.splitlines() if line.startswith("cash-lib")]
-    assert pinned == [f"cash-lib[pandas]{pin}"], (
-        f"binder/requirements.txt should pin cash-lib[pandas]{pin}, the release this checkout describes"
+    lines = [line for line in requirements.splitlines() if line and not line.startswith("#")]
+    pinned = [line for line in lines if line.startswith("cash-lib")]
+    assert pinned == [f"cash-lib{pin}"], (
+        f"binder/requirements.txt should pin cash-lib{pin}, the release this checkout describes"
     )
+    # Binder has only what this file lists: pandas (which brings the numpy the
+    # tour imports) and pyarrow, as a pandas user of cash would have them.
+    assert {"pandas", "pyarrow"} <= set(lines), lines
 
 
 def test_committed_notebooks_have_no_outputs():

@@ -28,8 +28,8 @@ Stop at the first line that fits:
 | `FileBackend` | yes | processes on this machine | `from cash import FileBackend` |
 | `SQLiteBackend` | yes | processes on this machine | `from cash import SQLiteBackend` |
 | `InMemoryBackend` | no | this process only | `from cash import InMemoryBackend` |
-| `RedisBackend` | as Redis is configured | every host that reaches Redis | `from cash.backends import RedisBackend` (extra `redis`) |
-| `S3Backend` | yes | every host that reaches the bucket | `from cash.backends import S3Backend` (extra `s3`) |
+| `RedisBackend` | as Redis is configured | every host that reaches Redis | `from cash.backends import RedisBackend` (`pip install redis`) |
+| `S3Backend` | yes | every host that reaches the bucket | `from cash.backends import S3Backend` (`pip install boto3`) |
 
 Every backend stores values with `pickle`, so only read a cache that people you
 trust write to. See [Sharing a cache](sharing-caches.md#the-trust-boundary).
@@ -163,8 +163,8 @@ Each entry is two Redis keys, written together. A ttl becomes a Redis
 two projects in one Redis apart.
 
 <!-- claim: cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
-- Install the extra: `pip install "cash-lib[redis]"`. Without it the backend
-  raises `DependencyNotFoundError`.
+- It also needs `pip install redis`. Without it the backend raises
+  `DependencyNotFoundError`.
 - Inside a tier stack, a single value over 10 MiB skips Redis.
 - Used on its own, it is the one backend whose `use_locking=True` lock spans
   processes and hosts. Behind a RAM tier, it locks per process only; see
@@ -187,8 +187,8 @@ One object per entry. Reading an entry's metadata fetches only its first 8 KB.
 Every miss is a GET and every write a PUT, both billed and both tens of
 milliseconds, so put S3 last in a tier stack. S3 does not delete expired
 entries by itself: cash skips them on read, and a bucket lifecycle rule or
-`cash.cleanup()` removes them. Install the extra:
-`pip install "cash-lib[s3]"`.
+`cash.cleanup()` removes them. The S3 backend also needs
+`pip install boto3`.
 
 ## Configuring without code
 
