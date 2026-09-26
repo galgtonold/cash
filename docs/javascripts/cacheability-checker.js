@@ -16,7 +16,7 @@
       code: "result = df.groupby('k').sum()",
       verdict: "ok",
       title: "Cached",
-      why: "A pure transformation: no mutation, no side effect, no randomness. Cash caches the result keyed on the inputs' lineage."
+      why: "A pure transformation: no mutation, no side effect, no randomness. cash caches the result keyed on the inputs' lineage."
     },
     {
       code: "total += 1",
@@ -28,7 +28,7 @@
       code: "data.append(4)",
       verdict: "no",
       title: "Not cached",
-      why: "append() mutates data in place, and this statement doesn't produce data — there is no output to hang the new version on. Cash bumps data's lineage (so downstream cells see the change) and re-runs the statement every time, rather than restoring a deserialised copy and breaking every other reference to the list."
+      why: "append() mutates data in place, and this statement doesn't produce data — there is no output to hang the new version on. cash bumps data's lineage (so downstream cells see the change) and re-runs the statement every time, rather than restoring a deserialised copy and breaking every other reference to the list."
     },
     {
       code: "del lookup['stale']",
@@ -40,7 +40,7 @@
       code: "x = np.random.randn(100)",
       verdict: "warn",
       title: "Cached + warning",
-      why: "Unseeded randomness. Cash still caches — and the badge marks the row 'unseeded', because the value is a frozen replay rather than a fresh draw. Seed the module first (np.random.seed(0)) for real reproducibility, put @cash:no-cache on its own line above to redraw every run, or @cash:allow-random to silence the warning."
+      why: "Unseeded randomness. cash still caches — and the badge marks the row 'unseeded', because the value is a frozen replay rather than a fresh draw. Seed the module first (np.random.seed(0)) for real reproducibility, put @cash:no-cache on its own line above to redraw every run, or @cash:allow-random to silence the warning."
     },
     {
       code: "model.fit(X, y)",
@@ -52,13 +52,13 @@
       code: "df.to_parquet('out.pq')",
       verdict: "no",
       title: "Not cached",
-      why: "A file write is a side effect. Replaying it from cache would skip writing the file, so Cash flags the statement uncacheable and always runs it. It does NOT count as a mutation of df: to_parquet reads the frame, so df's lineage is left alone."
+      why: "A file write is a side effect. Replaying it from cache would skip writing the file, so cash flags the statement uncacheable and always runs it. It does NOT count as a mutation of df: to_parquet reads the frame, so df's lineage is left alone."
     },
     {
       code: "r = requests.post(url, json=payload)",
       verdict: "no",
       title: "Not cached",
-      why: "A mutating network call (POST/PUT/DELETE/PATCH) is a side effect: a cache hit would never send the request, so Cash always executes it. When the POST only runs a query, put # @cash:assume-safe on the line to cache it anyway."
+      why: "A mutating network call (POST/PUT/DELETE/PATCH) is a side effect: a cache hit would never send the request, so cash always executes it. When the POST only runs a query, put # @cash:assume-safe on the line to cache it anyway."
     },
     {
       code: "r = session.post(url, json=payload)",

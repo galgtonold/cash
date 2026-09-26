@@ -656,6 +656,12 @@
 .cash-cc-dot.ok { background: var(--cash-green); }
 .cash-cc-dot.warn { background: var(--cash-ochre); }
 .cash-cc-dot.no { background: var(--cash-danger); }
+/* The same dots as a key in running text, above the checker. */
+.md-typeset p > .cash-cc-dot {
+  display: inline-block;
+  vertical-align: -1px;
+  margin: 0 2px;
+}
 .cash-cc-panel {
   padding: 14px 16px;
   border-radius: var(--cash-radius-sm);
@@ -861,6 +867,14 @@ a.cash-cta-card:hover {
  * itself shows. */
 iframe.cash-badge {
   color-scheme: light;
+}
+
+/* The line under a badge example that says it opens on click. It sits close
+ * to the frame above it, as a caption. */
+.md-typeset .cash-badge-caption {
+  margin: -4px 0 1em;
+  font-size: 13px;
+  color: var(--cash-ink-3);
 }
 
 /* ─── Warnings page chips ────────────────────────────────────────────── *
