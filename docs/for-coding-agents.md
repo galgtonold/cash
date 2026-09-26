@@ -90,7 +90,7 @@ The comment goes directly above the statement, no blank line, lowercase:
 # @cash:ttl=300         expire after N seconds (integer)
 # @cash:allow-random    hide the unseeded-draw warning (still frozen)
 # @cash:no-cache-calls  stop caching the slow call inside a statement
-# @cash:cache-fit       cache a bare estimator.fit(X, y) (off by default)
+# @cash:cache-fit       cache a bare model.fit(X, y) (off by default)
 ```
 
 Call-level caching is on by default, so a callee with side effects the
