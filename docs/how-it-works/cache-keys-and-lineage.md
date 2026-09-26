@@ -164,7 +164,7 @@ adds `name:lineage` for each. A name that no longer exists counts as
 `ABSENT`, so deleting a function makes the call re-run and raise `NameError`,
 as a plain kernel would, instead of replaying a stored value. For the case of
 calling a function defined in a later cell, see
-[known limitations](../known-limitations.md#a-function-that-calls-one-defined-in-a-later-cell).
+[Writing cache-safe cells](../known-limitations.md#a-function-that-calls-one-defined-in-a-later-cell).
 
 ### Resolving an input
 
