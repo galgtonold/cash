@@ -49,10 +49,11 @@
 ??? question "Is a 0.x release safe for real work?"
     The decorator is the simpler problem. The notebook path reasons about what
     your code reads and changes across cells, so surprises are more likely
-    there; watch the badge. Known gaps are in
-    [Writing cache-safe cells](known-limitations.md); the tests are described
-    in [How cash is tested](how-it-works/testing.md). Pin the version: during
-    0.x a minor release can change the API.
+    there; watch the badge. Known gaps: for `@cash.cache`, see
+    [Known limitations of `@cash.cache`](decorator-limitations.md); for
+    notebooks, see [Writing cache-safe cells](known-limitations.md). The tests
+    are described in [How cash is tested](how-it-works/testing.md). Pin the
+    version: during 0.x a minor release can change the API.
 
 ??? question "Is loading a cache safe?"
     Only if you trust whoever wrote it. Cash unpickles stored results, and
