@@ -15,14 +15,14 @@ yourself. Figures on this page are derived from the repository by
 
 ## The suites
 
-**<!-- docnum:tests_total -->~11,300<!-- /docnum --> tests** in
-<!-- docnum:test_files -->~1,130<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~11,400<!-- /docnum --> tests** in
+<!-- docnum:test_files -->~1,140<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~6,810<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Unit | <!-- docnum:tests_unit -->~6,820<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
 | Notebook integration | <!-- docnum:tests_integration -->~4,000<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
-| Docs | <!-- docnum:tests_docs -->~490<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
+| Docs | <!-- docnum:tests_docs -->~560<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
 ## What runs where
 
@@ -55,7 +55,7 @@ test that passes without the fix proves nothing and is rewritten.
   For a decorated function, it checks that the hits and misses match the
   example's comments (`# cache hit`, `# cache miss`).
 - **Claims are pinned to the code.** About
-  <!-- docnum:claims -->~330<!-- /docnum --> statements about behaviour carry an
+  <!-- docnum:claims -->~340<!-- /docnum --> statements about behaviour carry an
   anchor naming the source that decides them, with a fingerprint of that
   source. When the code changes, the claim is listed for re-reading. Pull
   requests report drift without failing; a release fails on it.
