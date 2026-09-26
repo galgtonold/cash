@@ -138,7 +138,10 @@ cache. Give it its own; see [Testing your code](tutorials/feature-guides/testing
 
 ## Seeing what cash did
 
-A script shows nothing by default. Use these to check that caching works.
+A script shows nothing by default. Use these to check that caching works,
+and to answer "why did it miss?" when a call ran that you expected to be a
+cache hit. Each miss names its reason: new arguments, a changed file, a
+helper you edited, an expired `ttl`.
 
 <!-- claim: cash/core.py:Cash.run_summary @1b06ce83, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
