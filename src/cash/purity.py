@@ -36,11 +36,12 @@ def pure(func: F) -> F:
     Returns:
         ``func`` itself, marked.
 
-    Example::
-
+    Examples:
+        ```python
         @pure
         def compute(x, y):
             return x + y
+        ```
     """
     setattr(func, _PURE_ATTR, True)
     return func
@@ -61,12 +62,13 @@ def stateful(func: F) -> F:
     Returns:
         ``func`` itself, marked.
 
-    Example::
-
+    Examples:
+        ```python
         @stateful
         def train_model(data):
             model.fit(data)
             return model.score(data)
+        ```
     """
     setattr(func, _STATEFUL_ATTR, True)
     return func

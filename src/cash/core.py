@@ -228,14 +228,15 @@ class Cash:
         ValueError: a keyword that is not a setting, or a value the setting
             cannot take, as ``cash.configure`` raises for the same.
 
-    Example:
-
+    Examples:
+        ```python
         from cash import Cash
         c = Cash()
 
         @c.cache
         def expensive(x):
             return x ** 2
+        ```
     """
 
     graph: DependencyGraph
@@ -960,9 +961,10 @@ class Cash:
             ValueError: ``type_`` is one cash hashes itself and ``override``
                 is not set.
 
-        Example:
-
+        Examples:
+            ```python
             c.register_hasher(DatabaseSession, lambda s: s.database_url)
+            ```
         """
         # Rejected BEFORE anything is mutated, so a refused call leaves an
         # earlier good registration for this type exactly as it was.
@@ -1274,8 +1276,8 @@ class Cash:
                 wrapper calls ``track(path)`` for each file, then the
                 original.
 
-        Example:
-
+        Examples:
+            ```python
             def handler(original, track):
                 def wrapper(path, *args, **kwargs):
                     track(path)
@@ -1283,6 +1285,7 @@ class Cash:
                 return wrapper
 
             c.register_file_handler("my_lib", "read_data", handler)
+            ```
         """
 
         file_registry().register(module_name, func_name, handler_factory)

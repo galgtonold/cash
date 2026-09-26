@@ -91,19 +91,20 @@ def opaque(cls: type) -> type:
     is recorded in a process-wide registry and is left unmodified, so this
     works on classes that refuse new attributes too.
 
-    Example:
-
-        import cash
-
-        @cash.opaque
-        class SlowToHashButStableConfig:
-            ...
-
     Does NOT propagate to a subclass. A subclass may carry its own
     freshly-written methods the user actively edits, and inheriting opacity
     from an ancestor would silently exempt that new code from ever
     invalidating the cache. A subclass that wants the same treatment is
     marked itself.
+
+    Examples:
+        ```python
+        import cash
+
+        @cash.opaque
+        class SlowToHashButStableConfig:
+            ...
+        ```
     """
     Cash.mark_opaque(cls)
     return cls
