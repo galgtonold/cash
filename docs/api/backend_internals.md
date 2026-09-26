@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Internals
 
 For both paths, and only if you write your own backend: the base class, the

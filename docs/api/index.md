@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # API reference
 
 For both paths: every public name, generated from the docstrings. Import each
@@ -10,7 +15,7 @@ parameters and return values.
 | [Cash class](cash.md) | `Cash` and its methods, the methods every cached function gets (`explain`, `cache_info`, `cache_clear`), `CacheExplanation`, and the module-level `configure`, `disabled`, `reset_session` and `cleanup`. |
 | [Backends](backends.md) | `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, `TieredBackend`, and the remote `RedisBackend` and `S3Backend` from `cash.backends`. |
 | [Purity markers](purity.md) | `pure`, `stateful`, `opaque`, `is_pure`, `is_stateful`. |
-| [Configuration](config.md) | `CashConfig`, the tier entry `TierConfig`, `get_config`, `create_default_config`. |
+| [Configuration API](config.md) | `CashConfig`, the tier entry `TierConfig`, `get_config`, `create_default_config`. |
 | [Data sources](data_sources.md) | `DataSource`, `FileDataSource`, `RemoteFileDataSource`. |
 | [Exceptions and warnings](exceptions.md) | Every exception and warning class, and how to filter warnings. |
 | [Notebook integration](notebook.md) | `CashStripPreprocessor`, for stripping cash output with nbconvert. |

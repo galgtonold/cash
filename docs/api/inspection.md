@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Inspection tools
 
 For both paths: browsing a cache from code. For the command line, see

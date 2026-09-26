@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Backends
 
 For both paths: the storage classes. Choosing a backend through
@@ -6,7 +11,13 @@ enough; build one yourself for tests or an unusual stack, and pass it as
 `Cash(backend=...)` or `Cash(backends=[...])`.
 
 ```python
-from cash import InMemoryBackend, FileBackend, SQLiteBackend, TieredBackend
+from cash import (
+    FileBackend,
+    InMemoryBackend,
+    SQLiteBackend,
+    TieredBackend,
+)
+
 from cash.backends import RedisBackend, S3Backend  # pip install 'cash-lib[redis]' / 'cash-lib[s3]'
 ```
 
@@ -19,7 +30,7 @@ To write a backend of your own, see [Internals](backend_internals.md).
     `FileBackend`, `SQLiteBackend`, `RedisBackend` and `S3Backend` store
     values with `pickle` (a DataFrame may use Parquet instead). Loading a
     pickle runs code embedded in it, so a cache is only as safe as whoever
-    wrote to it. Cash does not sandbox this, and no setting makes an
+    wrote to it. cash does not sandbox this, and no setting makes an
     untrusted cache safe.
 
     | Cache | Safe to load? |

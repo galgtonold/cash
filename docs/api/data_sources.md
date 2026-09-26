@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Data sources
 
 For the decorator: objects passed in `depends_on=` whose state becomes part
@@ -7,7 +12,7 @@ of the cache key. The entry is recomputed when that state changes.
 from cash import DataSource, FileDataSource, RemoteFileDataSource
 ```
 
-Cash already tracks the files and remote objects a cached function reads
+cash already tracks the files and remote objects a cached function reads
 through common readers (`open`, `pd.read_csv("s3://...")`). Declare a source
 only for what it cannot see; for a local file, `file_depends_on="path"` is
 shorter.
@@ -27,7 +32,8 @@ def load_data():
     return pd.read_csv("data/input.csv")
 
 load_data()  # computes
-load_data()  # hit, until the file's content changes; a touch alone does not
+# a hit, until the file's content changes; a touch alone does not
+load_data()
 ```
 
 ::: cash.RemoteFileDataSource
@@ -46,7 +52,9 @@ from cash import Cash, RemoteFileDataSource
 
 c = Cash()
 
-@c.cache(depends_on=[RemoteFileDataSource("s3://bucket/events.parquet")])
+EVENTS = RemoteFileDataSource("s3://bucket/events.parquet")
+
+@c.cache(depends_on=[EVENTS])
 def load_events():
     return read_via_boto3("bucket", "events.parquet")
 ```
@@ -95,6 +103,6 @@ user_summary()  # computes and records the token
 user_summary()  # hit, until the table's token changes
 ```
 
-Cash may warn that `user_summary` reads a global (`conn`) it cannot hash.
+cash may warn that `user_summary` reads a global (`conn`) it cannot hash.
 That is expected here: the connection is not the data, and the source
 tracks the table.

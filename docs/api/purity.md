@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Purity markers
 
 For both paths, mainly the decorator: the markers that tell cash what to

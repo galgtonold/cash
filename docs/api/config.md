@@ -1,4 +1,9 @@
-# Configuration
+---
+search:
+  boost: 0.5
+---
+
+# Configuration API
 
 For both paths: the configuration objects. Every setting, its environment
 variable, its default and the path it affects are listed once, in the

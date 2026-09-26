@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Notebook integration
 
 For the notebook path: the one public class for tooling around notebooks.
@@ -13,8 +18,8 @@ you can share or commit it clean.
 
 ```bash
 jupyter nbconvert --to html \
-    --Exporter.preprocessors='["cash.nbconvert.CashStripPreprocessor"]' \
-    notebook.ipynb
+  --Exporter.preprocessors='["cash.nbconvert.CashStripPreprocessor"]' \
+  notebook.ipynb
 ```
 
 <!-- test:skip reason="reads a notebook file that does not exist in the test environment" -->

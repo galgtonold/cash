@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Cash class
 
 For both paths, though mostly the decorator: the `Cash` class, the helpers
@@ -5,7 +10,14 @@ every cached function gets, and the module-level functions. The
 [decorator guide](../decorator.md) explains when to use each option.
 
 ```python
-from cash import Cash, CacheExplanation, configure, disabled, reset_session, cleanup
+from cash import (
+    CacheExplanation,
+    Cash,
+    cleanup,
+    configure,
+    disabled,
+    reset_session,
+)
 ```
 
 `cash.cache`, `cash.register_hasher` and `cash.show_stats` are those methods
@@ -17,14 +29,17 @@ for some functions.
 
 <!-- claim: cash/core.py:Cash.__init__ @e183e4ae, cash/core.py:Cash.cache @2d082328 -->
 ```text
-Cash(backend=None, cache_dir=None, backends=None, compress=None,
-     register_magic=None, debug=None, use_locking=False, config_path=None,
-     verbose=None, **config_overrides)
+Cash(
+    backend=None, cache_dir=None, backends=None, compress=None,
+    register_magic=None, debug=None, use_locking=False,
+    config_path=None, verbose=None, **config_overrides)
 
-Cash.cache(func=None, *, depends_on=None, dynamic_depends_on=None,
-           file_depends_on=None, ttl=None, cache_if=None,
-           chunk_max_items=1_000_000, chunk_max_bytes=1_000_000_000,
-           strict=False, assume_safe=False, allow_random=False, frozen=False)
+Cash.cache(
+    func=None, *, depends_on=None, dynamic_depends_on=None,
+    file_depends_on=None, ttl=None, cache_if=None,
+    chunk_max_items=1_000_000, chunk_max_bytes=1_000_000_000,
+    strict=False, assume_safe=False, allow_random=False,
+    frozen=False)
 ```
 
 `**config_overrides` takes any [setting](../getting-started/configuration.md)
@@ -92,3 +107,12 @@ These act on the default `Cash` that `@cash.cache` uses.
 ::: cash.reset_session
 
 ::: cash.cleanup
+
+## Related
+
+- [@cash.cache guide](../decorator.md): when to reach for each option of
+  `Cash.cache`, with examples.
+- [Configuration](../getting-started/configuration.md): every setting
+  `**config_overrides` and `configure` accept.
+- [Warnings](../warnings.md): what each warning a cached function raises
+  means, and how to silence it.

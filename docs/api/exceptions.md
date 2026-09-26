@@ -1,3 +1,8 @@
+---
+search:
+  boost: 0.5
+---
+
 # Exceptions and warnings
 
 For both paths: every exception and warning class, and how to filter
@@ -62,12 +67,12 @@ catches them all.
 
 ```text
 CashWarning
-├── CashCacheIneffectiveWarning     caching is not working or not paying off
-│   └── CashImpurityWarning         the function has side effects a hit skips
-├── CashCacheStoreFailedWarning     a result was computed but not stored
-├── CashRandomnessWarning           an unseeded random draw was cached
-├── CashUpstreamSyntaxWarning       an earlier notebook cell does not parse
-└── CashNotebookDiscoveryWarning    the notebook file was not found
+├── CashCacheIneffectiveWarning   caching is not working or paying off
+│   └── CashImpurityWarning       side effects a hit skips
+├── CashCacheStoreFailedWarning   a result was computed but not stored
+├── CashRandomnessWarning         an unseeded random draw was cached
+├── CashUpstreamSyntaxWarning     an earlier cell does not parse
+└── CashNotebookDiscoveryWarning  the notebook file was not found
 ```
 
 `CashNotebookDiscoveryWarning` is not importable from `cash`; filter it by its
@@ -103,7 +108,9 @@ warnings.filterwarnings("ignore", category=cash.CashWarning)
 warnings.filterwarnings("error", category=cash.CashImpurityWarning)
 
 # Silence failed stores only.
-warnings.filterwarnings("ignore", category=cash.CashCacheStoreFailedWarning)
+warnings.filterwarnings(
+    "ignore", category=cash.CashCacheStoreFailedWarning
+)
 ```
 
 To silence a single code, see
