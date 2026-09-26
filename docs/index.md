@@ -66,7 +66,9 @@ summary = df.groupby("region").sum()
 - Expensive results are saved to disk and come back after a kernel restart.
 - A badge above each cell's output says what cash restored and what ran.
 
-<iframe class="cash-badge" src="/_badges/anatomy_hero.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" title="cash badge example: a cell restored from the cache" src="/_badges/anatomy_hero.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+<p class="cash-badge-caption">Click a badge to open it.</p>
 
 Try it in your browser with no install:
 [Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb) ·
