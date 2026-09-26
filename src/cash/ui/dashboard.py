@@ -39,7 +39,7 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
             db is created, which reads nothing when analytics is off.
     """
     if not HAS_WIDGETS:
-        print("ipywidgets is required for the dashboard.")
+        print("The dashboard needs the ipywidgets package: pip install ipywidgets")
         return
 
     if mgr is None:
@@ -124,7 +124,7 @@ def show_analytics_dashboard(mgr: AnalyticsManager | None = None):
                     display(widgets.HTML(img_html))
                     plt.close()
             elif not HAS_MATPLOTLIB:
-                display(widgets.HTML("<p><i>Matplotlib not installed, skipping charts.</i></p>"))
+                display(widgets.HTML("<p><i>Charts need the matplotlib package: pip install matplotlib</i></p>"))
             elif not daily_savings:
                 display(widgets.HTML("<p><i>No historical data available for charts yet.</i></p>"))
 

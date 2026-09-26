@@ -183,17 +183,15 @@ def _sqlite_db_path(cache_dir: str) -> str:
     return os.path.join(cache_dir, DB_FILENAME)
 
 
-# The remote backends are imported lazily, so a missing extra does not break
-# importing this module.
+# The remote backends are imported lazily, so a missing redis or boto3 does not
+# break importing this module.
 
 
 def _build_redis(**kwargs: Any) -> CacheBackend:
     try:
         from .redis_backend import RedisBackend
     except ImportError as exc:
-        raise DependencyNotFoundError(
-            "Redis backend requires `pip install cash-lib[redis]` (the `redis` package)."
-        ) from exc
+        raise DependencyNotFoundError("The Redis backend needs the redis package: pip install redis") from exc
     # Drop None values so RedisBackend's own defaults apply.
     return RedisBackend(**{k: v for k, v in kwargs.items() if v is not None})
 
@@ -202,7 +200,7 @@ def _build_s3(*, bucket: str, region: str, prefix: str) -> CacheBackend:
     try:
         from .s3_backend import S3Backend
     except ImportError as exc:
-        raise DependencyNotFoundError("S3 backend requires `pip install cash-lib[s3]` (the `boto3` package).") from exc
+        raise DependencyNotFoundError("The S3 backend needs the boto3 package: pip install boto3") from exc
     if not bucket:
         raise ValueError("S3 backend requires a non-empty bucket name (set s3_bucket)")
     kwargs: dict[str, Any] = {"bucket": bucket, "prefix": prefix}

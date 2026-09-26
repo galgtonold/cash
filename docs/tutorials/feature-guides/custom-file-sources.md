@@ -134,7 +134,7 @@ load_events(url)   # first call: downloads, records the ETag
 load_events(url)   # cache hit: one metadata request
 ```
 
-<!-- claim: cash/remote_source.py:_fsspec_token @e1bf519f, cash/remote_source.py:_listing_token @fe6b3d29 -->
+<!-- claim: cash/remote_source.py:_fsspec_token @ac2266af, cash/remote_source.py:_listing_token @fe6b3d29 -->
 A prefix or a glob (`pd.read_parquet("s3://bucket/events/")`) is tracked by
 its listing: every object's name and validator, read with one LIST request
 per check. A new, removed or rewritten partition recomputes the next call.

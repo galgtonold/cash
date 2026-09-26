@@ -1212,7 +1212,7 @@ class Cash:
         from .ui.dashboard import HAS_WIDGETS, show_analytics_dashboard
 
         # Asking the dashboard whether it CAN run, rather than calling it and
-        # catching: without ipywidgets it prints "ipywidgets is required" and
+        # catching: without ipywidgets it prints which package to install and
         # returns normally, so there is nothing to catch. And whether anything
         # can draw it: outside a kernel, displaying the widgets only prints
         # their repr.

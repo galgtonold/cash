@@ -117,7 +117,7 @@ class CacheExplorer:
         Return cache entries as a pandas DataFrame.
         """
         if not HAS_PANDAS:
-            raise ImportError("pandas is required for to_dataframe(). Install with: pip install cash-lib[pandas]")
+            raise ImportError("to_dataframe() needs the pandas package: pip install pandas")
         entries = self.list_entries()
         if not entries:
             return pd.DataFrame()
@@ -139,7 +139,7 @@ class CacheExplorer:
         try:
             from IPython.display import IFrame
         except ImportError:
-            logger.warning("IPython is required for the widget.")
+            logger.warning("The cache explorer widget needs IPython: pip install ipython")
             return None
 
         hierarchy = self._build_hierarchy(self.list_entries())

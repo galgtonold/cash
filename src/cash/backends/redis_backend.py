@@ -77,9 +77,7 @@ class RedisBackend(CacheBackend):
             from redis.backoff import ExponentialBackoff
             from redis.retry import Retry
         except ImportError as exc:
-            raise DependencyNotFoundError(
-                "RedisBackend requires 'redis' package. Install it with 'pip install redis'."
-            ) from exc
+            raise DependencyNotFoundError("The Redis backend needs the redis package: pip install redis") from exc
 
         retry_strategy = Retry(ExponentialBackoff(), max_retries)
 

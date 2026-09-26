@@ -28,8 +28,8 @@ Usage::
 
 ``http://`` and ``https://`` need nothing beyond the standard library. Other
 schemes are resolved through fsspec and its filesystem for that scheme
-(``pip install "cash-lib[s3]"`` for ``s3://``, ``gcsfs`` for ``gs://``, and so
-on); a missing one raises :class:`~cash.exceptions.DependencyNotFoundError`.
+(``s3fs`` for ``s3://``, ``gcsfs`` for ``gs://``, and so on); a missing one
+raises :class:`~cash.exceptions.DependencyNotFoundError`.
 """
 
 from __future__ import annotations
@@ -401,20 +401,43 @@ def _http_token(url: str, timeout: float) -> str:
     raise _NoTokenError("the response carried no ETag, Last-Modified or Content-Length header")
 
 
+#: The package that gives fsspec its filesystem for a scheme. Each one
+#: installs fsspec too.
+_FSSPEC_PACKAGES = {
+    "s3": "s3fs",
+    "s3a": "s3fs",
+    "gs": "gcsfs",
+    "gcs": "gcsfs",
+    "az": "adlfs",
+    "abfs": "adlfs",
+    "abfss": "adlfs",
+}
+
+
+def _missing_filesystem(url: str, exc: ImportError) -> DependencyNotFoundError:
+    """The error for a scheme whose fsspec filesystem is not installed."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    package = _FSSPEC_PACKAGES.get(scheme)
+    if package is not None:
+        fix = f"fsspec's {scheme} filesystem, the {package} package: pip install {package}"
+    else:
+        fix = f"fsspec and its filesystem for {scheme}:// (fsspec says: {exc})"
+    return DependencyNotFoundError(
+        f"Tracking {scheme}:// objects needs {fix}. Or track the object with a custom DataSource."
+    )
+
+
 def _fsspec_token(url: str, storage_options: dict[str, Any]) -> str:
     """State token for any fsspec-addressable object, from its stat info."""
     try:
         import fsspec
     except ImportError as exc:  # pragma: no cover - exercised via a stubbed import
-        scheme = urllib.parse.urlsplit(url).scheme
-        raise DependencyNotFoundError(
-            f"tracking {scheme}:// objects requires fsspec and its {scheme} "
-            f'filesystem. Install them (for example `pip install "cash-lib[s3]"` '
-            f"and `pip install s3fs` for s3://), or track the object with a "
-            f"custom DataSource."
-        ) from exc
+        raise _missing_filesystem(url, exc) from exc
 
-    fs, path = fsspec.core.url_to_fs(url, **storage_options)
+    try:
+        fs, path = fsspec.core.url_to_fs(url, **storage_options)
+    except ImportError as exc:  # fsspec is there, the scheme's filesystem is not
+        raise _missing_filesystem(url, exc) from exc
     # s3fs answers `info` from a listing it cached earlier -- the reader's own,
     # made moments ago -- and would report the ETag the object had then.
     invalidate = getattr(fs, "invalidate_cache", None)

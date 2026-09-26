@@ -233,8 +233,25 @@ class TestFailureIsClosed:
         # A silent forever-recompute would hide an install problem the caller
         # can actually fix.
         monkeypatch.setitem(sys.modules, "fsspec", None)
-        with pytest.raises(DependencyNotFoundError, match="fsspec"):
+        with pytest.raises(DependencyNotFoundError, match="fsspec.*pip install s3fs"):
             RemoteFileDataSource("s3://bucket/key").state_token()
+
+    @pytest.mark.parametrize(
+        "url, fix",
+        [("s3://bucket/key", "pip install s3fs"), ("gs://bucket/key", "pip install gcsfs")],
+    )
+    def test_a_missing_filesystem_names_the_package_to_install(self, monkeypatch, url, fix):
+        # fsspec itself is installed; the scheme's filesystem is not. fsspec
+        # raises a bare ImportError then, which the caller would only see as
+        # a warning and a recompute on every call.
+        def no_filesystem(url, **kw):
+            raise ImportError("Install the filesystem to access this store")
+
+        fake = types.ModuleType("fsspec")
+        fake.core = types.SimpleNamespace(url_to_fs=no_filesystem)
+        monkeypatch.setitem(sys.modules, "fsspec", fake)
+        with pytest.raises(DependencyNotFoundError, match=fix):
+            RemoteFileDataSource(url).state_token()
 
 
 # ---------------------------------------------------------------------------

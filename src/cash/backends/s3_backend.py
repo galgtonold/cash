@@ -60,9 +60,7 @@ class S3Backend(CacheBackend):
             import botocore
             from botocore.config import Config
         except ImportError as exc:
-            raise DependencyNotFoundError(
-                "S3Backend requires 'boto3' package. Install it with 'pip install boto3'."
-            ) from exc
+            raise DependencyNotFoundError("The S3 backend needs the boto3 package: pip install boto3") from exc
 
         config = Config(
             max_pool_connections=max_pool_connections, retries={"max_attempts": retries, "mode": "standard"}
