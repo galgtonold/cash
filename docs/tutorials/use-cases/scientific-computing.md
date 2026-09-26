@@ -33,6 +33,11 @@ a decorated result is always written to disk unless it exceeds the disk tier's
 size cap; see
 [Where results are stored](../../decorator.md#where-results-are-stored).
 
+<!-- claim: cash/source_norm.py:normalize_source_for_hash @a1b4e588 -->
+Editing a comment or the docstring of `simulate` re-runs nothing. Editing its
+code, or a helper it calls, re-runs every combination the next time you ask
+for it.
+
 ## Parameter sweeps
 
 A sweep is a loop over arguments, and each combination is its own entry:
@@ -53,6 +58,38 @@ To spread a sweep over worker processes (`multiprocessing`, joblib), see
 Workers share results through the disk. Two workers can still compute the same
 combination at the same moment, unless the backend is Redis with
 `use_locking=True`.
+
+## Disk space
+
+<!-- claim: cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2, cash/__main__.py:cmd_clear @a08b9044 -->
+A sweep writes one entry per combination, and every entry goes to disk. By
+default cash lets the cache use a quarter of the free room on its volume,
+between 8 GiB and 100 GiB. When it is full, cash evicts the entries that are
+cheapest to recompute per byte.
+
+- **See it.** `cash info` in a terminal shows the folder, what it holds and
+  the cap:
+
+    ```text { title="Output" }
+      Cache dir:  /home/me/study/.cash
+      Holds:      120 entries, 3.2 GiB
+      Max size:   auto -- disk 26.0 GiB, RAM 3.1 GiB
+    ```
+
+- **Pin it.** Set `max_cache_size`, for the whole project in
+  `pyproject.toml`:
+
+    ```toml { title="pyproject.toml" }
+    [tool.cash]
+    max_cache_size = "50GB"
+    ```
+
+- **Drop one study.** `cash clear --function simulate` deletes every entry of
+  `simulate`. After you edit `simulate`, its old entries stay on disk until
+  the cap evicts them; this frees the space now.
+
+See [Where your cache lives](../../how-it-works/storage.md#when-the-disk-fills-up)
+for how eviction picks entries.
 
 <!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9 -->
 ## Seed through an argument
