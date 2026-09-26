@@ -176,6 +176,7 @@ nav:
     - Start:
       - Quick start: getting-started/quickstart-script.md
       - "@cash.cache guide": decorator.md
+      - Known limitations: decorator-limitations.md
     - What goes into the key:
       - Class methods: tutorials/feature-guides/caching-class-methods.md
       - File dependencies: tutorials/feature-guides/custom-file-sources.md

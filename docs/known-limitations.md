@@ -398,8 +398,9 @@ that trigger it. Say whether it happens on Run All or only when you re-run one
 cell, and count calls rather than timing them: a counter your function appends
 to shows what ran.
 
-Limitations of `@cash.cache` functions, such as code passed as an argument, are in
-the [decorator guide](decorator.md#code-you-pass-as-an-argument).
+Limitations of `@cash.cache` functions, such as
+[code passed as an argument](decorator-limitations.md#code-you-pass-as-an-argument),
+are in [Known limitations of `@cash.cache`](decorator-limitations.md).
 
 ## Related
 
@@ -407,5 +408,5 @@ the [decorator guide](decorator.md#code-you-pass-as-an-argument).
   find the input that moved.
 - [Knowing when to recompute](how-it-works/invalidation.md): what cash does
   track.
-- [`@cash.cache` known limitations](decorator.md#known-limitations): the
+- [Known limitations of `@cash.cache`](decorator-limitations.md): the
   decorator's own limits.

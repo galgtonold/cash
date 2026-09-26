@@ -56,9 +56,9 @@ flowchart TB
 Both engines recompute when something they track changes, and both keep the
 first value of an unseeded random draw rather than drawing again. Some inputs
 are not tracked, such as a file opened through a reader cash does not wrap.
-Each path lists its own: for `@cash.cache`, the decorator guide's
-[known limitations](../decorator.md#known-limitations); for notebooks,
-[Writing cache-safe cells](../known-limitations.md).
+Each path lists its own:
+[Known limitations of `@cash.cache`](../decorator-limitations.md) for the
+decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ## Related
 

@@ -5,9 +5,9 @@
 
 cash recomputes when something it tracks has changed since the result was
 stored. This page lists what it tracks and how it checks. What it does not
-see is listed per path: for `@cash.cache`, the decorator guide's
-[known limitations](../decorator.md#known-limitations); for notebooks,
-[Writing cache-safe cells](../known-limitations.md).
+see is listed per path:
+[Known limitations of `@cash.cache`](../decorator-limitations.md) for the
+decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ## What counts as a change
 
@@ -191,7 +191,7 @@ Three rules keep random draws right when you edit a seed:
 
 - [Cache keys and lineage](cache-keys-and-lineage.md): the parts of a key that
   a change moves.
-- [`@cash.cache` known limitations](../decorator.md#known-limitations):
+- [Known limitations of `@cash.cache`](../decorator-limitations.md):
   changes the decorator does not see.
 - [Writing cache-safe cells](../known-limitations.md): changes a notebook does
   not see, with fixes.
