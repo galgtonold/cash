@@ -824,6 +824,15 @@ a.cash-cta-card:hover {
   overflow-wrap: anywhere;
 }
 
+/* ─── Table of contents ──────────────────────────────────────────────── *
+ * mkdocstrings joins a symbol's type chip and its name with a no-break
+ * space, so a long class name cannot wrap and was cut off with "...". Let
+ * it wrap onto a second line instead. */
+.md-nav--secondary .md-ellipsis {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* ─── Badge example frames ───────────────────────────────────────────── *
  * The badge examples are light cards, as a notebook shows them. In dark
  * mode the page's color-scheme is dark; a frame whose document is light
