@@ -1,10 +1,16 @@
+---
+search:
+  boost: 2
+---
+
 # Command-line interface
 
 !!! info "Applies to: both paths"
     The `cash` command: see your configuration, inspect a cache and clear it. `cash autoload` is for notebook users only.
 
-`cash` and `python -m cash` are the same command. With no subcommand it prints
-help and exits 0.
+The `cash` command shows the settings in effect, lists what a cache holds,
+and clears it. `cash` and `python -m cash` are the same command. With no
+subcommand it prints help and exits 0.
 
 <!-- claim: cash/__main__.py:main @63d84ebf broad="the quick-reference table is a claim about the whole subcommand set" -->
 | Command | What it does | Deletes? |
@@ -25,7 +31,10 @@ Every subcommand takes `-h` / `--help`. There is no `--version` flag; use
 
 ```bash
 cash version
-# cash <!-- docnum:version -->0.11.0<!-- /docnum -->
+```
+
+```text title="Output"
+cash <!-- docnum:version -->0.11.0<!-- /docnum -->
 ```
 
 ## `cash info`
@@ -41,20 +50,23 @@ where each setting came from.
 
 ```bash
 cash info
-# Cash v<!-- docnum:version -->0.11.0<!-- /docnum -->
-#   Backend:    tiered
-#   Cache dir:  /home/me/project/.cash
-#   Holds:      412 entries, 1.3 GiB
-#               `cash inspect` lists them, with what each one saves
-#   Max size:   auto -- disk 16.4 GiB, RAM 4.0 GiB
-#   Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
-#   Config files:
-#     user         /home/me/.config/cash/config.toml  (not found)
-#     project      /home/me/project/pyproject.toml  (read)
-#   Settings (where each came from):
-#     compress = True                          /home/me/project/pyproject.toml
-#     debug = True                             CASH_DEBUG
-#   Source:     project:/home/me/project/pyproject.toml,env
+```
+
+```text title="Output"
+Cash v<!-- docnum:version -->0.11.0<!-- /docnum -->
+  Backend:    tiered
+  Cache dir:  /home/me/project/.cash
+  Holds:      412 entries, 1.3 GiB
+              `cash inspect` lists them, with what each one saves
+  Max size:   auto -- disk 16.4 GiB, RAM 4.0 GiB
+  Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
+  Config files:
+    user         /home/me/.config/cash/config.toml  (not found)
+    project      /home/me/project/pyproject.toml  (read)
+  Settings (where each came from):
+    compress = True                          /home/me/project/pyproject.toml
+    debug = True                             CASH_DEBUG
+  Source:     project:/home/me/project/pyproject.toml,env
 ```
 
 <!-- claim: cash/__main__.py:local_cache_dir @909369d0 -->
@@ -95,7 +107,7 @@ cash inspect ./notebooks/analysis.ipynb
 cash inspect --function model.heavy_field
 ```
 
-```
+```text title="Output"
 Cache directory: .cash
   Total size: 13.7 MiB    Entries: 3    Functions: 2
 
@@ -110,7 +122,7 @@ whether you ran it or imported it. Notebook statements group under
 
 With `--function`, each row shows what the entry is worth:
 
-```
+```text title="Output"
 ENTRY             SAVES       SIZE   USES   LAST USED   PRODUCES
 aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
       reads: /srv/etl/data/prices.csv
@@ -164,18 +176,24 @@ SQLite cache (one `cache.db` file) they are refused with exit code 2; clear it
 whole with `cash clear <dir>`.
 
 ```bash
-cash clear --expired                   # free what will never be served again
-cash clear --entry a1b2c3              # drop one entry
-cash clear --function ray.build_grid   # drop one function, keep the rest
-cash clear --function notebook         # drop the notebook statements only
-cash clear --all                       # delete the cache in use
-cash clear ./notebooks/analysis.ipynb  # delete that notebook's cache
+# free what will never be served again
+cash clear --expired
+# drop one entry
+cash clear --entry a1b2c3
+# drop one function, keep the rest
+cash clear --function ray.build_grid
+# drop the notebook statements only
+cash clear --function notebook
+# delete the cache in use
+cash clear --all
+# delete that notebook's cache
+cash clear ./notebooks/analysis.ipynb
 ```
 
 <!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @853438c9 -->
 **Safety rules.**
 
-- Cash deletes a directory only if it holds cash's `CACHE_VERSION` stamp or
+- cash deletes a directory only if it holds cash's `CACHE_VERSION` stamp or
   `.entry` files, and nothing cash did not write. Otherwise it refuses and
   names what it found. `--force` overrides this.
 - It never deletes the current directory or one that contains it, even with
@@ -218,8 +236,10 @@ cash.
   remove a file that lacks cash's marker comment.
 
 ```bash
-cash autoload on                       # import cash and run %cash_on in every kernel
-cash autoload on --mode available      # only import cash
+# import cash and run %cash_on in every kernel
+cash autoload on
+# only import cash
+cash autoload on --mode available
 cash autoload off
 ```
 
@@ -235,3 +255,12 @@ existing hook with a different body.
 | `0` | Success, including "nothing to clear" and "autoload not installed". |
 | `1` | A refusal or a missing target: `cash inspect` with no cache or an unknown or ambiguous `--function`; `cash clear` with a missing path, an unknown `--function` or `--entry`, a directory that is not a cash cache (without `--force`), the current directory, or a file it cannot delete; `cash autoload` refusing to overwrite or remove a file (without `--force`). |
 | `2` | A bad `cash clear` invocation: none of `path`, `--all`, `--function`, `--entry`, `--expired` or `--tool`; `--all` or `--tool` together with a path; `--expired` with `--function` or `--entry`; `--function`, `--entry` or `--expired` on a SQLite cache. Nothing is touched. |
+
+## Related
+
+- [Configuration](getting-started/configuration.md): the settings
+  `cash info` reports, and the layers they come from.
+- [Where your cache lives](how-it-works/storage.md): where the directory
+  `cash inspect` and `cash clear` act on is, and how it is capped.
+- [Sharing a cache](tutorials/feature-guides/sharing-caches.md): pointing
+  several machines at one cache, and what travels between them.
