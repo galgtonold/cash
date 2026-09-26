@@ -236,10 +236,14 @@ nav:
       - Inspection tools: api/inspection.md
     - Glossary: glossary.md
   - Project:
+    - Changelog: changelog.md
     - Versioning: versioning.md
     - Benchmarks: benchmarks.md
     - How cash is tested: how-it-works/testing.md
+    - Report a bug: report-a-bug.md
+    - Security policy: security.md
     - Contributing: contributing.md
+    - License: license.md
 
 extra:
   social:

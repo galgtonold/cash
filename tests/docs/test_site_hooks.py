@@ -98,6 +98,30 @@ def test_output_blocks_lose_the_copy_button():
     assert '<div class="language-python highlight"><span class="filename">demo.py</span>' in out
 
 
+# --- Repository files -----------------------------------------------------------
+
+
+def test_an_included_file_links_to_pages_and_to_github(tmp_path):
+    (tmp_path / "NOTES.md").write_text(
+        "# Notes\n\nSee [grid](docs/tutorials/grid.md#axis), [c](CONTRIBUTING.md), "
+        "[web](https://example.com) and [here](#notes).\n",
+        encoding="utf-8",
+    )
+    out = hooks.include_repo_files("<!-- include: NOTES.md -->\n\n## Related\n", "project/notes.md", root=tmp_path)
+    assert out == (
+        "# Notes\n\nSee [grid](../tutorials/grid.md#axis), "
+        "[c](https://github.com/galgtonold/cash/blob/main/CONTRIBUTING.md), "
+        "[web](https://example.com) and [here](#notes).\n\n## Related\n"
+    )
+
+
+@pytest.mark.parametrize("page", ["changelog.md", "security.md", "license.md"])
+def test_the_project_pages_include_their_repository_file(page: str):
+    text = (REPO_ROOT / "docs" / page).read_text(encoding="utf-8")
+    assert "<!-- include:" in text
+    assert "<!-- include:" not in hooks.include_repo_files(text, page)
+
+
 # --- Nav cross-links --------------------------------------------------------------
 
 

@@ -59,11 +59,24 @@ Nav cross-links
 mkdocs lists a page once. ``on_nav`` adds the entries in ``_NAV_CROSS_LINKS``:
 a link in one nav section to a page that lives in another, such as "Why did it
 miss?" in the Decorator tab opening the inspecting page of How it works.
+
+Repository files
+----------------
+``<!-- include: CHANGELOG.md -->`` on a line of its own is replaced with that
+file from the repository root, so the Changelog, Security policy and License
+pages show the files GitHub shows, with no second copy to keep in sync. A
+link in the file to ``docs/<page>.md`` becomes a link to that page; a link to
+another repository file goes to it on GitHub.
 """
 
 from __future__ import annotations
 
+import posixpath
 import re
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent
+_REPO_BLOB_URL = "https://github.com/galgtonold/cash/blob/main/"
 
 # Match the root-absolute badge src and split off the leading slash so we can
 # splice a page-relative prefix in front of the "_badges/..." remainder.
@@ -91,6 +104,9 @@ _OUTPUT_BLOCK = re.compile(r'<div class="(?P<cls>[^"]*\bhighlight\b[^"]*)"><span
 _NAV_CROSS_LINKS = [
     ("Decorator", "Start", "Why did it miss?", "how-it-works/inspecting.md"),
 ]
+
+_INCLUDE = re.compile(r"^<!--\s*include:\s*(?P<path>[\w./-]+)\s*-->[ \t]*$", re.MULTILINE)
+_MD_LINK_TARGET = re.compile(r"\]\((?P<target>(?![a-z][a-z0-9+.-]*:|#|/)[^)\s]+)\)")
 
 
 def strip_docnum_markers(markdown: str) -> str:
@@ -151,6 +167,30 @@ def rewrite_badge_paths(html: str, page_url: str) -> str:
     return _ABS_BADGE_SRC.sub(lambda m: m.group(1) + prefix + m.group(2) + m.group(3), html)
 
 
+def include_repo_files(markdown: str, page_src_uri: str, root: Path = _REPO_ROOT) -> str:
+    """Replace ``<!-- include: PATH -->`` lines with the repository file PATH.
+
+    ``page_src_uri`` is the page's path under ``docs/`` (``changelog.md``); a
+    link in the included file is rewritten to work from there.
+    """
+    page_dir = posixpath.dirname(page_src_uri)
+
+    def relink(m: re.Match[str]) -> str:
+        target = m.group("target")
+        path, _, anchor = target.partition("#")
+        if path.startswith("docs/"):
+            new = posixpath.relpath(path[len("docs/") :], page_dir or ".")
+        else:
+            new = _REPO_BLOB_URL + posixpath.normpath(path)
+        return "](" + new + ("#" + anchor if anchor else "") + ")"
+
+    def include(m: re.Match[str]) -> str:
+        text = (root / m.group("path")).read_text(encoding="utf-8")
+        return _MD_LINK_TARGET.sub(relink, text).rstrip("\n")
+
+    return _INCLUDE.sub(include, markdown)
+
+
 def _top_section(page) -> str | None:
     """Title of the nav tab the page sits in (``"Project"``), if any."""
     ancestors = getattr(page, "ancestors", None) or []
@@ -185,6 +225,7 @@ def on_nav(nav, *, config, files, **kwargs):
 
 def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:
     """mkdocs hook: rewrite the Markdown source before it is rendered."""
+    markdown = include_repo_files(markdown, page.file.src_uri)
     markdown = strip_docnum_markers(markdown)
     markdown = strip_test_injects(markdown)
     return applies_to_chip(

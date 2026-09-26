@@ -1,17 +1,16 @@
-# Security Policy
+# Security policy
 
 ## Supported versions
 
-Cash is in its `0.1.x` beta series. Security fixes are made against the latest
-released `0.1.x` version. Because the cache format may change between minor
-versions during `0.x`, always upgrade to the newest release before reporting an
-issue.
+cash is in its `0.x` beta series. Security fixes go into the latest release
+only. A minor release can change the cache format
+([versioning](https://cash-lib.readthedocs.io/en/latest/versioning/)), so
+upgrade to the newest release before you report an issue.
 
 | Version | Supported |
 |---------|-----------|
-| `0.1.x` (latest) | ✅ |
-| older `0.1.x`    | ⚠️ upgrade first |
-| `0.0.x` / TestPyPI | ❌ |
+| The latest release | Yes |
+| Older releases | Upgrade first |
 
 ## Reporting a vulnerability
 

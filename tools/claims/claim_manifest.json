@@ -51,6 +51,10 @@
     "anchors": 0,
     "audited": "2026-07-27"
   },
+  "docs/changelog.md": {
+    "anchors": 0,
+    "audited": "2026-09-26"
+  },
   "docs/cli.md": {
     "anchors": 12,
     "audited": "2026-07-27"
@@ -140,6 +144,10 @@
     "anchors": 23,
     "audited": "2026-07-27"
   },
+  "docs/license.md": {
+    "anchors": 0,
+    "audited": "2026-09-26"
+  },
   "docs/magics.md": {
     "anchors": 10,
     "audited": "2026-07-27"
@@ -151,6 +159,14 @@
   "docs/notebook_caching_api.md": {
     "anchors": 5,
     "audited": "2026-07-27"
+  },
+  "docs/report-a-bug.md": {
+    "anchors": 2,
+    "audited": "2026-09-26"
+  },
+  "docs/security.md": {
+    "anchors": 0,
+    "audited": "2026-09-26"
   },
   "docs/tutorials/feature-guides/async-caching.md": {
     "anchors": 3,
