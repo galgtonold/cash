@@ -127,15 +127,14 @@ CASES: dict[str, tuple[str, str]] = {
     ),
     "KEY-OPAQUE-CALLABLE": (
         """
-        import re
-
-        P = re.compile("a").match
+        class Magnitude:
+            __call__ = staticmethod(abs)
 
         @c.cache{DEC}
-        def f(x, h=P):
-            return bool(h(x)){W}
+        def f(x, h=Magnitude()):
+            return h(x){W}
         """,
-        "f('a')",
+        "f(-1)",
     ),
     "KEY-UNHASHABLE-GLOBAL": (
         """

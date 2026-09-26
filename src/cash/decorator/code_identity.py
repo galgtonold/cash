@@ -382,6 +382,11 @@ FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
 }
 
 
+#: ``__spec__.origin`` of a module compiled into the interpreter or frozen
+#: into it: never the user's code, whatever its ``__name__`` says.
+_INTERPRETER_ORIGINS = frozenset({"built-in", "frozen"})
+
+
 def is_user_code_module(mod: Any) -> bool:
     """Like :meth:`is_user_module`, but a module with no ``__file__``
     counts as user code rather than being disqualified.
@@ -390,12 +395,72 @@ def is_user_code_module(mod: Any) -> bool:
     edit"). That is right for its callers and wrong here: a class defined
     in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
     is precisely the thing the user edits between runs.
+
+    A built-in module is judged by its spec, not its name: ``_io`` calls
+    itself ``io``, which is not a built-in module name, so every file and
+    stream type counted as user code.
     """
     name = getattr(mod, "__name__", "") or ""
     path = getattr(mod, "__file__", None)
     if path is None:
-        return name not in FILELESS_NON_USER
+        origin = getattr(getattr(mod, "__spec__", None), "origin", None)
+        return origin not in _INTERPRETER_ORIGINS and name not in FILELESS_NON_USER
     return is_user_module(mod)
+
+
+_HEAPTYPE = 1 << 9
+_IMMUTABLETYPE = 1 << 8
+
+#: Callables implemented in C: builtin functions and bound methods, and the
+#: slot and method descriptors of C types.
+_C_CALLABLES = (
+    types.BuiltinFunctionType,
+    types.MethodWrapperType,
+    types.WrapperDescriptorType,
+    types.MethodDescriptorType,
+    types.ClassMethodDescriptorType,
+)
+
+
+def _is_c_type(cls: type) -> bool:
+    """Was *cls* made by C code rather than a ``class`` statement? A static
+    type, or a heap type an extension created immutable; Python cannot make
+    either."""
+    flags = getattr(cls, "__flags__", 0)
+    return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE)
+
+
+def _c_code_verdict(obj: Any) -> bool | None:
+    """`is_user_code_object` for C code whose ``__module__`` cannot be
+    followed; ``None`` when *obj* is not C code.
+
+    A C type or callable is never the exec'd or notebook code that the
+    fallback is for. ``sys.stdout.write`` has no ``__module__`` and
+    ``_thread.lock`` is not reachable as ``_thread.lock``, and both counted as
+    user code whose code could not be hashed: a logger, a queue or a stream
+    reached through an argument warned about ``lock.acquire``. A bound method
+    is judged by the class that defines it, so one of an extension built in
+    the project still counts and ``write`` of your ``io.StringIO`` subclass
+    does not.
+    """
+    if isinstance(obj, type):
+        return False if _is_c_type(obj) else None
+    if not isinstance(obj, _C_CALLABLES):
+        return None
+    owner = getattr(obj, "__self__", None)
+    if owner is None:
+        owner = getattr(obj, "__objclass__", None)
+    if isinstance(owner, types.ModuleType):
+        return is_user_code_module(owner)
+    if owner is None:
+        return False
+    cls = owner if isinstance(owner, type) else type(owner)
+    name = getattr(obj, "__name__", None)
+    try:
+        cls = next((klass for klass in cls.__mro__ if name in vars(klass)), cls)
+    except Exception:  # noqa: BLE001 - an odd class must not break the verdict
+        pass
+    return is_user_code_object(cls)
 
 
 def is_user_code_object(obj: Any) -> bool:
@@ -414,14 +479,13 @@ def is_user_code_object(obj: Any) -> bool:
     claims before trusting that module's verdict; otherwise this is the
     exec()/notebook case the predicate exists to catch, so it counts as
     user code (mirroring ``is_user_code_module``'s fileless-module
-    handling).
+    handling) -- unless it is C code (`_c_code_verdict`).
     """
     mod_name = getattr(obj, "__module__", None)
     mod = sys.modules.get(mod_name) if mod_name else None
-    if mod is None:
-        return True
-    if not qualname_resolves_in(mod, obj):
-        return True
+    if mod is None or not qualname_resolves_in(mod, obj):
+        verdict = _c_code_verdict(obj)
+        return True if verdict is None else verdict
     return is_user_code_module(mod)
 
 

@@ -964,12 +964,13 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @c7843ce8, cash/decorator/code_identity.py:is_user_module @8bcf4264 -->
+<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @c7843ce8, cash/decorator/code_identity.py:is_user_module @8bcf4264, cash/decorator/code_identity.py:is_user_code_object @9befecf9 -->
 **What happened.** A function, class or object from your own code reached a
 cached call (as an argument or a default), and cash could not hash its code.
-Typical cases: `numpy.frompyfunc(my_fn, 1, 1)`, or a bound method of a
-compiled object such as `re.compile(p).match`. Library callables do not
-trigger it.
+The typical case is a class of yours whose behaviour comes from a compiled
+function, such as `__call__ = staticmethod(abs)`. Library callables do not
+trigger it, and neither do compiled library objects and their methods
+(`re.compile(p).match`, a lock, a stream), wherever they are reached.
 
 **Why it matters.** Editing that code will not invalidate the entry.
 
@@ -978,8 +979,8 @@ trigger it.
 `cash.opaque(TheType)` (or `@cash.opaque` on a class you own), which silences
 this code for every object of that type.
 
-**When it is safe to ignore.** For a bound method of a compiled library object
-like `re.compile(p).match`: it cannot change under you.
+**When it is safe to ignore.** When the compiled code it runs cannot change
+under you, as with a builtin such as `abs`.
 
 **Silencing it.** Neither `# @cash:assume-safe` nor `assume_safe=True`
 silences this code; `cash.opaque(TheType)` does. See [Silencing one
