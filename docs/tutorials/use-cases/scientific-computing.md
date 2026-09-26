@@ -70,7 +70,7 @@ cheapest to recompute per byte.
 - **See it.** `cash info` in a terminal shows the folder, what it holds and
   the cap:
 
-    ```text { title="Output" }
+    ```text title="Output"
       Cache dir:  /home/me/study/.cash
       Holds:      120 entries, 3.2 GiB
       Max size:   auto -- disk 26.0 GiB, RAM 3.1 GiB
@@ -79,7 +79,7 @@ cheapest to recompute per byte.
 - **Pin it.** Set `max_cache_size`, for the whole project in
   `pyproject.toml`:
 
-    ```toml { title="pyproject.toml" }
+    ```toml title="pyproject.toml"
     [tool.cash]
     max_cache_size = "50GB"
     ```

@@ -1,3 +1,8 @@
+---
+search:
+  boost: 2
+---
+
 # The `@cash.cache` guide
 
 !!! info "Applies to: decorator"
@@ -21,7 +26,7 @@ import cash
 def slow_square(n):
     return sum(i * i for i in range(n))
 
-slow_square(1_000_000)   # first call: runs the body and stores the result
+slow_square(1_000_000)   # first call: runs the body, stores the result
 slow_square(1_000_000)   # cache hit: returns the stored result
 ```
 
@@ -70,15 +75,19 @@ RAM for this process, and
 ### Cache folder
 
 <!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @edf1f957 -->
-The cache folder (the cache directory) is `.cash` at your project root.
-cash starts at the running script and walks up to the first directory that
-holds a `setup.py`, a `setup.cfg`, a `.git`, or a `pyproject.toml` that
-declares a project (a `[project]`, `[build-system]`, `[tool.poetry]` or
-`[tool.cash]` table). So
+The cache folder (the cache directory) is `.cash` at your project root. So
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
-started it, from any directory. A script with no project above it caches next
-to itself. An installed tool run from outside any project caches per user, in
-the platform's cache folder. [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is)
+started it, from any directory. cash finds the folder from the running script:
+
+- **Your project root** is the first directory above the script that holds a
+  `setup.py`, a `setup.cfg`, a `.git`, or a `pyproject.toml` that declares a
+  project (a `[project]`, `[build-system]`, `[tool.poetry]` or `[tool.cash]`
+  table).
+- **A script with no project above it** caches next to itself.
+- **An installed tool run from outside any project** caches per user, in the
+  platform's cache folder.
+
+[Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is)
 has the full rule.
 
 To choose the folder yourself, highest priority first:
@@ -97,19 +106,23 @@ absolute path leaves no doubt about where entries go.
 <!-- claim: cash/config.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
 The disk cap is automatic. By default the disk tier may use a quarter of
 the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
-memory. `cash info` prints
-both numbers (`Max size: auto -- disk 8.0 GiB, RAM 3.1 GiB`). When the disk
-tier is full, cash evicts the entries worth least per byte first: cheap to
-recompute, large, and rarely read. Set `max_cache_size` (or
-`CASH_MAX_CACHE_SIZE`) to a number of bytes or a size such as `"20GB"` to pin
-the disk cap.
+memory. `cash info` prints both numbers:
+
+```text title="Output"
+Max size:   auto -- disk 8.0 GiB, RAM 3.1 GiB
+```
+
+When the disk tier is full, cash evicts the entries worth least per byte
+first: cheap to recompute, large, and rarely read. To pin the disk cap, set
+`max_cache_size` (or `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size
+such as `"20GB"`.
 
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/backends/file_eviction.py:FileEvictor.report_eviction @aa4b93be -->
 With `CASH_VERBOSE=1` or `CASH_DEBUG=1`, the first result a run writes to disk
 logs the folder and the cap, and the first time the cap makes cash remove
 entries it logs how much it removed:
 
-```text
+```text title="Output"
 cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
 ```
 
@@ -127,7 +140,9 @@ Pick the narrowest tool that does the job:
 | Everything | `cash clear --all` |
 
 A clear reaches processes that are still running, whichever of these made it:
-within about a second they stop serving what was cleared. An entry file that
+within about a second they stop serving what was cleared.
+
+An entry file that
 another process holds open (on Windows) cannot be removed; `cache_clear()`
 then warns ([`CACHE-CLEAR-INCOMPLETE`](warnings.md#cache-clear-incomplete)),
 and the CLI prints the entries it could not remove. Plain `cash clear` with no
@@ -152,7 +167,7 @@ missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
 CASH_SUMMARY=1 python model.py
 ```
 
-```text
+```text title="Output"
 cash: 4 of 7 calls restored, 0.3s saved
   cache: /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space)
   model.load_prices  1 hit,    1 miss      0.3s saved
@@ -172,7 +187,7 @@ not when the process is killed. `summary=True` in code or config does the same.
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
-```text
+```text title="Output"
 cash.calls: MISS model.build_grid  [4cc0d96b86b7]  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s)
 cash.calls: HIT  model.build_grid  [4cc0d96b86b7]  (saved 0.05s)
 cash.calls: MISS model.build_grid  [3bb6d830f0b9]  new arguments: called with arguments not seen on the last call  (ran 0.05s)
@@ -188,7 +203,7 @@ entries the size cap evicted (`evicted to make room`).
 
 <!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a -->
 If your program configures `logging`, these lines go to your handlers in your
-format instead of stderr. Cash's warnings are Python warnings, not log records;
+format instead of stderr. cash's warnings are Python warnings, not log records;
 `logging.captureWarnings(True)` routes them to your handlers too.
 
 **One function, from code.** `f.explain(*args)` tells you whether the next call
@@ -279,13 +294,16 @@ All parameters are keyword-only and optional:
 | `chunk_max_items=`, `chunk_max_bytes=` | 1,000,000 items, 1 GB | Chunk size for iterator results |
 | Leave an argument out of the key | | Not a parameter: every argument is in the key. See [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
 
-`strict=True` with `assume_safe=True` raises `ValueError`, and so does a
-negative, NaN or infinite `ttl=`; a `ttl=` that is not a number (a `"300"`
-read from an environment variable) raises `TypeError`, when the function is
-decorated. Changing a parameter
-keeps the entries already stored; adding, removing or changing a declared
-dependency recomputes. Locking is not a decorator parameter: it is
-`Cash(use_locking=True)`, see [Threads and processes](tutorials/feature-guides/thread-safety.md).
+Checks and rules that hold for all of them:
+
+- `strict=True` with `assume_safe=True` raises `ValueError`, and so does a
+  negative, NaN or infinite `ttl=`. A `ttl=` that is not a number (a `"300"`
+  read from an environment variable) raises `TypeError`. Both happen when
+  the function is decorated.
+- Changing a parameter keeps the entries already stored; adding, removing or
+  changing a declared dependency recomputes.
+- Locking is not a decorator parameter: it is `Cash(use_locking=True)`, see
+  [Threads and processes](tutorials/feature-guides/thread-safety.md).
 
 ### `ttl=`
 
@@ -296,15 +314,18 @@ def rates():
 ```
 
 <!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @672c5d75, cash/core.py:Cash.cleanup @b561dc3e -->
-After the ttl, the next call recomputes and replaces the entry. An entry keeps
-the ttl it was written with, and the decorator's current ttl applies too: the
-shorter one wins. So lengthening `ttl=60` to `ttl=3600` does not rescue entries
-written under 60 seconds. To give every function a lifetime from
-configuration, set `default_ttl` on the disk tier; see
-[Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).
-An expired entry stays on disk until it is called again or you run
-`cash clear --expired`. `ttl=0` recomputes on every call. An entry whose
-stored ttl cannot be read as a number counts as expired.
+After the ttl, the next call recomputes and replaces the entry.
+
+- **The shorter ttl wins.** An entry keeps the ttl it was written with, and
+  the decorator's current ttl applies too. So lengthening `ttl=60` to
+  `ttl=3600` does not rescue entries written under 60 seconds.
+- **A default for every function** comes from configuration: set
+  `default_ttl` on the disk tier; see
+  [Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).
+- **Expired entries stay on disk** until they are called again or you run
+  `cash clear --expired`.
+- `ttl=0` recomputes on every call. An entry whose stored ttl cannot be read
+  as a number counts as expired.
 
 ### `file_depends_on=` and `depends_on=`
 
@@ -352,7 +373,9 @@ def lookup(key):
 <!-- claim: cash/decorator/store.py:ResultStore.refusal @50f5a969 -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
-returned. Clear the function after adding or tightening one. If the predicate
+returned. Clear the function after adding or tightening one.
+
+If the predicate
 raises, the result is returned and not stored, with a warning. For an iterator
 result larger than one chunk the predicate cannot run
 ([`CACHE-IF-BYPASSED`](warnings.md#cache-if-bypassed)).
@@ -363,9 +386,13 @@ result larger than one chunk the predicate cannot run
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
-from an argument, `rng = np.random.default_rng(seed)`. Pass
+from an argument, `rng = np.random.default_rng(seed)`.
+
+Pass
 `allow_random=True` only when a frozen draw is what you want. It silences the
-warning and still caches. Don't call the global `np.random.seed()` inside a
+warning and still caches.
+
+Don't call the global `np.random.seed()` inside a
 cached function: a hit skips the reseed, so later draws differ between a hit and
 a miss.
 
@@ -379,10 +406,12 @@ cached function and nothing changes it afterwards, say so on the producer:
 ```python
 @cash.cache(frozen=True)
 def train(data):
-    return fit_model(data)          # nothing downstream modifies the model
+    # nothing downstream modifies the model
+    return fit_model(data)
 
 @cash.cache
-def score(model, batch):            # keys `model` by the call that made it
+def score(model, batch):
+    # keys `model` by the call that made it
     return model.predict(batch)
 ```
 
@@ -401,7 +430,7 @@ the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
-| The body... | Cash |
+| The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
@@ -412,16 +441,19 @@ would skip or get wrong:
 Logging calls are not side effects for this purpose.
 
 <!-- claim: cash/effect_observer.py:EffectObserver @45e537a1 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @ba9eb2a8 -->
-Cash also **watches the first call**. Library code is not read, so a
-`session.post` or an SDK request is invisible to the analysis above. While a
-miss runs, cash records file writes, outbound connections and subprocesses, and
+cash also **watches the first call**. Library code is not read, so a
+`session.post` or an SDK request is invisible to the analysis above.
+
+While a miss runs, cash records file writes, outbound connections and subprocesses, and
 warns once about any it had not already reported
 ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). A call to an
 LLM or HTTP SDK shows up this way, as a network read
 ([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and
-under `strict=True` it raises unless a `ttl=` is set. Two observations stop the result from being
-stored, because a hit could not reproduce them: the call changed an argument
-in place, or it called a `unittest.mock` object.
+under `strict=True` it raises unless a `ttl=` is set.
+
+Two observations stop the result from being stored, because a hit could not
+reproduce them: the call changed an argument in place, or it called a
+`unittest.mock` object.
 
 **Accepting an effect.** Once you have checked that skipping the effect on a hit
 is fine, put a comment on the line the warning names:
@@ -429,12 +461,14 @@ is fine, put a comment on the line the warning names:
 ```python
 @cash.cache
 def fetch_user(uid):
-    return requests.get(f"https://api.example.com/users/{uid}").json()   # @cash:assume-safe
+    url = f"https://api.example.com/users/{uid}"
+    return requests.get(url).json()   # @cash:assume-safe
 ```
 
 <!-- claim: cash/analysis/annotations.py:audited_lines @da3b0e65 -->
 The comment covers that statement only (put it on the opening line of a call
 that spans lines, or on the line above), so code added later is still checked.
+
 On the `def` line it covers findings about the whole body. In a helper it
 covers every caller of that helper. `assume_safe=True` silences the whole
 function instead, including code added after your review, so prefer the
@@ -459,9 +493,14 @@ def double(x):
     return x * 2
 
 double(1); double(1); double(2)
-double.cache_info()
-# {'hits': 1, 'misses': 2, 'hit_rate': 0.333..., 'total_time_saved': 1e-05,
-#  'miss_reasons': {'no entry yet': 1, 'new arguments': 1}, 'warnings': []}
+print(double.cache_info())
+```
+
+```text title="Output"
+{'hits': 1, 'misses': 2, 'hit_rate': 0.333...,
+ 'total_time_saved': 1e-05,
+ 'miss_reasons': {'no entry yet': 1, 'new arguments': 1},
+ 'warnings': []}
 ```
 
 `warnings` holds the last 20 cash warnings for the function, even when a
@@ -473,18 +512,21 @@ zero in each process.
 does not run the function, change the counters or write anything:
 
 ```python
-double.explain(5)
-# [MISS] model.double - no_entry
-#   cache_dir: /srv/proj/.cash
-#   cache_key: model.double:8ff9a351...::abc50414...
-#   entry_id: 58872c3e0a1e
-#   why: new arguments: called with arguments not seen on the last call
+print(double.explain(5))
 double(5)
-double.explain(5)
-# [HIT] model.double - hit
-#   cache_dir: /srv/proj/.cash
-#   ...
-#   execution_time_saved: 3.5e-06
+print(double.explain(5))
+```
+
+```text title="Output"
+[MISS] model.double - no_entry
+  cache_dir: /srv/proj/.cash
+  cache_key: model.double:8ff9a351...::abc50414...
+  entry_id: 58872c3e0a1e
+  why: new arguments: called with arguments not seen on the last call
+[HIT] model.double - hit
+  cache_dir: /srv/proj/.cash
+  ...
+  execution_time_saved: 3.5e-06
 ```
 
 `reason` is one of `hit`, `no_entry`, `ttl_expired`, `file_changed`,
@@ -527,10 +569,18 @@ with its fix:
 - <a id="edits-inside-a-running-process"></a>[Edits inside a running process](decorator-limitations.md#edits-inside-a-running-process)
 - <a id="using-a-decorated-function-in-a-notebook"></a>[Using a decorated function in a notebook](decorator-limitations.md#using-a-decorated-function-in-a-notebook)
 
-## Next
+## Related
 
-- [Deploying](tutorials/feature-guides/deploying.md): services, workers, CI, shared caches, libraries.
-- [Testing your code](tutorials/feature-guides/testing-your-code.md): keep the cache from passing tests for you.
-- [File dependencies](tutorials/feature-guides/custom-file-sources.md) and [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
-- [Choosing a backend](tutorials/feature-guides/choosing-a-backend.md) and [Configuration](getting-started/configuration.md).
+- [Known limitations of `@cash.cache`](decorator-limitations.md): the cases
+  that need a change on your side.
+- [Deploying](tutorials/feature-guides/deploying.md): services, workers, CI,
+  shared caches, libraries.
+- [Testing your code](tutorials/feature-guides/testing-your-code.md): keep the
+  cache from passing tests for you.
+- [File dependencies](tutorials/feature-guides/custom-file-sources.md): which
+  file reads are tracked, and how to name the others.
+- [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md): a
+  dependency chosen by the arguments.
+- [Configuration](getting-started/configuration.md): every setting, and where
+  settings come from.
 - [The decorator path](how-it-works/decorator-path.md): how the key is built.
