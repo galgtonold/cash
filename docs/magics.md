@@ -50,7 +50,7 @@ disk cache may grow: `Caching in /work/.cash, up to 26.0 GiB (a quarter of the
 free disk space; set max_cache_size to change it).` When a cell's results
 later take the cache over that cap, that cell ends with one `[cash] The cache
 in ... reached its ... cap` line saying what was removed
-([Where your cache lives](how-it-works/storage.md#when-the-disk-fills-up)). Without a live reader for unsaved edits (see
+([Where your cache lives](how-it-works/storage.md#cache-size-limit-and-eviction)). Without a live reader for unsaved edits (see
 [Editing without saving](known-limitations.md#editing-without-saving)), it also
 prints a one-time tip to save before running. With `CASH_DISABLE=1` set, it says
 so and does nothing.

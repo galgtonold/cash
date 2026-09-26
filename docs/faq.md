@@ -41,7 +41,7 @@ link to the page that has the details.
     cap in use. To pin it, set `max_cache_size`, for example
     `CASH_MAX_CACHE_SIZE=20GB` or `max_cache_size = "20GB"` under
     `[tool.cash]` in `pyproject.toml`. See
-    [Where your cache lives](how-it-works/storage.md#when-the-disk-fills-up).
+    [Where your cache lives](how-it-works/storage.md#cache-size-limit-and-eviction).
 
 ??? question "Is my cache still valid after I upgrade cash?"
     cash clears a local cache written in an older, incompatible format by

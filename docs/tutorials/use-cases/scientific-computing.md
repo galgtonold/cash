@@ -90,7 +90,7 @@ cheapest to recompute per byte.
   `simulate`. After you edit `simulate`, its old entries stay on disk until
   the cap evicts them; this frees the space now.
 
-See [Where your cache lives](../../how-it-works/storage.md#when-the-disk-fills-up)
+See [Where your cache lives](../../how-it-works/storage.md#cache-size-limit-and-eviction)
 for how eviction picks entries.
 
 <!-- claim: cash/tracking/randomness/detect.py:RNG_CARRIER_CONSTRUCTORS @620106b9 -->
