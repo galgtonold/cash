@@ -73,9 +73,9 @@ cheapest to recompute per byte.
   the cap:
 
     ```text title="Output"
-      Cache dir:  /home/me/study/.cash
-      Holds:      120 entries, 3.2 GiB
-      Max size:   auto -- disk 26.0 GiB, RAM 3.1 GiB
+    Cache dir:  /home/me/study/.cash
+    Holds:      120 entries, 3.2 GiB
+    Max size:   auto -- disk 26.0 GiB, RAM 3.1 GiB
     ```
 
 - **Pin it.** Set `max_cache_size`, for the whole project in

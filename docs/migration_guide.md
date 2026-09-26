@@ -49,11 +49,11 @@ need not be hashable: lists, dicts, DataFrames and arrays are keyed by content.
 ```python { title="Before: joblib.Memory" }
 from joblib import Memory
 
-memory = Memory("/tmp/joblib-cache", verbose=0)
+memory = Memory("joblib-cache")
 
 @memory.cache(ignore=["verbose"])
 def transform(data, verbose=False):
-    return data.apply(complex_transform)
+    return data.apply(clean)
 ```
 
 <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
@@ -62,7 +62,7 @@ import cash
 
 @cash.cache
 def _transform(data):
-    return data.apply(complex_transform)
+    return data.apply(clean)
 
 def transform(data, verbose=False):
     return _transform(data)
@@ -71,11 +71,11 @@ def transform(data, verbose=False):
 </div>
 
 joblib hashes the decorated function's own source. cash also follows the
-helpers it calls (`complex_transform` here) and the files it reads.
+helpers it calls (`clean` here) and the files it reads.
 
 | `joblib.Memory` | cash |
 |---|---|
-| `Memory("/tmp/joblib-cache")` | `.cash` at your project root by default. Choose another with `CASH_CACHE_DIR` or `Cash(cache_dir=...)`; see [Cache folder](decorator.md#cache-folder) |
+| `Memory("joblib-cache")` | `.cash` at your project root by default. Choose another with `CASH_CACHE_DIR` or `Cash(cache_dir=...)`; see [Cache folder](decorator.md#cache-folder) |
 | `ignore=["verbose"]` | No `ignore=`: every argument is in the key. Use a wrapper, as above; see [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
 | `verbose=` | `CASH_VERBOSE=1` logs one line per call |
 | `compress=True` | The `compress` setting ([Configuration](getting-started/configuration.md#all-settings)) |
@@ -92,11 +92,11 @@ helpers it calls (`complex_transform` here) and the files it reads.
 ```python { title="Before: diskcache" }
 from diskcache import Cache
 
-cache = Cache("/tmp/diskcache")
+cache = Cache("diskcache")
 
 @cache.memoize(expire=3600)
 def transform(data):
-    return data.apply(complex_transform)
+    return data.apply(clean)
 ```
 
 <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
@@ -105,7 +105,7 @@ import cash
 
 @cash.cache(ttl=3600)
 def transform(data):
-    return data.apply(complex_transform)
+    return data.apply(clean)
 ```
 
 </div>
@@ -116,7 +116,7 @@ calls or a file it reads changes.
 
 | `diskcache` | cash |
 |---|---|
-| `Cache("/tmp/diskcache")` | `.cash` at your project root, or `CASH_CACHE_DIR`; see [Cache folder](decorator.md#cache-folder) |
+| `Cache("diskcache")` | `.cash` at your project root, or `CASH_CACHE_DIR`; see [Cache folder](decorator.md#cache-folder) |
 | `expire=3600` | `ttl=3600` (seconds, or a `datetime.timedelta`) |
 | `typed=True` | Always on |
 | `ignore=` | No `ignore=`; see [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
@@ -131,14 +131,13 @@ calls or a file it reads changes.
 
     <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { title="Before: a pickle file" }
-    import os
-    import pickle
+    import os, pickle
 
     if os.path.exists("result.pkl"):
         with open("result.pkl", "rb") as f:
             result = pickle.load(f)
     else:
-        result = expensive_computation()
+        result = compute()
         with open("result.pkl", "wb") as f:
             pickle.dump(result, f)
     ```
@@ -148,10 +147,10 @@ calls or a file it reads changes.
     import cash
 
     @cash.cache
-    def expensive_computation():
+    def compute():
         ...
 
-    result = expensive_computation()
+    result = compute()
     ```
 
     </div>
@@ -162,21 +161,20 @@ calls or a file it reads changes.
 
     <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell title="Before: a pickle file" }
-    import os
-    import pickle
+    import os, pickle
 
     if os.path.exists("result.pkl"):
         with open("result.pkl", "rb") as f:
             result = pickle.load(f)
     else:
-        result = expensive_computation()
+        result = compute()
         with open("result.pkl", "wb") as f:
             pickle.dump(result, f)
     ```
 
     <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
     ```python { .nb-cell title="After: cash, below the %cash_on cell" }
-    result = expensive_computation()
+    result = compute()
     ```
 
     </div>
@@ -192,7 +190,7 @@ changes. cash recomputes then.
 ```python { .nb-cell title="Before: %store" }
 %store -r df
 if "df" not in dir():
-    df = pd.read_csv("large_file.csv")
+    df = pd.read_csv("data.csv")
     %store df
 ```
 
@@ -206,11 +204,11 @@ import cash
 
 <!-- test:skip reason="illustrative: before/after code; the other tools and data are not set up" -->
 ```python { .nb-cell title="Any cell below it" }
-df = pd.read_csv("large_file.csv")
+df = pd.read_csv("data.csv")
 ```
 
 `%store` never invalidates anything. cash reloads `df` after a restart and
-reads the file again when `large_file.csv` changes.
+reads the file again when `data.csv` changes.
 
 ## `jupyter-cache` (notebook)
 
