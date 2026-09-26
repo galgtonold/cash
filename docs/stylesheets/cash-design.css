@@ -753,6 +753,41 @@ a.cash-cta-card:hover {
   white-space: nowrap;
 }
 
+/* ─── "Applies to" path chip ─────────────────────────────────────────── *
+ * mkdocs_hooks.py turns the "Applies to" box that opens a page into this
+ * line: a small chip naming the path, then who the page is for. */
+.md-typeset .cash-applies {
+  margin: -1.1em 0 1.4em;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--cash-ink-3);
+}
+.md-typeset .cash-path {
+  display: inline-block;
+  margin-right: 0.5em;
+  padding: 0 0.6em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.md-typeset .cash-path--decorator {
+  color: var(--cash-green);
+  background: var(--cash-green-bg);
+}
+.md-typeset .cash-path--notebook {
+  color: var(--cash-info);
+  background: var(--cash-info-bg);
+}
+.md-typeset .cash-path--both-paths {
+  color: var(--cash-ink-3);
+  background: var(--cash-bg-section);
+}
+
 /* ─── Badge example frames ───────────────────────────────────────────── *
  * The badge examples are light cards, as a notebook shows them. In dark
  * mode the page's color-scheme is dark; a frame whose document is light

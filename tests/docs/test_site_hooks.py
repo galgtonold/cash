@@ -40,3 +40,43 @@ def test_no_line_the_harness_injects_reaches_the_site():
         if _apply_inject_comments(line) != line and hooks.strip_test_injects(line + "\n")
     ]
     assert not kept, "\n".join(kept)
+
+
+# --- The "Applies to" box -----------------------------------------------------
+
+_PAGE = '# Title\n\n!!! info "Applies to: both paths"\n    Anyone who reads\n    the [guide](g.md).\n\nLead.\n'
+
+
+def test_the_box_becomes_a_chip_and_the_audience_line():
+    out = hooks.applies_to_chip(_PAGE)
+    assert out == (
+        "# Title\n\n"
+        '<p class="cash-applies" markdown>\n'
+        '<span class="cash-path cash-path--both-paths" title="Applies to: both paths">Both paths</span>\n'
+        "Anyone who reads the [guide](g.md).\n"
+        "</p>\n\n"
+        "Lead.\n"
+    )
+
+
+def test_project_pages_keep_only_the_audience_line_and_home_drops_it():
+    assert "cash-path" not in hooks.applies_to_chip(_PAGE, chip=False)
+    assert "Anyone who reads" in hooks.applies_to_chip(_PAGE, chip=False)
+    assert hooks.applies_to_chip(_PAGE, keep=False) == "# Title\n\nLead.\n"
+
+
+def test_a_box_further_down_the_page_is_left_alone():
+    source = "# Title\n\n## Section\n\n" + _PAGE.split("\n\n", 1)[1]
+    assert hooks.applies_to_chip(source) == source
+
+
+def test_every_page_box_becomes_a_chip():
+    left = []
+    for page in _pages():
+        text = page.read_text(encoding="utf-8")
+        if '!!! info "Applies to:' not in text:
+            continue
+        out = hooks.applies_to_chip(text)
+        if '!!! info "Applies to:' in out or 'class="cash-path cash-path--' not in out:
+            left.append(page.relative_to(REPO_ROOT).as_posix())
+    assert not left, left

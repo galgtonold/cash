@@ -39,6 +39,14 @@ A ``# test:inject: <code>`` line in a code block is a step the docs harness runs
 (an import, a file edit, a clock jump) that the example does not show. It is
 test plumbing, so it is dropped from the page and from what the copy button
 copies. The harness reads the source, where the line stays.
+
+The "Applies to" box
+--------------------
+Pages open with ``!!! info "Applies to: <path>"`` and one line saying who the
+page is for. The source keeps the box (the page conventions and their checks
+rely on it); the site shows it as a small path chip under the H1, with the
+audience line beside it. On the home page it is dropped, and on the Project
+pages only the audience line stays: "both paths" tells those readers nothing.
 """
 
 from __future__ import annotations
@@ -55,6 +63,14 @@ _DOCNUM_MARKER = re.compile(r"<!--\s*(?:docnum:[a-z0-9_]+|/docnum)\s*-->")
 # The same line tests/docs/_harness.py turns into code, with its line break.
 _TEST_INJECT_LINE = re.compile(r"^[ \t]*# test:inject:.*(?:\n|$)", re.MULTILINE)
 
+# The page-opening box: the title line, then its 4-space-indented body up to
+# the first line that is neither blank nor indented.
+_APPLIES_BOX = re.compile(
+    r'^!!! info "Applies to: (?P<path>[^"]+)"[ \t]*\n(?P<body>(?:(?:[ ]{4}.*)?\n)*)',
+    re.MULTILINE,
+)
+_PATH_LABELS = {"decorator": "Decorator", "notebook": "Notebook", "both paths": "Both paths"}
+
 
 def strip_docnum_markers(markdown: str) -> str:
     """Remove ``docnum`` markers, keeping the value between them."""
@@ -64,6 +80,34 @@ def strip_docnum_markers(markdown: str) -> str:
 def strip_test_injects(markdown: str) -> str:
     """Drop every ``# test:inject:`` line; the docs harness reads the source."""
     return _TEST_INJECT_LINE.sub("", markdown)
+
+
+def applies_to_chip(markdown: str, *, chip: bool = True, keep: bool = True) -> str:
+    """Turn the first "Applies to" box before any H2 into a chip line.
+
+    ``chip=False`` keeps only the audience line; ``keep=False`` drops both.
+    """
+    m = _APPLIES_BOX.search(markdown)
+    if not m or re.search(r"^## ", markdown[: m.start()], re.MULTILINE):
+        return markdown
+    body = " ".join(line.strip() for line in m.group("body").splitlines() if line.strip())
+    if not keep:
+        return markdown[: m.start()] + markdown[m.end() :]
+    path = m.group("path").strip()
+    parts = []
+    if chip:
+        slug = re.sub(r"[^a-z]+", "-", path.lower()).strip("-")
+        label = _PATH_LABELS.get(path.lower(), path[:1].upper() + path[1:])
+        parts.append(f'<span class="cash-path cash-path--{slug}" title="Applies to: {path}">{label}</span>')
+    if body:
+        parts.append(body)
+    return (
+        markdown[: m.start()]
+        + '<p class="cash-applies" markdown>\n'
+        + "\n".join(parts)
+        + "\n</p>\n\n"
+        + markdown[m.end() :]
+    )
 
 
 def rewrite_badge_paths(html: str, page_url: str) -> str:
@@ -79,10 +123,23 @@ def rewrite_badge_paths(html: str, page_url: str) -> str:
     return _ABS_BADGE_SRC.sub(lambda m: m.group(1) + prefix + m.group(2) + m.group(3), html)
 
 
+def _top_section(page) -> str | None:
+    """Title of the nav tab the page sits in (``"Project"``), if any."""
+    ancestors = getattr(page, "ancestors", None) or []
+    return ancestors[-1].title if ancestors else None
+
+
 def on_page_markdown(markdown: str, *, page, config, files, **kwargs) -> str:
     """mkdocs hook: rewrite the Markdown source before it is rendered."""
     markdown = strip_docnum_markers(markdown)
-    return strip_test_injects(markdown)
+    markdown = strip_test_injects(markdown)
+    return applies_to_chip(
+        markdown,
+        chip=_top_section(page) != "Project",
+        # Not page.is_homepage: that is False for a home page nested in a nav
+        # section, as ours is under "Home".
+        keep=page.file.src_uri != "index.md",
+    )
 
 
 def on_post_page(output: str, *, page, config, **kwargs) -> str:
