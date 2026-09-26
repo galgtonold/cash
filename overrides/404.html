@@ -1,0 +1,14 @@
+{#-
+  The page Read the Docs shows for any URL that does not exist. It is served
+  at that URL, so its links are absolute (site_url), not relative.
+-#}
+{% extends "main.html" %}
+
+{% block content %}
+  <h1>Page not found</h1>
+  <p>
+    There is no page at this address. It may have moved when the docs were
+    reorganised. Start from the <a href="{{ config.site_url }}">home page</a>,
+    or search for what you were looking for.
+  </p>
+{% endblock %}
