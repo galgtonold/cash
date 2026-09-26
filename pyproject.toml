@@ -157,7 +157,11 @@ dev = [
     "pyinstrument>=4.6,<6",
     # An in-process S3 emulator for the object-storage docs examples and s3fs
     # tests. Those tests importorskip them.
-    "s3fs",
+    # The floor keeps pip from resolving s3fs 0.4: the newest boto3 (via moto)
+    # is often ahead of what aiobotocore allows, and rather than an older
+    # boto3 pip backtracked to the last s3fs without aiobotocore, which is
+    # sync-only and makes fsspec warn on import.
+    "s3fs>=2024.1",
     "moto[server]>=5.0",
 ]
 
