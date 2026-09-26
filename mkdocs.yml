@@ -1,4 +1,4 @@
-site_name: Cash Documentation
+site_name: cash docs
 # Read the Docs sets READTHEDOCS_CANONICAL_URL to the version's own root
 # (https://cash-lib.readthedocs.io/en/latest/). The canonical tags, the
 # sitemap and the 404 page's asset links are all built from site_url, so it
@@ -11,6 +11,8 @@ repo_name: cash
 
 theme:
   name: material
+  # overrides/main.html: the browser tab title comes from the page's H1.
+  custom_dir: overrides
   # Light and dark follow the reader's system setting until they pick one
   # with the toggle in the header. cash-design.css holds the colours of both.
   palette:

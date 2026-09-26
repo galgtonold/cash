@@ -1,0 +1,22 @@
+{#-
+  Theme overrides for the cash docs (theme.custom_dir in mkdocs.yml).
+
+  htmltitle: the browser tab and bookmark title is the page's H1, not its
+  nav label. Nav labels are short and repeat across tabs ("Quick start" in
+  both the Decorator and the Notebook tab), so two tabs read the same; the
+  H1s differ. A page's front-matter `title:` still wins.
+-#}
+{% extends "base.html" %}
+
+{% block htmltitle %}
+  {% if page.meta and page.meta.title %}
+    <title>{{ page.meta.title }} - {{ config.site_name }}</title>
+  {% elif page.toc and page.toc.items and page.toc.items[0].level == 1 %}
+    <title>{{ page.toc.items[0].title | striptags }} - {{ config.site_name }}</title>
+  {% elif page.title and not page.is_homepage %}
+    <title>{{ page.title | striptags }} - {{ config.site_name }}</title>
+  {% else %}
+    <title>{{ config.site_name }}</title>
+  {% endif %}
+{% endblock %}
+
