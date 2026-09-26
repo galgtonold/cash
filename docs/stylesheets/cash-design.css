@@ -693,6 +693,24 @@ a.cash-cta-card:hover {
   transform: translateY(-2px);
 }
 
+/* ─── Page width ─────────────────────────────────────────────────────── *
+ * Material's grid stops at 61rem, a 688px text column on a 1440px screen:
+ * code comments were cut off and table names broke mid-word. The wider
+ * grid gives the column about 900px there. Prose keeps a readable measure;
+ * code, tables, diagrams and boxes use the full width. */
+.md-grid {
+  max-width: 1440px;
+}
+.md-typeset > p,
+.md-typeset > ul,
+.md-typeset > ol,
+.md-typeset > dl,
+.md-typeset .tabbed-block > p,
+.md-typeset .tabbed-block > ul,
+.md-typeset .tabbed-block > ol {
+  max-width: 80ch;
+}
+
 /* ─── Badge example frames ───────────────────────────────────────────── *
  * The badge examples are light cards, as a notebook shows them. In dark
  * mode the page's color-scheme is dark; a frame whose document is light
