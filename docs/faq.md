@@ -76,6 +76,14 @@
     A hit returns the stored value without running the function body, so its
     prints and other side effects do not happen again.
 
+??? question "How do I force a fresh call?"
+    `f.__wrapped__(...)` runs the body once without the cache, and
+    `with cash.disabled():` does that for every cached call inside the block.
+    Neither replaces the stored result: the next cached call returns it
+    again. To replace it, run `f.cache_clear()` (or
+    `cash clear --function f` in a terminal); the next call runs the body and
+    stores the new result.
+
 ??? question "Why do I get `KEY-UNHASHABLE-ARG`?"
     An argument (a lock, a socket, an open file) cannot be hashed, so the call
     runs uncached. See [the warning](warnings.md#key-unhashable-arg).
@@ -119,7 +127,15 @@
 
 ??? question "How do I force a fresh run?"
     Put `# @cash:no-cache` above one statement, or run `%cash_off` to stop
-    caching for the rest of the session (`%cash_on` turns it back on). See
+    caching until `%cash_on`. Either runs the code fresh for as long as it is
+    in place, and leaves the stored result alone: remove the directive, or
+    turn caching back on, and the stored result comes back. That is
+    intended: once you allow caching again, an existing result is used.
+
+    To replace the stored result, run the statement once with
+    `# @cash:ttl=0` above it. That counts the stored result as expired, so
+    the statement runs and stores the new value; then remove the directive.
+    `cash clear --all` in a terminal empties the whole cache instead. See
     [Annotations](annotations.md).
 
 ??? question "`cache_info()` on a decorated function reads zero in my notebook."
