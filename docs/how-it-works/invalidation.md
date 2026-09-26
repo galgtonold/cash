@@ -1,9 +1,9 @@
 # Knowing when to recompute
 
 !!! info "Applies to: both paths"
-    Anyone who wants to know which changes make Cash recompute, and how it notices them.
+    Anyone who wants to know which changes make cash recompute, and how it notices them.
 
-Cash recomputes when something it tracks has changed since the result was
+cash recomputes when something it tracks has changed since the result was
 stored. This page lists what it tracks and how it checks. What it does not
 see is listed per path: for `@cash.cache`, the decorator guide's
 [known limitations](../decorator.md#known-limitations); for notebooks,
@@ -38,7 +38,7 @@ see is listed per path: for `@cash.cache`, the decorator guide's
       input changed ([below](#lineage-propagation)).
     - **A function or local module it calls.** An imported module of yours
       (outside the standard library and `site-packages`) is tracked as soon
-      as a cell imports it, and Cash reloads it in the kernel when you edit
+      as a cell imports it, and cash reloads it in the kernel when you edit
       it. Editing one function in a module re-runs only what uses that
       function.
     - **A global that a called function reads**, even one bound below the
@@ -53,7 +53,7 @@ see is listed per path: for `@cash.cache`, the decorator guide's
 ### Files
 
 <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @56d3c684, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->
-Cash records a file when your code reads it through one of these:
+cash records a file when your code reads it through one of these:
 
 | Library | Readers |
 |---|---|
@@ -126,7 +126,7 @@ lineages and miss, however many cells separate them.
 ### Upstream simulation
 
 <!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @8c6dba7f, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @3e6c6c48 -->
-You edit cell 1, then run cell 3 directly. Before cell 3 runs, Cash reads the
+You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
 produce, and compares it with the lineage from the last real run. Statements
@@ -141,25 +141,25 @@ through a helper or a loop over a list of paths.
 ### Finding your notebook
 
 <!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970 -->
-To simulate, Cash needs the notebook's current cells. It tries, in order:
-cells pushed by Cash's JupyterLab extension before each run, Colab's
+To simulate, cash needs the notebook's current cells. It tries, in order:
+cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have
 not saved. Otherwise it reads the saved `.ipynb`, found through VS Code's
 notebook variable, the `ipynbname` package or the Jupyter server API. See
 [editing without saving](../known-limitations.md#editing-without-saving).
 
 If none of these works (a plain IPython shell, for example), upstream checking
-is off for the session and Cash says so once
+is off for the session and cash says so once
 ([`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found)). Each cell still
-uses its own code and inputs. Cash never guesses the notebook from the files
+uses its own code and inputs. cash never guesses the notebook from the files
 on disk.
 
 ### Mutation bumps the receiver's lineage
 
 <!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f -->
-`items.append(x)` assigns nothing, but it changes `items`. When Cash decides a
+`items.append(x)` assigns nothing, but it changes `items`. When cash decides a
 method call changed its receiver, the receiver gets a new lineage from that
-statement, so everything built from it downstream misses. How Cash decides
+statement, so everything built from it downstream misses. How cash decides
 which calls change their receiver is under
 [the mutation problem](safety.md#the-mutation-problem).
 
@@ -175,7 +175,7 @@ Three rules keep random draws right when you edit a seed:
   generator state it left behind, and restores it only while the same seed is
   in force.
 - **A re-run draw starts from the right place.** If a draw re-runs because an
-  ordinary input changed, Cash first puts the generator where it would be in a
+  ordinary input changed, cash first puts the generator where it would be in a
   top-to-bottom run.
 
 !!! warning "An unseeded draw is usually frozen, not redrawn"

@@ -1,7 +1,11 @@
-# Seeing what Cash did
+# Seeing what cash did
 
 !!! info "Applies to: both paths"
-    Anyone checking whether Cash reused a result, and why it did or did not.
+    Anyone checking whether cash reused a result, and why it did or did not.
+
+Three places tell you what cash did and why: a decorated function's own
+`explain()`, the badge and magics in a notebook, and the `cash` command in a
+terminal.
 
 ## Asking a decorated function
 
@@ -94,7 +98,7 @@ the files it read and how long it took. `--graph` adds the chain of inputs
 ### Debug output
 
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @29ba1a1b -->
-`%cash_debug on` prints Cash's reasoning as it happens: keys, lineages,
+`%cash_debug on` prints cash's reasoning as it happens: keys, lineages,
 upstream checks and restore decisions. `%cash_debug json` prints the same
 records as JSON, `%cash_debug file log.txt` also appends them to a file, and
 `%cash_debug off` stops. See [magic commands](../magics.md).
@@ -110,9 +114,9 @@ same numbers as JSON and `%cash_stats reset` starts over.
   `print()` calls do not drag it down.
 - **Net time saved** counts only savings backed by a measurement (this
   session's, or the lowest an earlier session on this machine recorded), minus
-  Cash's own measured overhead. **Gross time saved** is labelled as an
+  cash's own measured overhead. **Gross time saved** is labelled as an
   estimate. When there is no measurement, as with a cache built on another
-  machine, Cash prints a range rather than the flattering figure.
+  machine, cash prints a range rather than the flattering figure.
 - `%cash_stats` does not scan the cache folder; for its size and entry
   count, run `cash info` in a terminal.
 

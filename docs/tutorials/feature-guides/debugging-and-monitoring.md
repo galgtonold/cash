@@ -123,7 +123,7 @@ run. If the badge names nothing, compare the `[CACHE_KEY]` lines of two runs.
 
 ### A cell I changed still shows the old result
 
-Cash cannot see the change. The usual causes, each with a fix, are in
+cash cannot see the change. The usual causes, each with a fix, are in
 [Writing cache-safe cells](../../known-limitations.md): an unsaved edit, a file
 read through a loader cash does not watch, a helper that reads the clock, a
 change made through another name, a function defined below the one that calls
@@ -156,6 +156,6 @@ names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED).
 and its history. See [Magic commands](../../magics.md).
 
 <!-- claim: cash/analytics.py:AnalyticsManager.__init__ @162a2e71 -->
-Cash also records per-session hit and miss events in a small `analytics.db` in
+cash also records per-session hit and miss events in a small `analytics.db` in
 your user cache folder, which `cash.show_stats()` reads. Deleting it is always
 safe. `CASH_ANALYTICS=0` turns it off.

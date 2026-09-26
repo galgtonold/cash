@@ -1,7 +1,7 @@
 # Knowing when *not* to cache
 
 !!! info "Applies to: both paths"
-    Anyone who wants to know why Cash warned about a function or refused to cache a statement.
+    Anyone who wants to know why cash warned about a function or refused to cache a statement.
 
 Some results should not simply be replayed: the code changed a value in place,
 or it did something besides computing a value, such as writing a file or
@@ -25,7 +25,7 @@ sending a request. The two engines handle this differently.
     The notebook refuses. A statement that changes a variable it does not
     produce, or that writes files, sends requests, reads the clock or asks for
     input, is not cached: it runs every time, and the badge says why. The rest
-    of this page explains how Cash decides. The full list of what is cached,
+    of this page explains how cash decides. The full list of what is cached,
     refused or keyed is in the [notebook guide](../notebook_caching_api.md#what-gets-cached).
 
 Unseeded randomness is the exception on both paths: it is cached, and a cached
@@ -104,7 +104,7 @@ again. See
 #### Method calls
 
 <!-- claim: cash/analysis/mutation_effects.py:classify_receivers @704f9e6f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373 -->
-A method call has no assignment target, so Cash classifies its object:
+A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
   that only writes a file from the object (`df.to_csv(path)`), and methods on
@@ -147,12 +147,12 @@ into a module; see
 ### Side effects
 
 <!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @7f115c19 -->
-Cash spots side effects from the statement's source, without running it. So:
+cash spots side effects from the statement's source, without running it. So:
 
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
   only known at run time.
 - Write methods are matched by name on any object: `obj.save(x)` counts even
-  on an object Cash knows nothing about, while `obj.write_thing(x)` does not.
+  on an object cash knows nothing about, while `obj.write_thing(x)` does not.
   `rename` and `replace` are left off the list, because `str.replace` would
   match them.
 - Reads are not side effects: `requests.get(url)`, `open(p)` for reading and a
@@ -178,7 +178,7 @@ only; a change in place, the clock and `input()` still make the statement run.
 
 <!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @5af2a939 -->
 A statement that wrote a file is re-run when a later statement reads that file
-and it is out of date. Cash tells repeatable writes (`to_parquet`, `savefig`,
+and it is out of date. cash tells repeatable writes (`to_parquet`, `savefig`,
 which replace the file) from appending ones (`open(p, "a")`,
 `to_csv(p, mode="a")`), so rebuilding does not duplicate rows in an
 append-mode log.
@@ -186,7 +186,7 @@ append-mode log.
 ### Unseeded randomness
 
 <!-- claim: cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734 -->
-Cash spots draws from `random`, `numpy.random`, `torch` and
+cash spots draws from `random`, `numpy.random`, `torch` and
 `tensorflow.random`. An unseeded draw is cached with a
 [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded) warning, and the first
 value is kept on every re-run. Once a module is seeded with `seed()`, its later
@@ -196,8 +196,8 @@ seed; seeding `np.random` says nothing about it.
 
 <!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
 A draw too cheap to cache is held too when it comes from the `random`,
-`numpy.random` or `torch` module stream: before a re-run, Cash rewinds those
-streams to where the cell started, so the draw repeats. Cash does not rewind a
+`numpy.random` or `torch` module stream: before a re-run, cash rewinds those
+streams to where the cell started, so the draw repeats. cash does not rewind a
 generator held in a variable, so a cheap draw from `rng` changes on every run.
 
 <!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->

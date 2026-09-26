@@ -1,9 +1,9 @@
 # Where your cache lives
 
 !!! info "Applies to: both paths"
-    Anyone who wants to know where Cash writes, how much it keeps, and what it deletes first.
+    Anyone who wants to know where cash writes, how much it keeps, and what it deletes first.
 
-By default Cash keeps results in two tiers: memory, for the running process,
+By default cash keeps results in two tiers: memory, for the running process,
 and a cache folder on disk, which survives a restart.
 
 ## Where the cache folder is
@@ -51,7 +51,7 @@ Each tier has a size cap, sized to the machine unless you set one:
 | Memory | A fifth of the memory the process may use (the machine's RAM, or a container's limit if lower), at least 512 MiB and at most 4 GiB. |
 
 <!-- claim: cash/backends/budget_notices.py:describe_budget @663afadf, cash/backends/adaptive_caps.py:disk_cap_reason @988059b0, cash/backends/file_eviction.py:FileEvictor.budget @9ff2d2c0 -->
-Cash says how big the disk cache may grow when caching starts, once per
+cash says how big the disk cache may grow when caching starts, once per
 process and cache folder. The line names the folder, the cap and the rule that
 set it, so a cache of many GiB is never a surprise:
 
@@ -123,7 +123,7 @@ the shorter of the ttl the entry was written with and the tier's current
 <!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @4e1a354c -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
-10 MB. When a value was meant for disk but every disk tier refused it, Cash
+10 MB. When a value was meant for disk but every disk tier refused it, cash
 keeps it in memory if it fits and warns once
 ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)).
 
@@ -146,7 +146,7 @@ their standing over time. An entry read since the ranking was made, or one
 about to be rewritten, is skipped in that round.
 
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.report_eviction @aa4b93be, cash/backends/budget_notices.py:eviction_text @172c867a -->
-The first time the cap makes Cash remove entries, it says how much it removed
+The first time the cap makes cash remove entries, it says how much it removed
 and that those were the entries worth least per byte. It says so once per
 process and cache folder; later removals only reach the debug log. It is a
 notice, not a warning: a cache at its cap is doing its job.
@@ -165,7 +165,7 @@ notice, not a warning: a cache at its cap is doing its job.
     ```
 
 <!-- claim: cash/backends/eviction_log.py:EvictionLog.record @cc6659e6, cash/backends/file_eviction.py:FileEvictor.clear @03ded076, cash/backends/eviction_log.py:EvictionLog.MAX_NOTES == 10000, cash/backends/file_backend.py:FileBackend.eviction_note @7f6d5fd0 -->
-Cash also notes each entry the cap removes: a hash of its key, when, how long
+cash also notes each entry the cap removes: a hash of its key, when, how long
 it took to compute, and its size, never the arguments or the value. It keeps
 the newest 10,000 such notes, in `_evicted.log` inside the cache folder, and
 `cash clear` removes them with the rest. When a later run misses on a noted
@@ -195,7 +195,7 @@ Parquet engine, is pickled.
 
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or
-    S3 bucket is as trustworthy as whoever can write to it. Never point Cash at
+    S3 bucket is as trustworthy as whoever can write to it. Never point cash at
     one filled by someone you do not trust.
 
 ## Damaged entries and format changes
@@ -214,7 +214,7 @@ new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
 <!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 2, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
-The cache folder records the storage format it was written in. When Cash opens
-a folder written in a different format, by an older or newer Cash, it logs a
+The cache folder records the storage format it was written in. When cash opens
+a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.
 Within one format, entry metadata tolerates fields it does not know.

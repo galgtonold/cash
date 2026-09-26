@@ -44,7 +44,7 @@ with its parts numbered as in the list below; in a notebook it starts closed.
    the code, one dot per storage tier (filled: the value is there; ring:
    restored from there; outline: skipped, for example a value over that tier's
    size cap), a timing bar and the time.
-6. **Overhead.** Cash's own time for the cell: `upstream` (re-checking earlier
+6. **Overhead.** cash's own time for the cell: `upstream` (re-checking earlier
    cells), `cache` (hashing and storing results), `badge` and `other`.
 7. **Report incorrect caching.** Opens a pre-filled GitHub issue with the badge
    attached.
@@ -64,7 +64,7 @@ A row and the cell header use the same word for the same state.
 | **MODULE RELOADED** | red | A local module you import was edited, and cash reloaded it. |
 | **WARNING** | red | Something to look at, such as a notebook file older than what the kernel ran. |
 | **ERROR** | red | The statement raised. |
-| **BYPASSED** | red | Header only. Cash handed the cell straight to IPython, usually because of a syntax error. If the cell looks fine, the kernel log names the error after `Cash auto-caching failed`. |
+| **BYPASSED** | red | Header only. cash handed the cell straight to IPython, usually because of a syntax error. If the cell looks fine, the kernel log names the error after `Cash auto-caching failed`. |
 
 The header's counters (`EXEC`, `NOT CACHED`, `CACHED`, `WARN`) count rows, so
 `EXEC 1 · CACHED 1` under an `EXECUTED` header means one statement ran and one
@@ -100,7 +100,7 @@ redrawn. The text badge shows the same pills as `[seed]`, `[random]` and
 
 <iframe class="cash-badge" title="cash badge example: first time seeing this code" src="/_badges/miss_first_time.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-Cash has no entry for this statement yet. Any edit to a statement gives it a new
+cash has no entry for this statement yet. Any edit to a statement gives it a new
 key. The next run with the same code shows `CACHED`.
 
 ### Input lineage changed
@@ -211,7 +211,7 @@ before and after, and runs the call every time from then on.
 
 <!-- claim: cash/notebook/statement/miss_guard.py:GUARD_AFTER_CONSECUTIVE_CHURN_MISSES == 5, cash/notebook/statement/miss_guard.py:REPROBE_EVERY_N_RUNS == 10 -->
 The statement ran five times in a row with a different cache key each time and
-no hit, so storing it could never pay back. Cash stops writing it, keeps looking
+no hit, so storing it could never pay back. cash stops writing it, keeps looking
 it up, and lets one write through every 10 runs or as soon as the key repeats.
 
 <!-- claim: cash/notebook/statement/miss_guard.py:MissGuard.cause @ce6fa03a -->

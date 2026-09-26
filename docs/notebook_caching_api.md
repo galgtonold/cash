@@ -38,7 +38,7 @@ are in [Configuration](getting-started/configuration.md).
 
 ## What cash caches
 
-Cash caches each **statement** on its own, keyed on the statement's code and on
+cash caches each **statement** on its own, keyed on the statement's code and on
 where its inputs came from. Edit one statement and only it, and what reads its
 result, run again:
 

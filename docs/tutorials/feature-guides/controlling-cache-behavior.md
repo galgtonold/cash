@@ -4,7 +4,7 @@
     Notebooks with `%cash_on`. How to change what cash does with one statement or
     one helper function.
 
-Cash decides for each statement whether to cache it, and most of the time you
+cash decides for each statement whether to cache it, and most of the time you
 leave it alone. When you know something it cannot see, you have four levers:
 
 - a `# @cash:` comment on one statement ([Annotations](../../annotations.md) is the
@@ -97,7 +97,7 @@ useful for a benchmark or a reproducible run, and wasteful for everyday work.
 
 ## Cache a request that only reads: `assume-safe`
 
-Cash runs every POST, PUT or upload every time, because a cache hit would skip
+cash runs every POST, PUT or upload every time, because a cache hit would skip
 sending it. Some APIs use POST for plain queries, such as a search endpoint or an
 LLM completion. Tell cash that skipping the request is harmless:
 
@@ -123,7 +123,7 @@ reads the clock still runs every time. Add a `ttl` when the answer can go stale.
 
 ## Stop caching calls inside a statement: `no-cache-calls`
 
-Cash caches the expensive call inside a statement even when the statement itself
+cash caches the expensive call inside a statement even when the statement itself
 cannot be cached, such as `results.append(compute(x))`. If the function has an
 effect cash cannot see, turn this off for the statement, or for a whole loop by
 putting the comment on its header:
@@ -162,7 +162,7 @@ Without the marker, a slow `announce` call is cached and a re-run skips the
 message: cash does not look inside `announce` for a chat client. Three things to
 know:
 
-- **Functions count, methods do not.** Cash checks the functions a statement
+- **Functions count, methods do not.** cash checks the functions a statement
   calls, by name (`announce(...)`) or through a module (`helpers.announce(...)`,
   `pkg.helpers.announce(...)`), anywhere in the statement. A method called on an
   object, such as `bot.announce(...)`, is not checked, so marking a method does

@@ -3,7 +3,8 @@
 !!! info "Applies to: notebook"
     Jupyter, JupyterLab, Colab and VS Code notebooks that use `%cash_on`.
 
-Install cash first: `pip install cash-lib` (see [Installation](installation.md)).
+Three steps take a notebook from no cache to a cached re-run. Install cash
+first: `pip install cash-lib` (see [Installation](installation.md)).
 To try it without installing, open the
 [Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
 or [Binder](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb)

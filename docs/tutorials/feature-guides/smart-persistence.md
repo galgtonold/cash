@@ -4,7 +4,7 @@
     Notebooks with `%cash_on`. What survives a kernel restart, and how to keep
     more of it.
 
-Cash keeps every cached statement in memory for the rest of the session and
+cash keeps every cached statement in memory for the rest of the session and
 writes the ones worth keeping to disk. After a kernel restart, only what is on
 disk comes back.
 
@@ -47,7 +47,7 @@ The HTML badge shows the same with the storage dots on each row.
 
 ## How a restart picks up
 
-Run any cell after a restart. Cash works out which variables the cell needs,
+Run any cell after a restart. cash works out which variables the cell needs,
 checks that the code and files behind each one are unchanged, and restores them
 from disk instead of running the cells that built them. A deep pipeline comes
 back in the time it takes to read the results. Whatever it cannot restore, such

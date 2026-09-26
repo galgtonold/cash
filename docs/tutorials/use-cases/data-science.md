@@ -29,7 +29,7 @@ transactions = pd.read_csv("transactions.csv")
 print(f"Customers: {len(customers)}, Transactions: {len(transactions)}")
 ```
 
-Cash tracks both files. Change `customers.csv` and the statements that read it
+cash tracks both files. Change `customers.csv` and the statements that read it
 run again. Open the badge and the row names the file:
 
 <iframe class="cash-badge" title="cash badge example: customers.csv changed" src="/_badges/miss_file_changed_customers.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
@@ -127,7 +127,7 @@ The loads and the aggregation, the slow part, cost nothing on this run.
    not `df.sort_values(..., inplace=True)`, when the frame came from an earlier
    cell.
 3. **Seed your randomness**: `random_state=42`, `np.random.seed(42)`,
-   `df.sample(100, random_state=42)`. Cash does not see every random draw, and an
+   `df.sample(100, random_state=42)`. cash does not see every random draw, and an
    unseeded one is replayed, not redrawn. See
    [Randomness](../../known-limitations.md#randomness).
 4. **Pass the date in.** `datetime.now()` in a statement runs every time, but

@@ -4,7 +4,7 @@
     Notebooks with `%cash_on`. For limitations of `@cash.cache` functions, see the
     [decorator guide](decorator.md).
 
-Cash restores a cell's inputs by working out what each statement reads and
+cash restores a cell's inputs by working out what each statement reads and
 writes. Where a change travels through a channel cash does not see, you can get a
 value that looks right and is stale. This page lists those cases: the symptom,
 an example and the fix.
@@ -37,7 +37,7 @@ result. A cheap draw that is never cached is frozen too if it comes from the
 `random`, `numpy.random` or `torch` stream: before a cell re-runs, cash rewinds
 those streams to where the cell started, so a re-run lands where a top-to-bottom
 run would. A generator held in a variable (`rng = np.random.default_rng()`) is
-not rewound, so a cheap draw from it changes on every run. Cash warns
+not rewound, so a cheap draw from it changes on every run. cash warns
 `RANDOM-UNSEEDED` when an unseeded draw first runs (not in a `no-cache`
 statement), and `RANDOM-REPLAYED` when an unseeded value comes back from the
 cache. An estimator fitted with `random_state=None` counts as an unseeded draw.
@@ -55,7 +55,7 @@ the rest of the session, but not `random.random()` and not a generator from
 the random stream back where the computed run left it, so the next draw matches a
 full run.
 
-Cash finds a draw by following the generator from where it was created, so these
+cash finds a draw by following the generator from where it was created, so these
 are **not** flagged and are cached silently:
 
 - a generator cash never saw created: `self.rng.normal()`, a generator returned
@@ -117,7 +117,7 @@ re-run. Run All is not affected.
 ### Mutating through an alias
 
 <!-- claim: cash/analysis/aliases.py:bare_alias_targets @311a21c3, cash/analysis/aliases.py:reference_alias_targets @f052d224 -->
-Cash tracks a change through the name the object is bound to. Through another
+cash tracks a change through the name the object is bound to. Through another
 name it is invisible, so a re-run applies it twice:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
@@ -167,7 +167,7 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-Cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
+cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
 while the live `s` holds `1e9`. **Fix:** move the change above the cells that
 must see it, or make it a new value (`s = s.copy(); s.iloc[0] = 1e9`).
 
@@ -209,7 +209,7 @@ r = a(3)                       # cell 3: 8
 # edit cell 2 to `return n + 10`, re-run cell 3 alone: still 8, not 26
 ```
 
-Cash follows dependencies upward, so `a` never learns it depends on `b`. Cash can
+cash follows dependencies upward, so `a` never learns it depends on `b`. cash can
 even serve `r` after cell 2 is deleted. **Fix:** define a function above the
 functions that call it. A module-level read of a name bound only below raises
 [`ForwardReferenceError`](#forwardreferenceerror) instead.
@@ -222,7 +222,7 @@ An earlier cell re-run can see the changed data.
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @6a19a3f5 -->
-This one can give a wrong answer on the first Run All. Cash keys each iteration
+This one can give a wrong answer on the first Run All. cash keys each iteration
 on the loop variable's value when the `for` binds it. A body that changes that
 value, or computes a new body-local variable, before the cached work is not seen:
 
@@ -246,7 +246,7 @@ the statement.
 **Symptom:** you changed a file and the cell still shows the old data, with a
 `CACHED` badge and no warning.
 
-Cash records a file when it is read through a reader it watches: `pd.read_*`,
+cash records a file when it is read through a reader it watches: `pd.read_*`,
 `np.load`, `joblib.load`, polars, `sqlite3.connect`, `open()` and
 [others](how-it-works/invalidation.md#what-counts-as-a-change). A read through
 anything else (a C extension that opens the file itself, a client library, a
@@ -266,7 +266,7 @@ the statement if the read is cheap.
 `functools.lru_cache`, you edit the config file, and the function returns
 the old result with no warning.
 
-Cash watches file reads from `import cash` on. A memoised loader that first
+cash watches file reads from `import cash` on. A memoised loader that first
 ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
@@ -278,13 +278,13 @@ as an argument (`load_cfg("config.yaml")` inside the cached function).
 ### An edit that keeps the size and timestamps
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @809a68f2, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
-Cash checks a file's size and timestamps first and reads its content only when
+cash checks a file's size and timestamps first and reads its content only when
 one of them moved. On Linux and macOS every write moves the inode change time,
 so this never misses. On **Windows**, two kinds of edit move nothing: a write
 whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
 `robocopy /COPY:T`), and a write through `np.memmap(path, mode="r+")`.
 
-**Fix:** after such a write, touch the file (`Path(path).touch()`). Cash then
+**Fix:** after such a write, touch the file (`Path(path).touch()`). cash then
 reads its content, and if it changed, everything that read it runs again.
 
 ### Large objects are hashed by sampling
@@ -302,7 +302,7 @@ resetting the session.
 ### A long `for`-append loop can stop caching
 
 <!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @aaa994ff, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0 -->
-Cash caches a `for` loop per iteration. A long loop is run as one unit instead
+cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length, per-statement
 bookkeeping estimated above one second (about 8 ms per statement per iteration),
 and no file I/O written in the loop body. A loop that appends to a list is an
@@ -338,7 +338,7 @@ N(N+1)/2 executions, not N, because each writer re-runs the writers before it.
 **Symptom:** you edited an upstream cell, ran a downstream one, and got the
 answer for the old code.
 
-Cash reads the cells it did not run from the notebook file. An unsaved edit is
+cash reads the cells it did not run from the notebook file. An unsaved edit is
 invisible unless your editor has a **live reader**:
 
 - **JupyterLab**, with the `cash-live-cells` extension that `pip install

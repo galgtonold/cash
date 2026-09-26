@@ -50,7 +50,7 @@ for all of them. Only a storage tier's size cap still applies.
 ### A statement around a cached call { #a-statement-around-a-cached-call }
 
 <!-- claim: cash/notebook/statement/store.py:StatementStore._store @cc8fe383, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @6680f15e -->
-Cash also caches the slow calls inside a statement on their own (see
+cash also caches the slow calls inside a statement on their own (see
 [`no-cache-calls`](annotations.md#call-level-caching-default-and-cashno-cache-calls)).
 The call's result is kept in the call's entry, so a statement around it is
 judged by its **own** work: what it does beyond its cached calls, plus reading
@@ -167,7 +167,7 @@ flowchart TB
     W -->|Yes| DISK
 ```
 
-1. **Store it at all?** Cash predicts how long reading the value back from the
+1. **Store it at all?** cash predicts how long reading the value back from the
    first tier (memory, by default) would take, and refuses when that exceeds
    both `min_cache_fixed_budget_seconds` and 80% of the compute time. In memory
    this almost never refuses.

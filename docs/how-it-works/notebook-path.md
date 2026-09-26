@@ -3,8 +3,8 @@
 !!! info "Applies to: notebook"
     Jupyter, JupyterLab, VS Code and Colab users who run `%cash_on`.
 
-After `%cash_on`, Cash handles every cell you run, one statement at a time.
-You write ordinary notebook code; for each statement Cash either restores the
+After `%cash_on`, cash handles every cell you run, one statement at a time.
+You write ordinary notebook code; for each statement cash either restores the
 stored result or runs it and stores what it produced.
 
 ## What happens when you run a cell
@@ -30,25 +30,25 @@ flowchart TB
 ```
 
 <!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @2561f548, cash/notebook/statement/processor.py:StatementProcessor.process_statement @04870aa4 -->
-1. **Inputs.** Cash reads from the cell's source which variables it uses.
+1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
-   it was edited, Cash works out from the notebook's code which statements
+   it was edited, cash works out from the notebook's code which statements
    above are out of date, restores what is still valid and re-runs the rest.
    [Knowing when to recompute](invalidation.md#upstream-simulation) explains
    how.
-3. **Statements.** Cash splits the cell into statements. For each one it
+3. **Statements.** cash splits the cell into statements. For each one it
    decides whether it is safe to cache
-   ([knowing when not to cache](safety.md)). If it is, Cash builds its
+   ([knowing when not to cache](safety.md)). If it is, cash builds its
    [key](cache-keys-and-lineage.md) and looks it up: a hit restores the
    variables and replays the output; a miss runs the statement and stores the
    result. A statement that is not safe to cache runs without a lookup.
-4. **Badge.** Cash prints a badge with one row per statement: `CACHED`,
+4. **Badge.** cash prints a badge with one row per statement: `CACHED`,
    `EXECUTED`, `NOT CACHED` (with the reason) or `SKIPPED`.
    [Reading the badge](../badges.md#statuses) lists every status.
 
-Cash caches statements rather than whole cells so that editing one line keeps
+cash caches statements rather than whole cells so that editing one line keeps
 the rest of the cell's work. The price is a few milliseconds of bookkeeping
-per statement, which the badge reports as Cash's own overhead.
+per statement, which the badge reports as cash's own overhead.
 
 ## Fine-grained caching: loops and branches
 
@@ -74,7 +74,7 @@ for ticker in ["AAPL", "MSFT", "GOOGL"]:
 
 Appending a ticker or editing the last one re-runs one statement. Editing the
 **first** one re-runs all three statements, because each later one reads the
-changed `stats`. The expensive call still runs only once: Cash also caches the
+changed `stats`. The expensive call still runs only once: cash also caches the
 call inside the statement (`compute(ticker)`), keyed on its arguments, so
 `MSFT` and `GOOGL` come from the call cache.
 
@@ -118,13 +118,13 @@ three calls in the statement; then they fold into one expandable row.
 
 ## Picking up after a kernel restart
 
-After a restart, run any cell. Cash restores the variables it needs from the
+After a restart, run any cell. cash restores the variables it needs from the
 cache, checking first that the code that produced them is unchanged. For a
 chain of steps (`df = load()`, then `df = clean(df)`), it restores the final
 value directly instead of replaying each step.
 
 <!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @7692fb7f -->
-A value built by a `for` loop can be restored too. Cash records what the loop
+A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop
 did nothing else: no file written, no draw from the global random generators,
@@ -136,17 +136,17 @@ them runs the loop.
 <!-- claim: cash/analysis/mutations.py:module_setting_receivers @2a5a82f5 -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,
 `plt.rcParams.update(...)`, `pd.set_option(...)` or
-`warnings.filterwarnings(...)`, is not a variable Cash can store. After a
+`warnings.filterwarnings(...)`, is not a variable cash can store. After a
 restart, a cell that uses that module runs the setting line again first, so a
 chart keeps the notebook's style.
 
 <!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @5c48f391 -->
 A cell that writes files (`df.to_csv(...)`, `fig.savefig(...)`) is not re-run
-after a restart just because it ran in an earlier kernel. Cash records the
+after a restart just because it ran in an earlier kernel. cash records the
 files it wrote and the lineages of what it read. It re-runs the writer only
 when the cell you run reads one of those files (directly or through a helper)
 and the file is gone or changed, or what the writer read has changed. A read
-whose path Cash cannot work out rules nothing out, so a writer above may be
+whose path cash cannot work out rules nothing out, so a writer above may be
 re-run to be safe. Files written by a C extension without Python's `open` are
 not seen; such a writer is re-run.
 

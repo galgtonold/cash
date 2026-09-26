@@ -100,7 +100,7 @@ example `stmt:ffd3d255…`.
   assigns.
 
 <!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._register_virtual_callable @57dbc4f5 -->
-After a restart, Cash computes these keys from the notebook's code before
+After a restart, cash computes these keys from the notebook's code before
 your `def` cells have run again, so a statement that calls a notebook
 function still hits.
 
@@ -159,7 +159,7 @@ reads it. A re-seed changes the draw's key and the lineage of everything built
 from it.
 
 **Globals that called functions read.** `r = a(3)` names `a`, not the globals
-`a` reads when it runs. Cash follows the called functions' global names and
+`a` reads when it runs. cash follows the called functions' global names and
 adds `name:lineage` for each. A name that no longer exists counts as
 `ABSENT`, so deleting a function makes the call re-run and raise `NameError`,
 as a plain kernel would, instead of replaying a stored value. For the case of

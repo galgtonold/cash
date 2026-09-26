@@ -1,9 +1,9 @@
-# How Cash works
+# How cash works: an overview
 
 !!! info "Applies to: both paths"
-    Anyone who wants to know why Cash reused a result, recomputed it or refused to cache it.
+    Anyone who wants to know why cash reused a result, recomputed it or refused to cache it.
 
-Cash has two caching engines. They share building blocks, but each decides on
+cash has two caching engines. They share building blocks, but each decides on
 its own terms, so this section explains them separately.
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder.build @8a590f3b, cash/notebook/cache_key.py:compute_cache_key @c2321118 -->
@@ -55,7 +55,7 @@ flowchart TB
 
 Both engines recompute when something they track changes, and both keep the
 first value of an unseeded random draw rather than drawing again. Some inputs
-are not tracked, such as a file opened through a reader Cash does not wrap.
+are not tracked, such as a file opened through a reader cash does not wrap.
 Each path lists its own: for `@cash.cache`, the decorator guide's
 [known limitations](../decorator.md#known-limitations); for notebooks,
 [Writing cache-safe cells](../known-limitations.md).
@@ -64,7 +64,7 @@ Each path lists its own: for `@cash.cache`, the decorator guide's
 
 - Decorator: [how `@cash.cache` decides](decorator-path.md), then
   [where your cache lives](storage.md) and
-  [seeing what Cash did](inspecting.md).
+  [seeing what cash did](inspecting.md).
 - Notebook: [the notebook path](notebook-path.md),
   [cache keys and lineage](cache-keys-and-lineage.md),
   [knowing when to recompute](invalidation.md),

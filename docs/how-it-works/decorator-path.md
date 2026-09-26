@@ -1,4 +1,4 @@
-# How `@cash.cache` decides
+# The decorator path: how `@cash.cache` decides
 
 !!! info "Applies to: decorator"
     Scripts, services and libraries that use `@cash.cache`, and anyone asking why a call hit or missed.
@@ -73,7 +73,7 @@ Each argument is fingerprinted by the first rule that applies:
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
 2. A built-in content hasher: pandas, numpy, polars, pyarrow, modin and dask
    values are hashed by content.
-3. An identity tag Cash keeps current, such as the one a `frozen=True`
+3. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 4. A hasher you registered without `override=True`.
 5. The pickled value, in one canonical form: sets in sorted order, every
@@ -98,7 +98,7 @@ registration.
 ## When there is no key
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
-If any part of the key cannot be built, the call runs uncached and Cash warns.
+If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
 - an argument that cannot be hashed, such as a generator or a lock
@@ -142,7 +142,7 @@ side effects and still caches:
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @21132aa4 -->
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
-`CashImpureFunctionError`, because Cash cannot tell when that code changes.
+`CashImpureFunctionError`, because cash cannot tell when that code changes.
 The [decorator guide](../decorator.md#side-effects) covers
 `assume_safe` and the `# @cash:assume-safe` line marker.
 
