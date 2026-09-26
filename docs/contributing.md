@@ -1,7 +1,15 @@
-# Contributing to Cash
+---
+search:
+  boost: 0.5
+---
+
+# Contributing to cash
 
 !!! info "Applies to: both paths"
     Contributors: setting up, finding your way around the code, and getting a change through CI.
+
+How to set up a checkout, find your way around the code, and get a change
+through review.
 
 ## Setup
 
@@ -22,45 +30,58 @@ pre-commit install                     # runs ruff on each commit
 
 ## The code
 
-Cash has two engines: the decorator (`@cash.cache`) and the notebook engine
+cash has two engines: the decorator (`@cash.cache`) and the notebook engine
 (`%cash_on`). They share the hashing, effect rules, file tracking and storage,
-but each builds its own keys. [How Cash works](how-it-works/overview.md)
+but each builds its own keys. [How cash works](how-it-works/overview.md)
 describes both.
 
-```
+```text
 src/cash/
-├── __init__.py         # the public API (cash.__all__) and the default Cash instance
+├── __init__.py         # the public API (cash.__all__) and the
+│                       #   default Cash instance
 ├── __main__.py         # the `cash` command line
-├── core.py             # the Cash class: registries, configuration, the cache decorator front
-├── decorator/          # what a cached call does: its key (code, globals,
-│                       #   closures, arguments, seed, files), the call itself,
-│                       #   explain() and the warnings it raises
-├── notebook/           # the notebook engine (only the magics loaders import it)
+├── core.py             # the Cash class: registries, configuration,
+│                       #   the cache decorator front
+├── decorator/          # what a cached call does: its key (code,
+│                       #   globals, closures, arguments, seed, files),
+│                       #   the call itself, explain() and the warnings
+│                       #   it raises
+├── notebook/           # the notebook engine (only the magics loaders
+│                       #   import it)
 │   ├── ipython/        #   the magics and the cell executor
 │   ├── statement/      #   statement-level caching
-│   ├── control_structures/  # per-iteration loop and branch caching
+│   ├── control_structures/ #   per-iteration loop and branch caching
 │   ├── upstream/       #   upstream simulation and restore
 │   ├── badge_renderer/ #   the HTML and text badge
-│   └── *.py            #   the statement cache key, lineage store, call units,
-│                       #   provenance, live cell sources, ...
-├── analysis/           # static analysis: statement inputs and outputs,
-│                       #   # @cash: annotations, mutations, cacheability,
-│                       #   the purity analysis of a decorated function
+│   └── *.py            #   the statement cache key, lineage store, call
+│                       #   units, provenance, live cell sources, ...
+├── analysis/           # static analysis: statement inputs and
+│                       #   outputs, # @cash: annotations, mutations,
+│                       #   cacheability, the purity analysis of a
+│                       #   decorated function
 ├── tracking/           # what a computation reads at run time: files,
 │                       #   function source, modules, randomness
-├── backends/           # storage: memory, file, tiered, SQLite, Redis, S3;
-│                       #   serialization, the entry format, eviction, size caps
+├── backends/           # storage: memory, file, tiered, SQLite,
+│                       #   Redis, S3; serialization, the entry format,
+│                       #   eviction, size caps
 ├── ui/                 # the dashboard and the cache explorer
-├── labextension/       # the prebuilt JupyterLab extension (source in labextension/ at the repo root)
+├── labextension/       # the prebuilt JupyterLab extension (source in
+│                       #   labextension/ at the repo root)
 ├── config.py           # CashConfig and how settings are resolved
-├── effects.py          # which calls write files, send requests, read the clock or environment
-├── effect_observer.py  # side effects a cached function performs on its first call
+├── effects.py          # which calls write files, send requests, read
+│                       #   the clock or environment
+├── effect_observer.py  # side effects a cached function performs on
+│                       #   its first call
 ├── purity.py           # @pure, @stateful and the known-pure registry
-├── dependency_state.py # the state hash: own source, dependencies, helpers
+├── dependency_state.py # the state hash: own source, dependencies,
+│                       #   helpers
 ├── object_hashing.py   # content hashes and sizes of values
-├── source_norm.py      # normalises source before hashing (comments, blank lines)
-├── cost_model.py       # predicted serialise and restore time per type and backend
-├── effectiveness.py    # notices when caching costs more than it saves
+├── source_norm.py      # normalises source before hashing (comments,
+│                       #   blank lines)
+├── cost_model.py       # predicted serialise and restore time per
+│                       #   type and backend
+├── effectiveness.py    # notices when caching costs more than it
+│                       #   saves
 ├── data_source.py      # the DataSource protocol
 ├── file_source.py      # FileDataSource for a local file
 ├── remote_source.py    # RemoteFileDataSource for s3, gs, az and http
@@ -68,11 +89,14 @@ src/cash/
 ├── exceptions.py       # public exceptions and warnings
 ├── analytics.py        # cache-usage analytics
 ├── graph.py            # the function dependency graph (Cash.graph)
-├── nbconvert.py        # nbconvert preprocessor that strips badges and magics
+├── nbconvert.py        # nbconvert preprocessor that strips badges
+│                       #   and magics
 ├── reconfigure.py      # cash.configure() on a running instance
-├── _agent_guide.py     # the text cash.help() returns; identical to docs/for-coding-agents.md
-└── _*.py, *.py         # small helpers: logging, console output, paths,
-                        #   where the project and cache are, clocks, type sets
+├── _agent_guide.py     # the text cash.help() returns; identical to
+│                       #   docs/for-coding-agents.md
+└── _*.py, *.py         # small helpers: logging, console output,
+                        #   paths, where the project and cache are,
+                        #   clocks, type sets
 ```
 
 The JupyterLab extension sends unsaved cell sources to the kernel, so the
@@ -87,10 +111,12 @@ CI runs these on every push and pull request; run the ones your change touches.
 ruff check .
 ruff format --check .
 
-# Unit tests (the default is 16 xdist workers; add -n 0 -s to debug)
-pytest tests/ --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs -m "not perf"
+# Unit tests (16 xdist workers by default; add -n 0 -s to debug)
+pytest tests/ --ignore=tests/test_notebook_integration \
+    --ignore=tests/test_wheel_gate --ignore=tests/docs -m "not perf"
 
-# Integration tests: the files named after what you changed, then the core set
+# Integration tests: the files named after what you changed,
+# then the core set
 pytest tests/test_notebook_integration/loops/ -v
 pytest @tools/test_selection/core_set.txt
 
@@ -109,8 +135,8 @@ core set after large changes, see `tools/test_selection/`.
 python scripts/fails_first.py tests/test_core/test_your_change.py
 ```
 
-It stashes your changes under `src/`, runs the tests, and fails if they pass
-anyway. A test can pass vacuously when the mechanism never engages (a cached
+It runs your tests against the last commit's `src/` in a temporary
+worktree, and fails if they pass anyway. A test can pass vacuously when the mechanism never engages (a cached
 function faster than the persistence floor never reaches disk; sleep
 `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S`), when empty input satisfies the
 assertion, or when it checks state instead of behaviour.
@@ -118,10 +144,14 @@ assertion, or when it checks state instead of behaviour.
 **Changing behaviour the docs describe:**
 
 ```bash
-python scripts/claims.py --report cash/cost_model.py   # claims resting on a file
-python scripts/claims.py --pin                         # fill new `@?` anchors
-python scripts/claims.py --queue                       # claims to re-read
-python scripts/doc_numbers.py --update                 # refresh test counts and similar
+# claims resting on a file
+python scripts/claims.py --report cash/cost_model.py
+# fill new `@?` anchors
+python scripts/claims.py --pin
+# claims to re-read
+python scripts/claims.py --queue
+# refresh test counts and similar
+python scripts/doc_numbers.py --update
 ```
 
 [`tests/docs/README.md`](https://github.com/galgtonold/cash/blob/main/tests/docs/README.md)
@@ -164,7 +194,9 @@ An integration test drives a real kernel with the `nb_runner` fixture:
 
 ```python
 def test_feature(nb_runner):
-    nb_runner.create_notebook(["x = 10", "y = x * 2", "print(f'Result: {y}')"])
+    nb_runner.create_notebook(
+        ["x = 10", "y = x * 2", "print(f'Result: {y}')"]
+    )
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "Result: 20" in nb_runner.get_output(3)
@@ -195,3 +227,12 @@ A test that calls `InteractiveShell.instance()` must call
 5. Describe what changed and why.
 
 Commit messages use Conventional Commits (`fix:`, `feat:`, `docs:`, ...).
+
+## Related
+
+- [How cash is tested](how-it-works/testing.md): the suites, where each one
+  runs, and their sizes.
+- [How it works](how-it-works/overview.md): the two engines this page's
+  directory map points into.
+- [Versioning](versioning.md): what counts as public API, and so what a
+  change may break.

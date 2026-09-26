@@ -1,9 +1,15 @@
+---
+search:
+  boost: 0.5
+---
+
 # How cash is tested
 
 !!! info "Applies to: both paths"
-    Contributors, and anyone deciding how far to trust Cash's results.
+    Contributors, and anyone deciding how far to trust cash's results.
 
-Figures on this page are derived from the repository by
+What the test suites cover, where each one runs, and how to run them
+yourself. Figures on this page are derived from the repository by
 `scripts/doc_numbers.py` and checked in CI; they are current as of
 <!-- docnum:version -->0.11.0<!-- /docnum -->.
 
@@ -72,14 +78,21 @@ through kernel restarts. It is run by hand; CI skips it.
 ## Running the suites
 
 ```bash
-pytest tests/ --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs
-pytest @tools/test_selection/core_set.txt     # the integration core set
-pytest tests/test_notebook_integration        # the whole integration suite (slow)
+# the unit suite
+pytest tests/ --ignore=tests/test_notebook_integration \
+    --ignore=tests/test_wheel_gate --ignore=tests/docs
+# the integration core set
+pytest @tools/test_selection/core_set.txt
+# the whole integration suite (slow)
+pytest tests/test_notebook_integration
 pytest tests/docs
 python scripts/claims.py --queue
 python scripts/fails_first.py <your new test file>
 ```
 
-[Contributing](../contributing.md) covers setup and which tests to run for a
-change. [Known limitations](../known-limitations.md) lists the cases Cash is
-known to get wrong or not see.
+## Related
+
+- [Contributing](../contributing.md): setup, and which tests to run for a
+  change.
+- [Writing cache-safe cells](../known-limitations.md): the cases cash is
+  known to get wrong or not see.
