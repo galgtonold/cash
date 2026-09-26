@@ -49,6 +49,7 @@ from collections.abc import Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import audited_lines, get_statement_annotations
 from ...analysis.code_analyzer import CodeAnalyzer, splitlines_like_the_parser, statement_code
 from ...backends._writes import discarded_writes
@@ -766,7 +767,7 @@ class CellExecutor:
         # 2. Badge & timing init
         badge_display_id = str(uuid.uuid4())
         timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
-        hook_start = time.time()
+        hook_start = _perf_counter()
         logger.debug("[TIMING_PROXY] Start cached_run_cell")
 
         # 3. Module change detection (must precede upstream check)
@@ -818,9 +819,9 @@ class CellExecutor:
         # reports a saving and nothing reports what establishing it cost.
         with _measured_validation(sink=cell.timing_breakdown):
             yield
-        t_persist = time.time()
+        t_persist = _perf_counter()
         self._statement_processor.end_cell_persistence()
-        cell.timing_breakdown["persist_final"] = time.time() - t_persist
+        cell.timing_breakdown["persist_final"] = _perf_counter() - t_persist
 
     def _complete_cell(
         self,
@@ -895,9 +896,9 @@ class CellExecutor:
     def _init_cell_timing_and_badge(self, badge_display_id: str) -> "TimingBreakdown":
         """Set up timing tracking and render the initial 'RUNNING' badge."""
         timing_breakdown: "TimingBreakdown" = {}
-        t_badge_init = time.time()
+        t_badge_init = _perf_counter()
         self._badges.start_cell(badge_display_id)
-        timing_breakdown["badge_init"] = time.time() - t_badge_init
+        timing_breakdown["badge_init"] = _perf_counter() - t_badge_init
         return timing_breakdown
 
     # ------------------------------------------------------------------
@@ -1047,10 +1048,10 @@ class CellExecutor:
 
             for var_name in inputs:
                 if var_name not in self.shell.user_ns:
-                    start_restore = time.time()
+                    start_restore = _perf_counter()
                     try:
                         metrics = self._restorer.restore_variable(var_name)
-                        total_restore_time += time.time() - start_restore
+                        total_restore_time += _perf_counter() - start_restore
                         if metrics:
                             upstream_metrics.extend(metrics)
                     except NameError:
@@ -1110,7 +1111,7 @@ class CellExecutor:
         (the async hook), re-raise so the caller sees a normal Python
         exception.
         """
-        t_ensure = time.time()
+        t_ensure = _perf_counter()
 
         def _upstream_progress_cb(
             upstream_metrics_so_far: list,
@@ -1159,13 +1160,13 @@ class CellExecutor:
                 original_run_cell,
             )
 
-        timing_breakdown["upstream_check_raw"] = time.time() - t_ensure
+        timing_breakdown["upstream_check_raw"] = _perf_counter() - t_ensure
         timing_breakdown["total_restore_time"] = total_restore_time
         timing_breakdown["total_execution_time"] = total_execution_time
-        timing_breakdown["upstream_check"] = (time.time() - t_ensure) - total_restore_time - total_execution_time
+        timing_breakdown["upstream_check"] = (_perf_counter() - t_ensure) - total_restore_time - total_execution_time
 
         if logger.isEnabledFor(logging.DEBUG):
-            ensure = time.time() - t_ensure
+            ensure = _perf_counter() - t_ensure
             logger.debug(
                 "[TIMING_PROXY] Ensure state: %.2fms (restore %.2fms, execution %.2fms, overhead %.2fms)",
                 ensure * 1000,
@@ -1466,7 +1467,7 @@ class CellExecutor:
         self._badges.finish(
             cell.all_metrics,
             cell.badge_display_id,
-            time.time() - cell.hook_start,
+            _perf_counter() - cell.hook_start,
             cell.timing_breakdown,
         )
 
@@ -1537,7 +1538,7 @@ class CellExecutor:
             is_last = i == len(tree.body) - 1
             unified_step = upstream_step_count + i + 1
 
-            t_badge_pre = time.time()
+            t_badge_pre = _perf_counter()
             self._badges.arm_progress(
                 all_metrics,
                 display_id=cell.badge_display_id,
@@ -1545,7 +1546,7 @@ class CellExecutor:
                 total=total_steps_unified,
                 code=stmt_code,
             )
-            badge_render_time += time.time() - t_badge_pre
+            badge_render_time += _perf_counter() - t_badge_pre
 
             try:
                 try:
@@ -1572,7 +1573,7 @@ class CellExecutor:
                         )
 
                     self._badges.cancel_progress()
-                    t_badge = time.time()
+                    t_badge = _perf_counter()
                     # `unified_step`, NOT `unified_step + 1`: this fires when a
                     # statement has FINISHED, and the next one has not started.
                     # The number means "the furthest statement cash has reached",
@@ -1584,7 +1585,7 @@ class CellExecutor:
                         total=total_steps_unified,
                         code=None,
                     )
-                    badge_render_time += time.time() - t_badge
+                    badge_render_time += _perf_counter() - t_badge
 
                 except Exception as e:  # intentionally broad: catches user code exceptions
                     self._finalize_error_badge(e, cell, node)

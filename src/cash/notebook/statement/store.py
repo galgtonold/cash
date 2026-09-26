@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model
+from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -372,7 +373,7 @@ class StatementStore:
         that we don't even write a metadata-only entry (the next lookup
         will miss cleanly rather than hit a metadata-only entry and
         pay a per-file read just to decide 'recompute')."""
-        t_store = time.time()
+        t_store = _perf_counter()
         # What this key recorded is about to change (``_producer_file_snapshots``).
         self._producer_snapshots.pop(run.cache_key, None)
 
@@ -417,8 +418,8 @@ class StatementStore:
         wire = self._wire(run, metadata, referenced)
         self._write(run, payload, wire, prediction)
 
-        store_time = time.time() - t_store
-        total_time = time.time() - run.process_start
+        store_time = _perf_counter() - t_store
+        total_time = _perf_counter() - run.process_start
         logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
         logger.debug("[CACHE DEBUG] Stored in cache: %s", run.cache_key)
 

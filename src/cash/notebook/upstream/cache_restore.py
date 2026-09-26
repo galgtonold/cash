@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import ast
 import logging
-import time as time_module
 from typing import TYPE_CHECKING, Any
 
+from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
@@ -105,7 +105,7 @@ class CacheRestorer:
         Returns:
             Tuple of (set of variables successfully restored, restore_time_seconds, saved_time_seconds).
         """
-        start_time = time_module.time()
+        start_time = _perf_counter()
 
         if not self.virtual_lineage.cash_instance:
             return set(), 0.0, 0.0
@@ -149,12 +149,12 @@ class CacheRestorer:
                 fresh, stale = snapshot_is_fresh(file_deps)
                 if not fresh:
                     logger.debug("[UPSTREAM] Restore failed: stale file dependency (%s)", stale)
-                    return set(), time_module.time() - start_time, 0.0
+                    return set(), _perf_counter() - start_time, 0.0
 
                 conflict = lineage_conflict(metadata, file_deps, expected_lineages)
                 if conflict is not None:
                     logger.debug("[UPSTREAM] Restore failed: lineage mismatch for %s", conflict)
-                    return set(), time_module.time() - start_time, 0.0
+                    return set(), _perf_counter() - start_time, 0.0
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
@@ -165,12 +165,12 @@ class CacheRestorer:
                     lineage_confirmed_vars(metadata, file_deps, expected_lineages),
                 )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
-                return restored_vars, time_module.time() - start_time, saved_time
+                return restored_vars, _perf_counter() - start_time, saved_time
 
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("[UPSTREAM] Virtual restore error: %s", e)
 
-        return set(), time_module.time() - start_time, 0.0
+        return set(), _perf_counter() - start_time, 0.0
 
     def _restore_vars_from_cache(
         self,

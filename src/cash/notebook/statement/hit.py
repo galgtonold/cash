@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import logging
 import pickle
-import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement.results import COST_MODEL_KEYS
@@ -97,7 +97,7 @@ class CacheHitServer:
             # reconstruct the dependency graph on a cache hit, not just on
             # a fresh compute.
             metrics["inputs"] = list((metadata.inputs or []) if metadata else [])
-            metrics["total_time"] = time.time() - process_start
+            metrics["total_time"] = _perf_counter() - process_start
 
             if metadata:
                 if metadata.source is not None:

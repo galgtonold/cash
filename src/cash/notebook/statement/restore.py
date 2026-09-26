@@ -29,9 +29,10 @@ nothing. Both are pinned by ``tests/test_notebook/test_display_without_ipython.p
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
+
+from cash._clock import perf_counter as _perf_counter
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
 from ..restored_var import apply_restored_var
@@ -115,7 +116,7 @@ class StatementRestorer:
         *seed_epochs* is the seeding regime in force now; the entry's RNG state
         is replayed only while it still holds (:func:`rng_replay_is_current`).
         """
-        t_restore = time.time()
+        t_restore = _perf_counter()
 
         try:
             payload = cached_data
@@ -137,7 +138,7 @@ class StatementRestorer:
                 rich_outputs = []
                 object_rng_states = None
 
-            t_var = time.time()
+            t_var = _perf_counter()
             inplace = inplace_restore or frozenset()
             for var_name, value in restored_vars.items():
                 self._restore_one_var(tracking_state, var_name, value, metadata, inplace)
@@ -156,14 +157,14 @@ class StatementRestorer:
                     )
                 restore_object_rng_states(object_rng_states, self.shell.user_ns)
 
-            var_restore_time = time.time() - t_var
+            var_restore_time = _perf_counter() - t_var
 
             output_replay_time = 0.0
             if not silent:
                 output_replay_time = self._replay_cached_outputs(stdout, stderr, rich_outputs)
 
-            restore_time = time.time() - t_restore
-            total_time = time.time() - process_start
+            restore_time = _perf_counter() - t_restore
+            total_time = _perf_counter() - process_start
 
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -259,6 +260,6 @@ class StatementRestorer:
 
         Returns elapsed seconds (for timing-debug accounting).
         """
-        t_output = time.time()
+        t_output = _perf_counter()
         replay_outputs(stdout, stderr, rich_outputs)
-        return time.time() - t_output
+        return _perf_counter() - t_output

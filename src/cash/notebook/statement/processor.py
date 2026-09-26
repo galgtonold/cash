@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import ast
 import logging
-import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
 
 from cash._active import default_cash
+from cash._clock import perf_counter as _perf_counter
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.control_markers import has_marker
 from cash.exceptions import (
@@ -565,7 +565,7 @@ class StatementProcessor:
         self._randomness.stamp_random_effect(run.metrics, code, run.unseeded_calls)
         logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
-        run.process_start = time.time()
+        run.process_start = _perf_counter()
 
         try:
             run.tree = ast.parse(code.strip())
@@ -824,7 +824,7 @@ class StatementProcessor:
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
-        start_time = time.time()
+        start_time = _perf_counter()
         if run.annotation is not None and run.annotation.no_cache:
             self._randomness.resume_live_stream(code)
         # Snapshot the global RNG streams around execution so a before/after
@@ -847,7 +847,7 @@ class StatementProcessor:
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
         self._forget_file_answers_if_it_wrote(code, execution)
-        execution.wall_time = time.time() - start_time
+        execution.wall_time = _perf_counter() - start_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
 
@@ -883,7 +883,7 @@ class StatementProcessor:
         if not result.success:
             metrics["status"] = CacheStatus.ERROR
             metrics["error"] = result.error
-            metrics["total_time"] = time.time() - run.process_start
+            metrics["total_time"] = _perf_counter() - run.process_start
             self._handle_execution_error(result, run.silent)
             return metrics
 
@@ -1100,7 +1100,7 @@ class StatementProcessor:
             run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
         )
 
-        run.metrics["total_time"] = time.time() - run.process_start
+        run.metrics["total_time"] = _perf_counter() - run.process_start
         self.analytics_manager.record_event(
             status="MISS",
             execution_time=run.metrics["total_time"],
@@ -1348,7 +1348,7 @@ class StatementProcessor:
             if all_present:
                 logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
                 run.metrics["status"] = CacheStatus.SKIPPED
-                run.metrics["total_time"] = time.time() - run.process_start
+                run.metrics["total_time"] = _perf_counter() - run.process_start
                 self._update_state_tracking(
                     code,
                     ExecutionResult(success=True, skipped=True),
@@ -1433,7 +1433,7 @@ class StatementProcessor:
         Raises:
             CacheKeyComputationError: If the cache key cannot be computed.
         """
-        t1 = time.time()
+        t1 = _perf_counter()
         effects = statement_effects(
             code,
             tree,
@@ -1443,9 +1443,9 @@ class StatementProcessor:
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
         self._records.log_statement_reads(code, inputs)
-        analysis_time = time.time() - t1
+        analysis_time = _perf_counter() - t1
 
-        t2 = time.time()
+        t2 = _perf_counter()
 
         # A draw READS its module's hidden RNG variable; fold it into the key so a
         # re-seed re-keys the draw. Only the LOCAL key-input set gets it
@@ -1477,7 +1477,7 @@ class StatementProcessor:
 
         self._randomness.record_seeds(code, cache_key)
 
-        hash_time = time.time() - t2
+        hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
 
     def _log_cache_lookup(

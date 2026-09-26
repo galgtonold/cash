@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ..._clock import perf_counter as _perf_counter
 from ...backends._base import ttl_expired
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ..call_refs import resolve_call_refs
@@ -129,10 +130,10 @@ class CacheFreshnessChecker:
         if not isinstance(epoch, int) or epoch != self._epoch or time.monotonic() - self._answered_at > _ANSWERS_LAST_S:
             self.forget_file_answers(epoch)
 
-        t3 = time.time()
+        t3 = _perf_counter()
         raw_metadata, cached_data = self._backend.get(cache_key)
         metadata = StatementCacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
-        cache_check_time = time.time() - t3
+        cache_check_time = _perf_counter() - t3
 
         if cached_data and metadata:
             # `is not None`, not truthiness: ttl=0 is a REQUEST ("expire

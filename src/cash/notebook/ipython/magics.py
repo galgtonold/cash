@@ -6,7 +6,6 @@ import contextlib
 import functools
 import json
 import logging
-import time
 import weakref
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
@@ -18,6 +17,7 @@ from typing import Any
 from IPython.core.magic import Magics, line_magic, magics_class
 
 from ... import _log
+from ..._clock import perf_counter as _perf_counter
 from ..._console import safe_text
 from ...backends._writes import all_pending_writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
@@ -998,7 +998,7 @@ class CashMagics(InspectionMagicsMixin, Magics):
         observability, buffered-output replay, and the final badge render.
         """
         all_metrics, timing_breakdown = done.all_metrics, done.timing_breakdown
-        hook_total = time.time() - done.hook_start
+        hook_total = _perf_counter() - done.hook_start
 
         # Analytics events are intentionally NOT flushed here, per cell.
         # The AnalyticsManager buffers events and flushes on its own policy —

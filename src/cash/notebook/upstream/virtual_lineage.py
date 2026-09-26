@@ -18,13 +18,13 @@ import logging
 import marshal
 import os
 import sys
-import time as time_module
 import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import strip_markers
 
+from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.cacheability import statement_writes_files
@@ -1302,9 +1302,9 @@ class VirtualLineage:
         try:
             logger.debug("[UPSTREAM] Virtual lookup Key: %s", cache_key)
 
-            t_lookup = time_module.time()
+            t_lookup = _perf_counter()
             metadata = self._get_metadata_only(cache_key)
-            cache_lookup_time = time_module.time() - t_lookup
+            cache_lookup_time = _perf_counter() - t_lookup
 
             if metadata:
                 hist_files = metadata.get("file_dependencies", {})
