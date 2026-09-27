@@ -110,6 +110,28 @@ def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lo
     assert len(slow_lookup) == cu._GUARD_AFTER_CALLS, "calls no hit could beat kept being looked up"
 
 
+def test_one_stalled_sample_does_not_keep_the_site_cached(call_unit_harness, slow_lookup):
+    """The test above failed on a macOS runner with 90 lookups for 50: the
+    five samples were timed, and the site stayed cached. A stall inside one
+    sample (the process descheduled, a garbage collection) is enough to lift
+    the mean of five past the bar. The verdict reads their median."""
+    ran: list[int] = []
+
+    def work(v):
+        ran.append(v)
+        # The first call run plain to time it comes after the cached ones.
+        stalled = len(ran) == cu._GUARD_AFTER_CALLS + 1
+        time.sleep(0.03 if stalled else 0.0015)
+        return v * 2
+
+    unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+    wrapped = unit.wrap(work, SITE)
+
+    assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
+
+    assert len(slow_lookup) == cu._GUARD_AFTER_CALLS, "one slow sample kept the site cached"
+
+
 def test_every_call_is_counted_including_the_plain_ones(call_unit_harness, slow_lookup):
     """The badge read ``sub-call read_doc(p): 5220/5225`` for
     5,225 files, ``296/301``, ``495/500``: every count five short. The calls

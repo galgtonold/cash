@@ -28,6 +28,7 @@ import dataclasses
 import functools
 import logging
 import pathlib as _pathlib
+import statistics
 import sys
 import time as _time
 import types
@@ -218,8 +219,8 @@ class _SiteRun:
     computed: int = 0
     compute_s: float = 0.0
     probing: bool = False
-    plain_n: int = 0
-    plain_s: float = 0.0
+    #: The calls run plain to time them, in seconds each.
+    plain_samples: list[float] = dataclasses.field(default_factory=list)
     decided: bool = False
     plain: bool = False
 
@@ -455,13 +456,19 @@ class CallUnit:
             if run.probing:
                 started = _perf_counter()
                 result = fn(*args, **kwargs)
-                run.plain_s += _perf_counter() - started
-                _log_plain(_perf_counter() - started)
-                run.plain_n += 1
-                if run.plain_n >= _PLAIN_SAMPLES:
+                took = _perf_counter() - started
+                run.plain_samples.append(took)
+                _log_plain(took)
+                if len(run.plain_samples) >= _PLAIN_SAMPLES:
                     run.probing = False
                     cached = run.total_s / run.calls
-                    plain = run.plain_s / run.plain_n
+                    # The median, not the mean: one sample stretched by a
+                    # stall (the process descheduled, a garbage collection)
+                    # lifted the mean of five over the bar, and the site
+                    # stayed cached for the rest of the run. The cached side
+                    # is averaged over _GUARD_AFTER_CALLS calls, where one
+                    # stall weighs a tenth as much.
+                    plain = statistics.median(run.plain_samples)
                     keyed = run.key_s / run.calls
                     # Too dear to cache, or a hit could not save a quarter of
                     # the call: a hit pays the key and lookup, then the restore.
