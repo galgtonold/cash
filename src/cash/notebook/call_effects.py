@@ -7,14 +7,19 @@ tracker (:func:`replay_deps`), what it printed goes onto the live stream
 (:func:`restore_globals`). On a miss the same effects are recorded for that
 later hit (:func:`call_capturing_output`, :func:`capture_globals`), and the
 arguments are hashed around the call (:func:`hash_args`) so a callee that
-mutates one is never cached.
+mutates one is never cached, as is one that rebinds a variable of the
+function it was made in (:func:`rebinds_its_closure`).
 """
 
 from __future__ import annotations
 
 import copy as _copy
+import dis as _dis
+import functools
+import inspect as _inspect
 import logging
 import sys
+import types as _types
 from collections.abc import Mapping
 from typing import Any
 
@@ -30,6 +35,7 @@ __all__ = [
     "call_capturing_output",
     "capture_globals",
     "hash_args",
+    "rebinds_its_closure",
     "replay_deps",
     "replay_output",
     "restore_globals",
@@ -160,6 +166,42 @@ def replay_output(metadata: Mapping[str, Any]) -> None:
             sys.stderr.write(stderr_text)
         except (OSError, ValueError, TypeError, AttributeError):  # a closed or foreign stream
             logger.debug("call unit: could not replay stderr", exc_info=True)
+
+
+def rebinds_its_closure(fn) -> bool:
+    """Whether calling *fn* rebinds a variable of the function it was made
+    in: ``nonlocal count; count += 1``.
+
+    A hit cannot put that back, and the key never sees it: the cell is not
+    in the callee's lineage, and an int in a cell passes as plain data. So
+    ``val1 = counter(); val2 = counter()`` read ``1, 1`` whenever the first
+    call was slow enough to be stored. The globals a callee writes are
+    captured and restored (:func:`capture_globals`); a cell is not a global,
+    so such a callee is not cached.
+    """
+    try:
+        code = getattr(_inspect.unwrap(fn), "__code__", None)
+    except ValueError:  # a __wrapped__ cycle
+        return False
+    if not isinstance(code, _types.CodeType) or not code.co_freevars:
+        return False
+    return _rebinds(code, frozenset(code.co_freevars))
+
+
+@functools.lru_cache(maxsize=4096)
+def _rebinds(code: _types.CodeType, cells: frozenset[str]) -> bool:
+    """Whether *code*, or a function defined in it, stores to or deletes one
+    of *cells*, the enclosing function's variables it reaches."""
+    for ins in _dis.get_instructions(code):
+        if ins.opname in ("STORE_DEREF", "DELETE_DEREF") and ins.argval in cells:
+            return True
+    for const in code.co_consts:
+        if isinstance(const, _types.CodeType):
+            # Its own variable of the same name shadows the outer one.
+            reached = (cells & frozenset(const.co_freevars)) - frozenset(const.co_cellvars)
+            if reached and _rebinds(const, reached):
+                return True
+    return False
 
 
 def hash_args(args: tuple, kwargs: dict) -> tuple:

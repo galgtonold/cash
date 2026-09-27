@@ -12,6 +12,8 @@ right above the assertion it protects.
 
 import time
 
+import pytest
+
 from cash.notebook.call_interception import CallSite
 from cash.notebook.call_unit import CallCache
 
@@ -278,3 +280,75 @@ def test_an_unhashable_argument_reads_as_changed_not_unchanged(monkeypatch):
         "two unknowable snapshots compared equal — an argument whose content "
         "cannot be hashed is being read as 'unchanged', which is fail-open"
     )
+
+
+def _make_counter():
+    count = 0
+
+    def counter():
+        nonlocal count
+        time.sleep(0.05)  # above the call cost floor, so a miss is stored
+        count += 1
+        return count
+
+    return counter
+
+
+def _make_counter_bumped_inside():
+    count = 0
+
+    def counter():
+        def bump():
+            nonlocal count
+            count += 1
+
+        time.sleep(0.05)
+        bump()
+        return count
+
+    return counter
+
+
+@pytest.mark.parametrize("make", [_make_counter, _make_counter_bumped_inside])
+def test_a_callee_that_rebinds_its_closure_is_never_cached(call_unit_harness, make):
+    """``val1 = counter(); val2 = counter()`` read ``1, 1`` in CI.
+
+    ``count`` lives in a cell the key never sees: the callee's lineage stays
+    put and an int passes as plain data, so the second call keyed as the
+    first and was served its 1, and the bump a hit cannot replay was lost.
+
+    Mutation-that-breaks-this-test: dropping the ``rebinds_its_closure``
+    check in ``CallUnit.wrap`` makes the second call a hit returning 1.
+    """
+    counter = make()
+    unit = call_unit_harness(lineage={"counter": "hash-counter"}, user_ns={"counter": counter})
+    site = _site(source="counter()", names=("counter",))
+
+    unit.begin_statement()
+    first = unit.wrap(counter, site)()
+    unit.begin_statement()
+    second = unit.wrap(counter, site)()
+
+    assert (first, second) == (1, 2), "the second call was served the first call's count"
+
+
+def test_a_closure_that_only_reads_its_cells_is_still_cached(call_unit_harness):
+    """The refusal is for a rebinding, not for a closure: ``make_adder(5)``'s
+    ``adder`` reads ``n`` and is cached as before."""
+    calls = []
+
+    def make_adder(n):
+        def adder(x):
+            calls.append(x)
+            time.sleep(0.05)
+            return x + n
+
+        return adder
+
+    add5 = make_adder(5)
+    unit = call_unit_harness(lineage={"add5": "hash-add5"}, user_ns={"add5": add5})
+    site = _site(source="add5(10)", names=("add5",))
+
+    assert unit.wrap(add5, site)(10) == 15
+    assert unit.wrap(add5, site)(10) == 15
+    assert calls == [10], "a closure that rebinds nothing was not served from the cache"

@@ -340,6 +340,25 @@ class TestGlobalNonlocalScope:
         assert "val1 = 11, val2 = 12" in nb_runner.get_output(2)
 
     @pytest.mark.timeout(90)
+    def test_a_counter_call_is_not_served_the_last_count(self, nb_runner):
+        """``val2 = counter()`` printed 1 in CI: the first ``counter()`` took
+        longer than the 3 ms call floor, so it was stored, and the second --
+        same callee, same lineage, no arguments -- was served that 1 without
+        bumping the count. The floor is pinned to zero here so the first call
+        is always stored, which the CI run hit by chance."""
+        nb_runner.create_notebook(
+            [
+                "import cash\n%load_ext cash\ncash.configure(call_cost_floor_seconds=0.0)\n%cash_on",
+                "def make_counter(start):\n    count = start\n    def increment():\n        nonlocal count\n"
+                "        count += 1\n        return count\n    return increment",
+                "counter = make_counter(0)\nval1 = counter()\nval2 = counter()\nprint(f'val1 = {val1}, val2 = {val2}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "val1 = 1, val2 = 2" in nb_runner.get_output(3)
+
+    @pytest.mark.timeout(90)
     def test_global_in_function(self, nb_runner):
         nb_runner.create_notebook(
             [

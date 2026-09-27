@@ -48,6 +48,7 @@ from cash.notebook.call_effects import (
     call_capturing_output,
     capture_globals,
     hash_args,
+    rebinds_its_closure,
     replay_deps,
     replay_output,
     restore_globals,
@@ -588,6 +589,10 @@ class CallUnit:
 
         def _invoke(*args, **kwargs):
             __tracebackhide__ = True
+            if rebinds_its_closure(fn):
+                # `counter()` bumps a `nonlocal`: a hit would skip the bump
+                # and hand the next call the same count.
+                return fn(*args, **kwargs)
             # Globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
             # memoised (`callee_mutated_globals`) while the "is it bound, is it
