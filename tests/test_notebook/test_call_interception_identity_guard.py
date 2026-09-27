@@ -120,9 +120,11 @@ def test_a_figure_returning_call_is_not_cached(call_cache):
 def test_ordinary_results_are_still_cached(call_cache):
     """Positive control: the guard must not disable caching in general."""
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def compute(x):
-        calls.append(x)
+        note(x)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         return x + 1
 

@@ -44,9 +44,11 @@ def test_a_scalar_that_happens_to_be_an_argument_is_still_cached(call_unit_harne
     (found by the session-replay tests). Nothing can rely on an int's identity.
     """
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def score(c, a):
-        calls.append((c, a))
+        note((c, a))
         time.sleep(0.05)
         return c * a
 

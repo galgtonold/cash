@@ -32,6 +32,7 @@ from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
+from cash.notebook.call_effects import closure_cells, rebinds_its_closure
 from cash.object_hashing import compute_hash, compute_hash_full, pandas_nbytes
 
 if TYPE_CHECKING:
@@ -39,7 +40,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CallKeys", "call_cache_key", "callee_mutated_globals", "global_digests", "global_names_reached"]
+__all__ = [
+    "CallKeys",
+    "call_cache_key",
+    "callee_mutated_globals",
+    "global_digests",
+    "global_names_reached",
+    "holds_a_closure_with_state",
+]
 
 
 def _is_dunder_loop_var(name: str) -> bool:
@@ -91,7 +99,8 @@ _GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
 
 
 def callee_mutated_globals(fn) -> tuple[str, ...]:
-    """Names in *fn*'s own globals that calling *fn* mutates in place, sorted.
+    """Names in *fn*'s own globals, or in its closure, that calling *fn*
+    mutates in place, sorted.
 
     The same analysis the statement path applies to a callee it finds by name
     (:func:`~cash.analysis.callee_effects.source_global_mutations`), read from
@@ -103,6 +112,19 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     globals_dict = getattr(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
         return ()
+    cached = _source_mutations(fn)
+    # Filtered per call, not memoised: whether a name is bound (and not a
+    # module) can change between calls, and the memo is about the source.
+    capturable = capturable_globals(cached, globals_dict)
+    # A name the callee reads from its closure is one too: `seen.append(x)`
+    # on a list a factory made. Not in any namespace, so the filter above
+    # drops it, and the second `add('a')` was served the first one's length.
+    cells = closure_cells(fn)
+    return tuple(n for n in cached if n in cells or n in capturable)
+
+
+def _source_mutations(fn) -> tuple[str, ...]:
+    """The free names *fn*'s source mutates in place, sorted, memoised on its code."""
     try:
         memo_key = getattr(_inspect.unwrap(fn), "__code__", None)
     except ValueError:  # a __wrapped__ cycle; getsource cannot read it either
@@ -115,10 +137,28 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
             cached = ()
         if memo_key is not None:
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
-    # Filtered per call, not memoised: whether a name is bound (and not a
-    # module) can change between calls, and the memo is about the source.
-    capturable = capturable_globals(cached, globals_dict)
-    return tuple(n for n in cached if n in capturable)
+    return cached
+
+
+def holds_a_closure_with_state(value, depth: int = 2) -> bool:
+    """Whether *value* is, or directly holds, a function that changes what
+    its closure holds when called: a counter or a log a factory returned.
+
+    Such a value cannot be served from the cache. The store keeps a function
+    by reference, so a hit hands back the closure the last run made, with
+    everything it has counted or collected since: ``counter =
+    make_counter(0)`` run again gave a counter that went on from 2.
+    """
+    if isinstance(value, _types.FunctionType):
+        cells = closure_cells(value)
+        return bool(cells) and (rebinds_its_closure(value) or any(n in cells for n in _source_mutations(value)))
+    if depth <= 0:
+        return False
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return any(holds_a_closure_with_state(item, depth - 1) for item in value)
+    if isinstance(value, dict):
+        return any(holds_a_closure_with_state(item, depth - 1) for item in value.values())
+    return False
 
 
 def call_cache_key(
@@ -452,10 +492,12 @@ def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     them fails closed.
     """
     globals_dict = getattr(fn, "__globals__", None) or {}
+    cells = closure_cells(fn)
     digests: dict[str, str] = {}
     for name in names:
         try:
-            digests[name] = compute_hash_full(globals_dict[name])
+            value = cells[name].cell_contents if name in cells else globals_dict[name]
+            digests[name] = compute_hash_full(value)
         except Exception:  # noqa: BLE001 - a missing digest only widens the key
             logger.debug("call unit: could not digest global %r", name)
     return digests

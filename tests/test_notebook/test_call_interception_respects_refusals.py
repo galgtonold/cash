@@ -80,9 +80,11 @@ def test_stateful_callee_is_not_recorded_as_intercepted(call_cache):
 def test_ordinary_callee_still_wrapped(call_cache):
     """Positive control: the refusal check must not disable caching generally."""
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def compute(x):
-        calls.append(x)
+        note(x)
         time.sleep(0.2)
         return x + 1
 

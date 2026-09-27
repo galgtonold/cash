@@ -55,9 +55,11 @@ def _site(source="compute(x)", names=("compute", "x"), computed_arg_positions=(0
 def test_undecorated_function_is_cached(call_cache):
     """The point of the feature: the body runs once across two identical calls."""
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def compute(x):
-        calls.append(x)
+        note(x)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)  # above the cost-model floor
         return x + 1
 
@@ -70,9 +72,11 @@ def test_undecorated_function_is_cached(call_cache):
 
 def test_different_arguments_are_separate_entries(call_cache):
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def compute(x):
-        calls.append(x)
+        note(x)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         return x + 1
 

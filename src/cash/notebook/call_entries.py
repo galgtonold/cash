@@ -18,6 +18,7 @@ from cash.analysis.cacheability_decision import identity_coupled_reason
 from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
+from cash.notebook.call_key import holds_a_closure_with_state
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     ESTIMATED_FIELD,
@@ -163,6 +164,11 @@ class CallEntries:
            the very object a reader already drained. The statement path
            refuses such an output for the same reason.
 
+        4. **A closure that keeps state** -- a counter or a log a factory
+           returns (:func:`~cash.notebook.call_key.holds_a_closure_with_state`).
+           A function is kept by reference too, so a hit hands back the one
+           the last run made, still holding what it counted.
+
         A caching optimisation must never be why user code fails. The two
         ``is`` loops above cannot themselves raise -- identity comparison
         never does -- so the only place this can fail is the
@@ -186,8 +192,10 @@ class CallEntries:
                 if result is arg:
                     return False
         try:
-            return identity_coupled_reason("<intercepted call>", result) is None and not is_consumable_unrestorable(
-                result
+            return (
+                identity_coupled_reason("<intercepted call>", result) is None
+                and not is_consumable_unrestorable(result)
+                and not holds_a_closure_with_state(result)
             )
         except Exception:  # noqa: BLE001 - never let the predicate break the call
             return True

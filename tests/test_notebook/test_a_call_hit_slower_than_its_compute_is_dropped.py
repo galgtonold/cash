@@ -13,8 +13,11 @@ from cash.notebook.call_interception import CallSite
 
 
 def _unit(call_unit_harness, calls):
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
+
     def work(k):
-        calls.append(k)
+        note(k)
         time.sleep(0.02)
         return k * 2
 

@@ -338,8 +338,11 @@ def test_a_closure_that_only_reads_its_cells_is_still_cached(call_unit_harness):
     calls = []
 
     def make_adder(n):
+        # Not `calls.append` in the body: a hit replays that write to its closure.
+        note = calls.append
+
         def adder(x):
-            calls.append(x)
+            note(x)
             time.sleep(0.05)
             return x + n
 

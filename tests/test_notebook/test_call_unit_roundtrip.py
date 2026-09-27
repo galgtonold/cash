@@ -21,9 +21,11 @@ def _site(source="slow(x)", names=("slow", "x")):
 
 def test_second_call_with_same_lineage_is_a_hit(call_unit_harness):
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def slow(v):
-        calls.append(v)
+        note(v)
         time.sleep(0.05)
         return v * 2
 
@@ -75,9 +77,11 @@ def test_a_computed_argument_is_hashed_into_the_key(call_unit_harness):
     the SAME call site must land in two different cache entries.
     """
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def slow(v):
-        calls.append(v)
+        note(v)
         time.sleep(0.05)
         return v * 2
 
@@ -110,9 +114,11 @@ def test_unpacking_call_is_keyed_on_every_value_it_receives(call_unit_harness):
     still computes its own value, and the first pair again is a hit.
     """
     calls = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def compute(*args, **kwargs):
-        calls.append((args, kwargs))
+        note((args, kwargs))
         time.sleep(0.05)
         return sum(args) + sum(kwargs.values())
 

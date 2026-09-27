@@ -259,6 +259,15 @@ class TestSingletonPatterns:
         assert "['add', 'mul']" in output
 
 
+# Every call is stored, and no statement is: a statement restored whole on
+# the second run would skip the call inside it, and with it the write to the
+# closure these tests watch -- the statement engine's own question.
+CALLS_ONLY = (
+    "import cash\n%load_ext cash\n"
+    "cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=60.0)\n%cash_on"
+)
+
+
 class TestGlobalNonlocalScope:
     """Scope-related interaction patterns."""
 
@@ -344,11 +353,14 @@ class TestGlobalNonlocalScope:
         """``val2 = counter()`` printed 1 in CI: the first ``counter()`` took
         longer than the 3 ms call floor, so it was stored, and the second --
         same callee, same lineage, no arguments -- was served that 1 without
-        bumping the count. The floor is pinned to zero here so the first call
-        is always stored, which the CI run hit by chance."""
+        bumping the count. The call floor is pinned to zero here so the first
+        call is always stored, which the CI run hit by chance.
+
+        Run again, ``counter = make_counter(0)`` was served the counter the
+        first run made, which went on counting from 2."""
         nb_runner.create_notebook(
             [
-                "import cash\n%load_ext cash\ncash.configure(call_cost_floor_seconds=0.0)\n%cash_on",
+                CALLS_ONLY,
                 "def make_counter(start):\n    count = start\n    def increment():\n        nonlocal count\n"
                 "        count += 1\n        return count\n    return increment",
                 "counter = make_counter(0)\nval1 = counter()\nval2 = counter()\nprint(f'val1 = {val1}, val2 = {val2}')",
@@ -357,6 +369,31 @@ class TestGlobalNonlocalScope:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "val1 = 1, val2 = 2" in nb_runner.get_output(3)
+
+        nb_runner.run_all()
+        assert "val1 = 1, val2 = 2" in nb_runner.get_output(3)
+
+    @pytest.mark.timeout(90)
+    def test_a_call_appending_to_its_closure_list_is_not_served_the_last_length(self, nb_runner):
+        """The same hole through a list: ``add`` appends to ``seen`` in its
+        closure, and ``n2 = add('a')`` was served ``n1``'s length. Run twice,
+        so the second run's calls are served, and the list in the closure
+        must still hold what they appended."""
+        nb_runner.create_notebook(
+            [
+                CALLS_ONLY,
+                "def make_log():\n    seen = []\n    def add(x):\n        seen.append(x)\n        return len(seen)\n"
+                "    return add",
+                "add = make_log()\nn1 = add('a')\nn2 = add('a')\nprint(f'n1 = {n1}, n2 = {n2}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "n1 = 1, n2 = 2" in nb_runner.get_output(3)
+
+        nb_runner.run_all()
+        assert "n1 = 1, n2 = 2" in nb_runner.get_output(3)
+        assert nb_runner.peek("add.__closure__[0].cell_contents") == "['a', 'a']"
 
     @pytest.mark.timeout(90)
     def test_global_in_function(self, nb_runner):

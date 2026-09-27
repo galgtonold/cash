@@ -72,9 +72,11 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
     call over the cheap bar is not sampled at all."""
     monkeypatch.setattr(cu, "_GUARD_CHEAP_BELOW_S", 0.001)
     ran: list[int] = []
+    # Not `ran.append` in the body: a hit replays that write to its closure.
+    note = ran.append
 
     def work(v):
-        ran.append(v)
+        note(v)
         time.sleep(0.005)  # over the (lowered) cheap bar and the store floor
         return v * 2
 

@@ -62,9 +62,11 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
     data_path = tmp_path / "data.csv"
     data_path.write_text("10", encoding="utf-8")
     calls: list[int] = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def load(k):
-        calls.append(k)
+        note(k)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         return int(data_path.read_text(encoding="utf-8")) * k
 
@@ -225,9 +227,11 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
 
     url = "s3://bucket/key.csv"
     calls: list[str] = []
+    # Not `calls.append` in the body: a hit replays that write to its closure.
+    note = calls.append
 
     def fetch(u):
-        calls.append(u)
+        note(u)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         # What a real registered remote-reader handler does: tell the
         # ACTIVE tracker about the read. `track_path` routes a URL-shaped

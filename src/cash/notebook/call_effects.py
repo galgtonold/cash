@@ -4,7 +4,8 @@ A call served from the cache does not run, so nothing it would have done
 happens unless it is put back: the files it read go onto the statement's
 tracker (:func:`replay_deps`), what it printed goes onto the live stream
 (:func:`replay_output`), and the globals it wrote go back into its namespace
-(:func:`restore_globals`). On a miss the same effects are recorded for that
+(:func:`restore_globals`), as do the objects in its closure it changed in
+place. On a miss the same effects are recorded for that
 later hit (:func:`call_capturing_output`, :func:`capture_globals`), and the
 arguments are hashed around the call (:func:`hash_args`) so a callee that
 mutates one is never cached, as is one that rebinds a variable of the
@@ -13,6 +14,7 @@ function it was made in (:func:`rebinds_its_closure`).
 
 from __future__ import annotations
 
+import collections
 import copy as _copy
 import dis as _dis
 import functools
@@ -34,6 +36,7 @@ __all__ = [
     "UNWRAP_FAILED",
     "call_capturing_output",
     "capture_globals",
+    "closure_cells",
     "hash_args",
     "rebinds_its_closure",
     "replay_deps",
@@ -168,6 +171,49 @@ def replay_output(metadata: Mapping[str, Any]) -> None:
             logger.debug("call unit: could not replay stderr", exc_info=True)
 
 
+def closure_cells(fn) -> dict[str, _types.CellType]:
+    """*fn*'s closure cells, by the name its code reads each one under.
+
+    Those of the function under any ``functools.wraps`` wrapper, whose
+    source is the one analysed for what the call writes.
+    """
+    try:
+        target = _inspect.unwrap(fn)
+    except ValueError:  # a __wrapped__ cycle
+        return {}
+    code = getattr(target, "__code__", None)
+    closure = getattr(target, "__closure__", None)
+    if not isinstance(code, _types.CodeType) or not closure:
+        return {}
+    return dict(zip(code.co_freevars, closure))
+
+
+#: What a closure's object can be to be put back in place on a hit: a
+#: container whose whole content one assignment or ``clear`` + ``update``
+#: replaces. Anything else -- a user object, a frame, an array that grew --
+#: cannot be written back into the live object soundly.
+_IN_PLACE_TYPES = (list, dict, set, bytearray, collections.deque)
+
+
+def _put_back_in_place(cell: _types.CellType, value) -> None:
+    """Make the object in *cell* hold *value*'s content, keeping the object."""
+    try:
+        live = cell.cell_contents
+    except ValueError:  # emptied since: nothing holds the old object
+        cell.cell_contents = value
+        return
+    if type(live) is not type(value):
+        cell.cell_contents = value
+    elif isinstance(live, (list, bytearray)):
+        live[:] = value
+    elif isinstance(live, collections.deque):
+        live.clear()
+        live.extend(value)
+    else:
+        live.clear()
+        live.update(value)
+
+
 def rebinds_its_closure(fn) -> bool:
     """Whether calling *fn* rebinds a variable of the function it was made
     in: ``nonlocal count; count += 1``.
@@ -284,6 +330,10 @@ def capture_globals(fn, names: tuple[str, ...]) -> dict[str, Any] | None:
       for that whole class. Storing an entry whose pre-state cannot be
       told apart is exactly the partial-accumulator hazard.
 
+    * **a closure's object that cannot be put back in place** -- see
+      :data:`_IN_PLACE_TYPES`. A name the callee reads from its closure is
+      captured from the cell, not from its globals.
+
     Returning ``None`` costs a permanently-uncached site. Storing anyway
     would cost a silently wrong restore, and this method exists to prefer
     the former.
@@ -308,11 +358,20 @@ def capture_globals(fn, names: tuple[str, ...]) -> dict[str, Any] | None:
     if not names:
         return {}
     globals_dict = getattr(fn, "__globals__", None) or {}
+    cells = closure_cells(fn)
     captured: dict[str, Any] = {}
     for name in names:
-        if name not in globals_dict:
+        if name in cells:
+            try:
+                value = cells[name].cell_contents
+            except ValueError:  # an empty cell
+                return None
+            if not isinstance(value, _IN_PLACE_TYPES):
+                return None
+        elif name in globals_dict:
+            value = globals_dict[name]
+        else:
             return None
-        value = globals_dict[name]
         try:
             if is_identity_fallback_hash(value, compute_hash(value)):
                 return None
@@ -338,6 +397,11 @@ def restore_globals(fn, names: tuple[str, ...], recorded: Mapping[str, Any] | No
     object — a real limitation, and the same one the statement path has
     always had for every restored variable.
 
+    A name the callee reads from its closure is different: the content goes
+    back INTO the object the cell holds (:func:`_put_back_in_place`), so the
+    list a factory handed out alongside the closure, and every other holder
+    of it, sees what the calls appended.
+
     Only names in *names* are written. The entry could carry a stale name
     from a since-edited callee, and honouring it would resurrect a variable
     the current source never mentions.
@@ -347,8 +411,7 @@ def restore_globals(fn, names: tuple[str, ...], recorded: Mapping[str, Any] | No
     if not isinstance(recorded, Mapping) or not recorded:
         return
     globals_dict = getattr(fn, "__globals__", None)
-    if not isinstance(globals_dict, dict):
-        return
+    cells = closure_cells(fn)
     for name in names:
         if name in recorded:
             # A COPY, for the mirror of the reason `capture_globals`
@@ -357,6 +420,10 @@ def restore_globals(fn, names: tuple[str, ...], recorded: Mapping[str, Any] | No
             # object, so the next call would rewrite the entry it was just
             # served from.
             try:
-                globals_dict[name] = _copy.deepcopy(recorded[name])
+                value = _copy.deepcopy(recorded[name])
+                if name in cells:
+                    _put_back_in_place(cells[name], value)
+                elif isinstance(globals_dict, dict):
+                    globals_dict[name] = value
             except Exception:  # noqa: BLE001 - a restore must never crash
                 logger.debug("call unit: could not restore global %r", name)
