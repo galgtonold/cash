@@ -34,7 +34,7 @@ cash version
 ```
 
 ```text title="Output"
-cash <!-- docnum:version -->0.11.0<!-- /docnum -->
+cash <!-- docnum:version -->0.12.0<!-- /docnum -->
 ```
 
 ## `cash info`
@@ -53,7 +53,7 @@ cash info
 ```
 
 ```text title="Output"
-Cash v<!-- docnum:version -->0.11.0<!-- /docnum -->
+Cash v<!-- docnum:version -->0.12.0<!-- /docnum -->
   Backend:    tiered
   Cache dir:  /home/me/project/.cash
   Holds:      412 entries, 1.3 GiB

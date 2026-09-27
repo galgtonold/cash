@@ -7,6 +7,361 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-27
+
+This release makes cash smaller to learn and harder to fool. There is one plain
+`pip install cash-lib`, one name and one import path for each public thing, and
+eleven fewer magics: the ones that repeated what the badge, `%cash_stats`,
+`explain()` or `cash clear` already do. Around that, more sweeps went looking
+for a cached call that returns a stale answer — an environment variable, a file
+checked only by size or existence, a dict's order, a pandas category, a helper
+marked `@cash.pure`, a closure, a compiled extension — and each one found is now
+part of the key. The notebook and the decorator now judge side effects from the
+same list, and the documentation was rewritten around those two paths. 817
+commits in all.
+
+Some names and settings are gone, so read **Breaking** first. Every cached entry
+misses once after you upgrade — see **Upgrading** at the end.
+
+### Breaking
+
+- **One install, no extras.** `pip install cash-lib` now installs everything
+  cash itself needs: psutil, and tomli on Python 3.10. The extras (`[pandas]`,
+  `[polars]`, `[notebook]`, `[redis]`, `[s3]`, `[viz]`, `[memory]`, `[toml]`,
+  `[ipynbname]`, `[cloudpickle]`, `[sqlite]`, `[all]`) are gone; pip warns about
+  an extra that does not exist and installs cash alone. Install what you use
+  yourself: `pyarrow` to store DataFrames as Parquet, `redis` or `boto3` for
+  those backends, `s3fs` or `gcsfs` for tracked `s3://` and `gs://` reads,
+  `ipywidgets` and `matplotlib` for the `show_stats()` dashboard. When a feature
+  needs a package that is missing, the error names it (`pip install redis`).
+  ipynbname is no longer used: cash finds the notebook itself.
+- **Removed magics**, and what to use instead:
+  - `%cash_verify`, `%cash_repair`: a damaged entry is already discarded when it
+    is read. For a clean start, `cash clear --all` and restart the kernel.
+  - `%cash_export`, `%cash_import`, `%cash_diff`: share a cache through a shared
+    backend (one `cache_dir`, Redis or S3).
+  - `%cash_benchmark`: time the cell with `%%time` under `%cash_off`, and read
+    the badge and `%cash_stats` under `%cash_on`.
+  - `%cash_audit`: `%cash_provenance` records the same for every variable.
+  - `%cash_log`: `%cash_debug on` prints the same records in the cell.
+  - `%cash_track`: modules of your project are tracked as soon as a cell imports
+    them. Watching an installed package for edits has no replacement.
+  - `%cash_feedback`: its two links now end `%cash_help`.
+  - The `%%cash` cell magic: use `%cash_on`, and `# @cash:ttl=N` in place of its
+    `ttl=N` line.
+  - The `collab` and `inspect` topics of `%cash_help`: `%cash_help <magic>`
+    now prints any magic's full help (`%cash_help badge`, `%cash_help debug`).
+- **One spelling per directive.** `# @cash:nocache`, `allowrandom`, `cachefit`
+  and `nocachecalls` are now only `no-cache`, `allow-random`, `cache-fit` and
+  `no-cache-calls`. `# @cash:cache-calls` is gone: calls are cached by default.
+  An old spelling is not silently ignored — it warns
+  `ANNOT-UNKNOWN-DIRECTIVE` and names the directive you meant.
+- **One name and one import path for each public thing.**
+  - `cash.mark_pure(f)` and `cash.mark_stateful(f)`: use `cash.pure(f)` and
+    `cash.stateful(f)`, which mark `f` and return it unwrapped.
+  - `cash.mark_opaque(cls)`: use `cash.opaque(cls)`, as a decorator or as a
+    call on a class you do not own. It no longer sets `__cash_opaque__` on the
+    class, so it works on classes that refuse new attributes.
+  - `cash.experimental` is gone. Import `CacheExplorer` from `cash.ui.explorer`
+    (or call `Cash().explorer()`), `DependencyGraph` from `cash.graph` and
+    `AnalyticsManager` from `cash.analytics`. `cash.ui` re-exports nothing.
+  - `CacheDebugger` and `visualize_notebook` are removed: their hit and miss
+    answers never matched the real key. The badge and `f.explain()` answer "why
+    did this miss?" correctly.
+  - `CascadingBackend` is removed: use `TieredBackend`. `Cash(backends=[...])`
+    now builds a `TieredBackend`, with the same caps and rules as the default.
+  - `CacheExpiredError` is removed. Nothing raised it: an expired entry is a
+    miss.
+  - `cash.analyze_function_purity` is removed, with no replacement.
+  - `from cash import *` no longer imports `cache`, `show_stats`,
+    `register_hasher` or `help` (it replaced the builtin `help` and built the
+    default cache as a side effect). Use `cash.cache` and so on.
+  - Modules that were never public API moved: `cash.purity_analyzer` and
+    `cash.purity_flow` are under `cash.analysis`; `cash.notebook.purity` is
+    gone (import `pure`, `stateful`, `is_pure`, `is_stateful` from `cash`);
+    `cash.notebook` no longer re-exports `CashMagics`, `StatementProcessor`,
+    `UpstreamChecker` or `CodeAnalyzer`; `cash.utils` and `cash.logging` are
+    private.
+- **For custom backends and data sources.**
+  - A `DataSource` implements `get_id()` and `state_token()`; `has_changed()`
+    and `update_state()` are gone.
+  - `cash.backends` no longer exports `CacheMetadata`. The metadata a backend
+    sees is a plain dict, and `EntryMetadata` (in `cash.backends`) documents its
+    keys. A custom backend subclasses `CacheBackend`.
+  - `CloudPickleSerializer` and `cash.backends.lazy` (`LazyProxy`) are removed;
+    cash never used them.
+  - `TieredBackend(min_persist_compute_s=..., min_persist_savings_pct=...)` is
+    now `TieredBackend(policy=PersistencePolicy(...))`, from
+    `cash.backends.persistence_policy`.
+- **Settings.**
+  - `smart_persistence` (`CASH_SMART_PERSISTENCE`) is removed. There is one
+    rule for what reaches disk, and a `TieredBackend` you build yourself uses
+    the same 0.1 s floor as the default one instead of 1.0 s.
+  - `"tiered"` is no longer a tier type in a `tiers` list;
+    `backend = "tiered"` still names the RAM + disk stack.
+  - A config file's settings must sit under `[cash]` (or `[tool.cash]` in
+    `pyproject.toml`). A file with only top-level keys is not read, and
+    `CONFIG-INVALID` says so.
+  - Settings given in code are checked, and a bad one raises instead of being
+    dropped: `Cash(...)` refuses a keyword that is not a setting (`Cash(ttl=60)`
+    used to be accepted and ignored), negative sizes, counts and intervals, and
+    an empty `cache_dir`; `@cash.cache(ttl=...)` takes `None`, a number of
+    seconds or a `timedelta`; `depends_on=` takes callables and `DataSource`s
+    (a path belongs in `file_depends_on=`); `configure()` refuses to change the
+    tiers of a backend you passed in. From a file or an environment variable, a
+    bad value is reported as `CONFIG-INVALID` and the default applies. A
+    `CASH_*` variable set to the empty string counts as unset.
+  - `create_default_config()` no longer overwrites an existing file; pass
+    `force=True`.
+
+### Added
+
+- **`with cash.assume_safe():`** waives purity findings for the lines inside
+  it — between `# @cash:assume-safe` on one line and `assume_safe=True` for a
+  whole function. It is code, so a typo fails on the first run instead of
+  waiving nothing, and adding or removing it keeps your stored results. It works
+  at the top level of a notebook cell too. `# @cash:assume-safe` now also works
+  on a notebook statement, where it lets cash cache a call it would refuse by
+  name (a `session.post` that only runs a search, say).
+- **Environment variables are inputs.** A cached function or notebook statement
+  reading `os.environ["TENANT"]` used to serve the first tenant's answer to
+  every other one. A named environment variable and the working directory are
+  now folded into the key on both paths — including `"X" in os.environ`,
+  `Path.cwd()` and `abspath` of a relative path — and a miss names the variable
+  that changed. Only the value's digest is kept, never the value.
+- **How big the disk cache may grow, said once.** `%cash_on` prints the disk
+  cap, the folder and the rule that set it ("a quarter of the free disk space",
+  "set by max_cache_size"); scripts log it at the first disk write and the exit
+  summary names it. The first time the cap removes entries, cash says how much
+  went. A miss on an entry the cap removed now reads "evicted to make room", and
+  recomputing one that took two seconds or more warns `CACHE-EVICTED-RECOMPUTE`.
+- **`KEY-NETWORK-READ`.** A GET or a database query in a decorated function is
+  an input the key cannot see, so cash now advises `ttl=` for it instead of
+  calling it a side effect; a `ttl=` silences it, and `strict=True` raises
+  unless one is set. A connection your code opens through a client object
+  (`requests.Session().get`) counts too.
+- **Rewording a docstring or running a formatter keeps the cache.** Quote style,
+  trailing commas, added parentheses and docstrings no longer change a key, as
+  comments already did not.
+- **An `analytics` setting** (`CASH_ANALYTICS=0`) turns off the notebook's
+  usage history; nothing is written when it is off.
+- `ttl=` accepts a `datetime.timedelta`, `depends_on=` a single callable and
+  `file_depends_on=` a single path.
+
+### Changed
+
+- **Editing a `@cash.pure` or `@cash.stateful` helper invalidates its callers.**
+  A marked helper was left out of the key, so its edit kept serving the old
+  result. A marker says what a helper may do, not what it computes: it is now
+  keyed like any other helper.
+- **A statement around a cached call is stored only for its own work.**
+  `b = shifted(a) + 1` used to keep `shifted(a)`'s result twice, as the call's
+  entry and inside the statement's value. The statement is now priced and stored
+  for what it does beyond the call, and `b = shifted(a)` stores a small
+  reference to the call's entry instead of a copy.
+- **A call whose result a method is called on is cached.** In
+  `b = shifted(a).sum()`, `shifted(a)` used to run again on every run.
+- **A registered hasher keys the value on its own.** `cash.register_hasher` now
+  applies wherever the value sits in an argument — inside a list or a dict, not
+  only at the top level — and cash no longer searches the value for code. The
+  documented way to keep a logger out of the key used to reach every logger and
+  handler in the process and warn `KEY-OPAQUE-CALLABLE`.
+- **Side effects are judged the same way on both paths.** The notebook and the
+  decorator read one list of what writes, reads the clock or talks to the
+  network. In a notebook these statements now run every time instead of being
+  restored: `input()` and `getpass`, `os.popen` and the other process
+  starters, database writes (`INSERT`, `commit`), a POST through a
+  client object (`session.post`, `s3.upload_file`) or spelled
+  `requests.request("POST", ...)`, more file writers (`shutil.copyfile`,
+  `Path.touch`, `Path.unlink`, `os.chmod`), and clock reads such as
+  `time.strftime` and `pd.Timestamp.now()`. A decorated function is now warned
+  about the same calls, and about pyplot drawing; `re.compile`, `gzip.open` and
+  `df.eval` are no longer reported as I/O.
+- **Tables, dicts and objects are keyed by all they hold.** Two values that
+  differed used to share an entry: pandas columns of the same values over
+  different categories, a column holding `1` and one holding `'1'`, two slices
+  of one PyArrow table, a polars column of Python objects, equal dicts in a
+  different order (which changes `pd.DataFrame(d)`'s columns), an ndarray or
+  `str` subclass carrying a set, a grid built as `[[0] * 3] * 3`, and two classes
+  named `Config` in two modules. The notebook's loop and call keys now use the
+  decorator's hashers, so an `int64` and an `Int64` series no longer match.
+- **Notebook usage history moved** from `~/.cash/analytics.db` to the per-user
+  cache folder (`~/.cache/cash` on Linux, `~/Library/Caches/cash` on macOS,
+  `%LOCALAPPDATA%\cash` on Windows), and `show_stats()` shows this session's
+  events.
+- **Cash spends less on itself.** A hit on 200,000 numpy floats in a list takes
+  18 ms instead of 1.3 s; string columns key five to eight times faster; cash's
+  I/O wrappers are installed only while a cached call or `%cash_on` needs them
+  and keep the real function's signature and docstring for `help()`;
+  `%cash_status` counts entries without reading them; a long-running process no
+  longer grows a call log, a lock per key or a `Cash` that can never be freed.
+- Byte sizes read the same everywhere, in binary units labelled as such
+  (`2.0 GiB`, not `2 GB`).
+- Links in warnings and in the config template point at the current docs.
+- **The documentation was rewritten** around the decorator and the notebook,
+  each with its own tab and limitations page, with dark mode and pages that fit
+  a phone.
+
+### Fixed
+
+**Wrong or stale answers in decorated functions.**
+
+- **Code the key never saw.** An object a factory-built helper captured, the
+  class a classmethod helper is bound to, a function or model held in a data
+  global (inside an sklearn pipeline too), the arguments of a `partial` or the
+  state of a callable object in a global, a function from a C or Cython
+  extension built in your project, a function with no source file (`python -c`,
+  a heredoc), two closures from one factory capturing different modules, and a
+  script's cached callee run as `python pipeline.py`. Each edit was served the
+  old result; each is now keyed.
+- **A redefined function is never served the old version's result.** A new
+  definition could inherit a dead one's identity and hit on its entries.
+- A `functools.wraps` wrapper with parameters of its own binds a call to them,
+  not to the inner function's.
+- A part of the key that cannot be built makes the call run uncached with a
+  warning, instead of being left out of the key.
+- `explain()` builds the key a real call builds, and `m.score.explain(2)` on a
+  method raises and names the spelling that works,
+  `Model.score.explain(m, 2)`.
+
+**Files, remote data and pools.**
+
+- **Reads that were not recorded.** `os.path.getsize` and `getmtime` (the
+  "newest export" idiom), an existence check that answers yes, a reader bound
+  by name (`from pyarrow.parquet import read_table`) and pyarrow's reader
+  classes, a dataset read from a directory, a glob or a list of paths, a
+  SQLite database opened by `file:` URI, a file read while the app imports
+  before the first decoration, and what `multiprocessing.Pool` and joblib
+  workers read (every scikit-learn `n_jobs=`).
+- `file_depends_on=` and `FileDataSource` check the file's content, not its
+  mtime, like any tracked read.
+- A remote prefix or glob is checked by its listing, so a new partition
+  invalidates; a read with `storage_options` is checked against the store they
+  name; remote checks use the proxy settings in effect at the time.
+- On Windows, a path longer than 260 characters and a drive letter written as
+  `D://` are kept as local files, and a dependency cash cannot check is never
+  counted as fresh.
+- A file rewritten with the same size within two seconds is caught when cells
+  run without history (from an agent or an extension).
+
+**Notebooks.**
+
+- **cash finds the notebook** when the kernel runs in its own virtualenv or
+  conda env, on JupyterHub, and behind an HTTP proxy. Upstream tracking used to
+  stay off for the whole session.
+- **Top-level `await` works on IPython 9.16 and later**; every such cell failed
+  or hung.
+- **A virtualenv inside the project folder** (`python -m venv .`) no longer
+  makes every local module look installed, so editing one invalidates its
+  cells.
+- **Module edits are seen**: a submodule imported as `from pkg import helpers`
+  hits on the second run, a same-size edit saved within a second of the import
+  is not hidden by its `.pyc`, and a comment added to a module no longer re-runs
+  the work built on it.
+- A `@cash.stateful` function or a file writer called through a module of your
+  project (`helpers.announce(...)`, `wr.write_csv(...)`) runs every time, as the
+  same function defined in the notebook did.
+- `# @cash:no-cache`: statements reading its output see the new value, a draw
+  under it continues the live random stream, and the directive at the end of a
+  line works like one on its own line.
+- Cached control flow behaves like Python: `try`/`except`/`finally` runs
+  `finally` and matches handlers as Python does, a `for` loop's `else` runs, an
+  error in an `if` condition keeps its type, and a loop that fails part-way
+  stops and shows your error.
+- **Restart & Run All re-runs less.** Several statements keyed differently in
+  each kernel and recomputed after every restart: `M = enc.fit_transform(data)`,
+  calls into libraries whose names clash with a variable (`u`, `random`), seeded
+  draws, loops that learned to split, a `def` in a cell with a magic, and code
+  run under coverage.
+- **A function that keeps state in its closure** (a `nonlocal` counter, a list
+  it appends to) is no longer served the previous call's answer. A cached call
+  to it restores what it changed, or runs every time when cash cannot restore
+  it, and a statement around it re-runs instead of skipping the call.
+- One stall while cash times the cheap calls in a comprehension no longer
+  keeps them cached for the rest of the statement.
+- An open file or a generator returned by a call inside a statement is never
+  stored and handed back drained.
+- Code a frontend runs silently (a variable explorer) is no longer treated as a
+  cell.
+- `cash.configure(cache_dir=...)` and `configure(persist_all=...)` reach a
+  running notebook, and `call_cost_floor_seconds` is honoured.
+
+**Badges, magics and warnings.**
+
+- The badge's EXECUTED time leaves out cash's own work, so it agrees with the
+  saved time; "step x/N" counts only statements that run; and quotes in a value
+  can no longer break out of the badge's HTML.
+- `%cash_provenance` and `%cash_badge` use the badge's words (EXECUTED, CACHED);
+  `%cash_status` and `%cash_provenance` refuse arguments they do not know;
+  `%cash_debug` keeps a log path's case and turns fully off.
+- `RANDOM-UNSEEDED` says what happens to a cheap draw (it is drawn again) and is
+  not given for a `no-cache` statement; a fit that is not cached is not called
+  frozen.
+- Warnings: two different warnings about one function are both shown; a warning
+  shown once per cache is recorded only when a filter let it through, so
+  `filterwarnings("error")` in CI fails every run, not just the first;
+  `KEY-DEPENDS-ON-OPAQUE` fires; library C code (a lock, a stream) no longer
+  warns `KEY-OPAQUE-CALLABLE`; one slow first call no longer triggers
+  `CACHE-NET-LOSS`; every warning carries its `.code`.
+- `show_stats()` prints its table in a script, the cache explorer's preview
+  works, and the nbconvert strip preprocessor removes only cash's own output.
+- `cash.help()` no longer tells coding agents four wrong things.
+
+**Storage, configuration and the CLI.**
+
+- `f.cache_clear()` reaches other running processes, retries a file Windows
+  holds open and warns `CACHE-CLEAR-INCOMPLETE` about what survives, and resets
+  every counter.
+- Cached generators can be advanced from any thread, two streams of one call no
+  longer share chunks, and a quick generator reaches disk by the same rule as
+  any result.
+- A result one backend cannot pickle no longer fails the call; a forked worker
+  no longer hangs on the parent's in-flight write; another process's new entry
+  is never read with the old entry's metadata; every tier expires an entry by
+  one `ttl` rule, and a bad stored `ttl` reads as expired.
+- A DataFrame comes back from disk with its `RangeIndex`, and one Parquet
+  cannot return as it was is pickled instead.
+- A small RAM tier keeps its entries under memory pressure, and a failed memory
+  reading never fails a write. `shutdown_write_timeout=0` no longer warns about
+  writes that landed.
+- Settings: a relative `cache_dir` is resolved once, where it was given; a
+  `cache_dir` too long for Windows paths warns at once; a failed `configure()`
+  leaves everything as it was and takes settings the way `Cash(...)` does;
+  `configure(summary=...)` works both ways; every tier setting is used or
+  reported; `configure()` and `disabled()` reach pool workers; `disabled()`
+  blocks in two threads unwind correctly; `Cash(backend="sqlite")` builds that
+  backend.
+- `cash info`, `inspect` and `clear` find the cache where the kernel or a tier's
+  own `cache_dir` puts it, `cash clear` removes every file cash writes, names a
+  file another process holds instead of printing a traceback, and can be re-run
+  after it stops part-way. `--function`, `--entry` and `--expired` on a SQLite
+  cache are refused rather than reporting nothing cleared. Names the console
+  cannot encode no longer crash the CLI or `show_stats()`.
+
+### Upgrading
+
+**Every cached entry misses once.** Keys changed in several ways — formatting
+and docstrings are ignored, and tables, dicts and objects are hashed more fully
+— so the first run after upgrading recomputes everything and writes new entries
+beside the old ones. From then on, reformatting or rewording a docstring keeps
+the cache. `cash clear --all` removes the old entries if you would rather not
+carry both.
+
+Then:
+
+- Replace the removed names, magics and directive spellings listed under
+  **Breaking**. An old directive spelling now warns rather than being ignored.
+- Drop the extras from your install line: `pip install cash-lib` plus the
+  libraries you use (for example `pip install cash-lib pandas pyarrow`).
+- Move the settings of a config file that has only top-level keys under
+  `[cash]`.
+- Old cache layouts are no longer migrated: an entry written without a checksum
+  is recomputed, and a SQLite database at its old location (where the cache
+  folder path itself was the database file) is not picked up. A loop's learned
+  split point is measured again once.
+- Usage history starts over in the new location. The old `~/.cash/analytics.db`
+  is no longer read and can be deleted.
+
 ## [0.11.0] - 2026-09-22
 
 Eight rounds of user testing on the notebook path — five projects each, run by
