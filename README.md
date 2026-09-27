@@ -69,6 +69,13 @@ features("large_dataset.csv")     # restored, and again in the next process
 - Side effects (HTTP calls, file writes) are flagged, because they run on the
   first call only.
 
+A 30-second video of `@cash.cache` in a script (click to play):
+
+<a href="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/decorator-2026-09.mp4">
+  <img width="640" alt="Play the 30-second video of @cash.cache in a script"
+       src="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/decorator-2026-09.jpg">
+</a>
+
 [Decorator quick start](https://cash-lib.readthedocs.io/en/latest/getting-started/quickstart-script/) · [`@cash.cache` guide](https://cash-lib.readthedocs.io/en/latest/decorator/)
 
 ## Notebook
@@ -104,9 +111,12 @@ edited, so only that line ran.
   `df["x"] = ...` or `items.append(...)` are detected.
 - Expensive results are saved to disk and come back after a kernel restart.
 
-A 90-second demo of cash in a real notebook:
+A 30-second video of cash in a notebook (click to play):
 
-https://github.com/user-attachments/assets/3f376660-aeb5-4794-89cc-532a04f82f32
+<a href="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/notebook-2026-09.mp4">
+  <img width="640" alt="Play the 30-second video of cash in a notebook"
+       src="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/notebook-2026-09.jpg">
+</a>
 
 Or try it in your browser with no install:
 

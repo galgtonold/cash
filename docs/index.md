@@ -40,6 +40,13 @@ slow_square(4)           # cache hit: instant, also in the next process
 - Every result is written to disk, so a new process gets it back.
 - Works in any Python script; no notebook needed.
 
+<video class="cash-demo-video" controls playsinline preload="none" width="1920" height="1080"
+       poster="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/decorator-2026-09.jpg"
+       aria-label="30-second video: @cash.cache in a script">
+  <source src="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/decorator-2026-09.mp4" type="video/mp4">
+  <a href="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/decorator-2026-09.mp4">Download the video</a>.
+</video>
+
 [Decorator quick start](getting-started/quickstart-script.md)
 
 ## Notebook
@@ -69,6 +76,13 @@ summary = df.groupby("region").sum()
 <iframe class="cash-badge" title="cash badge example: a cell restored from the cache" src="/_badges/anatomy_hero.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 <p class="cash-badge-caption">Click a badge to open it.</p>
+
+<video class="cash-demo-video" controls playsinline preload="none" width="1920" height="1080"
+       poster="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/notebook-2026-09.jpg"
+       aria-label="30-second video: cash in a notebook">
+  <source src="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/notebook-2026-09.mp4" type="video/mp4">
+  <a href="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/notebook-2026-09.mp4">Download the video</a>.
+</video>
 
 Try it in your browser with no install:
 [Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb) ·

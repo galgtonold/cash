@@ -711,9 +711,16 @@
   padding-left: 12px;
 }
 
-/* ─── Landing hero video (enabled once the R2 asset is wired in) ─────── */
-.cash-hero-video {
+/* ─── Home: the 30-second video under each path's example ───────────── */
+.cash-demo-video {
+  display: block;
+  width: 100%;
+  max-width: 900px;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin: 1.25em 0;
   border: 1px solid var(--cash-rule-strong);
+  border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
 }
 

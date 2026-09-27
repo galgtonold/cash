@@ -8,7 +8,7 @@ first: `pip install cash-lib` (see [Installation](installation.md)).
 To try it without installing, open the
 [Colab](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
 or [Binder](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb)
-tour.
+tour. To see it first, watch the [30-second video](../index.md#notebook).
 
 ## 1. Turn cash on
 

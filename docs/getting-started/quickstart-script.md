@@ -4,7 +4,8 @@
     Scripts, services and libraries that use `@cash.cache`.
 
 Cache a slow function with one decorator, then watch cash notice when a
-helper or a data file it depends on changes.
+helper or a data file it depends on changes. To see it first, watch the
+[30-second video](../index.md#decorator).
 
 ## 1. Install
 
