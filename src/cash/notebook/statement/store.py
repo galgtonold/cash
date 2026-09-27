@@ -31,6 +31,7 @@ from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
 
+from ..call_key import holds_a_closure_with_state
 from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, CallRef
 
 if TYPE_CHECKING:
@@ -533,6 +534,19 @@ class StatementStore:
                     # file-loaded data got here past the too-cheap floor and
                     # its badge row said NOT CACHED.
                     skip_reason = None
+        # The same route for a value holding a closure that keeps state --
+        # `add = make_log()` with the factory imported from a module, so the
+        # rule above does not see it. A function is kept by reference, so the
+        # restore handed back the closure the last run made, still holding
+        # what it had appended.
+        if not should_skip:
+            _stateful = sorted(_name for _name, _v in captured_vars.items() if holds_a_closure_with_state(_v))
+            if _stateful:
+                should_skip = True
+                skip_reason = (
+                    f"output(s) {', '.join(_stateful)} hold a function that changes its closure; "
+                    f"statement re-executes (lineage persists)"
+                )
         # Perpetual-miss guard. After the gates above so it can override their
         # exemptions: ``has_file_dependencies`` waives the whole size-aware
         # cost model, and a fit on a CSV-derived frame inherits the read's file

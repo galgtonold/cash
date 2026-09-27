@@ -21,6 +21,7 @@ from cash.notebook.cache_key import (
     compute_cache_key,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
+from cash.notebook.call_key import changes_its_closure
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -50,7 +51,7 @@ from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.ast_util import resolve_dotted_name
+from ...analysis.ast_util import called_names, resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     decide_cacheability,
@@ -710,6 +711,20 @@ class StatementProcessor:
                 f"Callee mutates: {', '.join(sorted(callee_globals))} "
                 "(global lineage bumped; statement re-executes, call still cached)"
             )
+        # The same for a callee that changes its closure: `add` appending to
+        # the list `make_log` gave it, `counter` bumping a `nonlocal`. The
+        # list is no variable of the notebook, so it is not an output and has
+        # no lineage; the statement only re-executes. Restored whole, it
+        # skipped the call inside, and the list stayed empty. In a loop or
+        # branch body too: without a lineage the body statement's key never
+        # moves, so nothing else sends it back to run.
+        closure_writers = self._callees_changing_their_closure(tree)
+        if closure_writers:
+            run.skip_cache = True
+            metrics["uncacheable_reasons"].append(
+                f"Callee changes its closure: {', '.join(sorted(closure_writers))} "
+                "(statement re-executes, call still cached)"
+            )
         # a draw inside a loop/branch body. Skip the CACHE without
         # touching ``outputs`` -- the statement must re-execute so the artists
         # actually land on the Axes, but bumping its lineage from a per-statement
@@ -724,6 +739,12 @@ class StatementProcessor:
             metrics["uncacheable_reasons"].append(
                 f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
             )
+
+    def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
+        """The functions *tree* calls by name, outside loop and branch bodies,
+        that change their closure (:func:`changes_its_closure`)."""
+        user_ns = self.shell.user_ns
+        return {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
 
     def _decide_cacheability(self, run: StatementRun) -> None:
         """Skip-cache *run* when the static cacheability decision refuses it."""

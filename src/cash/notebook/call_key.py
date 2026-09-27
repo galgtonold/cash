@@ -44,6 +44,7 @@ __all__ = [
     "CallKeys",
     "call_cache_key",
     "callee_mutated_globals",
+    "changes_its_closure",
     "global_digests",
     "global_names_reached",
     "holds_a_closure_with_state",
@@ -140,6 +141,16 @@ def _source_mutations(fn) -> tuple[str, ...]:
     return cached
 
 
+def changes_its_closure(fn) -> bool:
+    """Whether calling *fn* rebinds a variable of the function it was made
+    in, or changes an object one of them holds: ``nonlocal count; count +=
+    1``, ``seen.append(x)``."""
+    if not isinstance(fn, _types.FunctionType):
+        return False
+    cells = closure_cells(fn)
+    return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
+
+
 def holds_a_closure_with_state(value, depth: int = 2) -> bool:
     """Whether *value* is, or directly holds, a function that changes what
     its closure holds when called: a counter or a log a factory returned.
@@ -150,8 +161,7 @@ def holds_a_closure_with_state(value, depth: int = 2) -> bool:
     make_counter(0)`` run again gave a counter that went on from 2.
     """
     if isinstance(value, _types.FunctionType):
-        cells = closure_cells(value)
-        return bool(cells) and (rebinds_its_closure(value) or any(n in cells for n in _source_mutations(value)))
+        return changes_its_closure(value)
     if depth <= 0:
         return False
     if isinstance(value, (tuple, list, set, frozenset)):

@@ -4,6 +4,8 @@ import textwrap
 
 import pytest
 
+from tests._nbharness.runner import CASH_TEST_PIN_THRESHOLDS
+
 pytestmark = [pytest.mark.stress]
 
 
@@ -394,6 +396,35 @@ class TestGlobalNonlocalScope:
         nb_runner.run_all()
         assert "n1 = 1, n2 = 2" in nb_runner.get_output(3)
         assert nb_runner.peek("add.__closure__[0].cell_contents") == "['a', 'a']"
+
+    @pytest.mark.timeout(90)
+    def test_a_statement_is_not_restored_past_a_write_to_a_closure(self, nb_runner):
+        """With statements cached too, the second run restored ``n1 =
+        add('a')`` and ``val1 = counter()`` whole: the printed values were
+        right, but the calls inside never ran, so ``add``'s list stayed empty
+        and ``counter`` stayed at 0. A statement whose callee changes its
+        closure re-executes, as one whose callee changes a global does, in a
+        loop body too; the call inside it is still served."""
+        nb_runner.create_notebook(
+            [
+                "import cash\n%load_ext cash\n" + CASH_TEST_PIN_THRESHOLDS + "%cash_on",
+                "def make_log():\n    seen = []\n    def add(x):\n        seen.append(x)\n        return len(seen)\n"
+                "    return add",
+                "add = make_log()\nn1 = add('a')\nn2 = add('a')\nfor x in 'bc':\n    n3 = add(x)\n"
+                "print(f'n1 = {n1}, n2 = {n2}, n3 = {n3}')",
+                "def make_counter(start):\n    count = start\n    def increment():\n        nonlocal count\n"
+                "        count += 1\n        return count\n    return increment",
+                "counter = make_counter(0)\nval1 = counter()\nval2 = counter()\nprint(f'val1 = {val1}, val2 = {val2}')",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        nb_runner.run_all()
+
+        assert "n1 = 1, n2 = 2, n3 = 4" in nb_runner.get_output(3)
+        assert "val1 = 1, val2 = 2" in nb_runner.get_output(5)
+        assert nb_runner.peek("add.__closure__[0].cell_contents") == "['a', 'a', 'b', 'c']"
+        assert nb_runner.peek("counter.__closure__[0].cell_contents") == "2"
 
     @pytest.mark.timeout(90)
     def test_global_in_function(self, nb_runner):
