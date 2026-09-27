@@ -91,9 +91,23 @@ def _setup(magics):
     run_cash_cell(magics, "a = list(range(1000))")
 
 
+def _floor_between_own_work_and_the_call(magics):
+    """Pin the statement floor between a statement's own work and the 0.2 s
+    call inside it, for a test that a statement is judged by the former.
+
+    The own work (``+ [1]``, ``len(b)``) takes microseconds, but it is timed
+    by the wall clock, which charges it for any moment the thread was not
+    running. A Windows runner measured 29 ms for ``c = shifted(a) + [2]``
+    around a served call, over the default 0.01 s floor, and kept the value.
+    Its whole cost, the call's included, stays above this floor, so a
+    statement priced by that instead is still caught."""
+    magics._cash_instance.config.min_execution_time_to_cache_seconds = 0.1
+
+
 def test_a_cheap_rest_around_a_cached_call_keeps_no_value(tiers, mock_shell):
     """F: ``b = shifted(a) + [1]``."""
     magics, ram, disk = tiers
+    _floor_between_own_work_and_the_call(magics)
     _setup(magics)
     run_cash_cell(magics, "b = shifted(a) + [1]")
     assert mock_shell.user_ns["b"] == [*range(1000), 1]
@@ -113,6 +127,7 @@ def test_a_cheap_rest_around_a_cached_call_keeps_no_value(tiers, mock_shell):
 def test_a_statement_missing_while_its_call_hits_keeps_no_value(tiers, mock_shell):
     """G: a second statement over the same call is served the call."""
     magics, ram, disk = tiers
+    _floor_between_own_work_and_the_call(magics)
     _setup(magics)
     run_cash_cell(magics, "b = shifted(a) + [1]")
     run_cash_cell(magics, "c = shifted(a) + [2]")
@@ -163,6 +178,7 @@ def test_a_file_read_inside_a_cached_call_does_not_waive_the_floor(tiers, mock_s
     magics, ram, disk = tiers
     path = tmp_path / "data.txt"
     path.write_text("hello", encoding="utf-8")
+    _floor_between_own_work_and_the_call(magics)
     _setup(magics)
     run_cash_cell(magics, f"t = load(r'{path}') + '!'")
     assert mock_shell.user_ns["t"] == "hello!"
@@ -180,6 +196,7 @@ def test_a_cheap_statement_over_it_is_not_kept_for_rebuilding_the_call(tiers, mo
     cell can write it to disk. Rebuilding ``b`` costs the ``+ [1]`` and a
     restore of the call's result, not the call, so ``n = len(b)`` gets none."""
     magics, ram, disk = tiers
+    _floor_between_own_work_and_the_call(magics)
     _setup(magics)
     run_cash_cell(magics, "b = shifted(a) + [1]")
     run_cash_cell(magics, "n = len(b)")
@@ -253,6 +270,7 @@ def test_a_call_whose_result_a_method_is_called_on_is_a_call_unit(tiers, mock_sh
     inside it ran again on every run. It is the call unit; the ``.count(5)``
     is the statement's own, cheap, work."""
     magics, ram, disk = tiers
+    _floor_between_own_work_and_the_call(magics)
     _setup(magics)
     run_cash_cell(magics, "b = shifted(a).count(5)")
     assert mock_shell.user_ns["b"] == 1
