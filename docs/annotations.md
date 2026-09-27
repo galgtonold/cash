@@ -173,7 +173,7 @@ waives the whole block, as the comment would anywhere inside it.
 
 ### `# @cash:no-cache-calls` { #call-level-caching-default-and-cashno-cache-calls }
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @b55376b5 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @fb18d631 -->
 cash also caches the expensive **calls inside** a statement, by default and with
 no directive. That is what keeps work cached where the statement itself cannot
 be: in `results.append(compute(x))` the append runs every time, but `compute(x)`
@@ -210,8 +210,9 @@ and `no-cache` switches them off.
 
 !!! warning "A cached call skips effects cash cannot see"
     cash does not serve a call from the cache when it sees the function change
-    an argument, draw random numbers or write a file, and it restores a change
-    the function makes to a global. Any other effect is skipped on a hit. Use
+    an argument, rebind a variable of its closure, draw random numbers or write
+    a file, and it restores a change the function makes to a global or to a
+    list, dict or set its closure holds. Any other effect is skipped on a hit. Use
     `no-cache-calls` on the statement, or mark the function [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers),
     when you are not sure.
 

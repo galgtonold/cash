@@ -399,6 +399,10 @@ git commit -m "release: X.Y.Z"
 git tag vX.Y.Z
 ```
 
+If any commit landed after step 2 (a CI fix, say), run
+`python scripts/claims.py --queue` again on the commit you tag: `publish.yml`
+blocks on drift that CI on `main` only reports.
+
 Push only after the user confirms. Pushing the tag does not publish:
 `publish.yml` runs on a published GitHub Release (or a manual dispatch).
 
