@@ -8,12 +8,14 @@ and, when caching costs more than ``_OVERHEAD_FACTOR`` times the work, the
 rest of the statement's calls to the site run plain. Expensive calls are never
 timed plain, and a new statement run starts over.
 
-Overhead is made deterministic here by slowing the lookup.
+The guard's clock is a fake one here, moved only by the work and the lookup
+by exact amounts. They slept once: on Windows, Python 3.10's ``time.sleep`` ends
+on a system-timer tick, so a 1.5 ms call and a 2 ms lookup both waited ~2 ms
+or ~15.6 ms, whichever the timer resolution was at the time, and the verdict
+turned on the tick rather than on the costs the tests set out.
 """
 
 from __future__ import annotations
-
-import time
 
 import pytest
 
@@ -31,14 +33,35 @@ SITE = CallSite(
 N = cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES + 40
 
 
+class FakeClock:
+    """The clock ``call_unit`` reads, moved only by :meth:`spend`."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def spend(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @pytest.fixture
-def slow_lookup(monkeypatch):
+def clock(monkeypatch):
+    fake = FakeClock()
+    monkeypatch.setattr(cu, "_perf_counter", fake)
+    return fake
+
+
+@pytest.fixture
+def slow_lookup(monkeypatch, clock):
+    """Every lookup costs exactly 2 ms."""
     real = CallEntries.lookup
     lookups: list[str] = []
 
     def lookup(self, key):
         lookups.append(key)
-        time.sleep(0.002)
+        clock.spend(0.002)
         return real(self, key)
 
     monkeypatch.setattr(CallEntries, "lookup", lookup)
@@ -67,7 +90,7 @@ def test_a_new_statement_run_starts_over(call_unit_harness, slow_lookup):
     assert len(slow_lookup) == 1
 
 
-def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, monkeypatch):
+def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, monkeypatch, clock):
     """Timing a plain sample of a slow call would repeat the slow work; a
     call over the cheap bar is not sampled at all."""
     monkeypatch.setattr(cu, "_GUARD_CHEAP_BELOW_S", 0.001)
@@ -77,7 +100,7 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
 
     def work(v):
         note(v)
-        time.sleep(0.005)  # over the (lowered) cheap bar and the store floor
+        clock.spend(0.005)  # over the (lowered) cheap bar and the store floor
         return v * 2
 
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
@@ -93,7 +116,7 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
     assert ran == [], "an expensive call was run again instead of served"
 
 
-def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lookup):
+def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lookup, clock):
     """``add_features(g)`` over 360 groups, ~5 ms a call,
     cost ~8 ms more a call to cache and still under 4x its work, so it kept
     being cached. Keying and looking it up alone cost as much as the call: a
@@ -101,7 +124,7 @@ def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lo
     whose key and lookup cost at least the call runs plain."""
 
     def work(v):
-        time.sleep(0.0015)  # under the 2 ms lookup; well under 4x the miss
+        clock.spend(0.0015)  # under the 2 ms lookup; well under 4x the miss
         return v * 2
 
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
@@ -112,18 +135,23 @@ def test_calls_a_hit_could_not_beat_stop_being_cached(call_unit_harness, slow_lo
     assert len(slow_lookup) == cu._GUARD_AFTER_CALLS, "calls no hit could beat kept being looked up"
 
 
-def test_one_stalled_sample_does_not_keep_the_site_cached(call_unit_harness, slow_lookup):
+def test_one_stalled_sample_does_not_keep_the_site_cached(call_unit_harness, slow_lookup, clock):
     """The test above failed on a macOS runner with 90 lookups for 50: the
     five samples were timed, and the site stayed cached. A stall inside one
     sample (the process descheduled, a garbage collection) is enough to lift
-    the mean of five past the bar. The verdict reads their median."""
+    the mean of five past the bar. The verdict reads their median: the
+    samples here are 30, 1.5, 1.5, 1.5 and 1.5 ms, a mean of 7.2 ms that a
+    2 ms lookup is under three quarters of, and a median of 1.5 ms that it
+    is not."""
     ran: list[int] = []
+    # Not `ran.append` in the body: a hit replays that write to its closure.
+    note = ran.append
 
     def work(v):
-        ran.append(v)
+        note(v)
         # The first call run plain to time it comes after the cached ones.
         stalled = len(ran) == cu._GUARD_AFTER_CALLS + 1
-        time.sleep(0.03 if stalled else 0.0015)
+        clock.spend(0.03 if stalled else 0.0015)
         return v * 2
 
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
