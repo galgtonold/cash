@@ -370,6 +370,11 @@ Edit only `__version__ = "..."` in `src/cash/__init__.py`. `pyproject.toml` read
 `tests/test_core/test_docs_version_currency.py` fails if a user-facing page names
 another version.
 
+Then move the try-it notebooks to the new version: run
+`python scripts/build_try_cash_colab.py` and set the `cash-lib~=X.Y.0` pin in
+`binder/requirements.txt`. `tests/docs/test_try_cash_notebooks_in_sync.py`
+checks both.
+
 ### 5. Build and verify, always into an empty `dist/`
 
 ```bash
