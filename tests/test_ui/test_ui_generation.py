@@ -1,5 +1,5 @@
-import os
 import shutil
+import tempfile
 import unittest
 
 from cash import Cash
@@ -7,14 +7,15 @@ from cash import Cash
 
 class TestUIGeneration(unittest.TestCase):
     def setUp(self):
-        self.cache_dir = "test_ui_cache"
+        # A directory of this test's own: under xdist the tests of this class
+        # run at the same time in different workers, and a shared cwd-relative
+        # folder let one test's tearDown delete the other's files.
+        self.cache_dir = tempfile.mkdtemp(prefix="cash_test_")
         self.app = Cash(cache_dir=self.cache_dir)
-        self.app.backend.clear()
 
     def tearDown(self):
         self.app.backend.clear()
-        if os.path.exists(self.cache_dir):
-            shutil.rmtree(self.cache_dir)
+        shutil.rmtree(self.cache_dir)
 
     def test_size_tracking(self):
         @self.app.cache
