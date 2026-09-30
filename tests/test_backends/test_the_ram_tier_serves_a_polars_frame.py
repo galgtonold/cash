@@ -13,9 +13,9 @@ import pytest
 
 pl = pytest.importorskip("polars")
 
-from cash.backends.file_backend import FileBackend  # noqa: E402
-from cash.backends.memory_backend import InMemoryBackend  # noqa: E402
-from cash.backends.tiered_backend import TieredBackend  # noqa: E402
+from cash.backends.file_backend import FileBackend
+from cash.backends.memory_backend import InMemoryBackend
+from cash.backends.tiered_backend import TieredBackend
 
 
 def _frame():

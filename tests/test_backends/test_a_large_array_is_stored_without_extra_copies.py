@@ -17,10 +17,10 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from cash.backends import file_backend  # noqa: E402
-from cash.backends.cache_dir import VERSION_FILENAME  # noqa: E402
-from cash.backends.entry_format import MAGIC, read_entry  # noqa: E402
-from cash.backends.file_backend import FileBackend  # noqa: E402
+from cash.backends import file_backend
+from cash.backends.cache_dir import VERSION_FILENAME
+from cash.backends.entry_format import MAGIC, read_entry
+from cash.backends.file_backend import FileBackend
 
 N = 500_000  # 4 MB of float64: well above the out-of-band threshold
 

@@ -11,8 +11,8 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from cash.backends import memory_backend  # noqa: E402
-from cash.backends.memory_backend import InMemoryBackend  # noqa: E402
+from cash.backends import memory_backend
+from cash.backends.memory_backend import InMemoryBackend
 
 
 @pytest.fixture
