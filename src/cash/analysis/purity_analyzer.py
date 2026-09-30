@@ -57,7 +57,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .._annotation_refs import annotation_referents
-from .._memo import CODE_OBJECTS, PURITY_REPORTS, LruMemo
+from .._memo import CODE_OBJECTS, MODULE_ANALYSES, PURITY_REPORTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
@@ -85,7 +85,11 @@ from ..source_norm import (
     callable_identity,
     compiled_identity,
     extension_file_digest,
+    getsource,
+    getsourcelines,
     own_source,
+    settled_source_version,
+    source_version_unchanged,
 )
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
@@ -1775,7 +1779,7 @@ def _clock_helper_read(value: Any) -> str | None:
     _CLOCK_HELPER_CACHE[code] = None  # a helper that calls itself
     found = None
     try:
-        tree = ast.parse(textwrap.dedent(inspect.getsource(value)))
+        tree = ast.parse(textwrap.dedent(getsource(value)))
         func_def = tree.body[0] if tree.body else None
         body = list(getattr(func_def, "body", []))
         if (
@@ -2727,7 +2731,7 @@ def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> Non
     """
     try:
         target = func.__code__ if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__") else func
-        first = inspect.getsourcelines(target)[1]
+        first = getsourcelines(target)[1]
         filename = inspect.getsourcefile(target) or ""
     except SOURCE_RETRIEVAL_ERRORS:
         return
@@ -2786,7 +2790,7 @@ def _is_log_helper_function(value: Any) -> bool:
     known = _LOG_HELPER_CACHE.get(code)
     if known is None:
         try:
-            tree = ast.parse(textwrap.dedent(inspect.getsource(value)))
+            tree = ast.parse(textwrap.dedent(getsource(value)))
             known = bool(tree.body) and is_log_helper(tree.body[0])
         except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
             known = False
@@ -2985,13 +2989,27 @@ def _module_modified_globals(module: Any) -> frozenset[str]:
 
     Empty when the source can't be read, so nothing is flagged on incomplete
     information. The scan is memoised on the source text, so a module edited
-    under a running process is scanned again.
+    under a running process is scanned again; and, once its file has settled,
+    on the file's version, so each helper the walk meets in a big module does
+    not read and hash the whole file again to find the scan it already did.
     """
+    version = settled_source_version(module)
+    if version is not None:
+        hit = _MODULE_MUTATIONS.get(version)
+        if hit is not None:
+            return hit
     try:
         source = inspect.getsource(module)
     except SOURCE_RETRIEVAL_ERRORS:
         return frozenset()
-    return _modified_globals_in_source(source)
+    modified = _modified_globals_in_source(source)
+    if version is not None and source_version_unchanged(version):
+        _MODULE_MUTATIONS[version] = modified
+    return modified
+
+
+#: `_module_modified_globals` per module file version: (path, mtime_ns, size).
+_MODULE_MUTATIONS: LruMemo[tuple[str, int, int], frozenset[str]] = LruMemo(MODULE_ANALYSES)
 
 
 @functools.lru_cache(maxsize=256)
@@ -3048,7 +3066,7 @@ def _try_source_hash(func: Callable[..., Any]) -> str | None:
     report, and the second got the first one's findings.
     """
     try:
-        src = inspect.getsource(func)
+        src = getsource(func)
     except SOURCE_RETRIEVAL_ERRORS:
         return None
     return hashlib.sha256(src.encode("utf-8")).hexdigest()

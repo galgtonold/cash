@@ -32,7 +32,7 @@ from ..analysis.purity_analyzer import (
 from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
-from ..source_norm import own_source
+from ..source_norm import getsource, own_source
 from ..value_types import CODELESS_PRIMS
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH
@@ -594,7 +594,7 @@ class GlobalsFold:
         provisional: frozenset = frozenset()
         if candidates:
             try:
-                tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+                tree = ast.parse(textwrap.dedent(getsource(func)))
                 hard = unsafe_uses_of(
                     tree,
                     candidates,
@@ -1438,7 +1438,7 @@ class GlobalsFold:
             return cached
         names: tuple[str, ...] = ()
         try:
-            tree = ast.parse(textwrap.dedent(inspect.getsource(code)))
+            tree = ast.parse(textwrap.dedent(getsource(code)))
             node = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
             if node is not None and node.decorator_list:
                 g = getattr(fn, "__globals__", None) or {}

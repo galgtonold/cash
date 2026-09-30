@@ -30,6 +30,7 @@ from ..source_norm import (
     callable_identity,
     code_consts_without_docstring,
     compiled_identity,
+    getsource,
     loaded_class_identity,
     loaded_code_matches_disk,
     own_source_digest,
@@ -599,7 +600,7 @@ class CodeIdentity:
                 return cached
         result: tuple[str | None, tuple[str, ...], bool] = (None, (), False)
         try:
-            src = textwrap.dedent(inspect.getsource(func))
+            src = textwrap.dedent(getsource(func))
             tree = ast.parse(src)
         except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
             if code is not None:

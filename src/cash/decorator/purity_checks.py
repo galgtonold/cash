@@ -35,6 +35,7 @@ from ..exceptions import (
     CashImpureFunctionError,
     CashImpurityWarning,
 )
+from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
 from .code_identity import func_key, is_user_module, own_package
@@ -166,7 +167,7 @@ def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
     if reader is None:
         return ""
     try:
-        lines, first = inspect.getsourcelines(reader)
+        lines, first = getsourcelines(reader)
         filename = inspect.getsourcefile(reader) or inspect.getfile(reader)
         source = textwrap.dedent("".join(lines))
         tree = ast.parse(source)
@@ -209,7 +210,7 @@ def helper_mutates_global(fn: Any, name: str) -> bool:
             if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
                 return True
     try:
-        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        tree = ast.parse(textwrap.dedent(getsource(fn)))
     except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
         return False
     return name in unsafe_uses_of(tree, frozenset({name}), bare_args=False, mutating_methods_only=True)

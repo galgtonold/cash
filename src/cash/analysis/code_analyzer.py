@@ -23,6 +23,7 @@ from typing import Any
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_norm import getsource
 from .ast_util import bytecode_global_refs, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
@@ -516,7 +517,7 @@ class CodeAnalyzer:
 
         visitor = _CallVisitor()
         try:
-            source = textwrap.dedent(inspect.getsource(func))
+            source = textwrap.dedent(getsource(func))
             tree = ast.parse(source)
         except SOURCE_RETRIEVAL_ERRORS:
             # No source (`python - <<EOF`, `python -c`, `exec`): the names

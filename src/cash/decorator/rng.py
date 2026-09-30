@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..analysis.annotations import parse_annotation_line
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_norm import getsource, getsourcelines
 from ..tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
@@ -435,7 +436,7 @@ class RngWatch:
     def note_self_seeding(self, func: Callable, func_name: str) -> None:
         """Remember which global streams *func*'s own source seeds."""
         try:
-            src = textwrap.dedent(inspect.getsource(func))
+            src = textwrap.dedent(getsource(func))
             own = get_seeding_rng_modules(src)
         except Exception:  # noqa: BLE001 - no source: every drawn stream stays an input
             return
@@ -508,7 +509,7 @@ class RngWatch:
             return
 
         try:
-            src_lines, first_lineno = inspect.getsourcelines(func)
+            src_lines, first_lineno = getsourcelines(func)
         except SOURCE_RETRIEVAL_ERRORS:
             # No retrievable source (exec'd, REPL, C function). Staying silent
             # is the conservative choice: we cannot see a draw, so we cannot
