@@ -173,7 +173,8 @@ know:
   wrapper too.
 - **File writes need no marker.** A helper you wrote that writes a file
   (`fig.savefig(...)`, `df.to_csv(...)`, `open(p, "w")`), directly or through
-  another of your functions, in the notebook or in a module of your project, is
+  any chain of your other functions, however long, in the notebook or in a
+  module of your project, is
   detected: the statement runs every time and the
   badge says `Calls save(), which writes files`. Appending to a log file does not
   count. If such a write does not matter, mark the helper `@pure` and it caches

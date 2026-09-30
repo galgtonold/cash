@@ -165,7 +165,8 @@ REMOTE_URLS = 1024
 #: accounted on every iteration.
 STATEMENTS = 4096
 
-#: One "does it write files?" verdict per user function and call depth.
+#: What one user function's own body says about writing files, by its code:
+#: whether it replaces a file itself, and the calls it makes.
 USER_CALLEES = 500
 
 #: One set of file snapshots per producing cache entry: a folder read's set

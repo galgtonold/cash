@@ -19,7 +19,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from .._memo import USER_CALLEES, LruMemo
+from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
+from ..exceptions import CashCacheIneffectiveWarning
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
 from ..source_norm import getsource
@@ -111,19 +113,83 @@ def statement_user_writer_call(
     return None
 
 
-#: How many calls deep :func:`user_callee_writing_files` follows user code.
-_MAX_CALLEE_DEPTH = 3
+#: How many user functions one question may follow before cash gives up on
+#: telling. Not a depth: every function a call reaches is followed, and a
+#: seen set ends call cycles. This only stops a walk that is running away;
+#: past it, the call is judged a writer, so its statement runs every time.
+_CALLEE_LIMIT = 5_000
 
-#: (co_filename, co_firstlineno, source, depth) -> name of the writing function
-#: or None. Keyed on the depth the function was examined at: below the cap a
-#: search sees fewer calls, and its "no" must not answer a question asked from
-#: higher up.
-_callee_write_cache: LruMemo[tuple[str, int, str, int], str | None] = LruMemo(USER_CALLEES)
-#: A miss in `_callee_write_cache`, whose entries may be None.
+#: What a statement's writer is called when cash could not follow all of it.
+_TOO_MANY_CALLEES = f"<more than {_CALLEE_LIMIT} functions to follow>"
+
+#: A function's code object -> whether its body itself replaces a file, and the
+#: callee expressions of its calls; None when cash does not look into it (an
+#: installed package's code, no source, a body that does not parse). Keyed by
+#: the code that RUNS, so a redefined function is read again. Only what the
+#: body says: the callees are resolved again on every question, because a
+#: name the body calls can be rebound, and a verdict memoised with the
+#: callee it had then answered for one that was no longer there.
+_body_cache: LruMemo[types.CodeType, "tuple[bool, tuple[ast.expr, ...]] | None"] = LruMemo(USER_CALLEES)
+#: A miss in `_body_cache`, whose entries may be None.
 _NOT_SEEN = object()
 
 
-def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
+def _read_body(func: types.FunctionType) -> "tuple[bool, tuple[ast.expr, ...]] | None":
+    """What *func*'s own source says: see :data:`_body_cache`."""
+    code_obj = func.__code__
+    if normcase_path(os.path.abspath(code_obj.co_filename)).startswith(installed_roots()):
+        return None
+    try:
+        source = textwrap.dedent(getsource(func))
+    except (OSError, TypeError):
+        return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    handles = frozenset(locally_opened_handles(tree))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    replaces = any(call_repeatability(node, handles) == REPEATABILITY_REPLACING for node in calls)
+    # One of each spelling, and only the ones a name lookup can resolve
+    # (``helper``, ``module.helper``): ``df.assign(...)`` ten times over is
+    # one lookup, and ``make()(...)`` resolves to nothing at all.
+    callees: dict[tuple[str, ...], ast.expr] = {}
+    for node in calls:
+        parts: list[str] = []
+        expr = node.func
+        while isinstance(expr, ast.Attribute):
+            parts.append(expr.attr)
+            expr = expr.value
+        if isinstance(expr, ast.Name):
+            callees.setdefault((expr.id, *reversed(parts)), node.func)
+    return replaces, tuple(callees.values())
+
+
+def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, tuple[ast.expr, ...]] | None":
+    """``(function, replaces a file itself, callee expressions)`` for a user
+    function cash can read, or None for anything else: not a Python function,
+    ``@pure``, from an installed package, or without source."""
+    if not isinstance(func, types.FunctionType):
+        func = inspect.unwrap(func) if callable(func) else func
+        if not isinstance(func, types.FunctionType):
+            return None
+    elif hasattr(func, "__wrapped__"):
+        func = inspect.unwrap(func)
+        if not isinstance(func, types.FunctionType):
+            return None
+    if is_pure(func):
+        return None
+    code_obj = func.__code__
+    known = _body_cache.get(code_obj, _NOT_SEEN)
+    if known is _NOT_SEEN:
+        known = _read_body(func)
+        _body_cache[code_obj] = known
+    if known is None:
+        return None
+    return func, known[0], known[1]
+
+
+def user_callee_writing_files(func: Any) -> str | None:
     """The user function that writes files when *func* is called, or None.
 
     ``save(fig, "chart.png")``, where ``save`` calls ``fig.savefig``, writes a
@@ -141,47 +207,46 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     says nothing about what this call does with the user's files. ``@pure``
     is the user's word that the function has no effect; it is taken.
 
-    Calls are followed :data:`_MAX_CALLEE_DEPTH` deep, which also ends a
-    call cycle, so the answer depends only on the function and the depth.
+    Every user function the call reaches is followed, however deep; a seen
+    set ends call cycles. Calls were once followed three deep, and a write
+    four calls down was cached and skipped on a hit. A walk past
+    :data:`_CALLEE_LIMIT` functions is taken for a writer, with a warning:
+    the statement runs every time rather than be served without a write.
     """
-
-    func = inspect.unwrap(func) if callable(func) else func
-    if not isinstance(func, types.FunctionType) or is_pure(func) or _depth > _MAX_CALLEE_DEPTH:
+    root = _examined_body(func)
+    if root is None:
         return None
-    code_obj = func.__code__
-    if normcase_path(os.path.abspath(code_obj.co_filename)).startswith(installed_roots()):
-        return None
-    try:
-        source = textwrap.dedent(getsource(func))
-    except (OSError, TypeError):
-        return None
-    key = (code_obj.co_filename, code_obj.co_firstlineno, source, _depth)
-    known = _callee_write_cache.get(key, _NOT_SEEN)
-    if known is not _NOT_SEEN:
-        return known
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return None
-    handles = frozenset(locally_opened_handles(tree))
-    replaces = any(
-        isinstance(node, ast.Call) and call_repeatability(node, handles) == REPEATABILITY_REPLACING
-        for node in ast.walk(tree)
-    )
-    found = func.__name__ if replaces else None
-    if found is None:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                # ``helper(...)`` and ``other_module.helper(...)`` alike: a
-                # project module's export often hands the write to a sibling
-                # module. Attributes are followed through modules only.
-                callee = resolve_callee(node.func, func.__globals__)
-                if callee is not None and callee is not func:
-                    found = user_callee_writing_files(callee, _depth + 1)
-                    if found:
-                        break
-    _callee_write_cache[key] = found
-    return found
+    seen: set[int] = {id(root[0])}
+    held = [root[0]]  # keeps every examined function alive, so no id is reused
+    stack = [root]
+    while stack:
+        current, replaces, callees = stack.pop()
+        if replaces:
+            return current.__name__
+        found = []
+        for expr in callees:
+            # ``helper(...)`` and ``other_module.helper(...)`` alike: a
+            # project module's export often hands the write to a sibling
+            # module. Attributes are followed through modules only.
+            body = _examined_body(resolve_callee(expr, current.__globals__))
+            if body is None or id(body[0]) in seen:
+                continue
+            seen.add(id(body[0]))
+            held.append(body[0])
+            found.append(body)
+        if len(seen) > _CALLEE_LIMIT:
+            name = getattr(root[0], "__qualname__", root[0].__name__)
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-HELPERS-UNWALKABLE",
+                f"cash cannot tell whether {name}() writes files: it reaches more than "
+                f"{_CALLEE_LIMIT} functions. A statement calling it runs every time.",
+                "If your code really calls this many functions, report it: cash should follow them all.",
+            )
+            return _TOO_MANY_CALLEES
+        # Depth first, in the order the body makes its calls.
+        stack.extend(reversed(found))
+    return None
 
 
 # Write-call method forms whose FIRST positional argument (or a common path

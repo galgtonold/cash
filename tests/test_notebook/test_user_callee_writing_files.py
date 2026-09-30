@@ -105,10 +105,10 @@ def ring_b(path):
 
 
 def test_the_verdict_does_not_depend_on_what_was_asked_first():
-    """A function reached near the depth cap cannot see a writer past it; that
-    cut answer must not be what a direct question about it gets later."""
-    namespace_effects._callee_write_cache.clear()
-    assert user_callee_writing_files(chain_top) is None  # the writer is past the cap from here
+    """Every function is followed however deep, so a writer five calls down
+    is seen from the top, and no answer depends on the question before it."""
+    namespace_effects._body_cache.clear()
+    assert user_callee_writing_files(chain_top) == "deep_writer"
     assert user_callee_writing_files(chain_3) == "deep_writer"
     assert user_callee_writing_files(chain_2) == "deep_writer"
 
@@ -117,6 +117,6 @@ def test_a_call_cycle_does_not_hide_a_writer():
     """``ring_b`` only calls ``ring_a``, which calls ``ring_b`` back and then
     the writer. Asking about ``ring_a`` first must not leave ``ring_b``
     answered from the moment ``ring_a`` was still being examined."""
-    namespace_effects._callee_write_cache.clear()
+    namespace_effects._body_cache.clear()
     assert user_callee_writing_files(ring_a) == "deep_writer"
     assert user_callee_writing_files(ring_b) == "deep_writer"
