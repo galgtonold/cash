@@ -46,7 +46,7 @@ SOURCES = {
 
         @cash.cache
         def read():
-            return os.environ.get("HOME") is not None
+            return os.environ.get("PATH") is not None
 
 
         print(read())

@@ -63,13 +63,19 @@ def expandvars_of_a_parameter(p):
     return os.path.expandvars(p)
 
 
+#: Where ``~`` comes from: Windows reads USERPROFILE and ignores HOME.
+HOME_VAR = "USERPROFILE" if os.name == "nt" else "HOME"
+#: Plain names, so Windows path separators cannot change how they read back.
+HOMES = ("cash_home_a", "cash_home_b")
+
+
 @pytest.mark.parametrize(
     ("fn", "var", "values"),
     [
         (expandvars, "CASH_TEST_DATA_DIR", ("/data/a", "/data/b")),
-        (expanduser, "HOME", ("/home/a", "/home/b")),
-        (home, "HOME", ("/home/a", "/home/b")),
-        (path_expanduser, "HOME", ("/home/a", "/home/b")),
+        (expanduser, HOME_VAR, HOMES),
+        (home, HOME_VAR, HOMES),
+        (path_expanduser, HOME_VAR, HOMES),
     ],
     ids=lambda v: getattr(v, "__name__", None),
 )
@@ -86,8 +92,10 @@ def test_a_new_value_is_a_new_entry(c, monkeypatch, fn, var, values):
 
 
 def test_which_follows_path(c, monkeypatch, tmp_path):
+    # Windows finds a program only by an extension listed in PATHEXT.
+    suffix = ".bat" if os.name == "nt" else ""
     for sub in ("one", "two"):
-        tool = tmp_path / sub / "cash-test-tool"
+        tool = tmp_path / sub / f"cash-test-tool{suffix}"
         tool.parent.mkdir()
         tool.write_text("#!/bin/sh\n", encoding="utf-8")
         tool.chmod(0o755)

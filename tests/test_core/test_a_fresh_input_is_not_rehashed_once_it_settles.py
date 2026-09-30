@@ -111,6 +111,10 @@ data = sys.argv[2]
 if sys.argv[3] == "make":
     with open(data, "wb") as fh:
         fh.write(b"abcdefgh")
+    # Written "just now" as of the body's read, however long the first
+    # call's analysis takes: a slow machine let the file settle before it.
+    t = time.time_ns() + 3_000_000_000
+    os.utime(data, ns=(t, t))
 head(data)
 reads = [r for r in reads if r == data]
 print(len(reads), head.cache_info()["hits"])
@@ -134,6 +138,6 @@ def test_the_remembered_check_reaches_the_next_process(tmp_path):
     run("make")
     import time
 
-    time.sleep(1.2)
+    time.sleep(4.2)  # past the future mtime plus the 1 s window
     assert run("call") == ["1", "1"], "the first settled check reads it once"
     assert run("call") == ["0", "1"], "the next process read the unchanged file again"
