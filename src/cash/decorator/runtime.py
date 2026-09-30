@@ -204,6 +204,7 @@ class KeyBuilder:
             state_hash = folded_defaults
             chain.append(state_hash)
             state_hash = self._closures.fold_bound_self(func, func_name, state_hash)
+            state_hash = self._closures.fold_bound_partial(func, func_name, state_hash)
             chain.append(state_hash)
             state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
             state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)

@@ -174,7 +174,7 @@ _STATE_STAGES = (
     "its code",
     "a variable it captures",
     "a parameter default",
-    "the instance it is bound to",
+    "the instance or values it is bound to",
     "a global it reads",
     "the random-seed epoch",
     "the environment it reads",

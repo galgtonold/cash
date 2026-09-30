@@ -1030,7 +1030,8 @@ did not expect the file to change.
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
 **What happened.** An argument could not be hashed, so no key could be built.
-The message names the type, or says the value is nested in a container. The
+The message names the type, or says the value is nested in a container. A
+value a cached `functools.partial` binds counts as an argument too. The
 call ran uncached.
 
 **Why it matters.** Every call with that argument recomputes. Nothing stale
