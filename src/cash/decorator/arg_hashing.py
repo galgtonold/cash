@@ -24,6 +24,8 @@ from ..object_hashing import (
     NOT_HOOKED,
     builtin_hash,
     canonical_bytes,
+    canonical_call_bytes,
+    canonical_marker_bytes,
     is_native_panic,
     stable_key_repr,
 )
@@ -882,6 +884,24 @@ class ArgHasher:
             self._frame_memo_store(value, digest)
         return digest
 
+    def plain_value_digest(self, value: Any) -> str | None:
+        """``hash_payload((value,), {})`` for plain or JSON-like data
+        (`plain_key_part`), without the general walk around it; None for
+        any other value.
+
+        The same digest: such a value is keyed by the digest of its content
+        alone, holds no hook's value, and alone shares nothing with another
+        argument.
+        """
+        if self.override_hashers or self.type_hashers or self._frozen.arrays or self._frozen.containers:
+            return None
+        if type(value) not in _plain_data.TREE_NODES:
+            return None
+        marker = plain_key_part(value)
+        if marker is value:
+            return None
+        return hashlib.sha256(canonical_marker_bytes(marker)).hexdigest()
+
     def hash_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form.
@@ -892,6 +912,14 @@ class ArgHasher:
         ``TypeError`` of an unhashable argument instead, so the call runs
         uncached with KEY-UNHASHABLE-ARG.
         """
+        if not (self.override_hashers or self.type_hashers or self._frozen.arrays or self._frozen.containers):
+            # Every argument a number, a string, None: the canonical bytes
+            # built directly, the same ones the walk below makes (a
+            # tenth of its cost, which is most of a small-argument hit).
+            fast = canonical_call_bytes(args, kwargs)
+            if fast is not None:
+                ARG_COST.last = None
+                return hashlib.sha256(fast).hexdigest()
 
         def get_arg_hash(arg):
             # Content-authoritative builtin hashers FIRST. pandas /

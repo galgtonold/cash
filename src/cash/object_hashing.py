@@ -260,6 +260,51 @@ def canonical_bytes(value: Any, hook: Callable[[Any], Any] | None = None, seen: 
     return b"u" + _plain_data.content_dumps(form)
 
 
+#: Exact types `canonical_call_bytes` writes straight into the form: each is
+#: its own canonical form (`stable_key_repr` returns it as it is).
+_FORM_PRIMS = frozenset((str, int, float, bool, type(None), bytes, complex))
+
+
+def canonical_call_bytes(args: tuple, kwargs: dict) -> bytes | None:
+    """``canonical_bytes((args, kwargs))`` for a call whose every argument is
+    a primitive (`_FORM_PRIMS`), built without the walk; None for any other.
+
+    The same bytes, at a tenth of the cost: a primitive is its own form, and
+    the tuple and dict around them are tagged as `_typed` tags them. Hooks do
+    not apply to primitives, and none of them is a container another
+    argument could share.
+    """
+    prims = _FORM_PRIMS
+    for a in args:
+        if type(a) not in prims:
+            return None
+    for k, v in kwargs.items():
+        if type(v) not in prims or type(k) is not str:
+            return None
+    return _call_bytes(tuple(args), tuple(kwargs.items()))
+
+
+def canonical_marker_bytes(marker: tuple) -> bytes:
+    """``canonical_bytes(((marker,), {}))`` for a *marker* that is a tuple of
+    strings: the one argument an argument hash reduced to a digest of its own
+    (`arg_hashing.plain_key_part`)."""
+    return _call_bytes((("__cash_type__", _BUILTIN_CONTAINER_TAGS[tuple], marker),), ())
+
+
+def _call_bytes(arg_forms: tuple, kwarg_forms: tuple) -> bytes:
+    """The canonical bytes of ``(args, kwargs)`` from their items' forms."""
+    tuple_tag = _BUILTIN_CONTAINER_TAGS[tuple]
+    form = (
+        "__cash_type__",
+        tuple_tag,
+        (
+            ("__cash_type__", tuple_tag, arg_forms),
+            ("__cash_type__", _BUILTIN_CONTAINER_TAGS[dict], kwarg_forms),
+        ),
+    )
+    return b"u" + _plain_data.content_dumps(form)
+
+
 #: What a `stable_key_repr` hook returns for a value it has no stand-in for.
 NOT_HOOKED = object()
 
