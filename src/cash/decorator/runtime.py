@@ -134,11 +134,9 @@ class KeyBuilder:
         or default that cannot be hashed, a key build that raised -- has
         been warned about once; the caller runs it uncached.
         """
-        mocked = self._registry.refresh_helper_bindings(func, func_name)
-        if mocked is not None:
-            return Unkeyable(
-                MissReason(MissKind.MOCKED, f"{mocked}, which has no code to key, so the call ran uncached")
-            ), {}
+        unkeyable = self._registry.refresh_helper_bindings(func, func_name)
+        if unkeyable is not None:
+            return Unkeyable(unkeyable), {}
         ledger: dict = {}
         ledger_token = STATE_LEDGER.set(ledger)
         watch: dict = {}

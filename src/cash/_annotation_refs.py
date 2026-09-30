@@ -21,7 +21,6 @@ import types
 import typing
 from typing import Any
 
-_MAX_DEPTH = 8
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
@@ -64,16 +63,25 @@ def _resolve_string(text: str, namespace: dict) -> list[Any]:
     return found
 
 
-def _walk(value: Any, namespace: dict, out: list, depth: int) -> None:
-    if depth > _MAX_DEPTH or value is None:
+def _walk(value: Any, namespace: dict, out: list, seen: dict) -> None:
+    """Add what *value* names to *out*. *seen* (key -> the object, held so its
+    id is not reused) ends a cycle of string aliases (``A = "B"``, ``B = "A"``);
+    everything else is a finite tree, walked whole, however deeply nested."""
+    if value is None:
         return
+    # Per namespace: the same text in another module can name another class,
+    # and so can one alias (``typing`` caches ``List["B"]``) holding it.
+    mark = (value if isinstance(value, str) else id(value), id(namespace))
+    if mark in seen:
+        return
+    seen[mark] = value
     if isinstance(value, str):
         for resolved in _resolve_string(value, namespace):
-            _walk(resolved, namespace, out, depth + 1)
+            _walk(resolved, namespace, out, seen)
         return
     forward = getattr(value, "__forward_arg__", None)
     if isinstance(forward, str):
-        _walk(forward, namespace, out, depth + 1)
+        _walk(forward, namespace, out, seen)
         return
     if isinstance(value, (type, types.FunctionType)):
         out.append(value)
@@ -86,9 +94,9 @@ def _walk(value: Any, namespace: dict, out: list, depth: int) -> None:
     except Exception:  # noqa: BLE001 - an alias typing cannot take apart has nothing to walk
         return
     if origin is not None:
-        _walk(origin, namespace, out, depth + 1)
+        _walk(origin, namespace, out, seen)
     for arg in args:
-        _walk(arg, namespace, out, depth + 1)
+        _walk(arg, namespace, out, seen)
     # `Annotated[int, AfterValidator(check)]`: the validator's function runs.
     func = getattr(value, "func", None)
     if isinstance(func, types.FunctionType):
@@ -106,6 +114,7 @@ def annotation_referents(obj: Any, is_user: Any = None) -> list[Any]:
     is returned is unfiltered; the caller decides what is user code.
     """
     out: list[Any] = []
+    seen: dict = {}
     try:
         if isinstance(obj, type):
             owners = []
@@ -126,15 +135,15 @@ def annotation_referents(obj: Any, is_user: Any = None) -> list[Any]:
         for owner in owners:
             namespace = _module_namespace(owner)
             for value in _raw_annotations(owner).values():
-                _walk(value, namespace, out, 0)
+                _walk(value, namespace, out, seen)
         if isinstance(obj, type):
             fields = getattr(obj, "model_fields", None)
             if isinstance(fields, dict):
                 namespace = _module_namespace(obj)
                 for info in fields.values():
-                    _walk(getattr(info, "annotation", None), namespace, out, 0)
+                    _walk(getattr(info, "annotation", None), namespace, out, seen)
                     for meta in getattr(info, "metadata", ()) or ():
-                        _walk(meta, namespace, out, 0)
+                        _walk(meta, namespace, out, seen)
     except Exception:  # noqa: BLE001 - following annotations must never break a call
         return out
     return out

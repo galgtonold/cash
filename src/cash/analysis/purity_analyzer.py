@@ -50,6 +50,7 @@ import textwrap
 import threading
 import time
 import types
+import warnings
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -73,7 +74,7 @@ from ..effects import (
     environ_membership,
     environment_input,
 )
-from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashWarning
 from ..install_paths import is_user_path
 from ..purity import (
     KNOWN_PURE_BUILTINS,
@@ -333,6 +334,10 @@ class PurityReport:
     #: through a plain helper or a function-local import had none, and an
     #: edit to it served its callers' old results.
     cached_callees: tuple[Any, ...] = ()
+    #: Why the walk for the key could not finish (`PurityAnalyzer._WALK_LIMIT`),
+    #: or "". A report that did not reach every helper cannot key the call,
+    #: so the call runs uncached.
+    unwalkable: str = ""
 
     @property
     def is_clean(self) -> bool:
@@ -471,9 +476,11 @@ class _PurityVisitor(ast.NodeVisitor):
         self.opens_tracked_database = False
         #: Environment reads whose value the key folds (`environment_input`).
         self.environment_reads: set[tuple[str, str]] = set()
-        # Bare names read (Load context) in this body - used to detect reads of
-        # mutable module globals.
-        self.read_names: set[str] = set()
+        # Bare names read (Load context) in this body, in source order - used
+        # to detect reads of mutable module globals and to find helpers named
+        # as values. Ordered, so the walk queues helpers in the same order in
+        # every process (a set's order moves with PYTHONHASHSEED).
+        self.read_names: dict[str, None] = {}
         #: Attribute reads (Load context) on a name or another attribute: a
         #: helper named as a value through its module (``map(helper.g, xs)``).
         self.read_attributes: list[ast.Attribute] = []
@@ -517,7 +524,7 @@ class _PurityVisitor(ast.NodeVisitor):
 
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load):
-            self.read_names.add(node.id)
+            self.read_names[node.id] = None
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -2000,10 +2007,15 @@ class PurityAnalyzer:
     analyzer via :func:`get_analyzer`.
     """
 
-    _MAX_DEPTH = 6  # Defensive depth cap. Real call hierarchies
-    # rarely exceed 3-4 levels before hitting library code; the cap
-    # bounds pathological cases (recursive helpers that resolve
-    # through different code paths).
+    #: How many callables one walk may visit. Not a depth cap: every helper
+    #: the cached function reaches, however deep, is keyed, and the visited
+    #: set ends cycles. Code that is finite never reaches this. What can is
+    #: code that makes a NEW function on every read (a module ``__getattr__``
+    #: or a class building a closure per attribute access, reached from the
+    #: function it builds): the walk would never end. Stopping there silently
+    #: would leave the rest out of the key, so the function runs uncached
+    #: instead (``PurityReport.unwalkable``), with a warning.
+    _WALK_LIMIT = 5_000
 
     def __init__(self) -> None:
         # memo key -> (report, the function it was built from); see `analyze`
@@ -2069,6 +2081,12 @@ class PurityAnalyzer:
                 return cached
 
         report = self._analyze_uncached(func)
+        if report.unwalkable:
+            warnings.warn(
+                f"cash cannot key {_qualname_of(func)}: {report.unwalkable}. It runs uncached.",
+                CashWarning,
+                stacklevel=2,
+            )
         if is_stateful(func):
             # The user has spoken: one finding for the function itself.
             report = dataclasses.replace(
@@ -2178,14 +2196,12 @@ class PurityAnalyzer:
             """Queue, hash-only, the user classes and functions *obj*'s
             annotations name (see ``cash._annotation_refs``): pydantic runs a
             field type's validators, a ``get_type_hints`` builder constructs it."""
-            if depth >= self._MAX_DEPTH:
-                return
             for target in annotation_referents(obj, lambda o: _is_user_code(o, root_module)):
                 _queue_hash_only(target, obj, depth)
 
         def _queue_class_refs(cls: Any, tree: ast.AST, depth: int) -> None:
             """Queue user-code objects a CLASS body constructs, hash-only."""
-            if not isinstance(cls, type) or depth >= self._MAX_DEPTH:
+            if not isinstance(cls, type):
                 return
             for called in _called_names_in_tree(tree):
                 _queue_hash_only(_resolve_in_class_namespaces(cls, called), cls, depth)
@@ -2214,20 +2230,40 @@ class PurityAnalyzer:
             if starts:
                 stack = starts
         # id -> whether that walk reported findings, and the name it took.
-        visited_ids: dict[int, bool] = {}
-        walked_names: dict[int, str] = {}
+        visited_ids: dict[Any, bool] = {}
+        walked_names: dict[Any, str] = {}
+        # Every object walked stays alive until the walk ends: `id()` is
+        # unique only among live objects, and a bound method is made anew on
+        # each attribute read, so a collected one could hand its id to a
+        # different method, which was then skipped as already walked.
+        keep_alive: list[Any] = []
+        unwalkable = ""
         while stack:
             func, depth, hash_only, reported = stack.pop()
             reported = reported and not (is_pure(func) or is_stateful(func))
-            walked_reported = visited_ids.get(id(func))
+            # A bound method is visited as its function and the object it is
+            # bound to: `Model.run` read twice gives two method objects, one
+            # method.
+            if isinstance(func, types.MethodType):
+                walk_id: Any = (id(func.__func__), id(func.__self__))
+            else:
+                walk_id = id(func)
+            walked_reported = visited_ids.get(walk_id)
             if walked_reported is not None and (walked_reported or not reported):
                 continue
-            visited_ids[id(func)] = reported
+            if len(keep_alive) >= self._WALK_LIMIT:
+                unwalkable = (
+                    f"the helpers {_qualname_of(root_func)} reaches do not end (over {self._WALK_LIMIT} "
+                    "functions walked; code that makes a new function on every read can cause this)"
+                )
+                break
+            keep_alive.append(func)
+            visited_ids[walk_id] = reported
             if walked_reported is not None:
                 # Walked below a marker first, reached now from an unmarked
                 # caller too: walk it again so its findings are reported. Its
                 # key part is the same, under the same name.
-                qualname = walked_names[id(func)]
+                qualname = walked_names[walk_id]
             else:
                 qualname = _qualname_of(func)
                 # Visited by OBJECT: a library wrapper can copy the name of the
@@ -2241,7 +2277,7 @@ class PurityAnalyzer:
                         n += 1
                     qualname = f"{qualname}#{n}"
                 visited.add(qualname)
-                walked_names[id(func)] = qualname
+                walked_names[walk_id] = qualname
 
             # Read source. Failure -> opaque leaf for PURITY: we cannot see
             # what it does, so we decline to judge it.
@@ -2268,7 +2304,7 @@ class PurityAnalyzer:
                 # stand in: a cached function run from `python - <<EOF` or
                 # `python -c` keyed its own bytecode and nothing it called,
                 # and an edited helper was served the old result.
-                if depth < self._MAX_DEPTH and isinstance(func, types.FunctionType):
+                if isinstance(func, types.FunctionType):
                     for chain in bytecode_global_refs(func):
                         callee = resolve_callee_chain(func.__globals__, chain)
                         if not isinstance(callee, types.FunctionType) or callee is func:
@@ -2415,9 +2451,6 @@ class PurityAnalyzer:
             if not reported:
                 # Under ``@pure`` / ``@stateful``: walked for the key only.
                 del all_issues[own_issues_from:]
-
-            if depth >= self._MAX_DEPTH:
-                continue
 
             # Resolve callees and queue user-code helpers. The merged
             # namespace (built above) includes closure cells so nested-function
@@ -2594,6 +2627,7 @@ class PurityAnalyzer:
             unkeyable=tuple(unkeyable),
             environment_reads=frozenset(environment_reads),
             cached_callees=tuple(cached_callees),
+            unwalkable=unwalkable,
         )
 
     def _flag_mutable_global_reads(
@@ -2601,7 +2635,7 @@ class PurityAnalyzer:
         func: Callable[..., Any],
         func_def: ast.AST,
         qualname: str,
-        read_names: set[str],
+        read_names: dict[str, None],
         all_issues: list[PurityIssue],
     ) -> None:
         """Append an issue for each module global *func* reads that is
@@ -2620,7 +2654,7 @@ class PurityAnalyzer:
         locals_ = _function_locals(func_def)
         freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
         own_name = getattr(func, "__name__", None)
-        candidates = (read_names & modified) - locals_ - freevars - BUILTIN_NAMES
+        candidates = (read_names.keys() & modified) - locals_ - freevars - BUILTIN_NAMES
         for name in sorted(candidates):
             if name == own_name or name not in module_ns:
                 continue
