@@ -116,7 +116,9 @@ if sys.argv[3] == "make":
     t = time.time_ns() + 3_000_000_000
     os.utime(data, ns=(t, t))
 head(data)
-reads = [r for r in reads if r == data]
+# The tracker may hand the path over with other separators (Windows).
+same = lambda p: os.path.normcase(os.path.normpath(p))
+reads = [r for r in reads if same(r) == same(data)]
 print(len(reads), head.cache_info()["hits"])
 """
 
