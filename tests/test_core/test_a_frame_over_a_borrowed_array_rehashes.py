@@ -58,10 +58,10 @@ def test_a_check_that_cannot_run_rehashes(total, monkeypatch):
     """If the borrowed-data check itself fails (a pandas internals change),
     the frame is re-hashed. Keeping the memo then served the stale 10.0."""
 
-    def broken(block):
+    def broken(*args):
         raise AttributeError("pandas moved its internals")
 
-    monkeypatch.setattr(arg_hashing, "_block_refcount", broken)
+    monkeypatch.setattr(arg_hashing, "_refs_beyond", broken)
     arr = np.array([[1.0, 2.0], [3.0, 4.0]])
     frame = pd.DataFrame(arr, copy=False)
     assert total(frame) == 10.0

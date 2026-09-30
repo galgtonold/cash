@@ -180,7 +180,7 @@ def test_the_memo_lets_go_of_a_collected_frame(c):
     def n(df):
         return len(df)
 
-    df = _frame()
+    df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "s": ["x", "y", "z"]})  # no categorical: memoised
     n(df)
     assert id(df) in c._args._frame_memo
     key = id(df)
