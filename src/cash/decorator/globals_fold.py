@@ -803,6 +803,19 @@ class GlobalsFold:
         if pending is not None:
             pending.update(watch)
         parts.extend(self._local_binding_parts(func))
+        # A function default is evaluated where the `def` stands, so what a
+        # default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
+        # of *func*'s: editing K kept the key.
+        for default in self._function_defaults(func):
+            if seen is not None:
+                if ("default", id(default)) in seen:
+                    continue
+                seen.add(("default", id(default)))
+            h = self.fold_read_globals(
+                default, func_name, "", owner_code=owner_code if owner_code is not None else code, seen=seen
+            )
+            if h:
+                parts.append((f"#default:{default.__qualname__}", h))
         for cls in classes:
             parts.extend(
                 self.class_parts(
@@ -816,6 +829,23 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _function_defaults(func: Callable) -> list[types.FunctionType]:
+        """The user functions among *func*'s parameter defaults."""
+        found: list[types.FunctionType] = []
+        for container in (
+            getattr(func, "__defaults__", None) or (),
+            (getattr(func, "__kwdefaults__", None) or {}).values(),
+        ):
+            for value in container:
+                if (
+                    isinstance(value, types.FunctionType)
+                    and value is not func
+                    and own_code_is_user(value, getattr(func, "__module__", None))
+                ):
+                    found.append(value)
+        return found
 
     def fold_helper_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold globals the transitive HELPERS read, not just *func*'s own.
@@ -1043,7 +1073,7 @@ class GlobalsFold:
     def _may_read_data(self, fn: Any) -> bool:
         """Could `GlobalsFold.fold_read_globals` find anything in *fn*? False for
         a method that reads no global, no ``module.attr``, no import in its
-        body -- most of a class's
+        body and has no function default -- most of a class's
         methods, and every one a dataclass generates -- so a class costs a
         lookup per such method instead of a fold."""
         code = fn.__code__
@@ -1053,7 +1083,7 @@ class GlobalsFold:
                 self.read_global_data_names(fn) or self._read_module_attr_pairs(fn) or self._local_binding_plan(fn)
             )
             self._reads_anything[code] = cached
-        return cached
+        return cached or bool(self._function_defaults(fn))
 
     def _class_code(self, cls: type) -> tuple[tuple, frozenset, frozenset, frozenset]:
         """``(functions, written globals, names read, attributes written)``
@@ -1618,6 +1648,11 @@ class GlobalsFold:
             # constant served stale. Fold user-class attributes too.
             is_cls = isinstance(obj, type) and is_user_class(obj, own_pkg)
             if not (is_mod or is_cls):
+                # `scale.k` with `scale.k = 1` set on a function of the
+                # user's: an attribute stored on the function object, which
+                # its source does not show.
+                if isinstance(obj, types.FunctionType):
+                    parts.extend(self._function_attr_parts(obj, attr, mod_name, func_name))
                 continue
             try:
                 value = inspect.getattr_static(obj, attr) if is_cls else getattr(obj, attr)
@@ -1687,6 +1722,19 @@ class GlobalsFold:
             if h is not None:
                 parts.append((label, h))
         return parts
+
+    def _function_attr_parts(self, fn: Any, attr: str, name: str, func_name: str) -> list[tuple[str, str]]:
+        """The key part for data stored as an attribute of the user's function *fn*."""
+        stored = getattr(fn, "__dict__", None)
+        if not isinstance(stored, dict) or attr not in stored or not is_user_code_object(fn):
+            return []
+        value = stored[attr]
+        if isinstance(value, (types.ModuleType, type)) or (
+            callable(value) and not isinstance(value, (dict, list, tuple, set))
+        ):
+            return []
+        h = self.safe_global_hash(value, func_name, f"{name}.{attr}")
+        return [(f"{name}.{attr}", h)] if h is not None else []
 
     def safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
