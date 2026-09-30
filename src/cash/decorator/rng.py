@@ -21,6 +21,7 @@ from ..tracking.randomness import (
     RandomnessDetector,
     capture_rng_state,
     describe_random_call,
+    get_seeding_rng_modules,
     restore_rng_state,
     rng_modules_changed,
     seed_epoch_component,
@@ -314,6 +315,8 @@ class RngWatch:
         self._registry = registry
         self._backend_slot = backend_slot
         self._notices = notices
+        #: func_name -> the global streams its own body seeds (`note_self_seeding`).
+        self._self_seeded: dict[str, set[str]] = {}
         watch_seeds()
 
     def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
@@ -345,7 +348,7 @@ class RngWatch:
             modules = self._load_rng_draw_marker(func_name)
         if not modules:
             return state_hash
-        component = seed_epoch_component(modules)
+        component = seed_epoch_component(self._stream_inputs(func_name, modules))
         if not component:
             return state_hash
         return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
@@ -420,7 +423,24 @@ class RngWatch:
         # drawn module is actually SEEDED. An unseeded draw has no epoch that can
         # change, so its frozen value is correct from the first call; skipping the
         # write there would redraw and break the freeze-from-first-call contract.
-        return bool(drew & seeded_rng_modules())
+        return bool(self._stream_inputs(func_name, drew) & seeded_rng_modules())
+
+    def _stream_inputs(self, func_name: str, modules: set[str]) -> set[str]:
+        """The streams of *modules* whose position is an input of *func_name*:
+        not one its own body seeds before drawing, since the seed, not where
+        the caller left the stream, decides what it draws."""
+        own = self._self_seeded.get(func_name)
+        return set(modules) - own if own else set(modules)
+
+    def note_self_seeding(self, func: Callable, func_name: str) -> None:
+        """Remember which global streams *func*'s own source seeds."""
+        try:
+            src = textwrap.dedent(inspect.getsource(func))
+            own = get_seeding_rng_modules(src)
+        except Exception:  # noqa: BLE001 - no source: every drawn stream stays an input
+            return
+        if own:
+            self._self_seeded[func_name] = set(own)
 
     def replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
@@ -483,6 +503,7 @@ class RngWatch:
         # A seed the caller sets must be seen from now on (`watch_seeds`), and
         # the module that imports numpy has usually just been imported.
         watch_seeds()
+        self.note_self_seeding(func, func_name)
         if allow_random:
             return
 

@@ -60,7 +60,7 @@ out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
 through `getattr`, is not seen. Name it with `depends_on=[...]`.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @20eb5528 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @8346a209 -->
 An unseeded draw is not a change. The first value is stored and returned on
 every later call, with a [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded)
 warning; `allow_random=True` accepts that on purpose.

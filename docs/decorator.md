@@ -384,7 +384,7 @@ result larger than one chunk the predicate cannot run
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @246c732b -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d580fdbc -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -398,7 +398,8 @@ A seed of the global stream set by the caller counts: after
 `np.random.seed(s)` or `random.seed(s)` (at module level, or in the function
 that calls this one), a function seen drawing from that stream is keyed by
 where the stream stands, so each seed and each draw after it gets its own
-entry. A seed set before the function is decorated is not seen.
+entry. A seed set before the function is decorated is not seen. A function
+whose own body seeds the stream is not keyed by where the caller left it.
 
 Don't call the global `np.random.seed()` inside a
 cached function: a hit skips the reseed, so later draws differ between a hit and

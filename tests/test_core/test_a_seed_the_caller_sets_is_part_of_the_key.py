@@ -116,3 +116,19 @@ def test_the_warning_says_a_callers_seed_is_keyed(inst):
     text = " ".join(str(w.message) for w in caught)
     assert "RANDOM-UNSEEDED" in text or "Unseeded randomness" in text
     assert "np.random.seed() after this decoration" in text
+
+
+def test_a_function_that_seeds_itself_is_not_keyed_by_the_stream(inst):
+    """Its own seed decides what it draws, not where the caller left the
+    stream: the second call is a hit."""
+    calls = []
+
+    @inst.cache
+    def load(scale):
+        calls.append(scale)
+        random.seed(scale)
+        return random.randint(0, 100)
+
+    first = load(3)
+    assert load(3) == first
+    assert len(calls) == 1
