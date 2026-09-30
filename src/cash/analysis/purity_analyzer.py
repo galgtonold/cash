@@ -71,6 +71,7 @@ from ..effects import (
     environment_input,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..install_paths import is_user_path
 from ..purity import (
     KNOWN_PURE_BUILTINS,
     is_pure,
@@ -1502,6 +1503,10 @@ def _clock_helper_read(value: Any) -> str | None:
     """
     code = getattr(value, "__code__", None)
     if not isinstance(value, types.FunctionType) or code is None:
+        return None
+    if not is_user_path(code.co_filename):
+        # A library function (`os.path.isdir`) is not the user's helper, and
+        # reading its source inside a cached call would record the read.
         return None
     known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
     if known is not _NOT_JUDGED:
