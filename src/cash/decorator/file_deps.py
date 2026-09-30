@@ -332,8 +332,7 @@ class FileDeps:
         this call, its remembered files are added (`credited_reads`). A memo
         keyed by a path the call was given (``parse(path)``) adds only that
         path when it is among them; a memo of a fixed file adds what it read.
-        The cached function's own history is left out -- it is per argument --
-        and so is a function that read too many files to attribute.
+        The cached function's own history is left out -- it is per argument.
 
         A remembered read also says which version of the file it was. When the
         file has changed since, the memo handed this call the OLD version's
