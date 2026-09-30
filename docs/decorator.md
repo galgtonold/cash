@@ -131,7 +131,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @b1adf703, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @3e1c3aca, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -223,7 +223,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @3825a447, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @a7bad3ba, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -436,7 +436,10 @@ A frozen numpy array comes back read-only, and
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer if a
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
 warns when hashing an argument costs more than the cache saves. For big inputs,
-key the cached functions by **file path** and parse inside them.
+key the cached functions by **file path** and parse inside them. For an object
+of your own class that holds the big data, a
+[`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key) method
+that returns a version or id keys it without reading the data.
 
 ## Side effects
 

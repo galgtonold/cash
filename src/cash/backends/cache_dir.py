@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ANALYTICS_DB_FILENAME",
+    "CASH_KEYS_FILENAME",
     "CACHE_FORMAT_VERSION",
     "COMPUTE_BASELINES_FILENAME",
     "DB_FILENAME",
@@ -78,6 +79,8 @@ MISS_GUARD_FILENAME = "_miss_guard.json"
 LOOP_SPLIT_FILENAME = "_loop_split.json"
 #: The notebook's measured compute costs, for ``%cash_stats``.
 COMPUTE_BASELINES_FILENAME = "_compute_baselines.json"
+#: What each ``__cash_key__`` stood for when first checked (`KeyCheck`).
+CASH_KEYS_FILENAME = "_cash_keys.json"
 #: The analytics database, in the per-user cache root.
 ANALYTICS_DB_FILENAME = "analytics.db"
 #: The decorator's stored-key records: one ``<function>.json`` each.
@@ -96,6 +99,7 @@ _CASH_FILE_NAMES = frozenset(
         MISS_GUARD_FILENAME,
         LOOP_SPLIT_FILENAME,
         COMPUTE_BASELINES_FILENAME,
+        CASH_KEYS_FILENAME,
         *(db + companion for db in (DB_FILENAME, ANALYTICS_DB_FILENAME) for companion in ("", *_SQLITE_COMPANIONS)),
     }
 )

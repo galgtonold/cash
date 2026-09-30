@@ -75,5 +75,7 @@ def test_a_frame_in_a_list_keys_by_content(tmp_path, monkeypatch):
         return real(value)
 
     monkeypatch.setattr(object_hashing, "hash_pandas", counting)
-    c._args.hash_payload(([frame],), {})
+    # A frame this ArgHasher has not seen: one it has may be answered by the
+    # copy-on-write memo without being read again.
+    c._args.hash_payload(([frame.copy()],), {})
     assert calls, "a frame inside a list was pickled, not content-hashed"

@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @a4b76be6 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @7dee89e4 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -55,7 +55,7 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 15 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 16 | Something the result depends on may not be in the cache key. |
+| [Cache keys](#key-codes) | `KEY-` | 17 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 4 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
@@ -367,10 +367,13 @@ covered, and several small losers are named together.
 <!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
 **What to do.** If a cached function produced the argument and nothing
 changes it afterwards, mark the producer `@cash.cache(frozen=True)`: the
-argument is then keyed by the call that made it. Otherwise register a cheap
-hasher for its type that returns a version or content id. For numpy and
-dataframe types this needs `override=True`, and what it returns becomes the
-value's whole identity. If neither fits, remove the decorator. See
+argument is then keyed by the call that made it. If the argument is an object
+of your own class holding the large data, give the class a
+[`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key) method
+that returns a version or id. Otherwise register a cheap hasher for its type
+that returns a version or content id. For numpy and dataframe types this needs
+`override=True`, and what it returns becomes the value's whole identity. If
+none fits, remove the decorator. See
 [`frozen=` and large arguments](decorator.md#frozen-and-large-arguments).
 
 <!-- test:skip reason="fragment: names a type or helper the page does not define" -->
@@ -628,7 +631,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @b448a4ef -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @2ddd6f7b -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -730,6 +733,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
+| [KEY-STALE-CASH-KEY](#key-stale-cash-key) | decorator | one `__cash_key__` stands for two different contents |
 | [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
@@ -751,7 +755,7 @@ these reads is reported where it is called, however it is called: `now()`,
 
 <!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @7e3e55a5 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @90d90753 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
@@ -948,7 +952,7 @@ object that takes attributes. Or remove `frozen=True`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @29550361 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @985b955a -->
 **What happened.** You cached a bound method (`c.cache(obj.method)`) and the
 instance could not be hashed, so cash keyed on the object's in-memory identity.
 
@@ -1065,6 +1069,44 @@ entry.
 **When it is safe to ignore.** Always, for correctness. Look into it if you
 did not expect the file to change.
 
+### KEY-STALE-CASH-KEY {#key-stale-cash-key}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/decorator/cash_key.py:content_digest @8f2ced8a -->
+**What happened.** A class's
+[`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key)
+returned the same key for two objects holding different data. cash reads an
+object's content in the background the first time it is keyed by
+`__cash_key__` in a process, and compares it with what the same key stood for
+before, in this run or an earlier one. The warning points at the
+`__cash_key__` method.
+
+**Why it matters.** The key is the object's whole identity, so results
+computed from the first object's data are served for the second. That is a
+wrong answer, not a slow one.
+
+**What to do.** Make `__cash_key__` return something that changes whenever
+the data does: a version you bump, a content id, or the source file's path
+with its modification time.
+
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+class Dataset:
+    def __cash_key__(self):
+        return (self.path, os.path.getmtime(self.path))
+```
+
+Then clear the results stored under the old key with `f.cache_clear()` on the
+cached functions that took the object.
+
+<!-- claim: cash/decorator/cash_key.py:content_digest @8f2ced8a -->
+**When it is safe to ignore.** When the difference is state that never
+changes a result: a lazily filled memo, a load timestamp, a handle. cash
+compares every attribute it can pickle, so such an attribute set before the
+first cached call differs between runs. Turn the check off with
+`check_cash_keys=False` if that is the case for your class.
+
 ### KEY-UNHASHABLE-ARG {#key-unhashable-arg}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
@@ -1078,11 +1120,21 @@ call ran uncached.
 **Why it matters.** Every call with that argument recomputes. Nothing stale
 is served.
 
-**What to do.** Register a hasher for the type, or pass something hashable in
-its place (a connection string, not a connection):
+**What to do.** For a class of yours, give it a
+[`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key) method
+that returns what identifies an instance. If the message names
+`__cash_key__()` itself, that method raised or returned something cash cannot
+hash; make it return a string, a number or a tuple of them. For a type you
+don't own, register a hasher, or pass something hashable in its place (a
+connection string, not a connection):
 
 <!-- test:skip reason="fragment: names a type or helper the page does not define" -->
 ```python
+class DatabaseSession:
+    def __cash_key__(self):
+        return self.database_url
+
+# or, for a class you can't change:
 cash.register_hasher(DatabaseSession, lambda s: s.database_url)
 ```
 
@@ -1114,7 +1166,7 @@ is the classic case.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @a7bad3ba -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 
@@ -1450,7 +1502,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @49b1dc2c -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @7d10460b -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

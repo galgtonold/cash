@@ -144,7 +144,7 @@ unless a `pyproject.toml` above it sets `[tool.cash] cache_dir` or
 Unreadable entries are skipped. Inspecting a notebook needs `nbformat`; without
 it, cash says how to install it and exits 0.
 
-<!-- claim: cash/__main__.py:cmd_clear @a08b9044 -->
+<!-- claim: cash/__main__.py:cmd_clear @3e1c3aca -->
 ## `cash clear` { #cash-clear-path-all }
 
 **Usage:** `cash clear [--all] [--function NAME] [--entry ID] [--expired] [--tool NAME] [--force] [path]`

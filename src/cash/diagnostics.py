@@ -230,6 +230,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # dependency at runtime (getattr(m, name)(), eval)
         "KEY-OPAQUE-CALLABLE",  # a callable reached the call but its code could
         # not be hashed, so editing it changes nothing
+        "KEY-STALE-CASH-KEY",  # one __cash_key__ stood for two different
+        # contents, so one's results are served for the other
         "KEY-SOURCE-CHANGED",  # a cached function's or helper's file was edited
         # after import; keyed by the code actually running
         "KEY-UNHASHABLE-ARG",  # an argument could not be hashed; not cached

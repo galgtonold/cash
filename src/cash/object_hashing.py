@@ -41,6 +41,7 @@ import logging
 import pickle
 import random
 import sys
+import threading
 import types
 import uuid
 from collections.abc import Callable
@@ -203,7 +204,8 @@ def stable_key_repr(
             first = _seen.get(id(value))
             if first is not None:
                 return ("__cash_alias__", first[0])
-        digest = builtin_hash(value)
+        content = getattr(CONTENT_DIGEST, "fn", None)
+        digest = content(value) if content is not None else builtin_hash(value)
         if digest is not None:
             if family in _WRITABLE_FAMILIES:
                 _seen[id(value)] = (len(_seen), value)
@@ -261,6 +263,41 @@ def canonical_bytes(value: Any, hook: Callable[[Any], Any] | None = None, seen: 
 #: What a `stable_key_repr` hook returns for a value it has no stand-in for.
 NOT_HOOKED = object()
 
+#: ``fn`` on this thread, when set, replaces `builtin_hash` for the frames,
+#: arrays and tables a key walk meets: the decorator sets it to its
+#: copy-on-write memo while it builds a key.
+CONTENT_DIGEST = threading.local()
+
+#: Items looked at per container attribute by `holds_content_data`.
+_HOLDS_SCAN_ITEMS = 256
+
+
+def holds_content_data(value: Any) -> bool:
+    """Does the object *value* hold a frame, array or table in an attribute,
+    or in a list, tuple or dict an attribute holds?
+
+    ``__dict__`` alone, not `object_state`: this is asked of every object a
+    key walk leaves to pickle, and the slots walk up the MRO made keying a
+    list of records markedly slower. An object holding its frames in slots is
+    pickled whole.
+    """
+    state = getattr(value, "__dict__", None)
+    if type(state) is not dict:
+        return False
+    for v in state.values():
+        t = type(v)
+        if _builtin_family_of(t) is not None:
+            return True
+        if t is list or t is tuple:
+            items: Any = v[:_HOLDS_SCAN_ITEMS]
+        elif t is dict:
+            items = [x for _, x in zip(range(_HOLDS_SCAN_ITEMS), v.values())]
+        else:
+            continue
+        if any(_builtin_family_of(type(x)) is not None for x in items):
+            return True
+    return False
+
 
 def _builtin_family_of(type_: type) -> str | None:
     """`builtin_hash_family`, remembered per type: asked of every value a
@@ -293,14 +330,24 @@ def _stable_key_repr_of(
         return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), hook, left)
     if isinstance(value, (list, tuple)):
         return _typed(value, tuple(sub(v) for v in value), hook, left)
-    if not contains_set(value):
-        if left is not None and not (
-            type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
-        ):
-            left.append(value)
-        return value
     t = type(value)
-    return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
+    if contains_set(value):
+        return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
+    if holds_content_data(value):
+        # Pickled whole, every frame inside was serialised and hashed on each
+        # call. Opened up, each goes through its content hasher, and through
+        # the caller's memo (`CONTENT_DIGEST`), so an unchanged frame is
+        # checked rather than read again. An object that reaches itself is
+        # left to pickle, which keeps the loop.
+        try:
+            return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
+        except CyclicValueError:
+            pass
+    if left is not None and not (
+        type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
+    ):
+        left.append(value)
+    return value
 
 
 #: The reconstructors ``object.__reduce_ex__`` names: their state is the

@@ -8,13 +8,15 @@ cases that need a change on your side, and what that change is.
 
 ## Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @479611f1 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @a7c962d4 -->
 An argument that cannot be pickled (a lock, an open file, a live connection, a
 closure) cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while
 building the key does the same. Pass a plain value that identifies the object
-instead, or register a hasher that returns a **stable** identifying value, such
-as a database URL:
+instead. For a class of yours, give it a
+[`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key)
+method that returns one. For a type you don't own, register a hasher that
+returns a **stable** identifying value, such as a database URL:
 
 ```python
 import hashlib
@@ -93,7 +95,9 @@ for a type that is never input data. Don't do this for `bool` or `int`: a
 
 `self` is an argument like any other, hashed by its state: two instances with
 equal attributes share entries. An unpicklable attribute makes every call
-uncached. See [Class methods](tutorials/feature-guides/caching-class-methods.md).
+uncached, and a large one (a frame, a model) is read on every call. A
+`__cash_key__` method on the class fixes both. See
+[Class methods](tutorials/feature-guides/caching-class-methods.md).
 
 ## Code you pass as an argument
 

@@ -126,6 +126,49 @@ changed. `f.explain(...)` says why a call would miss, and `CASH_SUMMARY=1`
 prints a table for the whole run; see
 [Seeing what cash did](../../decorator.md#seeing-what-cash-did).
 
+## A class that holds several tables {#a-class-that-holds-several-tables}
+
+Pipelines often wrap their inputs in one object: a `Snapshot` holding the
+day's orders, customers and products, with methods that compute from them.
+Cached methods key `self` by everything it holds, so every call reads all the
+tables to build the key, even a method that returns one number. With a few
+hundred MB of frames that is most of a second per call.
+
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @579078d7 -->
+Give the class a `__cash_key__` that returns what identifies the snapshot,
+and the key uses that instead:
+
+```python
+import pandas as pd
+import cash
+
+class Snapshot:
+    def __init__(self, day, run_id):
+        self.day = day
+        self.run_id = run_id   # changes whenever the extract is rerun
+        self.orders = pd.DataFrame({"amount": [10.0, 25.0, 5.0]})
+
+    def __cash_key__(self):
+        return (self.day, self.run_id)
+
+    @cash.cache
+    def revenue(self):
+        return float(self.orders["amount"].sum())
+
+snap = Snapshot("2026-09-30", run_id=7)
+snap.revenue()   # runs
+snap.revenue()   # a hit: keyed by (day, run_id), frames not read
+# test:inject: revenue = Snapshot.revenue  # lets the harness read cache_info
+```
+
+Use it when the object is large and something small names its content: a
+date plus a run id, a path plus its modification time, a version. The key
+must change whenever the data does; cash checks that in the background and
+warns [`KEY-STALE-CASH-KEY`](../../warnings.md#key-stale-cash-key) when one
+key stands for two contents. Skip it when the tables are small: content keys
+are exact and need nothing from you. See
+[Custom hashers](../feature-guides/custom-hashers.md#cash-key).
+
 ## Running it in production
 
 Each Airflow task, Prefect flow or Dagster op just calls the cached functions.

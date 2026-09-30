@@ -21,7 +21,8 @@ link to the page that has the details.
 ??? question "Does it work with pandas, numpy, polars, torch or duckdb?"
     Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask and
     scipy.sparse. For
-    anything else, register one with `cash.register_hasher`. See
+    a class of your own, add a `__cash_key__` method; for anything else,
+    register a hasher with `cash.register_hasher`. See
     [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 
 ??? question "How much faster will it make things?"

@@ -5,25 +5,30 @@
 
 `@cash.cache` works on methods. `self` is part of the key like any other
 argument, hashed by its state, so two instances with equal attributes share
-entries. That default goes wrong in two ways:
+entries. That default goes wrong in three ways:
 
+- **`self` holds a lot of data.** An instance holding several large frames is
+  read in full to build the key on every call, even for a method that returns
+  a row count. That can take seconds per call.
 - **`self` can't be pickled.** An instance holding a connection, a thread or a
   lock gives cash nothing to hash. Every call runs uncached, with a warning
   ([`KEY-UNHASHABLE-ARG`](../../warnings.md#key-unhashable-arg)).
-- **`self` carries state that doesn't matter.** A lazy attribute, a memo dict or
-  a large `self.df` changes the key, or makes it slow to build, while the
-  instance means the same thing.
+- **`self` carries state that doesn't matter.** A lazy attribute or a memo
+  dict changes the key while the instance means the same thing.
 
-The fix for both is to tell cash what identifies an instance.
+The fix for all three is to tell cash what identifies an instance.
 
-## Register a hasher for the class
+## Give the class a `__cash_key__`
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/decorator/arg_hashing.py:ArgHasher.hash_payload @479611f1 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @579078d7 -->
 ```python
-import hashlib
 from cash import Cash
 
 app = Cash()
+
+class FakeDB:
+    def query(self, dataset_id, version):
+        return f"{dataset_id}@{version}"
 
 class Loader:
     def __init__(self, dataset_id, db):
@@ -31,42 +36,63 @@ class Loader:
         # a connection: not part of the identity
         self.db = db
 
+    def __cash_key__(self):
+        return self.dataset_id
+
     @app.cache
     def load(self, version):
         return self.db.query(self.dataset_id, version)
 
-def hash_loader(loader):
-    return hashlib.sha256(loader.dataset_id.encode()).hexdigest()
-
-app.register_hasher(Loader, hash_loader)
+Loader("sales", FakeDB()).load(1)   # runs
+Loader("sales", FakeDB()).load(1)   # a hit: same dataset_id
+# test:inject: load = Loader.load  # lets the harness read cache_info
 ```
 
-Register it before the first call. The hasher then applies wherever a `Loader`
-is an argument of a cached function, as `self` or not. The method's other
-arguments are hashed as usual.
+`self` is then keyed by what `__cash_key__` returns, and nothing else it holds
+is read. The method's other arguments are hashed as usual.
 
-The hasher must name **everything** that changes the result. Here two loaders
+The key must name **everything** that changes the result. Here two loaders
 with the same `dataset_id` but different databases share entries. That is
-right only if both databases hold the same data. See
-[Custom hashers](custom-hashers.md#what-makes-a-good-hasher).
+right only if both databases hold the same data. When the data behind an id
+can change, put a version in the key. cash checks a key against the content it
+stands for once per object and warns
+[`KEY-STALE-CASH-KEY`](../../warnings.md#key-stale-cash-key) when one key
+stands for two contents. See
+[Custom hashers](custom-hashers.md#cash-key) for the rules.
 
-For a service object with no identity of its own, a constant hasher drops
-`self` from the key:
+For a service object with no identity of its own, a constant key drops `self`
+from the key:
 
 ```python
-app.register_hasher(MyService, lambda _: "singleton")
+class Service:
+    def __cash_key__(self):
+        return "singleton"
 ```
 
 Every instance then shares entries, which is correct only when instances are
 interchangeable.
 
 `__hash__` doesn't help: Python's `hash()` is 64 bits and meant for dict
-buckets, too weak for a cache key. Use `register_hasher`.
+buckets, too weak for a cache key, and it is often identity-based.
+
+## A class you don't own
+
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
+For a class you can't add a method to, register a hasher for it before the
+first call. It applies wherever an instance is an argument of a cached
+function, as `self` or not:
+
+<!-- test:skip reason="fragment: names a type the page does not define" -->
+```python
+app.register_hasher(ThirdPartyClient, lambda c: c.base_url)
+```
+
+See [Custom hashers](custom-hashers.md#registering-a-hasher).
 
 ## Methods that return iterators
 
-A method that yields is cached like any iterator; `self` goes into the key
-through the same hasher. See [Iterators](iterator-caching.md).
+A method that yields is cached like any iterator, and `self` is keyed the
+same way. See [Iterators](iterator-caching.md).
 
 ## Related
 

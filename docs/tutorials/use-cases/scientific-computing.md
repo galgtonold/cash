@@ -63,7 +63,7 @@ combination at the same moment, unless the backend is Redis with
 
 ## Disk space
 
-<!-- claim: cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2, cash/__main__.py:cmd_clear @a08b9044 -->
+<!-- claim: cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2, cash/__main__.py:cmd_clear @3e1c3aca -->
 A sweep writes one entry per combination, and every entry goes to disk. By
 default cash lets the cache use a quarter of the free room on its volume,
 between 8 GiB and 100 GiB. When it is full, cash evicts the entries that are
@@ -157,6 +157,11 @@ run. Edit the simulation and everything after it recomputes, as it should.
   function `frozen=True`, or pass a path or the parameters that produced the
   array and load it inside; see
   [`frozen=` and large arguments](../../decorator.md#frozen-and-large-arguments).
+- **An object holding large arrays** (a mesh, a model with its fields) is read
+  in full to build the key of every call that takes it, and of every cached
+  method on it. Give its class a `__cash_key__` method that returns what
+  identifies it, such as the input file and a version, and the arrays are not
+  read. See [Custom hashers](../feature-guides/custom-hashers.md#cash-key).
 
 ## Reproducibility over months
 

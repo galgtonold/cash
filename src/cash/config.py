@@ -277,6 +277,12 @@ class CashConfig:
     function missed. ``CASH_SUMMARY=1 python script.py`` needs no code
     change."""
 
+    check_cash_keys: bool = True
+    """Check each ``__cash_key__`` against the data it stands for: the first
+    time an object is keyed by it in a process, its content is read on a
+    background thread and compared with what the same key held before.
+    Different data behind one key warns ``KEY-STALE-CASH-KEY``."""
+
     disable: bool = False
     """Run every ``@cash.cache`` call uncached (no key, lookup or store), and
     make ``%cash_on`` decline. ``CASH_DISABLE=1 pytest`` checks that tests

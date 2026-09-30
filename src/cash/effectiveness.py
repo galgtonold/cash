@@ -262,7 +262,9 @@ def _message(
         "register a cheaper hasher for that argument's type "
         "(cash.register_hasher) to keep caching -- for a type cash "
         "fingerprints itself, such as a numpy array or a dataframe, that "
-        "registration needs override=True -- or drop the decorator here."
+        "registration needs override=True; for an object of your own class, "
+        "a __cash_key__(self) method returning a version or id does the same "
+        "-- or drop the decorator here."
     )
     key_seconds = culprit[2] if culprit is not None else None
     if key_seconds is not None and key_seconds < 0.25 * led.typical_overhead():

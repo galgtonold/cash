@@ -19,11 +19,20 @@ from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
-from ..object_hashing import NOT_HOOKED, builtin_hash, canonical_bytes, is_native_panic, stable_key_repr
+from ..object_hashing import (
+    CONTENT_DIGEST,
+    NOT_HOOKED,
+    builtin_hash,
+    canonical_bytes,
+    is_native_panic,
+    stable_key_repr,
+)
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
+from .cash_key import cash_key_method, cash_key_method_of_type, type_name
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
+    from .cash_key import KeyCheck
     from .frozen import FrozenResults
     from .reporting import Notices
 
@@ -162,7 +171,47 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
     """The fix line for an argument of *type_name* that could not be hashed."""
     if isinstance(value, CODE_VALUE_TYPES):
         return CODE_ARG_FIX
-    return f"register a hasher with cash.register_hasher({type_name}, ...), or pass the argument by a hashable value."
+    if cash_key_method(value) is not None:
+        return (
+            f"fix {type_name}.__cash_key__(): it must return a value cash can hash, such as a "
+            f"string, a number or a tuple of them, and must not raise."
+        )
+    return (
+        f"if {type_name} is your own class, give it a __cash_key__(self) method that returns what "
+        f"identifies an instance; otherwise register a hasher with cash.register_hasher({type_name}, ...), "
+        f"or pass the argument by a hashable value."
+    )
+
+
+#: What `ArgHasher._nested_hasher` does with a value of a type: nothing, or
+#: key it by its class's ``__cash_key__``. Decided once per type: it is asked
+#: of every non-primitive value a key walk meets.
+_PASS = "pass"
+_KEYED = "keyed"
+_HOOK_KINDS: dict[type, str] = {}
+
+
+def _hook_kind(t: type) -> str:
+    try:
+        return _HOOK_KINDS[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _PASS
+    if t in BUILTIN_CONTAINERS or issubclass(t, (type, types.ModuleType, *CODE_VALUE_TYPES)):
+        kind = _PASS
+    else:
+        kind = _KEYED if cash_key_method_of_type(t) is not None else _PASS
+    if len(_HOOK_KINDS) >= 4096:
+        _HOOK_KINDS.clear()
+    _HOOK_KINDS[t] = kind
+    return kind
+
+
+#: How deep ``__cash_key__`` may nest (a key naming an object with its own
+#: key); past it, the keys are taken to loop.
+_CASH_KEY_MAX_DEPTH = 32
+_CASH_KEY_DEPTH = threading.local()
 
 
 #: Who wrote a value's ``_cash_lineage_hash``, in ``_cash_lineage_src``. Only the
@@ -500,8 +549,17 @@ class ArgHasher:
     """Canonical arguments and their content hashes, with the memos that keep
     re-hashing an unchanged argument cheap."""
 
-    def __init__(self, cached: dict[str, CachedFunction], frozen: FrozenResults, notices: Notices) -> None:
+    def __init__(
+        self,
+        cached: dict[str, CachedFunction],
+        frozen: FrozenResults,
+        notices: Notices,
+        key_check: KeyCheck | None = None,
+    ) -> None:
         self._cached = cached
+        #: Checks each ``__cash_key__`` against the content it names, in the
+        #: background (`KeyCheck`); None checks nothing.
+        self.key_check = key_check
         self._frozen = frozen
         self._notices = notices
         # id(arg) -> (weakref, lineage_hash, content_hash). Lets a repeated call
@@ -545,8 +603,24 @@ class ArgHasher:
         what it is, and a hasher registered for ``types.FunctionType`` must
         not take every function's body out of the key.
         """
-        if not (self.override_hashers or self.type_hashers) or isinstance(value, (type, *CODE_VALUE_TYPES)):
+        if isinstance(value, (type, *CODE_VALUE_TYPES)):
             return False
+        if cash_key_method(value) is not None:
+            return True
+        if not (self.override_hashers or self.type_hashers):
+            return False
+        try:
+            return any(
+                isinstance(value, type_)
+                for registry in (self.override_hashers, self.type_hashers)
+                for type_ in registry
+            )
+        except Exception:  # noqa: BLE001 - a lookup must never break a call
+            return False
+
+    def keys_by_registration_only(self, value: Any) -> bool:
+        """Is *value* keyed by a hasher registered for its type (not by
+        ``__cash_key__``)?"""
         try:
             return any(
                 isinstance(value, type_)
@@ -744,22 +818,69 @@ class ArgHasher:
             return
         self._frame_memo[key] = (wref, held, signature, content_hash)
 
-    def _nested_hasher(self, value: Any) -> Any:
-        """A registered hasher's identity for a value inside an argument.
+    def cash_key_hash(self, value: Any, method: Callable) -> str:
+        """*value*'s identity from its class's ``__cash_key__``.
 
-        Registrations applied to the arguments themselves only: a
-        ``Store`` inside a list was pickled instead, which fails on the
-        lock it holds, and the call never cached while the warning told the
-        user to register the hasher they had registered. Both registries are
-        asked before the built-in content hashers (`stable_key_repr`), which
-        is the top level's order: a plain registration is never for a type a
-        built-in claims, since ``register_hasher`` refuses one.
+        The returned value is hashed like an argument of its own, so it may be
+        a string, a tuple, a frame or another object with a key. The class's
+        name goes in, so two classes returning the same id key apart, and so
+        does the method's code, so editing it invalidates what it keyed.
         """
-        for registry in (self.override_hashers, self.type_hashers):
-            for type_, (hasher_fn, src_hash) in registry.items():
-                if isinstance(value, type_):
-                    return ("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}")
+        from .code_identity import hash_callable_source
+
+        name = type_name(value)
+        depth = getattr(_CASH_KEY_DEPTH, "n", 0)
+        if depth >= _CASH_KEY_MAX_DEPTH:
+            raise TypeError(f"{name}.__cash_key__() keys on objects whose keys lead back to it")
+        _CASH_KEY_DEPTH.n = depth + 1
+        try:
+            try:
+                identity = method(value)
+            except Exception as exc:  # reported as an unhashable argument
+                raise TypeError(f"{name}.__cash_key__() raised {type(exc).__name__}: {exc}") from exc
+            if identity is value:
+                raise TypeError(f"{name}.__cash_key__() returned the object itself")
+            digest = self.hash_payload((identity,), {})
+        finally:
+            _CASH_KEY_DEPTH.n = depth
+        src = hash_callable_source(method)
+        key_id = hashlib.sha256(f"{name}:{src}:{digest}".encode("utf-8")).hexdigest()
+        if self.key_check is not None:
+            self.key_check.note(value, key_id, method)
+        return f"__cash_key__:{key_id}"
+
+    def _nested_hasher(self, value: Any) -> Any:
+        """A value's stand-in inside an argument, or `NOT_HOOKED`.
+
+        A registered hasher's identity first (the top level's order; a
+        ``Store`` inside a list was pickled instead, which failed on the lock
+        it holds), then the class's ``__cash_key__``. Asked of every
+        non-primitive value a key walk meets, so what a type is gets decided
+        once per type (`_hook_kind`).
+        """
+        if self.override_hashers or self.type_hashers:
+            for registry in (self.override_hashers, self.type_hashers):
+                for type_, (hasher_fn, src_hash) in registry.items():
+                    if isinstance(value, type_):
+                        return ("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}")
+        if _hook_kind(type(value)) is _KEYED:
+            return ("__cash_hashed__", self.cash_key_hash(value, cash_key_method(value)))
         return NOT_HOOKED
+
+    def _memo_content_digest(self, value: Any) -> str | None:
+        """`builtin_hash` for a frame, array or table inside an argument,
+        through the copy-on-write memo when it is a pandas frame: an
+        unchanged frame inside an object or a list is checked, not read
+        again (`CONTENT_DIGEST`)."""
+        cow = is_cow_pandas(value)
+        if cow:
+            digest = self._frame_memo_lookup(value)
+            if digest is not None:
+                return digest
+        digest = builtin_hash(value)
+        if cow and digest is not None:
+            self._frame_memo_store(value, digest)
+        return digest
 
     def hash_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
@@ -807,6 +928,16 @@ class ArgHasher:
             # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
             # and the tag-as-identity shortcut further down served the result
             # for the unmutated object.
+            # The class's own ``__cash_key__``, ahead of anything that reads
+            # the value: the user has said what identifies it, and that id
+            # holds across restarts, which an in-memory tag does not. A
+            # hasher registered for the type still wins; it is the more
+            # specific, outside choice.
+            method = cash_key_method(arg)
+            if method is not None and not (
+                (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
+            ):
+                return self.cash_key_hash(arg, method)
             # The instance's OWN tag: one inherited from a tagged class made
             # every instance key alike (see cash.lineage_tag).
             lineage = own_tag(arg)
@@ -927,9 +1058,13 @@ class ArgHasher:
                 tuple([plain_key_part(a) for a in hashed_args]),
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
             )
-            hook = self._nested_hasher if (self.override_hashers or self.type_hashers) else None
             walked: dict = {}
-            args_bytes = canonical_bytes(form, hook=hook, seen=walked)
+            previous = getattr(CONTENT_DIGEST, "fn", None)
+            CONTENT_DIGEST.fn = self._memo_content_digest
+            try:
+                args_bytes = canonical_bytes(form, hook=self._nested_hasher, seen=walked)
+            finally:
+                CONTENT_DIGEST.fn = previous
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)

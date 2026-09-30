@@ -30,7 +30,7 @@ are cached as ordinary values.
 
 ## The first call streams
 
-<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @0e824f20 broad="the loop, the tracker scope and the commit rule are one mechanism" -->
+<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @09f2d88d broad="the loop, the tracker scope and the commit rule are one mechanism" -->
 On a miss you get each item as the function produces it, so caching does not
 delay the first item. cash copies each item into its chunk as it is yielded,
 so editing the item afterwards (or a producer refilling one buffer it yields
@@ -51,7 +51,7 @@ chunks.
 
 ## Later calls replay
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._wrap_iterator_hit @ea103db2, cash/decorator/iterators.py:ChunkedCachedIterator @9273f8c8 broad="the claim is about the whole replay wrapper" -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._wrap_iterator_hit @36086cd9, cash/decorator/iterators.py:ChunkedCachedIterator @40afba5e broad="the claim is about the whole replay wrapper" -->
 Each hit returns a new, independent iterator over the stored chunks. Chunks are
 loaded one at a time as you reach them, so memory stays bounded by the chunk
 size, and stopping early never reads the rest:
@@ -75,7 +75,7 @@ The replay supports `iter()`, `next()` and `close()`. Generator methods
 running generator. A generator's `return` value, what `yield from` evaluates
 to, is stored with the entry and comes back on a replay too.
 
-<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @64b46718, cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
+<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @2b060a05, cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
 **A missing chunk is recomputed, never skipped.** A stored result is only
 served when all its chunks are present; otherwise the call runs the function
 again.
@@ -108,7 +108,7 @@ own; it is never split. To opt out of chunking, return a list.
   result is stored anyway, with a warning
   ([`CACHE-IF-BYPASSED`](../../warnings.md#cache-if-bypassed)). Raise the
   chunk limits if you need the predicate.
-- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @744aeb1e -->
+- <!-- claim: cash/decorator/store.py:ResultStore._write_one_chunk @c7673a62 -->
   **A chunk that fails to store** warns
   ([`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed)). The result is
   then incomplete, so the next call recomputes it rather than serving part of

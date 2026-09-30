@@ -45,6 +45,7 @@ from .decorator.call_state import (
     enter_cached_call,
     exit_cached_call,
 )
+from .decorator.cash_key import KeyCheck
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
 from .decorator.code_args import CodeArgs
 from .decorator.code_identity import (
@@ -352,7 +353,12 @@ class Cash:
         self._calls = CallLog(self.config, self._registry.cached, self._misses, effectiveness)
         self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)
         self._frozen = FrozenResults(self.config, self._notices)
-        self._args = ArgHasher(self._registry.cached, self._frozen, self._notices)
+        self._args = ArgHasher(
+            self._registry.cached,
+            self._frozen,
+            self._notices,
+            KeyCheck(self._backend_slot.local_dir, lambda: self.config.check_cash_keys),
+        )
         self._code = CodeIdentity(self._args)
         self._captures = CaptureAnalysis()
         self._helpers = HelperIdentity(self._args, self._captures)

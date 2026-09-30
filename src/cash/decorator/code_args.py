@@ -19,6 +19,7 @@ from ..object_hashing import held_objects
 from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS
 from .arg_hashing import is_opaque, plain_census
+from .cash_key import cash_key_method
 from .code_identity import is_user_code_object
 
 if TYPE_CHECKING:
@@ -359,12 +360,18 @@ class CodeArgs:
             # still walked every logger, handler and stream in the process
             # (a logger holds its manager), and a handler holding a bound
             # builtin warned that its code was not in the key.
+            # So does one its class's ``__cash_key__`` keys.
             # Inline, not `_keyed_by_registration`: this runs per element.
-            if not ((self._registries[0] or self._registries[1]) and self._args.keys_by_registration(value)):
+            if cash_key_method(value) is None and not (
+                (self._registries[0] or self._registries[1]) and self._args.keys_by_registration(value)
+            ):
                 yield from self._iter_attribute_carriers(value, _depth, _seen)
 
     def _keyed_by_registration(self, value: Any) -> bool:
-        """`ArgHasher.keys_by_registration`, skipped while nothing is registered."""
+        """`ArgHasher.keys_by_registration`, skipped while nothing is registered
+        and *value* has no ``__cash_key__``."""
+        if cash_key_method(value) is not None:
+            return True
         override, typed = self._registries
         return bool(override or typed) and self._args.keys_by_registration(value)
 

@@ -113,8 +113,13 @@ Default: annotate nothing.
 ## Gotchas
 
 - **Unhashable argument** (a lock, socket, open file): cash warns
-  `KEY-UNHASHABLE-ARG` and the call runs uncached. Register a hasher with
-  `cash.register_hasher(SomeType, lambda x: ...)` or pass a hashable ID.
+  `KEY-UNHASHABLE-ARG` and the call runs uncached. Give your own class a
+  `__cash_key__(self)` method returning what identifies an instance, register
+  a hasher with `cash.register_hasher(SomeType, lambda x: ...)`, or pass a
+  hashable ID.
+- **Slow key on a big object** (a class holding many DataFrames, used as
+  `self` or an argument): every call reads all of it to build the key. Add
+  `__cash_key__(self)` returning a version or id that changes with the data.
 - **Wrong case or a blank line above an annotation**: it does nothing, with no
   error (a misspelled name warns `ANNOT-UNKNOWN-DIRECTIVE`). Check the badge.
 - **Cache-safe cells:** rebind instead of changing an object from an earlier
