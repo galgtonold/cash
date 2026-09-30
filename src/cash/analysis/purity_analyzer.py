@@ -370,6 +370,7 @@ class _PurityVisitor(ast.NodeVisitor):
         "_param_names",
         "_qualname",
         "read_names",
+        "read_attributes",
         "_assign_kinds",
         "_name_call_nodes",
         "_subscript_call_nodes",
@@ -402,6 +403,9 @@ class _PurityVisitor(ast.NodeVisitor):
         # Bare names read (Load context) in this body - used to detect reads of
         # mutable module globals.
         self.read_names: set[str] = set()
+        #: Attribute reads (Load context) on a name or another attribute: a
+        #: helper named as a value through its module (``map(helper.g, xs)``).
+        self.read_attributes: list[ast.Attribute] = []
         # For each simple ``name = ...`` target, the kinds of RHS it was ever
         # assigned ({"dynamic"} / {"other"} / both). A name assigned ONLY from a
         # dynamic source (getattr(obj,name), eval, importlib) and then CALLED is
@@ -488,6 +492,8 @@ class _PurityVisitor(ast.NodeVisitor):
         ):
             self._whole_environment_read(node, f"{dotted_name(node)} as a whole")
             return
+        if isinstance(node.ctx, ast.Load) and isinstance(node.value, (ast.Name, ast.Attribute)):
+            self.read_attributes.append(node)
         self.generic_visit(node)
 
     def _whole_environment_read(self, node: ast.AST, what: str) -> None:
@@ -2227,6 +2233,27 @@ class PurityAnalyzer:
                     # `A.model_validate(d)` (a library method) or `build(A, d)`.
                     # Its code shapes the result all the same; followed for the
                     # key, not audited.
+                    _queue_hash_only(_val, func, depth)
+            # The same through a module or a class: `map(helper.g, xs)`,
+            # `fn = helper.g`, `df.apply(features.row)`. Only the call-position
+            # spelling was followed, so an edit to `g` served the old result.
+            # Resolved statically (no property runs), from a module or class
+            # the name is bound to, not a local or parameter that shadows it.
+            shadowed = (param_names | _function_locals(func_def)) - local_imports.keys()
+            for _node in visitor.read_attributes:
+                _chain = _callee_chain(_node)
+                if _chain is None or _chain[0] in shadowed:
+                    continue
+                if not isinstance(namespace.get(_chain[0]), (types.ModuleType, type)):
+                    continue
+                _val = resolve_callee(_node, namespace, modules_only=False)
+                if _val is None or is_mock(_val):
+                    continue
+                if getattr(_val, "_cash_cached", False) or (
+                    (inspect.isfunction(_val) or inspect.ismethod(_val)) and _is_user_code(_val, root_module)
+                ):
+                    _queue_helper(_val, getattr(_node, "lineno", 0), _call_site_path(_chain))
+                elif isinstance(_val, type):
                     _queue_hash_only(_val, func, depth)
             _queue_annotation_refs(func, depth)
 
