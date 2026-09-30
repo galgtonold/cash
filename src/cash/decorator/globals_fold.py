@@ -38,7 +38,6 @@ from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
 from .code_identity import (
-    func_key,
     hash_callable_source,
     is_user_class,
     is_user_code_object,
@@ -428,6 +427,11 @@ def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
     return isinstance(value, Cash) or value is sys.modules.get("cash")
 
 
+#: The opcodes that read a module global by name (``LOAD_NAME`` in a class
+#: body or at module level; ``LOAD_FROM_DICT_OR_GLOBALS`` in 3.12+ class bodies).
+_GLOBAL_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS"})
+
+
 class GlobalsFold:
     """The module data a function and its helpers read, folded into the state
     segment: globals, ``module.ATTR`` reads, data reached through local
@@ -554,11 +558,17 @@ class GlobalsFold:
             for instr in dis.get_instructions(scope)
             if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL")
         }
+        # Names LOADED as globals, not every name in ``co_names``: that also
+        # holds attribute names, so `b.lock` read the module's unrelated `lock`
+        # and warned KEY-UNHASHABLE-GLOBAL about a global never read.
         candidates = {
-            n
+            instr.argval
             for scope in scopes
-            for n in (scope.co_names or ())
-            if n in g and n not in MACHINERY_DUNDERS and n not in written
+            for instr in dis.get_instructions(scope)
+            if instr.opname in _GLOBAL_LOADS
+            and instr.argval in g
+            and instr.argval not in MACHINERY_DUNDERS
+            and instr.argval not in written
         }
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
@@ -628,19 +638,15 @@ class GlobalsFold:
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
         """
-        if getattr(fn, "_cash_cached", False):
-            inner = getattr(fn, "__wrapped__", None)
-            if inner is not None:
-                name = func_key(inner)
-                if name in self._registry.functions:
-                    if self._registry.needs_population(inner, name):
-                        self._registry.ensure_closure_analyzed(inner)
-                    return "cached:" + self._state_hasher.compute(
-                        name,
-                        own_source_override=self._code.pin_own_source(inner),
-                        own_report=self._registry.report_for(inner, name),
-                    )
-                fn = inner
+        if getattr(fn, "_cash_cached", False) and not is_mock(fn):
+            state = getattr(fn, "_cash_state", None)
+            if state is not None:
+                # Its whole state, globals and environment included, built by
+                # the instance that owns it: the dependency state alone left
+                # out the globals it reads, and one on another instance was
+                # not in this registry at all.
+                return "cached:" + state()
+            fn = getattr(fn, "__wrapped__", fn)
         if not isinstance(fn, types.FunctionType):
             return hash_callable_source(fn)
         own = self._helpers.identity(fn)

@@ -240,8 +240,9 @@ changed. The second list is what cash does not see, and what to do about it.
       defaults, and captured variables.
     - The **classes it uses**: their code, their class attributes, and the
       module globals their methods read, inherited ones included.
-    - Another **cached function** it calls or passes on
-      (`pool.map(inner, xs)`).
+    - Another **cached function** it reaches, directly, through a helper or
+      an import in the body, on any `Cash` instance, or passes on
+      (`pool.map(inner, xs)`), with what that function reads.
     - **Your class or function passed as an argument** or held in an argument
       or global, also inside a library object (a transformer in an sklearn
       pipeline), and what that code reads.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextlib
+import contextvars
 import logging
 import threading
 import time
@@ -58,6 +59,13 @@ if TYPE_CHECKING:
     from .store import ResultStore
 
 logger = logging.getLogger(__name__)
+
+
+#: Cached functions whose `KeyBuilder.callee_state` is being built on this
+#: thread, so one that reaches itself folds its name instead of recursing.
+_CALLEE_STATES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "_cash_callee_states", default=frozenset()
+)
 
 
 class Unkeyable(NamedTuple):
@@ -160,6 +168,87 @@ class KeyBuilder:
                 self._misses.keep_state_ledger(slot, ledger)
         return built, watch
 
+    def _code_state(self, func: Callable, func_name: str, chain: list[str], *, note: bool = False) -> str:
+        """The state segment before anything the arguments decide: *func*'s
+        code, helpers, cached callees, declared files, closure, defaults,
+        globals, RNG epoch and environment. Appends each stage to *chain*.
+
+        Raises `UnhashableDefault` when a default cannot be hashed.
+        """
+        state_hash = self._state_hasher.compute(
+            func_name,
+            own_source_override=self._code.pin_own_source(func),
+            own_report=self._registry.report_for(func, func_name),
+            note=note,
+        )
+        state_hash = self._files.fold_declared_files(func_name, state_hash)
+        chain.append(state_hash)
+        state_hash = self._closures.fold_closure(func, func_name, state_hash)
+        chain.append(state_hash)
+        folded_defaults = self._closures.fold_defaults(func, func_name, state_hash)
+        if folded_defaults is None:
+            raise UnhashableDefault
+        state_hash = folded_defaults
+        chain.append(state_hash)
+        state_hash = self._closures.fold_bound_self(func, func_name, state_hash)
+        state_hash = self._closures.fold_bound_partial(func, func_name, state_hash)
+        chain.append(state_hash)
+        state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
+        state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
+        state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash)
+        chain.append(state_hash)
+        state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
+        chain.append(state_hash)
+        state_hash = self._globals.fold_environment(func, func_name, state_hash)
+        chain.append(state_hash)
+        return state_hash
+
+    def callee_state(self, func: Callable, func_name: str) -> str:
+        """What a call of cached *func_name* depends on besides its arguments,
+        as ONE digest: for a cached function another one reaches without a
+        graph edge of its own registry.
+
+        A cached function on another `Cash`, one passed in as an argument or
+        held in a dict, a list or a closure, or one a caller still holds after
+        ``importlib.reload`` put a new function under its name: its code was
+        keyed by cash's own wrapper, or by the new function, and the globals
+        and environment it reads not at all, so an edit to any of them served
+        the caller's old result. This is the key's own state segment, built by
+        the instance that owns *func*, for the function object the caller
+        reaches.
+
+        A cycle (a cached function that reaches itself through a table)
+        contributes its name. The ledger and the capture watch of the key
+        being built are the caller's, so they are set aside meanwhile.
+
+        Raises `KeyBuildFailed` when the state cannot be built.
+        """
+        active = _CALLEE_STATES.get()
+        if func_name in active:
+            return f"cycle:{func_name}"
+        token = _CALLEE_STATES.set(active | {func_name})
+        ledger_token = STATE_LEDGER.set(None)
+        watch_token = CAPTURE_WATCH.set(None)
+        # The callee's digest folds its own classes, whatever the caller folded.
+        classes_token = CLASSES_FOLDED.set(set())
+        try:
+            if self._registry.functions.get(func_name) is func:
+                self._registry.ensure_closure_analyzed(func)
+            return self._code_state(func, func_name, [])
+        except UnhashableDefault:
+            raise KeyBuildFailed(
+                "KEY-UNHASHABLE-DEFAULT",
+                f"@cash.cache on {func_name}: a parameter default of this cached function, "
+                f"which another cached function calls, could not be hashed, so the caller "
+                f"cannot tell whether it changed and ran uncached.",
+                "give the default a hashable value, or register a hasher for its type with cash.register_hasher.",
+            ) from None
+        finally:
+            CLASSES_FOLDED.reset(classes_token)
+            CAPTURE_WATCH.reset(watch_token)
+            STATE_LEDGER.reset(ledger_token)
+            _CALLEE_STATES.reset(token)
+
     def build(
         self,
         func: Callable,
@@ -191,32 +280,7 @@ class KeyBuilder:
             # that changed (`describe_state_change`).
             chain: list[str] = []
             ledger_note("@chain", chain)
-            state_hash = self._state_hasher.compute(
-                func_name,
-                own_source_override=self._code.pin_own_source(func),
-                own_report=self._registry.report_for(func, func_name),
-                note=True,
-            )
-            state_hash = self._files.fold_declared_files(func_name, state_hash)
-            chain.append(state_hash)
-            state_hash = self._closures.fold_closure(func, func_name, state_hash)
-            chain.append(state_hash)
-            folded_defaults = self._closures.fold_defaults(func, func_name, state_hash)
-            if folded_defaults is None:
-                raise UnhashableDefault
-            state_hash = folded_defaults
-            chain.append(state_hash)
-            state_hash = self._closures.fold_bound_self(func, func_name, state_hash)
-            state_hash = self._closures.fold_bound_partial(func, func_name, state_hash)
-            chain.append(state_hash)
-            state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
-            state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
-            state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash)
-            chain.append(state_hash)
-            state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
-            chain.append(state_hash)
-            state_hash = self._globals.fold_environment(func, func_name, state_hash)
-            chain.append(state_hash)
+            state_hash = self._code_state(func, func_name, chain, note=True)
             state_hash = self._code.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value

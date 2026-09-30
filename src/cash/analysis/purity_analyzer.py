@@ -35,6 +35,7 @@ warnings / exceptions / cache-key components.
 from __future__ import annotations
 
 import ast
+import builtins
 import dataclasses
 import functools
 import hashlib
@@ -42,6 +43,7 @@ import importlib
 import importlib.util
 import inspect
 import logging
+import operator
 import sqlite3
 import sys
 import textwrap
@@ -322,6 +324,13 @@ class PurityReport:
     #: the key folds on every call: ``("env", NAME)`` or ``("cwd", "")``
     #: (`cash.effects.environment_input`).
     environment_reads: frozenset[tuple[str, str]] = frozenset()
+    #: A reference (``ref()``) to each ``@cash.cache`` wrapper the walk met, in
+    #: the function or in any helper it reaches: called, imported in the body,
+    #: or named as a value. Not walked -- each is a graph edge of its own --
+    #: but an edge only its registry can make: a cached function reached
+    #: through a plain helper or a function-local import had none, and an
+    #: edit to it served its callers' old results.
+    cached_callees: tuple[Any, ...] = ()
 
     @property
     def is_clean(self) -> bool:
@@ -363,6 +372,7 @@ class _PurityVisitor(ast.NodeVisitor):
         "_param_names",
         "_qualname",
         "read_names",
+        "read_attributes",
         "_assign_kinds",
         "_name_call_nodes",
         "_subscript_call_nodes",
@@ -395,6 +405,9 @@ class _PurityVisitor(ast.NodeVisitor):
         # Bare names read (Load context) in this body - used to detect reads of
         # mutable module globals.
         self.read_names: set[str] = set()
+        #: Attribute reads (Load context) on a name or another attribute: a
+        #: helper named as a value through its module (``map(helper.g, xs)``).
+        self.read_attributes: list[ast.Attribute] = []
         # For each simple ``name = ...`` target, the kinds of RHS it was ever
         # assigned ({"dynamic"} / {"other"} / both). A name assigned ONLY from a
         # dynamic source (getattr(obj,name), eval, importlib) and then CALLED is
@@ -481,6 +494,8 @@ class _PurityVisitor(ast.NodeVisitor):
         ):
             self._whole_environment_read(node, f"{dotted_name(node)} as a whole")
             return
+        if isinstance(node.ctx, ast.Load) and isinstance(node.value, (ast.Name, ast.Attribute)):
+            self.read_attributes.append(node)
         self.generic_visit(node)
 
     def _whole_environment_read(self, node: ast.AST, what: str) -> None:
@@ -1403,6 +1418,146 @@ def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
     return tuple(reversed(parts))
 
 
+#: Prefix of the name a ``sys.modules["pkg.mod"]`` lookup is spelled as
+#: (`spell_static_dispatch`): ``<module pkg.mod>``, bound in the namespace.
+_MODULE_NAME_PREFIX = "<module "
+
+
+def _const_str(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+_DYNAMIC_MODULE = "%s with a non-constant name - dynamic import; the module's code is not tracked"
+_DYNAMIC_GETTER = "operator.%s(name)(obj) with non-constant name - dynamic dispatch"
+
+
+class _StaticDispatchSpeller(ast.NodeTransformer):
+    """Rewrites the lookups that name a module or a function by a string into
+    the plain spelling the helper walk follows (`spell_static_dispatch`)."""
+
+    def __init__(self, namespace: dict[str, Any]) -> None:
+        self._namespace = namespace
+        #: ``(line, kind, description)`` for each lookup whose name is computed
+        #: at run time, which no rewrite can follow.
+        self.untracked: list[tuple[int, str, str]] = []
+
+    def _is(self, node: ast.AST, target: Any) -> bool:
+        """Does *node* (a name or a module attribute) name *target*?"""
+        if isinstance(node, ast.Name) and node.id not in self._namespace:
+            return getattr(builtins, node.id, None) is target
+        return resolve_callee(node, self._namespace) is target
+
+    def _is_sys_modules(self, node: ast.AST) -> bool:
+        return self._is(node, sys.modules)
+
+    def _module_name(self, key: str, like: ast.AST) -> ast.AST | None:
+        module = sys.modules.get(key)
+        if module is None:
+            return None
+        name = f"{_MODULE_NAME_PREFIX}{key}>"
+        self._namespace[name] = module
+        return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), like)
+
+    def _namespace_lookup(self, node: ast.Subscript) -> tuple[ast.AST | None, str] | None:
+        """``(owner or None, what)`` when *node* looks a name up in a runtime
+        namespace: ``globals()[k]`` (owner None: the module), ``vars(x)[k]``,
+        ``x.__dict__[k]``."""
+        base = node.value
+        if isinstance(base, ast.Call) and not base.keywords:
+            if self._is(base.func, globals) and not base.args:
+                return None, "globals()[...]"
+            if self._is(base.func, vars) and len(base.args) == 1:
+                return base.args[0], "vars(...)[...]"
+        if isinstance(base, ast.Attribute) and base.attr == "__dict__":
+            return base.value, "obj.__dict__[...]"
+        return None
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        if not isinstance(node.ctx, ast.Load):
+            return node
+        key = _const_str(node.slice)
+        if self._is_sys_modules(node.value):
+            if key is None:
+                self.untracked.append((node.lineno, ISSUE_UNTRACKABLE_DEP, _DYNAMIC_MODULE % "sys.modules[...]"))
+                return node
+            return self._module_name(key, node) or node
+        lookup = self._namespace_lookup(node)
+        if lookup is None or key is None or not key.isidentifier():
+            return node
+        owner, _ = lookup
+        if owner is None:
+            return ast.copy_location(ast.Name(id=key, ctx=ast.Load()), node)
+        return ast.copy_location(ast.Attribute(value=owner, attr=key, ctx=ast.Load()), node)
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        self.generic_visit(node)
+        func = node.func
+        # sys.modules.get("pkg.mod")
+        if isinstance(func, ast.Attribute) and func.attr == "get" and self._is_sys_modules(func.value) and node.args:
+            key = _const_str(node.args[0])
+            if key is None:
+                self.untracked.append((node.lineno, ISSUE_UNTRACKABLE_DEP, _DYNAMIC_MODULE % "sys.modules.get(...)"))
+                return node
+            return self._module_name(key, node) or node
+        # attrgetter("g")(helper) -> helper.g; methodcaller("g", x)(helper) -> helper.g(x)
+        if isinstance(func, ast.Call) and len(node.args) == 1 and not node.keywords and func.args:
+            name = _const_str(func.args[0])
+            if self._is(func.func, operator.attrgetter) and len(func.args) == 1 and not func.keywords:
+                if name is None or not all(p.isidentifier() for p in name.split(".")):
+                    self.untracked.append((node.lineno, ISSUE_UNTRACKABLE_DEP, _DYNAMIC_GETTER % "attrgetter"))
+                    return node
+                spelled: ast.AST = node.args[0]
+                for part in name.split("."):
+                    spelled = ast.copy_location(ast.Attribute(value=spelled, attr=part, ctx=ast.Load()), node)
+                return spelled
+            if self._is(func.func, operator.methodcaller):
+                if name is None or not name.isidentifier():
+                    self.untracked.append((node.lineno, ISSUE_UNTRACKABLE_DEP, _DYNAMIC_GETTER % "methodcaller"))
+                    return node
+                method = ast.copy_location(ast.Attribute(value=node.args[0], attr=name, ctx=ast.Load()), node)
+                return ast.copy_location(ast.Call(func=method, args=func.args[1:], keywords=func.keywords), node)
+        # globals()[k].g(x), vars(m)[k].g(x): a function looked up through a
+        # runtime namespace by a computed name, then called through it.
+        root = func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if root is not func and isinstance(root, ast.Subscript) and _const_str(root.slice) is None:
+            lookup = self._namespace_lookup(root)
+            if lookup is not None:
+                self.untracked.append(
+                    (
+                        node.lineno,
+                        ISSUE_DYNAMIC_PATTERN,
+                        f"calls through {lookup[1]} with a computed name - that lookup does not reach "
+                        f"the cache key, so editing the callable it names will not invalidate; "
+                        f"name it with depends_on=[...]",
+                    )
+                )
+        return node
+
+
+def spell_static_dispatch(func_def: ast.AST, namespace: dict[str, Any], qualname: str) -> list[PurityIssue]:
+    """Rewrite, in place, lookups by a CONSTANT string into what they name, and
+    report the ones whose name is computed at run time.
+
+    ``sys.modules["helper"].g(x)``, ``globals()["helper"].g(x)``,
+    ``vars(helper)["g"](x)``, ``helper.__dict__["g"](x)``,
+    ``operator.attrgetter("g")(helper)(x)`` and
+    ``operator.methodcaller("g", x)(helper)`` all call ``helper.g``, and none
+    was followed: an edit to ``g`` served the old result, with no word, while
+    ``getattr(helper, name)`` and ``importlib.import_module`` warned. The
+    constant spellings become ``helper.g`` for the walk (a module found in
+    ``sys.modules`` is bound in *namespace* under a ``<module name>`` name);
+    a computed name is reported like the dispatch it is.
+    """
+    speller = _StaticDispatchSpeller(namespace)
+    speller.visit(func_def)
+    return [
+        PurityIssue(kind=kind, description=what, where=qualname, line=line) for line, kind, what in speller.untracked
+    ]
+
+
 def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | None:
     """The ambient read *node* makes, spelled canonically, or None.
 
@@ -1441,6 +1596,11 @@ def _clock_helper_read(value: Any) -> str | None:
     """
     code = getattr(value, "__code__", None)
     if not isinstance(value, types.FunctionType) or code is None:
+        return None
+    if getattr(value, "_cash_cached", False):
+        # Judged by its own analysis. And every cached function shares its
+        # wrapper's code object, which the memo below is keyed by: one cached
+        # `return time.time()` made every cached callee a clock read.
         return None
     known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
     if known is not _NOT_JUDGED:
@@ -1785,6 +1945,13 @@ class PurityAnalyzer:
         waived_paths: set[tuple[str, tuple[str, ...]]] = set()
         unwaived_paths: set[tuple[str, tuple[str, ...]]] = set()
         environment_reads: set[tuple[str, str]] = set()
+        cached_callees: list[Any] = []
+        cached_seen: set[int] = set()
+
+        def _note_cached(callee: Any) -> None:
+            if id(callee) not in cached_seen:
+                cached_seen.add(id(callee))
+                cached_callees.append(_ref(callee))
 
         def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
             if path is None or path in seen_bindings:
@@ -1836,6 +2003,8 @@ class PurityAnalyzer:
             if target is None or target is owner or not callable(target):
                 return
             if getattr(target, "_cash_cached", False):
+                if not is_mock(target):
+                    _note_cached(target)
                 return
             if not _is_user_code(target, root_module):
                 return
@@ -1941,7 +2110,10 @@ class PurityAnalyzer:
                         callee = resolve_callee_chain(func.__globals__, chain)
                         if not isinstance(callee, types.FunctionType) or callee is func:
                             continue
-                        if is_mock(callee) or getattr(callee, "_cash_cached", False):
+                        if is_mock(callee):
+                            continue
+                        if getattr(callee, "_cash_cached", False):
+                            _note_cached(callee)
                             continue
                         if not own_code_is_user(callee, root_module):
                             continue
@@ -2031,6 +2203,7 @@ class PurityAnalyzer:
                 _obj = resolve_local_import(_mod, _prefix, root_module)
                 if _obj is not None:
                     namespace[_local] = _obj
+            dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
             visitor = _PurityVisitor(
                 qualname=qualname,
                 param_names=param_names,
@@ -2041,6 +2214,7 @@ class PurityAnalyzer:
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
+            visitor.issues.extend(dispatch_issues)
             if visitor.opens_tracked_database:
                 visitor.issues = [i for i in visitor.issues if i.effect_kind is not EffectKind.DB_READ]
             if depth > 0 and _clock_helper_read(func) is not None:
@@ -2083,6 +2257,8 @@ class PurityAnalyzer:
             # recursion.
 
             def _call_site_path(chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
+                if chain and chain[0].startswith(_MODULE_NAME_PREFIX):  # sys.modules["mod"]
+                    return (chain[0][len(_MODULE_NAME_PREFIX) : -1], chain[1:]) if len(chain) > 1 else None
                 if chain and chain[0] in local_imports:  # loop var, used within iteration
                     module_name, prefix = local_imports[chain[0]]
                     return (module_name, prefix + chain[1:]) if module_name in sys.modules else None
@@ -2111,6 +2287,7 @@ class PurityAnalyzer:
                 # calls it by (``app.inner = fake``) replaces the edge.
                 if getattr(callee, "_cash_cached", False):
                     _note_binding(callee, path)
+                    _note_cached(callee)
                     return
                 # A classmethod reached as `module.Model.run`, or bound to a
                 # name (`run = Model.run`), is a method bound to the CLASS.
@@ -2138,11 +2315,12 @@ class PurityAnalyzer:
                 # wrapper (np.vectorize, toolz.curry, lru_cache), a
                 # singledispatch implementation. Each user-code one is walked
                 # in its own right, under its own name and namespace.
-                layers = [
-                    layer
-                    for layer in callable_layers(callee)
-                    if own_code_is_user(layer, root_module) and not getattr(layer, "_cash_cached", False)
-                ]
+                layers = []
+                for layer in callable_layers(callee):
+                    if getattr(layer, "_cash_cached", False) and not is_mock(layer):
+                        _note_cached(layer)
+                    elif own_code_is_user(layer, root_module):
+                        layers.append(layer)
                 # A function of a compiled extension built in the project
                 # (`build_ext --inplace`) is no Python source, but it is the
                 # user's code: keyed by its built file (`compiled_identity`).
@@ -2207,6 +2385,27 @@ class PurityAnalyzer:
                     # Its code shapes the result all the same; followed for the
                     # key, not audited.
                     _queue_hash_only(_val, func, depth)
+            # The same through a module or a class: `map(helper.g, xs)`,
+            # `fn = helper.g`, `df.apply(features.row)`. Only the call-position
+            # spelling was followed, so an edit to `g` served the old result.
+            # Resolved statically (no property runs), from a module or class
+            # the name is bound to, not a local or parameter that shadows it.
+            shadowed = (param_names | _function_locals(func_def)) - local_imports.keys()
+            for _node in visitor.read_attributes:
+                _chain = _callee_chain(_node)
+                if _chain is None or _chain[0] in shadowed:
+                    continue
+                if not isinstance(namespace.get(_chain[0]), (types.ModuleType, type)):
+                    continue
+                _val = resolve_callee(_node, namespace, modules_only=False)
+                if _val is None or is_mock(_val):
+                    continue
+                if getattr(_val, "_cash_cached", False) or (
+                    (inspect.isfunction(_val) or inspect.ismethod(_val)) and _is_user_code(_val, root_module)
+                ):
+                    _queue_helper(_val, getattr(_node, "lineno", 0), _call_site_path(_chain))
+                elif isinstance(_val, type):
+                    _queue_hash_only(_val, func, depth)
             _queue_annotation_refs(func, depth)
 
         # Stable order: by where (insertion) then line then kind.
@@ -2226,6 +2425,7 @@ class PurityAnalyzer:
             waived_bindings=frozenset(waived_paths - unwaived_paths),
             unkeyable=tuple(unkeyable),
             environment_reads=frozenset(environment_reads),
+            cached_callees=tuple(cached_callees),
         )
 
     def _flag_mutable_global_reads(

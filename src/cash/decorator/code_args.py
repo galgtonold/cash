@@ -60,6 +60,17 @@ def carrier_name(carrier: Any) -> str:
     return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
 
 
+def cached_function_in(carrier: Any) -> Any:
+    """The ``@cash.cache`` wrapper *carrier* is, or a partial wraps; else None."""
+    for _ in range(8):
+        if not isinstance(carrier, functools.partial):
+            break
+        carrier = carrier.func
+    if isinstance(carrier, types.FunctionType) and getattr(carrier, "_cash_cached", False) is True:
+        return carrier
+    return None
+
+
 def is_user_code_carrier(carrier: Any) -> bool:
     """``is_user_code_object`` for the ADVISORY rather than for hashing.
 
@@ -532,6 +543,15 @@ class CodeArgs:
             if id(carrier) in seen_carriers:
                 continue
             seen_carriers.add(id(carrier))
+            cached = cached_function_in(carrier)
+            if cached is not None:
+                # A cached function (bare, or under a partial) is what it
+                # computes: its whole state, as a call of it keys it. Its
+                # wrapper is cash's code, and the globals that code reads are
+                # cash's own -- a constant key part, and a false
+                # KEY-UNHASHABLE-GLOBAL naming them.
+                parts.append(f"cached:{carrier_name(cached)}:{self._globals.data_callable_identity(cached)}")
+                continue
             if is_opaque(carrier):
                 continue
             digest = self._code.code_surface_hash(carrier)
