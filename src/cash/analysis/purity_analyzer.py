@@ -322,6 +322,13 @@ class PurityReport:
     #: the key folds on every call: ``("env", NAME)`` or ``("cwd", "")``
     #: (`cash.effects.environment_input`).
     environment_reads: frozenset[tuple[str, str]] = frozenset()
+    #: A reference (``ref()``) to each ``@cash.cache`` wrapper the walk met, in
+    #: the function or in any helper it reaches: called, imported in the body,
+    #: or named as a value. Not walked -- each is a graph edge of its own --
+    #: but an edge only its registry can make: a cached function reached
+    #: through a plain helper or a function-local import had none, and an
+    #: edit to it served its callers' old results.
+    cached_callees: tuple[Any, ...] = ()
 
     @property
     def is_clean(self) -> bool:
@@ -1785,6 +1792,13 @@ class PurityAnalyzer:
         waived_paths: set[tuple[str, tuple[str, ...]]] = set()
         unwaived_paths: set[tuple[str, tuple[str, ...]]] = set()
         environment_reads: set[tuple[str, str]] = set()
+        cached_callees: list[Any] = []
+        cached_seen: set[int] = set()
+
+        def _note_cached(callee: Any) -> None:
+            if id(callee) not in cached_seen:
+                cached_seen.add(id(callee))
+                cached_callees.append(_ref(callee))
 
         def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
             if path is None or path in seen_bindings:
@@ -1836,6 +1850,8 @@ class PurityAnalyzer:
             if target is None or target is owner or not callable(target):
                 return
             if getattr(target, "_cash_cached", False):
+                if not is_mock(target):
+                    _note_cached(target)
                 return
             if not _is_user_code(target, root_module):
                 return
@@ -1941,7 +1957,10 @@ class PurityAnalyzer:
                         callee = resolve_callee_chain(func.__globals__, chain)
                         if not isinstance(callee, types.FunctionType) or callee is func:
                             continue
-                        if is_mock(callee) or getattr(callee, "_cash_cached", False):
+                        if is_mock(callee):
+                            continue
+                        if getattr(callee, "_cash_cached", False):
+                            _note_cached(callee)
                             continue
                         if not own_code_is_user(callee, root_module):
                             continue
@@ -2111,6 +2130,7 @@ class PurityAnalyzer:
                 # calls it by (``app.inner = fake``) replaces the edge.
                 if getattr(callee, "_cash_cached", False):
                     _note_binding(callee, path)
+                    _note_cached(callee)
                     return
                 # A classmethod reached as `module.Model.run`, or bound to a
                 # name (`run = Model.run`), is a method bound to the CLASS.
@@ -2138,11 +2158,12 @@ class PurityAnalyzer:
                 # wrapper (np.vectorize, toolz.curry, lru_cache), a
                 # singledispatch implementation. Each user-code one is walked
                 # in its own right, under its own name and namespace.
-                layers = [
-                    layer
-                    for layer in callable_layers(callee)
-                    if own_code_is_user(layer, root_module) and not getattr(layer, "_cash_cached", False)
-                ]
+                layers = []
+                for layer in callable_layers(callee):
+                    if getattr(layer, "_cash_cached", False) and not is_mock(layer):
+                        _note_cached(layer)
+                    elif own_code_is_user(layer, root_module):
+                        layers.append(layer)
                 # A function of a compiled extension built in the project
                 # (`build_ext --inplace`) is no Python source, but it is the
                 # user's code: keyed by its built file (`compiled_identity`).
@@ -2226,6 +2247,7 @@ class PurityAnalyzer:
             waived_bindings=frozenset(waived_paths - unwaived_paths),
             unkeyable=tuple(unkeyable),
             environment_reads=frozenset(environment_reads),
+            cached_callees=tuple(cached_callees),
         )
 
     def _flag_mutable_global_reads(

@@ -196,6 +196,11 @@ class FunctionRegistry:
         #: invalidates the parent key.
         self.declared_dep_snapshots: dict[str, str] = {}
         self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+        #: func_name -> {callee name -> ref()} for each cached function its
+        #: analysis reached (`PurityReport.cached_callees`): the object the
+        #: caller actually calls, which `reached_callee` compares with the
+        #: one registered under that name.
+        self.cached_callees: dict[str, dict[str, Any]] = {}
 
     def report_for(self, func: Callable[..., Any], func_name: str) -> PurityReport | None:
         """*func*'s own purity report: a closure's, else the one under *func_name*."""
@@ -509,6 +514,21 @@ class FunctionRegistry:
             logger.debug("Purity analyzer failed for %s: %s", func_name, e)
             report = PurityReport()
         self.purity_reports[func_name] = report
+        # Every cached function the analysis reached is an edge, however it is
+        # reached: through a plain helper, a function-local import, a name
+        # held as a value. Found only in the function's own calls, an edit
+        # to one reached any other way served the caller's old result.
+        callees: dict[str, Any] = {}
+        for ref in report.cached_callees:
+            inner = getattr(ref(), "__wrapped__", None)
+            if inner is None:
+                continue
+            name = func_key(inner)
+            if name != func_name:
+                callees[name] = ref
+                self.graph.add_dependency(func_name, name)
+        self.cached_callees[func_name] = callees
+        self._effective_ttl_cache.clear()
         if getattr(func, "__closure__", None):
             try:
                 self._closure_reports[func] = report
