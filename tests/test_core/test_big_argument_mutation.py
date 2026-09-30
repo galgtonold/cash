@@ -130,3 +130,53 @@ def test_a_big_list_that_is_only_read_still_stores(c):
     total(rows)
     total(rows)
     assert len(runs) == 1
+
+
+def _scale_in_place(values, factor):
+    import numpy as np
+
+    np.multiply(values, factor, out=values)  # a library writing through out=
+
+
+def test_a_big_array_changed_inside_a_library_is_not_stored(c, monkeypatch):
+    """``normalise(values)`` on an array whose key hash took over 50 ms
+    retired the argument check for the function: a library writing into the
+    array was stored, and the warm run returned without scaling it. The
+    budget is set to nothing so a small array stands in for a big one."""
+    import numpy as np
+
+    from cash.decorator import purity_checks
+
+    monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)
+
+    @c.cache
+    def normalise(values):
+        time.sleep(0.12)
+        _scale_in_place(values, 2.0)
+        return float(values.sum())
+
+    first = np.arange(10, dtype=float)
+    normalise(first)
+    second = np.arange(10, dtype=float)
+    normalise(second)
+    assert second.tolist() == first.tolist(), "the warm run skipped the in-place scale"
+
+
+def test_a_big_array_only_read_still_stores(c, monkeypatch):
+    """Control: an array the call leaves alone is stored however costly."""
+    import numpy as np
+
+    from cash.decorator import purity_checks
+
+    monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)
+    runs = []
+
+    @c.cache
+    def total(values):
+        runs.append(1)
+        time.sleep(0.12)
+        return float(values.sum())
+
+    total(np.arange(10, dtype=float))
+    total(np.arange(10, dtype=float))
+    assert len(runs) == 1

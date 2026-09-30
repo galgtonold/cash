@@ -603,10 +603,12 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.argument_snapshot @334133e6 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @2dd98300 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @7507ae49, cash/_plain_data.py:identity_changed @a853a1cf -->
-A call that changes an argument is **not stored**, so it runs every time. For
-arguments that take more than about 50 ms to hash, this check is skipped.
+A call that changes an argument is **not stored**, so it runs every time. The
+arguments are checked on every miss, whatever their size, and one that cannot
+be hashed again after the call counts as changed. Past about 50 ms of hashing,
+the message may say "an argument" instead of naming which one.
 
 **What to do.** If the effect is part of the job, split the function: cache the
 computation and do the writing in an uncached caller. For an argument
