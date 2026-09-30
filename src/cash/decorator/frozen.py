@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from .._memo import FROZEN_RESULTS, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
+from ..lineage_tag import own_tag, set_tags
 from ..object_hashing import builtin_hash
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 
@@ -87,12 +88,8 @@ class FrozenResults:
         args, kwargs = normalized_args
         names = []
         for name, value in [*((f"#{i}", v) for i, v in enumerate(args)), *kwargs.items()]:
-            if getattr(value, "_cash_lineage_src", None) == LINEAGE_SRC_FROZEN or (
-                self.arrays and id(value) in self.arrays
-            ):
-                producer = (
-                    getattr(value, "_cash_lineage_producer", None) or (self.arrays.get(id(value), [None, None])[1])
-                )
+            if own_tag(value, "_cash_lineage_src") == LINEAGE_SRC_FROZEN or (self.arrays and id(value) in self.arrays):
+                producer = own_tag(value, "_cash_lineage_producer") or (self.arrays.get(id(value), [None, None])[1])
                 names.append(f"{name} (the result of {producer}, declared frozen)")
         return names
 
@@ -218,11 +215,8 @@ class FrozenResults:
 
     def _warn_mutated(self, obj: Any, producer: Any = None) -> None:
         """KEY-FROZEN-MUTATED: a result declared frozen is not what it was."""
-        producer = producer or getattr(obj, "_cash_lineage_producer", None) or "a frozen=True function"
-        try:
-            obj._cash_lineage_src = LINEAGE_SRC_DECORATOR
-        except (AttributeError, TypeError):
-            pass
+        producer = producer or own_tag(obj, "_cash_lineage_producer") or "a frozen=True function"
+        set_tags(obj, _cash_lineage_src=LINEAGE_SRC_DECORATOR)
         warn_diagnostic(
             CashImpurityWarning,
             "KEY-FROZEN-MUTATED",
@@ -281,11 +275,8 @@ class FrozenResults:
             return True
         if entry[2] == digest:
             return True
-        producer = getattr(obj, "_cash_lineage_producer", None) or "a frozen=True function"
-        try:
-            obj._cash_lineage_src = LINEAGE_SRC_DECORATOR
-        except (AttributeError, TypeError):
-            pass
+        producer = own_tag(obj, "_cash_lineage_producer") or "a frozen=True function"
+        set_tags(obj, _cash_lineage_src=LINEAGE_SRC_DECORATOR)
         self._uses.pop(key, None)
         warn_diagnostic(
             CashImpurityWarning,

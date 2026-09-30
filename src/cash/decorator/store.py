@@ -18,6 +18,7 @@ from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import get_serializer
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
+from ..lineage_tag import set_tags
 from ..object_hashing import estimate_object_size
 from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
@@ -227,10 +228,11 @@ class ResultStore:
         ttl: int | None = None,
         func_name: str | None = None,
     ) -> None:
-        """Attach lineage hash to result if it supports attribute setting.
+        """Tag *result* with its lineage hash, beside it (`cash.lineage_tag.set_tags`).
 
-        Works with pandas DataFrame/Series, polars DataFrame/Series, PyArrow
-        Table, modin DataFrame, and any object that allows setting attributes.
+        Works with pandas, polars and modin frames and any other object that
+        has a ``__dict__`` and takes a weak reference; the object itself is
+        never changed.
 
         Skipped when the producer has a ``ttl``: a TTL'd value's identity is not
         captured by its cache key (the value changes over time while the key
@@ -261,75 +263,31 @@ class ResultStore:
         if not frozen and UNTAGGABLE_TYPES.get(type(result)):
             return
         lineage = lineage_hash(cache_key, auto_file_deps)
-        try:
-            # Say who wrote it: nothing will move this tag when the value is
-            # mutated, so `ArgHasher.hash_payload` must not take it for the content
-            # -- unless the function was declared frozen=True.
-            try:
-                result._cash_lineage_src = LINEAGE_SRC_FROZEN if frozen else LINEAGE_SRC_DECORATOR
-                if func_name is not None:
-                    # Named in CACHE-NET-LOSS and KEY-FROZEN-MUTATED.
-                    result._cash_lineage_producer = func_name
-            except (AttributeError, TypeError):
-                if frozen:
-                    self._frozen.warn_has_no_effect(func_name, result)
-            type_name = type(result).__name__
-            module = type(result).__module__ or ""
-
-            # pandas DataFrame / Series (has attrs dict)
-            if module.startswith("pandas") and type_name in ("DataFrame", "Series"):
-                result._cash_lineage_hash = lineage
-                return
-
-            # polars DataFrame / Series
-            if module.startswith("polars") and type_name in ("DataFrame", "Series"):
-                try:
-                    result._cash_lineage_hash = lineage
-                except (AttributeError, TypeError):
-                    logger.debug("Cannot attach _cash_lineage_hash to polars %s", type_name)
-                return
-
-            # modin DataFrame / Series
-            if module.startswith("modin") and type_name in ("DataFrame", "Series"):
-                try:
-                    result._cash_lineage_hash = lineage
-                except (AttributeError, TypeError):
-                    logger.debug("Cannot attach _cash_lineage_hash to modin %s", type_name)
-                return
-
-            # PyArrow Table
-            if module.startswith("pyarrow") and type_name in ("Table", "RecordBatch"):
-                try:
-                    result._cash_lineage_hash = lineage
-                except (AttributeError, TypeError):
-                    logger.debug("Cannot attach _cash_lineage_hash to PyArrow %s", type_name)
-                return
-
-            # Generic: try setting on DataFrame-like objects with attrs
-            if type_name == "DataFrame" and hasattr(result, "attrs"):
-                result._cash_lineage_hash = lineage
-                return
-
-            # Generic custom objects: any instance that accepts attribute
-            # assignment can carry the lineage hash, so a custom result short-
-            # circuits downstream content-hashing the same way a DataFrame does.
-            # Builtins (list/dict/tuple/str/numbers) and __slots__ objects with
-            # no matching slot reject the assignment - caught below, harmless
-            # skip - so those keep content-hashing (a hard Python limitation).
-            try:
-                result._cash_lineage_hash = lineage
-            except (AttributeError, TypeError):
-                # Once per type, then never tried again: it logged on every
-                # call returning a dict or an array, and meant nothing to the
-                # user reading CASH_DEBUG.
-                UNTAGGABLE_TYPES[type(result)] = True
-                logger.debug(
-                    "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
-                    type_name,
-                )
-
-        except (AttributeError, TypeError):
-            logger.debug("Failed to attach lineage hash to %s result", type(result).__name__)
+        # Beside the value, never on it (`cash.lineage_tag.set_tags`): as
+        # attributes the tags showed in the user's own data -- `vars()`,
+        # a `__dict__`-based `==` or `repr`, the pickle -- and a function
+        # returning its argument tagged the caller's object. Say who wrote
+        # it: nothing will move this tag when the value is mutated, so
+        # `ArgHasher.hash_payload` must not take it for the content -- unless
+        # the function was declared frozen=True.
+        tags = {
+            "_cash_lineage_src": LINEAGE_SRC_FROZEN if frozen else LINEAGE_SRC_DECORATOR,
+            "_cash_lineage_hash": lineage,
+        }
+        if func_name is not None:
+            # Named in CACHE-NET-LOSS and KEY-FROZEN-MUTATED.
+            tags["_cash_lineage_producer"] = func_name
+        if not set_tags(result, **tags):
+            if frozen:
+                self._frozen.warn_has_no_effect(func_name, result)
+            # Once per type, then never tried again: it logged on every call
+            # returning a dict or an array, and meant nothing to the user
+            # reading CASH_DEBUG.
+            UNTAGGABLE_TYPES[type(result)] = True
+            logger.debug(
+                "results of type %s cannot carry a lineage tag, so a cached function taking one hashes its content",
+                type(result).__name__,
+            )
 
     def store(
         self,

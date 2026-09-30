@@ -14,6 +14,7 @@ import tempfile
 import pytest
 
 from cash import Cash, FileBackend, InMemoryBackend
+from cash.lineage_tag import own_tag
 
 
 class Result:
@@ -29,7 +30,7 @@ def test_rejected_value_has_no_lineage_hash():
         return Result(list(range(n)))
 
     r = produce(5)
-    assert not hasattr(r, "_cash_lineage_hash")
+    assert own_tag(r) is None
 
 
 def test_accepted_value_still_has_lineage_hash():
@@ -40,7 +41,7 @@ def test_accepted_value_still_has_lineage_hash():
         return Result(list(range(n)))
 
     r = produce(5)
-    assert hasattr(r, "_cash_lineage_hash")
+    assert own_tag(r) is not None
 
 
 def test_downstream_recomputes_for_rejected_upstream():

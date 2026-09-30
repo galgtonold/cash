@@ -831,7 +831,7 @@ class ArgHasher:
             digest = get_arg_hash(value)
             seconds = _perf_counter() - t0
             if costliest is None or seconds > costliest[1]:
-                producer = getattr(value, "_cash_lineage_producer", None)
+                producer = own_tag(value, "_cash_lineage_producer")
                 if producer is None and self._frozen.arrays and id(value) in self._frozen.arrays:
                     producer = self._frozen.arrays[id(value)][1]
                 if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
@@ -887,7 +887,7 @@ class ArgHasher:
             payload_seconds = _perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:
                 label, value = max(raw, key=lambda r: len(r[1]) if hasattr(r[1], "__len__") else sys.getsizeof(r[1]))
-                producer = getattr(value, "_cash_lineage_producer", None)
+                producer = own_tag(value, "_cash_lineage_producer")
                 if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
                     producer = self._frozen.containers[id(value)][1]
                 costliest = (label, payload_seconds, type(value).__name__, producer, False)

@@ -20,6 +20,7 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_identity_coupled
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.namespace_effects import is_estimator
+from ...lineage_tag import own_tag
 from ...value_types import BUILTIN_NAMES
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
@@ -644,7 +645,7 @@ class MismatchClassifier:
         walrus target the mutation visitor misses).
         """
         live = self.shell.user_ns.get(var_name)
-        if getattr(live, "_cash_lineage_hash", None) is not None:
+        if own_tag(live) is not None:
             return False
         code = self.tracking_state.executed_cell_codes.get(var_name)
         if not code:

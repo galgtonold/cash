@@ -112,7 +112,12 @@ statement's occurrence index in the cell.
 - `LineageStore` (`notebook/lineage_store.py`) is the one place lineage is read and
   written. `LineageStore.resolve` applies the priority order: the simulation's
   `virtual_lineage` first, then the store (`variable_lineage`), then the object's
-  `_cash_lineage_hash` attribute, then `compute_hash_fn(value)`.
+  tag (`cash.lineage_tag.own_tag`), then `compute_hash_fn(value)`.
+- The decorator never writes onto a result: its tags live in the side table
+  of `cash.lineage_tag` (`set_tags`), keyed by identity. The notebook's
+  lineage store writes the `_cash_lineage_hash` attribute and clears the
+  side-table entry, so the latest writer wins. Read tags only through
+  `own_tag`, never `getattr`.
 - The simulator also tracks `executed_cell_codes` (variable to the code that last
   produced it) and `executed_input_lineages` (variable to the input lineages used).
 - The runtime and the upstream simulation must derive every lineage from the

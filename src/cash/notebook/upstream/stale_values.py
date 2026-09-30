@@ -20,6 +20,7 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import CellEffects
 from ...analysis.mutations import consumed_input_names
+from ...lineage_tag import own_tag
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
@@ -139,7 +140,7 @@ class StaleValueGuard:
                 broken_vars.add(var_name)
                 continue
             live_value = self.shell.user_ns.get(var_name)
-            live_lineage = getattr(live_value, "_cash_lineage_hash", None)
+            live_lineage = own_tag(live_value)
             # The value is the one the simulation of the cells above says this
             # cell starts from: current, and not this cell's own earlier output.
             # The checks below compare it with what the LAST statement writing

@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from cash.core import Cash
+from cash.lineage_tag import own_tag
 from cash.object_hashing import builtin_hash
 
 # ============================================================================
@@ -446,8 +447,8 @@ class TestLineageAttachment:
             return pd.DataFrame({"a": [1, 2, 3]})
 
         df = create_df()
-        assert hasattr(df, "_cash_lineage_hash")
-        assert df._cash_lineage_hash != ""
+        assert own_tag(df) is not None
+        assert own_tag(df) != ""
 
     def test_pandas_series_lineage(self):
         """pandas Series should get _cash_lineage_hash attached."""
@@ -461,7 +462,7 @@ class TestLineageAttachment:
             return pd.Series([1, 2, 3])
 
         s = create_series()
-        assert hasattr(s, "_cash_lineage_hash")
+        assert own_tag(s) is not None
 
     def test_non_dataframe_no_lineage(self):
         """Non-DataFrame results should not have _cash_lineage_hash."""
@@ -472,7 +473,7 @@ class TestLineageAttachment:
             return x * 2
 
         result = compute(5)
-        assert not hasattr(result, "_cash_lineage_hash")
+        assert own_tag(result) is None
 
 
 # ============================================================================
@@ -693,7 +694,7 @@ class TestDataFrameLibraryOnboarding:
             return pl.DataFrame({"a": [1, 2, 3]})
 
         df = create_df()
-        assert hasattr(df, "_cash_lineage_hash")
+        assert own_tag(df) is not None
 
     def test_pyarrow_table_hash(self):
         """PyArrow Table should be hashable."""

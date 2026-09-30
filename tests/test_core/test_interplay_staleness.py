@@ -15,6 +15,7 @@ import time
 import pytest
 
 from cash import Cash, FileBackend, InMemoryBackend
+from cash.lineage_tag import own_tag
 
 
 def test_cached_generator_invalidates_on_file_change(tmp_path):
@@ -61,7 +62,7 @@ def test_ttl_value_has_no_lineage_hash(tmp_path):
         return pd.DataFrame({"x": [1]})
 
     df = fetch()
-    assert not hasattr(df, "_cash_lineage_hash"), "TTL'd value must not carry lineage"
+    assert own_tag(df) is None, "TTL'd value must not carry lineage"
 
 
 def test_downstream_not_stale_after_ttl_refresh():

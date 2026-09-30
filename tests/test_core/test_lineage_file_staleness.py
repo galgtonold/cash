@@ -18,6 +18,7 @@ import time
 import pytest
 
 from cash import Cash, FileBackend
+from cash.lineage_tag import own_tag
 
 
 def test_downstream_recomputes_after_upstream_file_change(tmp_path):
@@ -68,11 +69,11 @@ def test_lineage_survives_disk_restore(tmp_path):
         return int(df["v"].sum())
 
     d1 = load(5)  # freshly computed
-    assert hasattr(d1, "_cash_lineage_hash")
+    assert own_tag(d1) is not None
     total(d1)
 
     d2 = load(5)  # restored from disk
-    assert hasattr(d2, "_cash_lineage_hash"), "lineage hash lost on disk restore"
+    assert own_tag(d2) is not None, "lineage hash lost on disk restore"
     total(d2)
 
     assert calls["n"] == 1, "downstream recomputed across the compute/restore boundary"

@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from cash.lineage_tag import own_tag, taggable
+from cash.lineage_tag import clear_tags, own_tag, taggable
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,9 @@ class LineageStore(Mapping[str, str]):
                 # This layer re-tags the value whenever it changes, which is
                 # what lets the decorator trust the tag for its content.
                 value._cash_lineage_src = "statement"
+                # The decorator tags beside the value (`cash.lineage_tag`);
+                # this newer tag must win over one it left.
+                clear_tags(value)
             except (AttributeError, TypeError):
                 # Builtins (int / str / ...) and slotted types reject attribute
                 # writes. The entry is still authoritative.

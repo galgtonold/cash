@@ -15,6 +15,7 @@ from __future__ import annotations
 import tempfile
 
 from cash import Cash, FileBackend, InMemoryBackend
+from cash.lineage_tag import own_tag
 
 
 class Result:
@@ -36,7 +37,7 @@ def test_custom_object_carries_lineage_hash():
         return Result(list(range(n)))
 
     r = produce(5)
-    assert hasattr(r, "_cash_lineage_hash")
+    assert own_tag(r) is not None
 
 
 def test_custom_object_short_circuits_downstream():
@@ -84,10 +85,10 @@ def test_custom_object_lineage_survives_disk_restore():
         return Result(list(range(n)))
 
     r1 = produce(5)
-    assert hasattr(r1, "_cash_lineage_hash")
+    assert own_tag(r1) is not None
     r2 = produce(5)  # restored from disk
-    assert hasattr(r2, "_cash_lineage_hash"), "lineage lost on disk restore"
-    assert r1._cash_lineage_hash == r2._cash_lineage_hash
+    assert own_tag(r2) is not None, "lineage lost on disk restore"
+    assert own_tag(r1) == own_tag(r2)
 
 
 def test_builtin_containers_do_not_crash():
@@ -111,4 +112,4 @@ def test_builtin_containers_do_not_crash():
     assert total(make_list(4)) == 6
     assert total(make_dict(7)) == 7
     # No _cash_lineage_hash on builtins (can't be set), but everything works.
-    assert not hasattr(make_list(4), "_cash_lineage_hash")
+    assert own_tag(make_list(4)) is None
