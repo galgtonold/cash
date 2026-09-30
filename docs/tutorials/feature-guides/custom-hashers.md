@@ -107,7 +107,7 @@ def evaluate(model, data):
     return model.weights @ data
 ```
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/source_norm.py:callable_identity @f9ec85f7 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/source_norm.py:callable_identity @4e3b5359 -->
 From now on, every `MyModel` argument is identified by `hash_model(model)`,
 and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
 `Cash(...)` instance, call `app.register_hasher(...)` instead.
@@ -125,7 +125,7 @@ and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
   cover every function passed to any cached call. Pass what a closure captures
   as a plain argument instead.
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @163caf79, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @6cecb0bf -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @68bbf619, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @6cecb0bf -->
 The hasher is the value's whole identity. The code of the value's class still
 counts when the class is yours, but cash does not search the value for code it
 holds: a function stored on an instance, or the handlers and streams a

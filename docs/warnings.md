@@ -1074,7 +1074,7 @@ code](#silencing-one-code).
 after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @ede4d2d0 -->
+<!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @c5a5c753 -->
 **Why it matters.** cash keys that code by what is actually running, so
 results in this process are correct, and they are not reused after a restart
 on the new code.
