@@ -637,14 +637,16 @@ Each finding has a line number and a label:
 | `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item | this code |
 | `discarded_call` | A call whose return value is thrown away | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
-| `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` | this code |
+| `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
-| `untrackable_dep` | `eval` / `exec` / `compile`, `getattr(obj, name)()` with a run-time name, `importlib.import_module` | raises `CashImpureFunctionError` |
+| `untrackable_dep` | `eval` / `exec` / `compile`, `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | raises `CashImpureFunctionError` |
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 module-level table such as `HANDLERS[kind]()` is hashed as a global and is not
-reported either.
+reported either, nor is a lookup whose name is written out
+(`sys.modules["helper"].g`, `getattr(helper, "g")`, `attrgetter("g")(helper)`):
+cash follows the code it names.
 
 **Why it matters.** `impure_call`, `scope_mutation` and `discarded_call` mean
 a hit will not repeat the effect. `mutable_global` and `dynamic_pattern` are
