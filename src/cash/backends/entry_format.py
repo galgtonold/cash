@@ -2,11 +2,16 @@
 
 One file per entry, holding both the metadata and the payload::
 
-    offset 0            magic       4 bytes    b"CSH2"
+    offset 0            magic       4 bytes    b"CSH2" or b"CSH3"
     offset 4            meta_len    uint32 LE  bytes of pickled metadata in use
     offset 8            meta_cap    uint32 LE  bytes RESERVED for metadata
     offset 12           metadata    meta_cap bytes, pickle + zero padding
     offset 12+meta_cap  payload     to end of file
+
+Under ``CSH2`` the payload is the serialized value in one piece. Under
+``CSH3`` (:data:`MAGIC_SPLIT`) it is a pickle stream and the large buffers
+it refers to (a numpy array's data, a frame's columns), each stored as it
+is in memory -- see "Why large buffers are stored apart" below.
 
 Why one file
 ------------
@@ -54,24 +59,51 @@ crc32 costs a fraction of writing or reading the payload it covers (several
 times faster than sha256). It detects damage, not forgery:
 nothing here defends against someone who can write the cache directory, and
 nothing needs to.
+
+Why large buffers are stored apart
+----------------------------------
+Pickled in one piece, a 100 MB array is copied into the pickle stream, and
+loading it copies it out again into a new array: two passes over the value
+besides the disk I/O, which made a disk hit about 5x an ``np.load``. Pickle
+protocol 5 can hand such buffers over "out of band" instead. A ``CSH3``
+payload is::
+
+    stream_len  uint64 LE
+    n_buffers   uint32 LE
+    lengths     n_buffers x uint64 LE
+    stream      the pickle stream, at the next multiple of 64
+    buffers     each at the next multiple of 64, zero padding between
+
+A read fills one ``bytearray`` per buffer straight from the file and the
+unpickled arrays use that memory as it is, with no second copy. The
+checksum covers every byte of the payload, padding included, and is checked
+before anything is unpickled.
 """
 
 from __future__ import annotations
 
+import os
 import pickle
 import struct
 import zlib
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, NamedTuple
 
 __all__ = [
     "MAGIC",
+    "MAGIC_SPLIT",
+    "MAGICS",
     "HEADER",
     "HEADER_SIZE",
     "META_SLACK",
     "ENTRY_SUFFIX",
     "CHECKSUM_FIELD",
     "CorruptEntry",
+    "PackedEntry",
+    "SplitPayload",
     "pack_entry",
+    "pack_entry_parts",
+    "split_chunks",
     "packed_size",
     "read_entry",
     "read_entry_and_checksum",
@@ -83,6 +115,13 @@ __all__ = [
 ]
 
 MAGIC = b"CSH2"
+#: The payload is a pickle stream plus its out-of-band buffers (module docstring).
+MAGIC_SPLIT = b"CSH3"
+MAGICS = (MAGIC, MAGIC_SPLIT)
+#: Where each part of a split payload starts: a multiple of this, from the
+#: payload's start.
+SPLIT_ALIGN = 64
+_SPLIT_HEAD = struct.Struct("<QI")
 HEADER = struct.Struct("<4sII")
 HEADER_SIZE = HEADER.size  # 12
 META_SLACK = 64
@@ -101,6 +140,58 @@ CHECKSUM_FIELD = "_payload_crc32"
 
 def _checksum(payload: bytes) -> bytes:
     return zlib.crc32(payload).to_bytes(4, "big")
+
+
+def _checksum_of(chunks: Sequence[Any]) -> bytes:
+    crc = 0
+    for chunk in chunks:
+        crc = zlib.crc32(chunk, crc)
+    return crc.to_bytes(4, "big")
+
+
+def _nbytes(chunk: Any) -> int:
+    return chunk.nbytes if isinstance(chunk, memoryview) else len(chunk)
+
+
+def _pad(offset: int) -> int:
+    return -offset % SPLIT_ALIGN
+
+
+class SplitPayload(NamedTuple):
+    """A ``CSH3`` payload: the pickle stream and its out-of-band buffers."""
+
+    stream: Any
+    buffers: list
+
+
+class PackedEntry(NamedTuple):
+    """An entry ready to write: *head* (header and metadata region), then
+    *chunks* (the payload, in order), *size* bytes in all."""
+
+    head: bytes
+    chunks: list
+    checksum: bytes
+    size: int
+
+
+def split_chunks(stream: Any, buffers: Sequence[Any]) -> list:
+    """The payload of a ``CSH3`` entry, as the pieces to write in order.
+
+    The buffers are written from where they are, not joined into one blob:
+    joining a 100 MB payload was a copy of its own."""
+    table = _SPLIT_HEAD.pack(len(stream), len(buffers)) + struct.pack(
+        f"<{len(buffers)}Q", *(_nbytes(b) for b in buffers)
+    )
+    chunks: list = [table + bytes(_pad(len(table))), stream]
+    offset = _nbytes(chunks[0]) + len(stream)
+    for buf in buffers:
+        pad = _pad(offset)
+        if pad:
+            chunks.append(bytes(pad))
+            offset += pad
+        chunks.append(buf)
+        offset += _nbytes(buf)
+    return chunks
 
 
 def payload_checksum(payload: bytes) -> bytes:
@@ -147,19 +238,26 @@ def _load_metadata(meta_bytes: bytes, where: str) -> dict[str, Any]:
 def pack_entry(metadata: dict[str, Any], payload: bytes, checksum: bytes | None = None) -> bytes:
     """Serialize one entry. *payload* is stored verbatim -- compress before.
 
-    *checksum*: `payload_checksum` of *payload*, when the caller has it already."""
+    *checksum*: `payload_checksum` of *payload*, when the caller has it already.
+    For a remote backend, which sends one blob; the file backend writes the
+    parts of `pack_entry_parts` one after the other instead."""
+    entry = pack_entry_parts(metadata, [payload], checksum=checksum)
+    return b"".join((entry.head, payload))
+
+
+def pack_entry_parts(
+    metadata: dict[str, Any], chunks: list, *, split: bool = False, checksum: bytes | None = None
+) -> PackedEntry:
+    """One entry whose payload is *chunks* in order, without joining them.
+
+    *split*: the chunks are `split_chunks` (a ``CSH3`` entry); otherwise they
+    are the serialized value."""
     if checksum is None:
-        checksum = _checksum(payload)
+        checksum = _checksum_of(chunks)
     meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: checksum})
     cap = len(meta_bytes) + META_SLACK
-    return b"".join(
-        (
-            HEADER.pack(MAGIC, len(meta_bytes), cap),
-            meta_bytes,
-            bytes(cap - len(meta_bytes)),
-            payload,
-        )
-    )
+    head = b"".join((HEADER.pack(MAGIC_SPLIT if split else MAGIC, len(meta_bytes), cap), meta_bytes, bytes(META_SLACK)))
+    return PackedEntry(head, chunks, checksum, len(head) + sum(_nbytes(c) for c in chunks))
 
 
 def packed_size(metadata: dict[str, Any], payload_len: int) -> int:
@@ -188,7 +286,8 @@ def unpack_entry(blob: bytes, *, with_payload: bool) -> tuple[dict[str, Any], by
     if len(blob) < HEADER_SIZE:
         raise CorruptEntry(f"truncated header ({len(blob)} bytes)")
     magic, meta_len, meta_cap = HEADER.unpack(blob[:HEADER_SIZE])
-    if magic != MAGIC:
+    if magic not in MAGICS or (with_payload and magic != MAGIC):
+        # A split entry is written only by the file backend, never sent whole.
         raise CorruptEntry(f"bad magic {magic!r}")
     if meta_len > meta_cap:
         raise CorruptEntry(f"meta_len {meta_len} > cap {meta_cap}")
@@ -235,7 +334,7 @@ def read_entry_and_checksum(path: str, *, with_payload: bool) -> tuple[dict[str,
         if len(head) < HEADER_SIZE:
             raise CorruptEntry(f"{path}: truncated header ({len(head)} bytes)")
         magic, meta_len, meta_cap = HEADER.unpack(head)
-        if magic != MAGIC:
+        if magic not in MAGICS:
             raise CorruptEntry(f"{path}: bad magic {magic!r}")
         if meta_len > meta_cap:
             raise CorruptEntry(f"{path}: meta_len {meta_len} > cap {meta_cap}")
@@ -246,10 +345,76 @@ def read_entry_and_checksum(path: str, *, with_payload: bool) -> tuple[dict[str,
         expected = metadata.pop(CHECKSUM_FIELD, None)
         if not with_payload:
             return metadata, None, expected
+        if magic == MAGIC_SPLIT:
+            return metadata, _read_split(fh, HEADER_SIZE + meta_cap, expected, path), expected
         fh.seek(HEADER_SIZE + meta_cap)
         payload = fh.read()
     _verify(payload, expected, path)
     return metadata, payload, expected
+
+
+def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> SplitPayload:
+    """Read a ``CSH3`` payload into one new ``bytearray`` per part, checked."""
+    if expected is None:
+        raise CorruptEntry(f"{path}: no payload checksum -- the value will be recomputed")
+    end = fh.seek(0, os.SEEK_END)
+    fh.seek(start)
+    head = _read_exact(fh, _SPLIT_HEAD.size, path)
+    stream_len, count = _SPLIT_HEAD.unpack(head)
+    if start + _SPLIT_HEAD.size + 8 * count > end:
+        raise CorruptEntry(f"{path}: split payload truncated")
+    lengths_raw = _read_exact(fh, 8 * count, path)
+    lengths = struct.unpack(f"<{count}Q", lengths_raw)
+    table = _SPLIT_HEAD.size + 8 * count
+    # The whole layout, checked against the file before anything is allocated
+    # for it: a damaged length must not ask for terabytes.
+    offset = table + _pad(table) + stream_len
+    for length in lengths:
+        offset += _pad(offset) + length
+    if start + offset != end:
+        raise CorruptEntry(f"{path}: split payload is {end - start} bytes, its table says {offset}")
+    crc = zlib.crc32(lengths_raw, zlib.crc32(head))
+    crc = zlib.crc32(_read_exact(fh, _pad(table), path), crc)
+    stream = _read_into(fh, stream_len, path)
+    crc = zlib.crc32(stream, crc)
+    offset = table + _pad(table) + stream_len
+    buffers = []
+    for length in lengths:
+        pad = _pad(offset)
+        if pad:
+            crc = zlib.crc32(_read_exact(fh, pad, path), crc)
+        buf = _read_into(fh, length, path)
+        crc = zlib.crc32(buf, crc)
+        buffers.append(buf)
+        offset += pad + length
+    found = crc.to_bytes(4, "big")
+    if found != expected:
+        raise CorruptEntry(
+            f"{path}: payload checksum {found.hex()} != stored {expected.hex()} "
+            f"({offset} bytes) -- the value will be recomputed"
+        )
+    return SplitPayload(stream, buffers)
+
+
+def _read_exact(fh: Any, n: int, path: str) -> bytes:
+    data = fh.read(n) if n else b""
+    if len(data) != n:
+        raise CorruptEntry(f"{path}: truncated")
+    return data
+
+
+def _read_into(fh: Any, n: int, path: str) -> bytearray:
+    """*n* bytes from *fh*, read straight into a new ``bytearray``: no
+    intermediate ``bytes`` to copy them out of."""
+    buf = bytearray(n)
+    view = memoryview(buf)
+    got = 0
+    while got < n:
+        k = fh.readinto(view[got:])
+        if not k:
+            raise CorruptEntry(f"{path}: truncated")
+        got += k
+    return buf
 
 
 def _verify(payload: bytes, expected: bytes | None, where: str) -> None:
@@ -287,7 +452,7 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any], expected: tupl
         if len(head) < HEADER_SIZE:
             return False
         magic, meta_len, cap = HEADER.unpack(head)
-        if magic != MAGIC:
+        if magic not in MAGICS:
             return False
         # The payload is not being rewritten, so its checksum has to survive --
         # and the caller never saw it, because every read strips it. Reading it
@@ -306,5 +471,5 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any], expected: tupl
         if len(meta_bytes) > cap:
             return False
         fh.seek(0)
-        fh.write(HEADER.pack(MAGIC, len(meta_bytes), cap) + meta_bytes)
+        fh.write(HEADER.pack(magic, len(meta_bytes), cap) + meta_bytes)
     return True

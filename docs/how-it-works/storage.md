@@ -131,7 +131,7 @@ keeps it in memory if it fits and warns once
 
 ## Cache size limit and eviction
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @39e0412a, cash/backends/file_eviction.py:FileEvictor.evict @290394ae -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @33ad48ec, cash/backends/file_eviction.py:FileEvictor.evict @290394ae -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -201,20 +201,20 @@ setting gets most of that back.
 
 ## Damaged entries and format changes
 
-<!-- claim: cash/backends/entry_format.py:pack_entry @2b6c17f2, cash/backends/entry_format.py:_verify @8a91dffb -->
+<!-- claim: cash/backends/entry_format.py:pack_entry @cd68bcc1, cash/backends/entry_format.py:_verify @8a91dffb -->
 Every entry carries a checksum of its payload, checked on every read. An entry
 that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @c3a588dc, cash/backends/file_backend.py:FileBackend.get @0f0d5cd5 -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @ae905171 -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 2, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 3, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
 The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.

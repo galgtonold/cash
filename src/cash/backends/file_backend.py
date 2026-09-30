@@ -31,12 +31,14 @@ from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_un
 from .entry_format import (
     ENTRY_SUFFIX,
     CorruptEntry,
+    PackedEntry,
+    SplitPayload,
     entry_identity,
-    metadata_span,
-    pack_entry,
+    pack_entry_parts,
     payload_checksum,
     read_entry,
     read_entry_and_checksum,
+    split_chunks,
     update_metadata_in_place,
 )
 from .file_eviction import FileEvictor
@@ -485,8 +487,12 @@ class FileBackend(CacheBackend):
                     # with the raw bytes, as the two-file path did.
                     logger.debug("Entry for %r flagged compressed but is not", key)
 
-            serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-            value = serializer_cls().deserialize(payload)
+            if isinstance(payload, SplitPayload):
+                # Written only for a PickleSerializer value (`set`).
+                value = PickleSerializer().deserialize_split(payload.stream, payload.buffers)
+            else:
+                serializer_cls = metadata.get("serializer_cls", PickleSerializer)
+                value = serializer_cls().deserialize(payload)
 
             metadata.setdefault("source", self.source_label)
             return metadata, value
@@ -528,8 +534,9 @@ class FileBackend(CacheBackend):
         """`cash._paths.replace_with_retry`, as a method so tests can stub it."""
         replace_with_retry(tmp_path, path)
 
-    def _atomic_write(self, path: str, payload: bytes) -> None:
-        """Write *payload* to *path* so no reader can observe a partial file.
+    def _atomic_write(self, path: str, payload: bytes | list) -> None:
+        """Write *payload* (bytes, or a list of pieces to write in order) to
+        *path* so no reader can observe a partial file.
 
         A temp file in the same directory, renamed into place: a concurrent
         reader sees the previous contents or the complete new ones, never a
@@ -546,7 +553,8 @@ class FileBackend(CacheBackend):
             # sort out, and on Windows opening a file created a moment before
             # is slow.
             try:
-                write_all(fd, payload)
+                for chunk in [payload] if isinstance(payload, (bytes, bytearray, memoryview)) else payload:
+                    write_all(fd, chunk)
             finally:
                 os.close(fd)
             self._replace_with_retry(tmp_path, path)
@@ -557,7 +565,7 @@ class FileBackend(CacheBackend):
                 logger.debug("Could not remove partial write %s", tmp_path, exc_info=True)
             raise
 
-    def _write_new_in_place(self, path: str, blob: bytes) -> bool:
+    def _write_new_in_place(self, path: str, entry: PackedEntry) -> bool:
         """Write a BRAND NEW entry directly, header last. False if one exists.
 
         Temp-and-rename costs about three times a direct write, and the
@@ -580,17 +588,17 @@ class FileBackend(CacheBackend):
         except OSError:
             return False  # no directory, no permission -- let the safe path report it
 
-        split = metadata_span(blob)
         try:
             # Raw fd writes: ``os.open`` raises the ``open`` audit event with
             # no mode, which neither the file tracker nor the effect observer
             # watches, so the entry never becomes a dependency or an effect of
             # the user's code whatever the directory is called. Unbuffered, the
             # payload and the header reach the page cache in program order.
-            os.lseek(fd, split, os.SEEK_SET)
-            write_all(fd, blob[split:])  # payload
+            os.lseek(fd, len(entry.head), os.SEEK_SET)
+            for chunk in entry.chunks:  # payload
+                write_all(fd, chunk)
             os.lseek(fd, 0, os.SEEK_SET)
-            write_all(fd, blob[:split])  # header + metadata, last
+            write_all(fd, entry.head)  # header + metadata, last
             os.close(fd)
         except BaseException:
             try:
@@ -606,17 +614,26 @@ class FileBackend(CacheBackend):
             raise
         return True
 
-    def _write_cache_files(self, key: str, path: str, metadata: dict, serialized_value: bytes) -> None:
+    def _write_cache_files(self, key: str, path: str, metadata: dict, serialized_value: bytes | SplitPayload) -> None:
         """Write one entry -- metadata and payload -- and update size tracking.
+
+        The header, the metadata and each part of the payload are written one
+        after the other, never joined into one blob first: for a 100 MB value
+        the join and the slice that split it again were two copies of it.
 
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
-        payload = gzip.compress(serialized_value) if self.compress else serialized_value
+        if isinstance(serialized_value, SplitPayload):
+            chunks = split_chunks(serialized_value.stream, serialized_value.buffers)
+            split = True
+        else:
+            chunks = [gzip.compress(serialized_value) if self.compress else serialized_value]
+            split = False
         # The bytes the value occupies on disk, after compression.
-        metadata["size"] = len(payload)
-        checksum = payload_checksum(payload)
-        blob = pack_entry(metadata, payload, checksum)
+        metadata["size"] = sum(len(c) for c in chunks)
+        entry = pack_entry_parts(metadata, chunks, split=split)
+        checksum = entry.checksum
 
         # What this entry occupies now, so a rewrite subtracts what was there.
         try:
@@ -630,8 +647,8 @@ class FileBackend(CacheBackend):
             # concurrent creator that won the O_EXCL race -- takes the safe
             # path, because there a failed write must not destroy what is
             # already cached.
-            if not self._write_new_in_place(path, blob):
-                self._atomic_write(path, blob)
+            if not self._write_new_in_place(path, entry):
+                self._atomic_write(path, [entry.head, *entry.chunks])
         except FileNotFoundError:
             # The cache directory was deleted under a live process (``cash
             # clear --all``, or by hand): recreate it, stamped first so the next
@@ -640,17 +657,17 @@ class FileBackend(CacheBackend):
             os.makedirs(self.cache_dir, exist_ok=True)
             self.stamp.ignore_in_git()
             self.stamp.write()
-            if not self._write_new_in_place(path, blob):
-                self._atomic_write(path, blob)
+            if not self._write_new_in_place(path, entry):
+                self._atomic_write(path, [entry.head, *entry.chunks])
 
         with self._touched.lock:
             self._remember(key, metadata, checksum)
-            self.evictor.note_write(key, old_entry_bytes, len(blob))
+            self.evictor.note_write(key, old_entry_bytes, entry.size)
 
         # Only a capped tier ranks, so only a capped tier keeps the rank index:
         # uncapped, it would be a file that only grows.
         if self.evictor.capped:
-            self.evictor.record_rank(key, path, metadata, len(blob))
+            self.evictor.record_rank(key, path, metadata, entry.size)
 
     def set(
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
@@ -674,13 +691,21 @@ class FileBackend(CacheBackend):
 
         # IMPORTANT: serialize on the calling thread so a post-set()
         # mutation of `value` can't corrupt the cached bytes.
-        serialized_value = serializer.serialize(value)
+        serialized_value: bytes | SplitPayload
+        if type(serializer) is PickleSerializer and not self.compress:
+            # Large buffers apart from the stream (``entry_format.MAGIC_SPLIT``).
+            stream, buffers = serializer.serialize_split(value)
+            serialized_value = SplitPayload(stream, buffers) if buffers else stream
+            nbytes = len(stream) + sum(len(b) for b in buffers)
+        else:
+            serialized_value = serializer.serialize(value)
+            nbytes = len(serialized_value)
 
         metadata["compressed"] = self.compress
         # Pre-compute size from the serialized bytes; the on-disk size
         # may differ slightly under compression but the user-facing
         # metadata needs to be populated synchronously for the badge.
-        metadata["size"] = len(serialized_value)
+        metadata["size"] = nbytes
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
@@ -706,7 +731,7 @@ class FileBackend(CacheBackend):
             self._prune_versions(
                 slot,
                 key,
-                len(serialized_value) + int(metadata.get("call_ref_bytes") or 0),
+                nbytes + int(metadata.get("call_ref_bytes") or 0),
                 metadata.get("execution_time") or 0.0,
                 metadata.get("call_refs") or (),
             )
@@ -748,7 +773,7 @@ class FileBackend(CacheBackend):
             refs.update(meta.get("call_refs") or ())
         return refs
 
-    def _do_set_sync(self, key: str, path: str, metadata: dict, serialized_value: bytes) -> None:
+    def _do_set_sync(self, key: str, path: str, metadata: dict, serialized_value: bytes | SplitPayload) -> None:
         """The actual disk write — runs in the PendingWrites worker thread.
 
         A failure re-raises and touches nothing: the destination is the
@@ -808,10 +833,10 @@ class FileBackend(CacheBackend):
         metadata.setdefault("size", 0)
 
         try:
-            blob = pack_entry(metadata, b"")
+            entry = pack_entry_parts(metadata, [b""])
             # A new key takes the cheaper in-place write, as a full entry does.
-            if existing is not None or not self._write_new_in_place(path, blob):
-                self._atomic_write(path, blob)
+            if existing is not None or not self._write_new_in_place(path, entry):
+                self._atomic_write(path, [entry.head])
             self._remember(key, metadata, payload_checksum(b""))
         except OSError as exc:
             logger.debug("Failed to write metadata-only entry for key %r: %s", key, exc)

@@ -22,7 +22,7 @@ from typing import Any
 
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheStoreFailedWarning
-from .entry_format import ENTRY_SUFFIX, MAGIC
+from .entry_format import ENTRY_SUFFIX, MAGIC, MAGICS
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +50,11 @@ __all__ = [
 ]
 
 #: Version of the on-disk cache format (the ``*.entry`` layout in
-#: ``entry_format``). Bump it, together with ``entry_format.MAGIC``, whenever a
-#: change makes entries written by an older build undecodable or liable to be
-#: misread. A directory stamped with another version is cleared on open.
-CACHE_FORMAT_VERSION = 2
+#: ``entry_format``). Bump it, together with ``entry_format.MAGICS``, whenever
+#: a change makes entries written by one build undecodable or liable to be
+#: misread by another. A directory stamped with another version is cleared on
+#: open. 3: split payloads (``entry_format.MAGIC_SPLIT``).
+CACHE_FORMAT_VERSION = 3
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
@@ -417,7 +418,7 @@ class CacheDirStamp:
         for path in entry_files[: cls.FORMAT_SAMPLE]:
             try:
                 with open(path, "rb") as fh:
-                    if fh.read(len(MAGIC)) != MAGIC:
+                    if fh.read(len(MAGIC)) not in MAGICS:
                         return False
             except OSError:
                 return False
