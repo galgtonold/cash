@@ -3,7 +3,8 @@
 ``cash clear --entry "$ID" ./cache`` with ``$ID`` unset passes an empty id.
 The empty string is falsy, so it fell through to the plain "clear this path"
 branch and removed every entry. A selector that selects nothing must exit 2
-and leave the cache alone; the same holds for ``--function ""``.
+and leave the cache alone; the same holds for ``--function ""`` and
+``--tool ""``.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ f(1); f(2)
 """
 
 
-@pytest.mark.parametrize("flag", ["--entry", "--function"])
+@pytest.mark.parametrize("flag", ["--entry", "--function", "--tool"])
 @pytest.mark.parametrize("value", ["", "  "])
 def test_an_empty_selector_clears_nothing(tmp_path, flag, value):
     cache = tmp_path / "cache"

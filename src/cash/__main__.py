@@ -795,6 +795,11 @@ def cmd_clear(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     tool = getattr(args, "tool", None)
+    if tool is not None and not tool.strip():
+        # Same as --entry below: an empty name selects no tool, and falling
+        # through would clear the path instead.
+        print("cash clear: --tool needs a non-empty value; nothing was cleared.")
+        sys.exit(2)
     if tool and args.path:
         print("cash clear: --tool and a path are mutually exclusive.")
         sys.exit(2)
