@@ -1798,7 +1798,7 @@ def _clock_helper_read(value: Any) -> str | None:
     code = getattr(value, "__code__", None)
     if not isinstance(value, types.FunctionType) or code is None:
         return None
-    if getattr(value, "_cash_cached", False):
+    if getattr(value, "_cash_cached", False) is True:
         # Judged by its own analysis. And every cached function shares its
         # wrapper's code object, which the memo below is keyed by: one cached
         # `return time.time()` made every cached callee a clock read.
@@ -2222,7 +2222,7 @@ class PurityAnalyzer:
         def _queue_hash_only(target: Any, owner: Any, depth: int) -> None:
             if target is None or target is owner or not callable(target):
                 return
-            if getattr(target, "_cash_cached", False):
+            if getattr(target, "_cash_cached", False) is True:
                 if not is_mock(target):
                     _note_cached(target)
                 return
@@ -2357,7 +2357,7 @@ class PurityAnalyzer:
                             continue
                         if is_mock(callee):
                             continue
-                        if getattr(callee, "_cash_cached", False):
+                        if getattr(callee, "_cash_cached", False) is True:
                             _note_cached(callee)
                             continue
                         if not own_code_is_user(callee, root_module):
@@ -2532,7 +2532,7 @@ class PurityAnalyzer:
                 #
                 # Its binding is still noted: rebinding the name the caller
                 # calls it by (``app.inner = fake``) replaces the edge.
-                if getattr(callee, "_cash_cached", False):
+                if getattr(callee, "_cash_cached", False) is True:
                     _note_binding(callee, path)
                     _note_cached(callee)
                     return
@@ -2569,7 +2569,7 @@ class PurityAnalyzer:
                     layer_failures.append(str(e))
                     return
                 for layer in callee_layers:
-                    if getattr(layer, "_cash_cached", False) and not is_mock(layer):
+                    if getattr(layer, "_cash_cached", False) is True and not is_mock(layer):
                         _note_cached(layer)
                     elif own_code_is_user(layer, root_module):
                         layers.append(layer)
@@ -2652,7 +2652,7 @@ class PurityAnalyzer:
                 _val = resolve_callee(_node, namespace, modules_only=False)
                 if _val is None or is_mock(_val):
                     continue
-                if getattr(_val, "_cash_cached", False) or (
+                if getattr(_val, "_cash_cached", False) is True or (
                     (inspect.isfunction(_val) or inspect.ismethod(_val)) and _is_user_code(_val, root_module)
                 ):
                     _queue_helper(_val, getattr(_node, "lineno", 0), _call_site_path(_chain))
