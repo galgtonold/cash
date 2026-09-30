@@ -10,6 +10,7 @@ import hashlib
 import inspect
 import pickle
 import textwrap
+import threading
 import types
 import weakref
 from collections.abc import Callable, Iterator
@@ -371,6 +372,36 @@ class CaptureAnalysis:
         return cached[1] if cached is not None else None
 
 
+_UNHASHABLE_CAPTURE_ERRORS = (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError)
+
+#: Captured values that hold no data a result could depend on: a closure
+#: that serialises its work with ``with guard:`` is keyed without the lock.
+#: The same types `GlobalsFold` leaves out of a class's data.
+_SYNC_TYPES: tuple[type, ...] = (
+    type(threading.Lock()),
+    type(threading.RLock()),
+    threading.Condition,
+    threading.Event,
+    threading.Semaphore,
+)
+
+
+def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyBuildFailed:
+    """KEY-UNHASHABLE-CAPTURE for *fn*'s captured *name*, whose *value* the
+    key needs and cannot hash. Left out, a change to it served the old
+    result; the call runs uncached instead."""
+    owner = getattr(fn, "__qualname__", repr(fn))
+    kind = type(value).__qualname__
+    return KeyBuildFailed(
+        "KEY-UNHASHABLE-CAPTURE",
+        f"@cash.cache: {owner} reads the captured variable '{name}', a {kind} that could "
+        f"not be hashed ({type(error).__name__}), so the call ran uncached rather than "
+        f"risk serving a result computed under a value that changed.",
+        f"pass what {owner} needs from '{name}' as an argument, capture only the plain "
+        f"values it reads, or register a hasher with cash.register_hasher({kind}, ...).",
+    )
+
+
 class HelperIdentity:
     """A helper's identity for the key: its code, its parameter defaults and
     the immutable values its closure captured."""
@@ -396,7 +427,8 @@ class HelperIdentity:
         caches, counters and registries in their closures, and folding state
         that drifts on every call would make every call miss. Captured
         FUNCTIONS are followed as helpers in their own right, not here. A
-        value that cannot be hashed is left out on its own.
+        value that cannot be hashed raises KEY-UNHASHABLE-CAPTURE
+        (`unhashable_capture`): left out, a change to it served the old result.
         """
         closure = getattr(fn, "__closure__", None)
         code = getattr(fn, "__code__", None)
@@ -420,8 +452,10 @@ class HelperIdentity:
                 # captured object's; its code, like any function's, is not.
                 try:
                     captures.append((name, self._args.hash_payload((value,), {})))
-                except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                    pass
+                except _UNHASHABLE_CAPTURE_ERRORS as e:
+                    raise unhashable_capture(fn, name, value, e) from e
+                continue
+            if isinstance(value, _SYNC_TYPES):
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
@@ -447,8 +481,8 @@ class HelperIdentity:
                         continue
             try:
                 captures.append((name, self._args.hash_payload((value,), {})))
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                continue
+            except _UNHASHABLE_CAPTURE_ERRORS as e:
+                raise unhashable_capture(fn, name, value, e) from e
         if not captures:
             return ""
         return hashlib.sha256(repr(captures).encode("utf-8")).hexdigest()
@@ -678,13 +712,18 @@ class ClosureFold:
 
             if is_immutable_capture(v):
                 captures.append((name, v))
+            elif isinstance(v, _SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
+                # A lock holds no data. A class, an ``lru_cache`` wrapper or
+                # another callable is code, followed by the helper walk.
+                continue
             elif name not in unsafe:
-                # Read-only mutable capture: fold its content hash.
-                # Unhashable content is skipped.
+                # Read-only mutable capture: fold its content hash. One that
+                # cannot be hashed runs the call uncached: left out, a
+                # change to it served the old result.
                 try:
                     h = self._args.hash_payload((v,), {})
-                except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
-                    continue
+                except _UNHASHABLE_CAPTURE_ERRORS as e:
+                    raise unhashable_capture(func, name, v, e) from e
                 captures.append((name, h))
                 pending = CAPTURE_WATCH.get()
                 if pending is not None and (provisional is None or name in provisional):

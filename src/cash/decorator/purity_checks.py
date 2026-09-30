@@ -191,11 +191,12 @@ def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
     return f" -- through `{text}`{inside} ({filename}:{lineno})"
 
 
-#: A re-hash costing more than this marks the function as not worth
-#: verifying again. Measured: ~7.4 ms for a 16 MB ndarray, so this is
-#: roughly a 100 MB argument. The first miss still gets checked -- the
-#: budget only stops a large argument from being re-hashed on every
-#: subsequent miss.
+#: Past this, the per-argument hashes that NAME a changed argument are no
+#: longer taken for the function (~7.4 ms for a 16 MB ndarray, so roughly a
+#: 100 MB argument): the message then says "an argument". Whether the call
+#: changed its arguments is still checked on every miss, whatever it costs --
+#: a check retired for a big argument stored a library's in-place write, and
+#: the warm run skipped it.
 MUTATION_CHECK_BUDGET_S = 0.05
 
 
@@ -494,20 +495,21 @@ class PurityChecks:
         An int, a str, a tuple of them: rebinding one inside the body (``n -=
         1``) is invisible to the caller, so they are left out, and most calls
         snapshot nothing. What remains lets `PurityChecks.check_argument_mutation` name the
-        argument that moved. None when the check has been retired as too
-        costly for this function, or nothing could be hashed.
+        argument that moved. None when naming has been retired as too costly
+        for this function (the check itself still runs), or nothing could be
+        hashed.
         """
         cf = self._registry.cached.get(func_name)
-        if cf is None or cf.mutation_check_retired:
+        if cf is None or cf.argument_naming_retired:
             return None
         # The key was hashed a moment ago, on this thread: if that already cost
-        # more than the check may, the check is retired before it pays -- a
-        # miss on two million rows hashed them three times, once for the key,
-        # once here and once after the body. Read from what
+        # more than naming may, naming is retired before it pays -- a miss on
+        # two million rows hashed them three times, once for the key, once
+        # here and once after the body. Read from what
         # `ArgHasher.note_arg_cost` kept: it has already taken `ARG_COST.last`.
         cost = cf.arg_cost
         if cost is not None and cost[2] > MUTATION_CHECK_BUDGET_S:
-            cf.mutation_check_retired = True
+            cf.argument_naming_retired = True
             return None
         started = _perf_counter()
         try:
@@ -530,7 +532,7 @@ class PurityChecks:
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
         if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
-            cf.mutation_check_retired = True
+            cf.argument_naming_retired = True
         return snapshot
 
     def argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
@@ -577,9 +579,9 @@ class PurityChecks:
         (kwargs order included) and is deterministic on unchanged input, which
         is what makes a difference mean *mutation* rather than noise.
 
-        Runs only on a miss, and only while it stays cheap: a re-hash over the
-        budget above retires the check for that function rather than taxing
-        every later miss.
+        Runs on every miss, whatever the arguments' size: one more hash of
+        them after the body. An argument that cannot be hashed again cannot
+        be shown unchanged, so the result is not stored.
         """
         if args_hash is None or observer is None:
             return
@@ -598,19 +600,19 @@ class PurityChecks:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
-        cf = self._registry.cached.get(func_name)
-        if cf is None or cf.mutation_check_retired:
-            return
-        started = _perf_counter()
         try:
             after = self._args.serialize_args(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - user arguments' hashing
-            # Hashing is best-effort here. An argument that hashed once and
-            # not twice (a generator drained by the body, say) is not evidence
-            # of mutation, and must not be reported as such.
+            # Hashed for the key, not after the body: nothing says the body
+            # left them as they were, and a hit would skip whatever it did.
+            logger.debug("[PURITY] %s: arguments could not be hashed again", func_name, exc_info=True)
+            observer.mutated_args = ["an argument"]
+            observer.record(
+                "argument mutation",
+                "its arguments could not be hashed again after the call, so cash cannot tell "
+                "whether it changed them -- the result was not stored, so this call runs every time",
+            )
             return
-        if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:
-            cf.mutation_check_retired = True
         if after is None or after == args_hash:
             return
         names = self._mutated_argument_names(func_name, args, kwargs, observer)

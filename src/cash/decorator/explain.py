@@ -192,11 +192,9 @@ STALE_REASON_TEXT = {
     "size": "size changed",
     "content": "content changed",
     "mtime": "mtime changed",
-    "mtime-sampled": "mtime changed (sampled file)",
-    "ctime-sampled": "the file was written (sampled file)",
     "hash-mode": (
-        "fingerprinted under a different file_hash_full_max_bytes, so "
-        "it could not be compared -- the file itself may be unchanged"
+        "fingerprinted from a sample of the file, which a whole-file hash "
+        "cannot be compared with -- the file itself may be unchanged"
     ),
     "appeared": "a file the call looked for and did not find now exists",
     "vanished": "a file or folder the call checked for is no longer there",
@@ -246,24 +244,14 @@ def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
         parts = ["remote"] if rec.get("remote") else []
         if rec.get("size") is not None:
             parts.append(f"{rec['size']} bytes")
-        if rec.get("hash") and is_sampled_dep(rec):
+        if rec.get("hash") and rec.get("sampled") is True:
             # Printed like a full hash, it read as proof of content that it is
             # not.
-            parts.append(
-                f"sampled hash {str(rec['hash'])[:12]} (head, middle and "
-                f"tail only; the rest is trusted to its timestamps)"
-            )
+            parts.append(f"sampled hash {str(rec['hash'])[:12]} (never fresh: re-read in full on the next call)")
         elif rec.get("hash"):
             parts.append(f"hash {str(rec['hash'])[:12]}")
         out[path] = ", ".join(parts) or "recorded"
     return out
-
-
-def is_sampled_dep(rec: Any) -> bool:
-    """Was this file fingerprinted by sampling (larger than
-    ``file_hash_full_max_bytes``)? The snapshot says so itself: every
-    snapshot records a ctime now, so its presence says nothing."""
-    return isinstance(rec, dict) and rec.get("sampled") is True
 
 
 def describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | None:

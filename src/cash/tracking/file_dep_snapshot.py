@@ -5,10 +5,8 @@ A snapshot is ``{path: {'mtime': float, 'size': int, 'hash': str}}`` (plus
 remote and absent entries). These are not pure functions: they stat and hash
 files, keep short-lived memos of both (``begin_file_state_epoch``,
 :class:`FreshnessMemo`), and do their own reads outside every tracker
-(``untracked``). One setting shapes the answers, the size above which a file
-is hashed by sampling; every entry point takes it as ``full_hash_max``, and
-resolves it from the running ``Cash``'s config (:func:`full_hash_max_bytes`)
-only when a caller does not pass it. Consumed by:
+(``untracked``). A file's content is always hashed in full, never sampled.
+Consumed by:
 
 - ``src/cash/core.py`` — the decorator subsystem, when recording file deps for
   a cached function call.
@@ -48,7 +46,6 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
-from cash._active import active_config
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
@@ -98,46 +95,6 @@ _PRESENT_MARKER = "present"
 # failing open (dropping the dependency) served every later edit stale.
 _UNRESOLVED_MARKER = "unresolved"
 
-# Files up to this size are hashed in full; larger files are sampled
-# deterministically (head / middle / tail) so hashing a multi-GB parquet on
-# every freshness check stays cheap. The sample is a function of the file size
-# only, so snapshot-time and check-time hashes are computed identically.
-#
-# 256 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
-# ``file_dep_is_fresh``) that serves wrong answers, and the memo below makes the full hash a once-per-window cost rather than a
-# per-check one -- which is what makes covering the ordinary CSV affordable.
-# Not 64 MiB either: an 80 MiB .npy written through np.memmap on Windows
-# changes neither its size nor any timestamp, so above the cap only content
-# can see it. Content is now read
-# only when the metadata moved (``_unchanged_since_hashed``), so that write is
-# not seen below the cap either, until the file is touched -- a documented
-# limitation; the cap still decides how a file whose metadata moved is hashed.
-_HASH_FULL_MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 256 MiB
-
-
-def full_hash_max_bytes() -> int:
-    """Largest file hashed IN FULL rather than sampled, for a caller that did
-    not pass its own ``full_hash_max``.
-
-    Configurable (``file_hash_full_max_bytes``) because the sampled regime has
-    a hole that serves wrong answers: a same-size
-    interior edit with the mtime restored is invisible to both the sample and
-    the mtime backstop. Raising this closes it, and the price is real and
-    measurable -- a full hash costs about 0.72 ms per MiB, on every freshness
-    check, i.e. on every cache HIT that depends on the file.
-
-    Resolved per call rather than at import so ``cash.configure(...)`` takes
-    effect; falls back to the default when the config layer is unavailable.
-    """
-    try:
-        value = int(active_config().file_hash_full_max_bytes)
-    except Exception:  # teardown, or a config that cannot load
-        logger.debug("[SNAPSHOT] no config for the full-hash threshold; using the default", exc_info=True)
-        return _HASH_FULL_MAX_BYTES_DEFAULT
-    return value if value > 0 else _HASH_FULL_MAX_BYTES_DEFAULT
-
-
-_HASH_SAMPLE_REGION_BYTES = 256 * 1024  # 256 KiB per sampled region
 _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 
 
@@ -288,30 +245,18 @@ def realpath_this_run(path: str) -> str:
 def file_content_hash(
     path: str,
     size: int | None = None,
-    full_hash_max: int | None = None,
     st: os.stat_result | None = None,
 ) -> str | None:
     """Return a stable content hash for *path*, or ``None`` if unreadable.
 
-    Small files (``<= full_hash_max_bytes()``) are hashed in full. Larger files
-    are sampled at three deterministic, size-derived offsets (head, middle,
-    tail) so the cost is bounded while still catching the overwhelming majority
-    of edits. The byte length is folded into the digest so a change that leaves
-    every sampled region untouched but alters the size still differs (the size
-    check catches that first anyway — this is belt-and-suspenders).
+    Every byte, whatever the size: a hash of a few regions of a big file read
+    an edit between them as no change. The byte length is folded in too.
 
     Determinism is the contract: given the same bytes and size, this returns
     the same digest at snapshot time and at every later freshness check.
 
     Memoized per process on the file's stat fields — see ``_HASH_MEMO`` for what
     that costs and what it saves.
-
-    *full_hash_max* lets a caller that checks many files resolve the threshold
-    once instead of per file. That is not a micro-optimisation: reading it from
-    the config costs a full config merge, which walks the directory tree looking
-    for a project marker, and profiling a 50-dependency hit found 7,000
-    ``os.path.exists`` calls and 130 ms spent there -- three times the hashing
-    it was guarding.
 
     *st* is the caller's stat of *path*, when it has just taken one.
     """
@@ -350,32 +295,19 @@ def file_content_hash(
         logger.debug("[FILE_DEP] Could not stat file for freshness: %s", path)
         return None
     try:
-        if full_hash_max is None:
-            full_hash_max = full_hash_max_bytes()
         h = hashlib.sha256()
         h.update(str(size).encode("ascii"))
         # Untracked: cash's own read of a file must not be tracked as a read
         # by the cached call it is checking on behalf of (which then hashed
         # the file a second time to fingerprint that "read").
         with untracked(), io.FileIO(path, "rb") as f:
-            if size <= full_hash_max:
-                # ``FileIO.read(n)`` allocates n bytes before it reads, so a
-                # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
-                # ~400us a file against ~60us reading size + 1 (the +1 finds EOF
-                # in the first read; a file that grew is still read to its end).
-                want = min(size + 1, _HASH_READ_CHUNK)
-                for chunk in iter(lambda: f.read(want), b""):
-                    h.update(chunk)
-            else:
-                half = _HASH_SAMPLE_REGION_BYTES // 2
-                offsets = (
-                    0,
-                    max(0, size // 2 - half),
-                    max(0, size - _HASH_SAMPLE_REGION_BYTES),
-                )
-                for off in offsets:
-                    f.seek(off)
-                    h.update(f.read(_HASH_SAMPLE_REGION_BYTES))
+            # ``FileIO.read(n)`` allocates n bytes before it reads, so a
+            # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
+            # ~400us a file against ~60us reading size + 1 (the +1 finds EOF
+            # in the first read; a file that grew is still read to its end).
+            want = min(size + 1, _HASH_READ_CHUNK)
+            for chunk in iter(lambda: f.read(want), b""):
+                h.update(chunk)
         digest = h.hexdigest()
         if memo_key is not None:
             _HASH_MEMO[memo_key] = (time.monotonic(), digest, HASH_EPOCH)
@@ -388,7 +320,6 @@ def file_content_hash(
 def snapshot_file_deps(
     paths: set[str],
     known: dict[str, tuple[Any, str]] | None = None,
-    full_hash_max: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -400,13 +331,8 @@ def snapshot_file_deps(
     it was hashed])``: that
     hash is used while the stat is still the same, so the entry describes the
     file as the body read it (see ``FileAccessTracker.read_digests``).
-
-    *full_hash_max* is the caller's ``file_hash_full_max_bytes``; resolved
-    from the running config when omitted (:func:`full_hash_max_bytes`).
     """
     snapshot: dict[str, dict[str, Any]] = {}
-    if full_hash_max is None:
-        full_hash_max = full_hash_max_bytes()
     for f in paths:
         try:
             st = os.stat(f)
@@ -429,14 +355,14 @@ def snapshot_file_deps(
             hashed_at = read[2] if len(read) > 2 else None
         else:
             hashed_at = time.time()  # before the read: an edit after it is not in the digest
-            content_hash = file_content_hash(f, st.st_size, full_hash_max, st)
+            content_hash = file_content_hash(f, st.st_size, st)
         if content_hash is not None:
             entry["hash"] = content_hash
             if hashed_at is not None:
                 entry["hashed_at"] = hashed_at
         # The integer nanoseconds alongside the float. ``st_mtime`` is derived
         # FROM this by CPython, not the other way round, so the float is the
-        # lossy one -- and the sampled comparison below is an equality test
+        # lossy one -- and `_unchanged_since_hashed` is an equality test
         # where every lost digit is a window an edit can hide in.
         entry["mtime_ns"] = st.st_mtime_ns
         # On POSIX ``st_ctime`` is the inode CHANGE time: it moves on any write
@@ -449,7 +375,6 @@ def snapshot_file_deps(
         # and timestamps exactly, and a re-pointed junction swaps one for the
         # other under the same path.
         entry["dev"], entry["ino"] = st.st_dev, st.st_ino
-        entry["sampled"] = st.st_size > full_hash_max
         snapshot[f] = entry
     return snapshot
 
@@ -537,7 +462,6 @@ def snapshot_dependencies(
     urls: Iterable[str] | None = None,
     absent: Iterable[str] | None = None,
     known: dict[str, tuple[Any, str]] | None = None,
-    full_hash_max: int | None = None,
     unresolved: Iterable[str] | None = None,
     present: Mapping[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
@@ -555,7 +479,7 @@ def snapshot_dependencies(
     shape; keeping the *capture* side unified too means the discriminator is
     written in exactly one place.
     """
-    snapshot = snapshot_file_deps(set(paths), known, full_hash_max) if paths else {}
+    snapshot = snapshot_file_deps(set(paths), known) if paths else {}
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
     if absent:
@@ -611,25 +535,9 @@ def existing_file_deps(paths: Iterable[str]) -> list[str]:
 def _timestamps_match(st: os.stat_result, stored: dict[str, Any], field: str) -> bool:
     """Did *field* (``mtime`` / ``ctime``) stay put since the snapshot?
 
-    Exact on the integer nanoseconds, because
-    this is the SAMPLED regime's backstop: the hash covers three regions of
-    the file, so an interior edit is caught by the timestamp or not at all,
-    and a tolerance is a window the edit can sit inside. Measured on a 65 MiB
-    file, one byte rewritten in place outside every sampled region: an edit
-    landing 8.02 ms after the recorded mtime was served FRESH under the old
-    0.01 s tolerance, and the boundary sat exactly where the constant says
-    (9.50 ms missed, 11.03 ms caught).
-
-    The tolerance is unreachable in practice on any filesystem worth the name.
-    Measured, 400 one-byte appends: ext4 and tmpfs gave all 400 writes a
-    distinct timestamp (smallest gap 3.2 us), NTFS 54 distinct (0.389 ms), a
-    9p translated mount 1.6 ms. Only the 1-2 second tier (FAT32, ext3, HFS+)
-    is coarser than 10 ms, and there no comparison at any resolution helps --
-    the answer there is to stay under ``file_hash_full_max_bytes`` so the
-    content hash decides and timestamps are never consulted.
-
-    A snapshot without the nanoseconds cannot prove the file unchanged, so it
-    does not match.
+    Exact on the integer nanoseconds: a tolerance is a window an edit can sit
+    inside. A snapshot without the nanoseconds cannot prove the file
+    unchanged, so it does not match.
     """
     stored_ns = stored.get(f"{field}_ns")
     return stored_ns is not None and getattr(st, f"st_{field}_ns", None) == stored_ns
@@ -744,7 +652,6 @@ def _note_settled(st: os.stat_result, stored: dict[str, Any], checked_at: float)
 def file_dep_is_fresh(
     resolved_path: str,
     stored: dict[str, Any],
-    full_hash_max: int | None = None,
     listed: os.stat_result | None = None,
 ) -> tuple[bool, str | None]:
     """Return ``(is_fresh, stale_reason)`` for a resolved file dependency.
@@ -759,22 +666,14 @@ def file_dep_is_fresh(
     (the file could not be read when it was taken) is fresh only while its
     mtime is unchanged to the nanosecond.
 
-    **Sampled-file backstop.** For files larger than ``full_hash_max_bytes()``
-    the content hash only covers three fixed head/middle/tail regions (see
-    :func:`file_content_hash`), so a same-size edit *outside* those regions
-    produces an identical hash and would silently pass as FRESH — serving stale
-    data. For that regime only, mtime is re-instated as an additional signal:
-    a matching sampled hash is trusted only when the mtime also matches. Any
-    real in-place edit bumps mtime, so the stale read is caught; the sole cost
-    is that merely *touching* a large file forces a (safe) spurious recompute.
-    "ignore mtime" reasoning holds only when the hash is authoritative,
-    i.e. for fully-hashed (<= cap) files, which keep the touch-tolerant path.
+    A snapshot marked ``sampled`` holds a digest of three regions of the file,
+    which no whole-file digest equals: it is stale (``'hash-mode'``) without
+    reading the file.
 
     ``stale_reason`` is ``None`` when fresh, else one of
     ``'unreadable' | 'size' | 'content' | 'hash-mode' | 'mtime' |
-    'mtime-sampled' | 'ctime-sampled' | 'appeared' | 'vanished' |
-    'unresolved' | 'remote-changed' | 'remote-unresolved'`` for debug
-    attribution.
+    'appeared' | 'vanished' | 'unresolved' | 'remote-changed' |
+    'remote-unresolved'`` for debug attribution.
 
     **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
     "path" is a URL, so there is nothing to stat, and the store's own validator
@@ -800,20 +699,13 @@ def file_dep_is_fresh(
             return False, "vanished"
     if stored.get(_UNRESOLVED_MARKER):
         return False, "unresolved"
+    if stored.get("sampled"):
+        return False, "hash-mode"
     stored_size = stored.get("size")
     stored_hash = stored.get("hash")
-    if full_hash_max is None and listed is not None:
-        full_hash_max = full_hash_max_bytes()
-    # A listed stat (``stats_from_listings``) stands in for one only where the
-    # file is hashed in full: there content is the authority, not the size or
-    # the time the listing reports. A sampled file keeps its timestamps as a
-    # backstop, so it gets a stat of its own.
-    if (
-        listed is not None
-        and stored_hash is not None
-        and listed.st_size <= full_hash_max
-        and (stored_size is None or stored_size <= full_hash_max)
-    ):
+    # A listed stat (``stats_from_listings``) stands in for one where content
+    # is the authority, not the size or the time the listing reports.
+    if listed is not None and stored_hash is not None:
         st = listed
     else:
         try:
@@ -826,41 +718,11 @@ def file_dep_is_fresh(
     if stored_hash is not None:
         if _unchanged_since_hashed(st, stored):
             return True, None
-        if full_hash_max is None:
-            full_hash_max = full_hash_max_bytes()
         checked_at = time.time()  # after the stat, before the read
-        cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max, st)
-        if cur_hash == stored_hash:
-            _note_settled(st, stored, checked_at)
+        cur_hash = file_content_hash(resolved_path, st.st_size, st)
         if cur_hash != stored_hash:
-            # Recorded in one regime and checked in the other -- the size is
-            # the same, so `file_hash_full_max_bytes` moved across it. The
-            # two digests are not comparable, and "content changed" blamed
-            # the data for a setting. The snapshot says which.
-            if stored.get("sampled", False) != (st.st_size > full_hash_max):
-                return False, "hash-mode"
             return False, "content"
-        # Full-hashed file: content is authoritative, mtime ignored.
-        if st.st_size <= full_hash_max:
-            return True, None
-        # Sampled file: the hash only covers head/middle/tail, so trust it only
-        # when the timestamps also match — otherwise a same-size edit outside
-        # the sampled regions would be served stale: a 9 MiB CSV with one
-        # amount field rewritten in place and the mtime restored.
-        #
-        # mtime alone is restorable -- that is exactly what `cp -p`, `rsync -a`
-        # and `tar -x` do. On POSIX ``st_ctime`` is not: it is the inode change
-        # time, it moves on any write, and no ordinary tool puts it back. On
-        # Windows it is the creation time and does not move, so this closes the
-        # hole on Linux and macOS and narrows nothing there -- nor does NTFS move
-        # LastWriteTime or ChangeTime for a write through np.memmap. The remaining
-        # Windows case is documented, and ``file_hash_full_max_bytes`` closes it
-        # on any platform at the cost of hashing the whole file on every check
-        # (measured ~0.72 ms/MiB).
-        if not _timestamps_match(st, stored, "mtime"):
-            return False, "mtime-sampled"
-        if not _timestamps_match(st, stored, "ctime"):
-            return False, "ctime-sampled"
+        _note_settled(st, stored, checked_at)
         return True, None
     # No content hash: the file was unreadable when the snapshot was taken.
     if not _timestamps_match(st, stored, "mtime"):
@@ -1013,9 +875,7 @@ def _memo_key(path: str, recorded: Any) -> Any:
             return None
 
 
-def _check_dep(
-    path: str, recorded: Any, full_hash_max: int | None, listed: os.stat_result | None
-) -> tuple[str | None, bool, str | None]:
+def _check_dep(path: str, recorded: Any, listed: os.stat_result | None) -> tuple[str | None, bool, str | None]:
     if not isinstance(recorded, Mapping):
         return path, False, "unrecorded"
     here = dep_path_for_this_process(path, recorded)
@@ -1023,7 +883,7 @@ def _check_dep(
     # also says the file is there, so a dependency costs one syscall, not an
     # ``exists`` and then a stat (a re-run of statements derived from 3,000
     # files made 72,000).
-    is_fresh, reason = file_dep_is_fresh(here, recorded, full_hash_max, listed if here == path else None)
+    is_fresh, reason = file_dep_is_fresh(here, recorded, listed if here == path else None)
     if reason != "unreadable" or here != path or recorded.get(_REMOTE_MARKER):
         # A dependency beside the code is checked in THIS install's copy and
         # nowhere else: missing there is a miss.
@@ -1034,13 +894,12 @@ def _check_dep(
         return None, False, "missing"
     if moved == path:
         return path, False, "unreadable"
-    return (moved, *file_dep_is_fresh(moved, recorded, full_hash_max))
+    return (moved, *file_dep_is_fresh(moved, recorded))
 
 
 def dep_is_fresh(
     path: str,
     recorded: Any,
-    full_hash_max: int | None = None,
     memo: FreshnessMemo | None = None,
 ) -> tuple[str | None, bool, str | None]:
     """``(resolved, is_fresh, stale_reason)`` for one recorded dependency.
@@ -1057,14 +916,14 @@ def dep_is_fresh(
         known = memo.answers.get(key)
         if known is not None:
             return known
-    answer = _check_dep(path, recorded, full_hash_max, memo.listed.get(path) if memo is not None else None)
+    answer = _check_dep(path, recorded, memo.listed.get(path) if memo is not None else None)
     if key is not None:
         memo.answers[key] = answer
     return answer
 
 
 def snapshot_is_fresh(
-    snap: Mapping[str, Any] | None, memo: FreshnessMemo | None = None, full_hash_max: int | None = None
+    snap: Mapping[str, Any] | None, memo: FreshnessMemo | None = None
 ) -> tuple[bool, StaleDep | None]:
     """``(True, None)`` when every dependency in *snap* still matches, else
     ``(False, StaleDep)`` naming the first one that does not.
@@ -1073,19 +932,17 @@ def snapshot_is_fresh(
     (``{path: entry}``); an empty or missing one is vacuously fresh. Each entry
     is judged by :func:`dep_is_fresh`. With a *memo*, answers and directory
     listings are shared with the caller's other checks for as long as it
-    keeps the memo. *full_hash_max* as for :func:`snapshot_file_deps`.
+    keeps the memo.
     """
     if not snap:
         return True, None
-    if full_hash_max is None:
-        full_hash_max = full_hash_max_bytes()
     if memo is not None and len(snap) >= LISTING_MIN_FILES:
         # Many files: read their directories once rather than stat each.
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
         if len(unlisted) >= LISTING_MIN_FILES:
             memo.listed.update(stats_from_listings(unlisted))
     for path, recorded in snap.items():
-        resolved, is_fresh, reason = dep_is_fresh(path, recorded, full_hash_max, memo)
+        resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo)
         if not is_fresh:
             return False, StaleDep(path, resolved, reason or "changed")
     return True, None

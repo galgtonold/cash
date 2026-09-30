@@ -25,6 +25,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
+from ..restored_var import hashed_by_lineage
 from ..tracking_state import TrackingState
 from .virtual_lineage import VirtualLineage
 
@@ -460,10 +461,15 @@ class StaleValueGuard:
         base_content = session_hashes.get(var_name)
         if base_content is None:
             return
-        try:
-            live_content = self.compute_hash_fn(live_value)
-        except (TypeError, ValueError, AttributeError, RecursionError):
-            return
+        if hashed_by_lineage(live_value):
+            # Its session hash is a lineage, which no content hash equals:
+            # hashing it in full only to find it different costs seconds.
+            live_content = "(its lineage)"
+        else:
+            try:
+                live_content = self.compute_hash_fn(live_value)
+            except (TypeError, ValueError, AttributeError, RecursionError):
+                return
         if live_content != base_content:
             logger.debug(
                 "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "

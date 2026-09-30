@@ -237,6 +237,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-SOURCE-CHANGED",  # a cached function's or helper's file was edited
         # after import; keyed by the code actually running
         "KEY-UNHASHABLE-ARG",  # an argument could not be hashed; not cached
+        "KEY-UNHASHABLE-CAPTURE",  # a value a closure reads could not be hashed;
+        # not cached
         "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
         "KEY-UNHASHABLE-GLOBAL",  # a global the function reads could not be
         # hashed, so changing it invalidates nothing

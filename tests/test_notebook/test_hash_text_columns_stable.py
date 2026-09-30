@@ -66,36 +66,26 @@ def test_different_text_still_hashes_differently():
     assert compute_hash(arr) != compute_hash(np.array(["b", 1, None, 2.5], dtype=object))
 
 
-def test_a_numeric_frame_hash_is_unchanged():
-    """Keys of numeric frames already on disk must not move."""
-    import hashlib
+def test_a_frame_hashes_by_its_whole_content():
+    """A frame is hashed as the decorator keys it (`builtin_hash`), every row."""
+    from cash.object_hashing import builtin_hash
 
     frame = pd.DataFrame({"a": np.arange(10), "b": np.arange(10) * 0.5})
-    legacy = hashlib.sha256(
-        f"{frame.shape}:{frame.dtypes.to_dict()}:{frame.head(5).values.tobytes()}".encode()
-    ).hexdigest()
-    assert compute_hash(frame) == legacy
+    assert compute_hash(frame) == builtin_hash(frame)
 
 
-def test_a_small_collection_of_large_frames_is_not_pickled_whole():
-    """A dict holding a few large frames was hashed by
-    pickling the WHOLE dict -- every frame byte for byte -- after each restore
-    and after each loop iteration that changed it, while the same frame on its
-    own is hashed by sampling. At 400 MiB a frame that is seconds per hit, and
-    their "hits" cost more than the compute they saved."""
-    import pickle
-    import time
+def test_a_collection_of_frames_is_hashed_frame_by_frame():
+    """A dict holding frames is hashed item by item, each frame as it is
+    hashed on its own, not pickled whole with the dict."""
+    from cash.object_hashing import builtin_hash
 
-    big = pd.DataFrame({"a": np.arange(2_000_000, dtype=float), "b": np.arange(2_000_000, dtype=float)})
+    big = pd.DataFrame({"a": np.arange(1000, dtype=float), "b": np.arange(1000, dtype=float)})
     blocks = {4: big, 8: big + 1}
-    t0 = time.perf_counter()
-    compute_hash(blocks)
-    took = time.perf_counter() - t0
-    t0 = time.perf_counter()
-    pickle.dumps(blocks)
-    full = time.perf_counter() - t0
-    assert took < full / 4, (took, full)
-    assert compute_hash(blocks) != compute_hash({4: big, 8: big + 2})
+    other = big + 1
+    other.loc[500, "a"] = -1.0
+    assert compute_hash(blocks) != compute_hash({4: big, 8: other})
+    assert compute_hash({4: big}) != compute_hash({4: big + 1})
+    assert builtin_hash(big) in {builtin_hash(v) for v in blocks.values()}
 
 
 def test_a_plain_small_collection_hash_is_unchanged():

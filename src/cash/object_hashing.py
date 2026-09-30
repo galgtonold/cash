@@ -10,10 +10,11 @@ cannot drift apart on what makes two values the same:
   per-iteration loop keys and call keys.
 * ``stable_key_repr`` is the canonical form a key pickles a value in: sets and
   dicts in a stable order, every container tagged with its type.
-* ``compute_hash`` SAMPLES large values. It is the ``compute_hash_fn`` seam
-  threaded into ``StatementProcessor`` and ``UpstreamChecker``, and what
-  ``Restorer`` checks a restored object against: a cheap freshness signal,
-  never a key discriminator.
+* ``compute_hash`` hashes a value's whole content too, a collection of
+  frames item by item. It is the ``compute_hash_fn`` seam threaded into
+  ``StatementProcessor`` and ``UpstreamChecker``, and what ``Restorer`` checks
+  a restored object against. No value hash here samples: a sample decides
+  "unchanged" for an edit outside it.
 
 And every size cash estimates, from one set of rules for what a frame, an
 array or a sparse matrix holds:
@@ -1089,99 +1090,40 @@ def hash_sparse(value: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Sampled and full hashes
+# Content hashes
 # ---------------------------------------------------------------------------
-
-
-def _content_bytes(values: Any) -> bytes:
-    """The bytes of an array's content -- never of its pointers.
-
-    An object array's buffer holds PyObject pointers: memory addresses, which
-    differ in every process and between a value and its copy. A frame with a
-    text column (whose ``.values`` is an object array) hashed differently after
-    every restart, so an ``if`` or ``for`` body that might reassign it gave it
-    a new lineage each time, and nothing downstream restored. Its
-    elements are pickled instead, which is content. Numeric arrays keep the raw
-    bytes, so their hashes -- and the keys built on them -- do not move.
-    """
-    if getattr(getattr(values, "dtype", None), "hasobject", False):
-        return pickle.dumps(values.tolist(), protocol=4)
-    return values.tobytes()
-
-
-def _frame_dtypes_signature(obj: Any) -> str:
-    """``str(obj.dtypes.to_dict())``, byte for byte, without its per-column cost.
-
-    That expression iterated the column index element by element (slow for
-    pandas' Arrow-backed string index) and called ``repr`` on every column's
-    dtype object. A loop mutating a 3130x800 frame re-hashed it after every
-    iteration, and building that string was 42% of a loop that ran 70x slower
-    under cash than without it. The OUTPUT must not change:
-    it is part of every frame's hash, and keys already on disk must not move
-    (``test_a_numeric_frame_hash_is_unchanged``). So: the columns come out in
-    one ``tolist()``, the dict keeps its semantics for duplicate names, and a
-    dtype is repr'd once however many columns share it.
-    """
-    mapping = dict(zip(obj.columns.tolist(), obj.dtypes.tolist()))
-    reprs: dict[int, str] = {}
-    parts = []
-    for name, dtype in mapping.items():
-        text = reprs.get(id(dtype))
-        if text is None:
-            text = reprs[id(dtype)] = repr(dtype)
-        parts.append(f"{name!r}: {text}")
-    return "{" + ", ".join(parts) + "}"
-
-
-def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
-    """Hash a pandas DataFrame or Series using shape + dtypes + data sample."""
-    shape_str = f"{obj.shape}"
-    if type_name == "DataFrame":
-        try:
-            dtypes_str = _frame_dtypes_signature(obj)
-        except _HASH_ERRORS:
-            dtypes_str = str(obj.dtypes.to_dict())
-    else:
-        dtypes_str = str(obj.dtype)
-    try:
-        sample = str(_content_bytes(obj.head(5).values) if len(obj) > 0 else b"")
-    except (TypeError, ValueError, AttributeError, pickle.PicklingError):
-        sample = str(obj.head(5))
-    combined = f"{shape_str}:{dtypes_str}:{sample}"
-    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
 
 _BULKY_TYPE_NAMES = frozenset({"DataFrame", "Series", "ndarray"})
 
 
+def _is_bulky(value: Any) -> bool:
+    """A frame, array or table: hashed on its own rather than pickled with
+    the collection that holds it."""
+    t = type(value)
+    return t.__name__ in _BULKY_TYPE_NAMES or builtin_hash_family(t) is not None
+
+
 def _hash_collection(obj: Any) -> str:
-    """Hash a list/tuple/dict/set/frozenset — sampling large ones to avoid O(n) pickle."""
-    n = len(obj)
-    if n <= 200:
-        # A few frames in a dict (`blocks = {w: net_returns(orders, w) ...}`)
-        # were pickled WHOLE -- every byte of every frame -- after each restore
-        # and each loop iteration that changed the dict, while a frame on its
-        # own is hashed by sampling: seconds per hit at 400 MiB a frame. Such
-        # a collection is hashed element by element, each
-        # element as ``compute_hash`` would hash it alone. Only then: a plain
-        # collection keeps the hash it always had, so its keys do not move.
-        items = list(obj.items()) if isinstance(obj, dict) else None
-        values = [v for _, v in items] if items is not None else (list(obj) if isinstance(obj, (list, tuple)) else [])
-        if any(type(v).__name__ in _BULKY_TYPE_NAMES for v in values):
-            parts = [f"{type(obj).__name__}:{n}"]
-            if items is not None:
-                parts.extend(f"{k!r}={compute_hash(v)}" for k, v in items)
-            else:
-                parts.extend(compute_hash(v) for v in values)
-            return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-        return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-    if isinstance(obj, (list, tuple)):
-        combined = f"list:{n}:{repr(obj[:5])}:{repr(obj[-5:])}"
-    elif isinstance(obj, dict):
-        combined = f"dict:{n}:{repr(sorted(obj.keys())[:10])}"
-    else:
-        combined = f"set:{n}:{repr(sorted(obj)[:10])}"
-    return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    """Hash a list/tuple/dict/set/frozenset over every item it holds.
+
+    A few frames in a dict (`blocks = {w: net_returns(orders, w) ...}`) are
+    hashed element by element, each element as ``compute_hash`` hashes it
+    alone, rather than pickled whole with the dict. Any other collection is
+    pickled whole, whatever its size: a hash of its ends and its length gave
+    two lists that differ in the middle one hash, and an in-place edit there
+    read as no change.
+    """
+    items = list(obj.items()) if isinstance(obj, dict) else None
+    values = [v for _, v in items] if items is not None else (list(obj) if isinstance(obj, (list, tuple)) else [])
+    if any(_is_bulky(v) for v in values):
+        parts = [f"{type(obj).__name__}:{len(obj)}"]
+        if items is not None:
+            parts.extend(f"{compute_hash(k)}={compute_hash(v)}" for k, v in items)
+        else:
+            parts.extend(compute_hash(v) for v in values)
+        return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    return hashlib.sha256(pickle.dumps(obj)).hexdigest()
 
 
 def identity_hash(obj: Any) -> str:
@@ -1224,26 +1166,29 @@ def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
 
 
 def compute_hash(obj: Any) -> str:
-    """Compute a hash for an object using type-specific methods with explicit fallbacks.
+    """Hash *obj* over its whole content, with explicit fallbacks.
 
     Strategy order:
-    1. Type-specific fast hash (DataFrame/ndarray/collections)
+    1. A frame, array or table through its built-in content hasher
+       (`builtin_hash`), every byte and its schema; a collection item by item
+       (`_hash_collection`)
     2. Generic pickle hash
     3. Identity hash (always succeeds) -- see ``identity_hash`` /
        ``is_identity_fallback_hash`` for why this tier is content-BLIND, not
        merely a cruder content hash.
+
+    Never a sample. This is the ``compute_hash_fn`` seam of the notebook: a
+    variable with no lineage is keyed on it, and every "did this value change?"
+    check (a call's arguments, a restored input, a loop's mutated variables)
+    compares two of its digests. A digest of a frame's first rows or a list's
+    ends let an edit elsewhere read as no change.
     """
     type_name = type(obj).__name__
 
     try:
-        if type_name in ("DataFrame", "Series"):
-            return _hash_dataframe_or_series(obj, type_name)
-        if type_name == "ndarray":
-            shape_str = str(obj.shape)
-            dtype_str = str(obj.dtype)
-            sample = str(_content_bytes(obj.flat[:100]) if obj.size > 0 else b"")
-            combined = f"{shape_str}:{dtype_str}:{sample}"
-            return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+        digest = builtin_hash(obj)
+        if digest is not None:
+            return digest
         if isinstance(obj, tuple) and isinstance(getattr(type(obj), "_fields", None), tuple):
             # A namedtuple is its name, its fields and its values. Pickling it
             # pickles its CLASS by reference, which fails for a class made on
@@ -1278,12 +1223,9 @@ def compute_hash(obj: Any) -> str:
 def compute_hash_full(obj: Any) -> str:
     """Full-content hash for cache-KEY discrimination.
 
-    ``compute_hash`` SAMPLES large objects (ndarray: first 100 elements,
-    DataFrame: first 5 rows, collections >200: head/tail). That is fine for
-    cheap freshness heuristics, but unsound wherever the hash *is* the key
-    discriminator — per-iteration loop caching keyed two iterations over
-    arrays that agreed in the sample onto one entry and produced a wrong
-    result on the very first run. This variant hashes every byte.
+    Hashes every byte, as ``compute_hash`` does; the two differ in how they
+    hash a collection and a namedtuple, so each keeps the digests its keys
+    already hold.
 
     A library value goes through ``builtin_hash``, the hasher the decorator
     keys arguments on, so it carries the value's schema as well: an ``int64``
@@ -1702,17 +1644,18 @@ def memory_footprint(obj: Any, _seen: set[int] | None = None) -> int:
 def mutation_fingerprint(obj: Any) -> str | None:
     """A digest that changes when *obj* is changed IN PLACE, or ``None``.
 
-    ``compute_hash`` samples a large frame or array, which is right for a
-    cache key and wrong for "did this call change its argument": a function
-    that adds a column or rescales values in place can leave the sample alone.
-    This reads the whole value -- `builtin_hash` for the library types
-    (pandas, numpy, polars, ...), and for an AnnData-like object the key sets
-    scanpy adds to (``obs``/``var`` columns, ``uns``/``obsm``/``varm``/``obsp``/``layers``
-    keys) plus a checksum of ``X``. Taken only around a statement that is
-    actually executing, twice, so its O(n) cost is paid next to real work.
+    Reads the whole value: `builtin_hash` for the library types (pandas,
+    numpy, polars, ...), and for an AnnData-like object every part scanpy
+    writes to -- the ``obs``/``var`` frames, ``X``, and each value of
+    ``uns``/``obsm``/``varm``/``obsp``/``varp``/``layers`` -- each by its own
+    content hash. A checksum of ``X`` and the key names alone missed a
+    reordering of ``X`` and a column rewritten in place. Taken only around a
+    statement that is actually executing, twice, so its O(n) cost is paid
+    next to real work.
 
-    ``None`` when the value cannot be observed (it cannot be pickled, so its
-    only hash would be its ``id``, which no in-place change moves).
+    ``None`` when the value cannot be observed (it, or a part of it, cannot be
+    pickled, so its only hash would be its ``id``, which no in-place change
+    moves).
     """
     h = hashlib.sha256()
     t = type(obj)
@@ -1722,22 +1665,40 @@ def mutation_fingerprint(obj: Any) -> str | None:
         h.update(digest.encode("utf-8"))
         return h.hexdigest()
     try:
-        if all(hasattr(obj, a) for a in ("obs", "var", "uns", "X")):
-            parts = [getattr(obj, "shape", None), [str(c) for c in obj.obs.columns], [str(c) for c in obj.var.columns]]
-            for slot in ("uns", "obsm", "varm", "obsp", "varp", "layers"):
+        is_anndata = all(hasattr(obj, a) for a in ("obs", "var", "uns", "X"))
+    except Exception:  # noqa: BLE001 - a property that raises: not AnnData-like
+        is_anndata = False
+    if is_anndata:
+        try:
+            parts: list[Any] = [repr(getattr(obj, "shape", None))]
+            for slot in ("obs", "var", "X", "uns"):
+                parts.append(f"{slot}={_part_digest(getattr(obj, slot))}")
+            for slot in ("obsm", "varm", "obsp", "varp", "layers"):
                 mapping = getattr(obj, slot, None)
-                parts.append(sorted(map(str, mapping.keys())) if mapping is not None else None)
-            h.update(repr(parts).encode("utf-8"))
-            x = obj.X
-            data = getattr(x, "data", x)
-            try:
-                h.update(repr((getattr(x, "nnz", None), float(data.sum()))).encode("utf-8"))
-            except (TypeError, ValueError, AttributeError):
-                pass
-            return h.hexdigest()
-    except _HASH_ERRORS:
-        pass
+                if mapping is None:
+                    parts.append(f"{slot}=None")
+                    continue
+                for key in sorted(mapping.keys(), key=str):
+                    parts.append(f"{slot}[{key!r}]={_part_digest(mapping[key])}")
+        except (_Unobservable, *_HASH_ERRORS):
+            return None
+        h.update("|".join(parts).encode("utf-8"))
+        return h.hexdigest()
     digest = compute_hash(obj)
     if digest == identity_hash(obj):
         return None
+    return digest
+
+
+class _Unobservable(Exception):
+    """A part of a value whose only hash is its identity."""
+
+
+def _part_digest(value: Any) -> str:
+    """`compute_hash` of one part of a value, or `_Unobservable`."""
+    if value is None:
+        return "None"
+    digest = compute_hash(value)
+    if digest == identity_hash(value):
+        raise _Unobservable(type(value).__name__)
     return digest

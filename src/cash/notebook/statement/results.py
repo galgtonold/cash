@@ -54,7 +54,6 @@ class DecoratorCallMetric(TypedDict, total=False):
     cash_seconds: float
     not_persisted: Any
     not_stored: Any
-    sampled_files: tuple[str, ...]
     # --- intercepted calls only ---
     call_source: str
     occurrence_index: int

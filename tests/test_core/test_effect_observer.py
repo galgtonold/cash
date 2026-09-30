@@ -387,30 +387,28 @@ def test_unmutated_arguments_of_awkward_types_do_not_look_mutated(tmp_path, valu
     assert not mutation, f"{type(value).__name__} looked mutated when it was not"
 
 
-def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path, monkeypatch):
-    """A large argument must not be re-hashed on every miss forever.
-
-    The budget is about repeat cost, not the first look: the first miss is
-    still checked, and only then is the function retired.
-    """
+def test_naming_the_changed_argument_retires_itself_when_re_hashing_is_expensive(tmp_path, monkeypatch):
+    """The per-argument hashes that only NAME a changed argument are not taken
+    again once they cost too much. The check that some argument changed is
+    not retired (`test_big_argument_mutation`)."""
     c = _cash(tmp_path)
     monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)  # make any re-hash "too expensive"
 
-    def reads(rows):
-        return len(rows)
+    def reads(rows, more):
+        return len(rows) + len(more)
 
-    _call_capturing(c, reads, [1, 2, 3])
+    _call_capturing(c, reads, [1, 2, 3], [4])
     name = next(n for n in c.functions if n.endswith("reads"))
-    assert c._registry.cached[name].mutation_check_retired, (
-        "an over-budget re-hash did not retire the check for that function"
+    assert c._registry.cached[name].argument_naming_retired, (
+        "an over-budget re-hash did not retire naming for that function"
     )
 
 
-def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monkeypatch):
+def test_an_argument_over_budget_for_the_key_is_hashed_once_more(tmp_path, monkeypatch):
     """The key's own hash already says what a re-hash would cost, so over the
-    budget the check is retired before it pays. It read that cost from a slot
-    the key build had already emptied, so a miss on two million rows hashed
-    them a second time after the body, every run."""
+    budget the per-argument hashes are skipped: a miss on two million rows
+    hashed them three times. The whole-arguments hash after the body stays --
+    it is what sees a change."""
     c = _cash(tmp_path)
     monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)  # any key's cost is over it
     hashes = []
@@ -421,4 +419,4 @@ def test_an_argument_over_budget_for_the_key_is_not_hashed_again(tmp_path, monke
         return len(rows)
 
     _call_capturing(c, reads, [1, 2, 3])
-    assert len(hashes) == 1, f"one miss hashed its arguments {len(hashes)} times"
+    assert len(hashes) == 2, f"one miss hashed its arguments {len(hashes)} times"

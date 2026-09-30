@@ -404,17 +404,15 @@ class ForLoopHandler:
         for name, val in bindings.items():
             try:
                 # The loop variable's hash IS the per-iteration cache-key
-                # discriminator: a sampled hash keyed two iterations over
-                # arrays that agreed in the sample onto ONE entry - wrong
-                # result on the first run. Hash full content here.
+                # discriminator: hash full content here, never a sample, or
+                # two iterations over arrays agreeing in it share ONE entry.
                 full = compute_hash_full(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]` want
                 # different things. `variable_lineage` wants PROVENANCE, and
                 # `val`'s own `_cash_lineage_hash` is the cheap right answer.
                 # `loop_var_digests` wants CONTENT, the call key's
-                # discriminator: that tag may itself derive from a SAMPLED
-                # hash (`update_mutated_variable_lineages`), so two frames
-                # that differ past the sample carry the same tag, and
+                # discriminator: a tag names where a value came from, not
+                # what it holds, and if two frames carried one tag,
                 # `for df in [df_a, df_b]:` would collapse iteration 2 onto
                 # iteration 1's cached value. Only `compute_hash_full` of
                 # `val` answers it soundly -- one full hash per iteration.

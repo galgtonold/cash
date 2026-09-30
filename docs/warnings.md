@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @5de52e8c -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @8568ad55 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -230,7 +230,7 @@ about, but `f.explain()`, the per-call log and a notebook badge still say
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps._warn_if_local_validation_is_expensive @ba7ad550, cash/remote_source.py:validation_is_expensive @18292cc6 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps._warn_if_local_validation_is_expensive @45f85758, cash/remote_source.py:validation_is_expensive @18292cc6 -->
 **What happened.** Before serving a hit, cash checks every file the call read.
 Here that check cost more than half of the compute it saved, or more than two
 seconds. The result was correct.
@@ -242,9 +242,7 @@ every caller's hit too.
 
 **What to do.** Make the entry depend on less. Split the function so each
 input is read by its own cached loader and the aggregate depends on their
-results. For a few very large files, lowering `file_hash_full_max_bytes`
-makes each check cheaper: files above it are sampled instead of hashed whole
-([Configuration](getting-started/configuration.md)).
+results.
 
 **When it is safe to ignore.** When the numbers in the message are still a good
 trade, such as half a second of checking against a five-minute job. It fires
@@ -605,10 +603,12 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.argument_snapshot @334133e6 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @2dd98300 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @7507ae49, cash/_plain_data.py:identity_changed @a853a1cf -->
-A call that changes an argument is **not stored**, so it runs every time. For
-arguments that take more than about 50 ms to hash, this check is skipped.
+A call that changes an argument is **not stored**, so it runs every time. The
+arguments are checked on every miss, whatever their size, and one that cannot
+be hashed again after the call counts as changed. Past about 50 ms of hashing,
+the message may say "an argument" instead of naming which one.
 
 **What to do.** If the effect is part of the job, split the function: cache the
 computation and do the writing in an uncached caller. For an argument
@@ -736,6 +736,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
 | [KEY-STALE-CASH-KEY](#key-stale-cash-key) | decorator | one `__cash_key__` stands for two different contents |
 | [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
+| [KEY-UNHASHABLE-CAPTURE](#key-unhashable-capture) | decorator | a value a closure reads cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
 
@@ -1170,6 +1171,26 @@ and give the captured values as arguments
 
 **When it is safe to ignore.** When you do not need that call cached.
 
+### KEY-UNHASHABLE-CAPTURE {#key-unhashable-capture}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/closure_fold.py:unhashable_capture @5ca7b3b7 -->
+**What happened.** The function, or a helper it calls, is a closure that reads
+a captured variable whose value could not be hashed -- an object holding a
+lock, a socket or a file handle. The call was not cached. The message names
+the variable and its type.
+
+**Why it matters.** The function is not cached while it captures that value.
+Keyed without it, a change to what the value carries (a setting on a config
+object) would have served the old result.
+
+**What to do.** Pass what the function needs as an argument, capture only the
+plain values it reads (`weight = settings.weight` in the factory), or register
+a hasher for the type.
+
+**When it is safe to ignore.** When you do not need that call cached.
+
 ### KEY-UNHASHABLE-DEFAULT {#key-unhashable-default}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
@@ -1547,7 +1568,7 @@ handle), or on Windows a file held open by another process.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @61fdcac0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @b6d6c4b7 -->
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @7622ec96 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @762c7ef0 -->
 **What happened.** A file the function read changed before it returned. The
 result was returned but not stored.
 

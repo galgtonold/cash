@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ..cache_key import statement_source_hash
+from ..restored_var import hashed_by_lineage
 from ..lineage_formula import (
     callable_source_component,
     input_lineage,
@@ -338,8 +339,7 @@ class StatementLineageBuilder:
         output_lineage_hash: str,
     ) -> None:
         """Update variable_hashes and current_session_hashes for *var_name*."""
-        type_name = type(value).__name__
-        if type_name in ("DataFrame", "Series", "ndarray"):
+        if hashed_by_lineage(value):
             # For large objects, use lineage hash as proxy for content hash
             if var_name not in tracking_state.variable_hashes:
                 tracking_state.variable_hashes[var_name] = set()

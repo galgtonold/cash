@@ -153,8 +153,9 @@ class CachedFunction:
     rng_modules: set[str] | None = None
     #: Seeding expressions fed by a parameter or a global (`seed_parameters`).
     seed_params: dict[str, tuple] = field(default_factory=dict, repr=False)
-    #: The argument-mutation check cost more than its budget and is off.
-    mutation_check_retired: bool = False
+    #: Naming a changed argument cost more than its budget and is off (the
+    #: check that some argument changed still runs).
+    argument_naming_retired: bool = False
     _signature: Any = field(default=_UNREAD, repr=False)
 
     @property
@@ -175,4 +176,4 @@ class CachedFunction:
         self.warnings = previous.warnings
         self.arg_cost = previous.arg_cost
         self.rng_modules = previous.rng_modules
-        self.mutation_check_retired = previous.mutation_check_retired
+        self.argument_naming_retired = previous.argument_naming_retired

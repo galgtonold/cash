@@ -10,11 +10,6 @@ the storage-path filter only knows cache files. So bumping the project's
 version, creating a user config or running `git init` recomputed every such
 function. Extra recomputes, never a stale value.
 
-And in the same spot: the threshold that decides which files are hashed in
-full came from the process-wide singleton, or a fresh read of the config
-files, never from the `Cash` instance doing the work -- so
-`Cash(file_hash_full_max_bytes=...)` on your own instance was ignored.
-
 The tracker's own filters are cash's reads too. The first read it classifies
 in a process looks up which time zone database directories exist, and it
 asked through the same `os.path.isdir` it watches, so every missing
@@ -130,24 +125,3 @@ def test_a_real_nested_read_still_propagates(project):
     time.sleep(0.02)
     data.write_text("world", encoding="utf-8")
     assert upper() == "WORLD"
-
-
-def test_an_instance_threshold_is_used(tmp_path):
-    """`file_hash_full_max_bytes` on your own Cash: a file above it is sampled,
-    so a touch (its timestamp backstop) recomputes -- it did not."""
-    big = tmp_path / "big.bin"
-    big.write_bytes(os.urandom(300_000))
-    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, file_hash_full_max_bytes=1000)
-    runs = []
-
-    @c.cache(assume_safe=True)
-    def size(path):
-        runs.append(1)
-        with open(path, "rb") as f:
-            return len(f.read())
-
-    size(str(big))
-    time.sleep(0.02)
-    os.utime(big)
-    size(str(big))
-    assert len(runs) == 2, "the instance's threshold was ignored"

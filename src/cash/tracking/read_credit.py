@@ -13,9 +13,10 @@ import logging
 import os
 import sys
 import time
+import weakref
 from typing import TYPE_CHECKING, Any
 
-from cash._memo import CODE_OBJECTS, READ_PATHS, SOURCE_FILES, LruMemo
+from cash._memo import READ_PATHS, SOURCE_FILES, LruMemo
 from cash._paths import is_remote_url, normalize_path
 from cash.install_paths import is_user_path
 from cash.tracking.read_classification import is_cash_internal, is_pseudo_fs, regular_file_stat
@@ -37,27 +38,25 @@ logger = logging.getLogger(__name__)
 #: WHICH version it read: a memo filled before the file changed hands back the
 #: old version's data. Reads outside any cached call count too
 #: (`note_untracked_read`) -- `main()` logging its settings through the memo
-#: before the first cached call is the ordinary way to fill one. A code past
-#: `_READS_PER_CODE_MAX` files is marked ``None``: it reads per argument, and
-#: every file it ever read is no one call's dependency.
-_READS_PER_CODE_MAX = 16
-_reads_by_code: LruMemo[Any, dict[str, Any] | None] = LruMemo(CODE_OBJECTS)
+#: before the first cached call is the ordinary way to fill one. Every file a
+#: code read is kept, however many: a loader memoised over twenty files hands
+#: its consumer all twenty. A memo keyed by the path a call was given adds only
+#: that path (`FileDeps.credit_remembered_reads`). Held weakly by the code,
+#: not in a bounded memo: evicting a loader's record while its memo still
+#: serves would leave the next consumer with no dependency at all, and the
+#: record goes when nothing can run the code any more.
+_reads_by_code: weakref.WeakKeyDictionary[Any, dict[str, Any]] = weakref.WeakKeyDictionary()
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _record_read(code: Any, abs_path: str, stat: Any) -> None:
     """Remember that *code* read *abs_path*, as it was (*stat*)."""
     memo = _reads_by_code
-    reads = memo.get(code, ())
+    reads = memo.get(code)
     if reads is None:
-        return
-    if code not in memo:
         reads = {}
         memo[code] = reads
-    if abs_path not in reads and len(reads) >= _READS_PER_CODE_MAX:
-        memo[code] = None
-    else:
-        reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
+    reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
 
 
 #: The decorator's code: `Cash` in core.py and the call steps in decorator/.
@@ -79,8 +78,7 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
     except ValueError:
         return
     stat = tracker.read_stats.get(abs_path)
-    depth = 0
-    while frame is not None and depth < 64:
+    while frame is not None:
         code = frame.f_code
         kind = frame_kind(code.co_filename)
         if kind == "wrapper":
@@ -88,7 +86,7 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
         if kind == "user":
             tracker.note_reading_code(code)
             _record_read(code, abs_path, stat)
-        frame, depth = frame.f_back, depth + 1
+        frame = frame.f_back
 
 
 #: code filename -> ``wrapper``/``cash``/``user``/``other``; `frame_kind`.
@@ -129,8 +127,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
     """
     try:
         codes = []
-        depth = 0
-        while frame is not None and depth < 64:
+        while frame is not None:
             kind = frame_kind(frame.f_code.co_filename)
             if kind == "wrapper":
                 break
@@ -138,7 +135,7 @@ def note_untracked_read(path: Any, frame: Any) -> None:
                 return  # cash reading its own files
             if kind == "user":
                 codes.append(frame.f_code)
-            frame, depth = frame.f_back, depth + 1
+            frame = frame.f_back
         if not codes:
             return
         raw = os.fsdecode(path) if isinstance(path, bytes) else os.fspath(path)
@@ -172,8 +169,6 @@ def note_untracked_read(path: Any, frame: Any) -> None:
         logger.debug("[TRACKER] could not note an untracked read of %r", path, exc_info=True)
 
 
-def credited_reads(code: Any) -> dict[str, Any] | None:
-    """``{file: stat when read}`` for files read while *code* was on the stack;
-    None when it reads per argument."""
-    reads = _reads_by_code.get(code, ())
-    return None if reads is None else dict(reads)
+def credited_reads(code: Any) -> dict[str, Any]:
+    """``{file: stat when read}`` for files read while *code* was on the stack."""
+    return dict(_reads_by_code.get(code) or {})

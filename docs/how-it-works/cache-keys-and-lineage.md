@@ -25,10 +25,11 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b, cash/object_hashing.py:compute_hash_full @244ad49e -->
+<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b, cash/object_hashing.py:compute_hash_full @4e7bb349 -->
 Both paths fingerprint data values with the same built-in hashers. The
-decorator uses them for arguments; the notebook uses them for a loop
-iteration's values and for the arguments of a cached call inside a statement.
+decorator uses them for arguments; the notebook uses them wherever it hashes
+a value: a loop iteration's values, the arguments of a cached call inside a
+statement, and a variable with no lineage.
 
 | Type | Library | What is hashed |
 |------|---------|----------------|
@@ -49,7 +50,7 @@ contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 For other types, register a hasher; see
 [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/object_hashing.py:compute_hash @7aa554ba -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/object_hashing.py:compute_hash @6ca6c1d7 -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a
@@ -168,15 +169,15 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:compute_hash @7aa554ba -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:compute_hash @6ca6c1d7 -->
 For each input variable, the statement key uses the first of these that
 exists:
 
 1. The lineage the upstream check simulated for it, while a check is running.
 2. The lineage recorded when the variable was last assigned.
 3. A lineage tag on the value itself.
-4. A content hash of the value, *sampled* for large objects (the first rows
-   of a DataFrame, the first elements of an array).
+4. A content hash of the value, over all of it: every row of a DataFrame,
+   every element of an array or a list.
 5. A hash of `str(value)`.
 
 A value that cannot be pickled at all ends up keyed on its memory address.

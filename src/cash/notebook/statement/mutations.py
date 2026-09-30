@@ -20,6 +20,7 @@ from cash.analysis.cacheability_decision import receiver_is_identity_coupled
 from cash.analysis.mutation_effects import classify_receivers, drawn_on_arguments
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from cash.analysis.namespace_effects import bare_call_arguments, fits_its_receiver, is_estimator
+from cash.notebook.restored_var import hashed_by_lineage
 from cash.object_hashing import mutation_fingerprint
 
 if TYPE_CHECKING:
@@ -155,7 +156,7 @@ class MutationClassifier:
                 assumed.add(base)
                 pre_route.add(base)
         # An object handed to a bare call (`im.add_qc(df)`, `sc.tl.leiden(hv)`)
-        # gets a full before/after fingerprint, since the cache hash samples.
+        # gets a full before/after fingerprint (`mutation_fingerprint`).
         # The result is learned into the verdict, so neither the next run nor
         # the simulation asks again: `print(df)` is learned as reading only.
         snapshots: dict[str, str] = {}
@@ -228,19 +229,15 @@ class MutationClassifier:
     def _receiver_observable(self, base: str) -> bool:
         """Return True if *base*'s value can be reliably content-hashed.
 
-        ``compute_hash`` *samples* large objects (DataFrame/Series/ndarray, and
-        collections over 200 elements), so an unchanged sample can't prove the
-        object wasn't mutated outside the sample. Such receivers are excluded
-        here and assume-mutated instead.
+        A large object -- a frame, an array, a collection of more than 200
+        items or one holding a frame (`hashed_by_lineage`) -- has its lineage
+        as its session hash, not its content, so there is nothing to compare
+        it with. Such receivers are excluded here and assume-mutated instead.
         """
         val = self.shell.user_ns.get(base)
         if val is None:
             return False
-        if type(val).__name__ in ("DataFrame", "Series", "ndarray"):
-            return False
-        if isinstance(val, (list, tuple, dict, set, frozenset)) and len(val) > 200:
-            return False
-        return True
+        return not hashed_by_lineage(val)
 
     def _receiver_mutated(self, base: str) -> bool:
         """Observe whether *base*'s content changed during this statement.

@@ -27,7 +27,7 @@ from ..tracking.file_dep_snapshot import snapshot_is_fresh
 from ._protocols import ShellProtocol
 from .cache_status import CacheStatus
 from .call_refs import resolve_call_refs
-from .restored_var import apply_restored_var
+from .restored_var import apply_restored_var, hashed_by_lineage
 from .statement import ProcessResult, StatementCacheMetadata
 from .tracking_state import TrackingState
 
@@ -179,7 +179,10 @@ class Restorer:
             if input_var not in self.shell.user_ns:
                 restored_metrics.extend(self.restore_variable(input_var))
             elif input_var in self.tracking_state.variable_hashes:
-                current_hash = compute_hash(self.shell.user_ns.get(input_var))
+                value = self.shell.user_ns.get(input_var)
+                # A lineage-hashed value has no content hash on record to
+                # match: restored, as a mismatch would be.
+                current_hash = None if hashed_by_lineage(value) else compute_hash(value)
                 if current_hash not in self.tracking_state.variable_hashes[input_var]:
                     restored_metrics.extend(self.restore_variable(input_var))
 

@@ -77,7 +77,7 @@ A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file
 read another way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_note_settled @4c164986 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @03b217be, cash/tracking/file_dep_snapshot.py:_note_settled @4c164986 -->
 When the result is stored, each file is recorded with its size, modification
 time and a content hash. Before the result is reused:
 
@@ -96,9 +96,8 @@ A file that was read but cannot be stat'ed when the result is stored (a
 permission error, a name the file system rejects) is recorded as never fresh:
 the call recomputes each time rather than lose the dependency.
 
-Files over 256 MiB (`file_hash_full_max_bytes`) are hashed from three sampled
-regions, so for them the timestamps must also match exactly. The one edit this
-misses is on Windows: a same-size write that puts the old modification time
+Every file is hashed in full, whatever its size. The one edit the checks
+miss is on Windows: a same-size write that puts the old modification time
 back, or a write through `np.memmap`, which moves no timestamp. See
 [an edit that keeps the size and timestamps](../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
 

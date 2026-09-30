@@ -140,11 +140,10 @@ class TestContentHashCollisionChannels:
         nb_runner.run_all()
         assert "probe= 9" in nb_runner.get_output(3), f"stale consumer after flag edit: {nb_runner.get_output(3)!r}"
 
-    def test_reset_state_sampled_df_consumer_not_stale(self, nb_runner):
+    def test_reset_state_df_consumer_not_stale(self, nb_runner):
         """Provenance loss (reset_cash_state) forces lineage to be re-derived
-        from the SAMPLED content hash.  A tail mutation (row 700, outside the
-        head-5 sample) then collides with the pre-mutation hash -- the cached
-        consumer must NOT serve the pre-mutation total."""
+        from the content hash.  A mutation at row 700 must move it -- the
+        cached consumer must NOT serve the pre-mutation total."""
         nb_runner.create_notebook(
             [
                 "import pandas as pd\ndf = pd.DataFrame({'a': list(range(1000))})",
@@ -167,28 +166,11 @@ class TestContentHashCollisionChannels:
         nb_runner.set_cell_source(2, "df.iloc[700, 0] = 0")
         nb_runner.run_cell(2)
 
-        # Session 3: provenance lost again; content hash of the mutated df
-        # collides with the pre-mutation hash (head-5/shape/dtypes unchanged).
+        # Session 3: provenance lost again; the content hash reads every row,
+        # so the mutated df keys apart from the pre-mutation one.
         nb_runner.reset_cash_state()
         nb_runner.run_cell(3)
-        # ADJUDICATED: the documented sampling limitation
-        # (docs/known-limitations.md, "Large objects are hashed by sampling").
-        #
-        # This is what sampling COSTS, and the cost is only reachable here
-        # because the probe deliberately destroys provenance first: normally
-        # lineage catches the mutation, and the content hash is a fallback for
-        # when it cannot. Once re-keyed from content alone, a head-5 sample of a
-        # 1000-row frame cannot see a row-700 edit, so the hash is unchanged and
-        # the consumer is legitimately considered fresh.
-        #
-        # Not fixable without hashing large frames whole, which is the cost
-        # sampling exists to avoid — it would put a full pass over every large
-        # object on the hot path of every statement.
-        #
-        # Pinned as the real behaviour so the trade-off stays visible.
-        assert "total= 499500" in nb_runner.get_output(3), (
-            f"expected the documented sampling collision: {nb_runner.get_output(3)!r}"
-        )
+        assert "total= 498800" in nb_runner.get_output(3), nb_runner.get_output(3)
 
 
 class TestViewsNestedAndFriends:

@@ -224,3 +224,39 @@ def test_a_memo_filled_at_import_before_any_decoration_is_an_input(tmp_path):
         assert run.returncode == 0, run.stderr[-2000:]
         got.append((run.stdout.strip().splitlines()[-1], "RAN" in run.stderr))
     assert got[2] == ("22", True), f"a config edit was served the old result: {got}"
+
+
+def test_a_memo_over_many_files_is_an_input_of_its_consumers(tmp_path):
+    """A settings loader memoised once over twenty files. Its consumer read
+    none of them itself, and past sixteen files the loader's reads were
+    written off as "per argument": the consumer stored no dependency and kept
+    serving the old settings after one of them changed."""
+    files = [tmp_path / f"part{i:02d}.txt" for i in range(20)]
+    for i, path in enumerate(files):
+        _write(path, [i])
+
+    def read_part(path):  # its own code: the module's parser has other tests' reads
+        with open(path, encoding="utf-8") as fh:
+            return int(fh.read())
+
+    @functools.lru_cache(maxsize=1)
+    def load_all():
+        return sum(read_part(str(path)) for path in files)
+
+    c = Cash(cache_dir=str(tmp_path / "cache"))
+    calls = {"n": 0}
+
+    @c.cache
+    def scaled(k):
+        calls["n"] += 1
+        return load_all() * k
+
+    expected = sum(range(20))
+    assert load_all() == expected  # the memo is filled outside any cached call
+    assert scaled(2) == 2 * expected
+    assert scaled(2) == 2 * expected
+    assert calls["n"] == 1, "an unchanged set of files did not hit"
+
+    _write(files[7], [100])
+    load_all.cache_clear()  # what a new process starts with
+    assert scaled(2) == 2 * (expected - 7 + 100), "the memo's consumer served the old settings"

@@ -317,10 +317,7 @@ class FileDeps:
             code="CACHE-FRESHNESS-COST",
             fix="depend on fewer or smaller files -- cache a summary rather than "
             "every input -- or split the function so the expensive inputs are "
-            "read by a callee whose deps the aggregates do not inherit. Note "
-            "that files above file_hash_full_max_bytes are sampled rather "
-            "than hashed in full, which is cheaper per file but not per file "
-            "COUNT.",
+            "read by a callee whose deps the aggregates do not inherit.",
         )
 
     def credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:
@@ -335,8 +332,7 @@ class FileDeps:
         this call, its remembered files are added (`credited_reads`). A memo
         keyed by a path the call was given (``parse(path)``) adds only that
         path when it is among them; a memo of a fixed file adds what it read.
-        The cached function's own history is left out -- it is per argument --
-        and so is a function that read too many files to attribute.
+        The cached function's own history is left out -- it is per argument.
 
         A remembered read also says which version of the file it was. When the
         file has changed since, the memo handed this call the OLD version's

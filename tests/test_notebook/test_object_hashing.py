@@ -93,29 +93,25 @@ class TestComputeHash:
         assert not is_identity_fallback_hash(42, compute_hash(42))
         assert not is_identity_fallback_hash([1, 2, 3], compute_hash([1, 2, 3]))
 
-    def test_hash_large_list_samples(self):
-        """Lists with >200 items hash by length + head/tail sample, not full pickle."""
+    def test_a_large_list_differing_in_the_middle_hashes_differently(self):
+        """Every item counts, not the ends: a list edited at item 150 of 300
+        is a different value."""
         h = compute_hash(list(range(300)))
-        # Same length but different head/tail must differ.
-        assert h != compute_hash([-1] + list(range(1, 300)))
-        # Identical large lists must match.
+        middle = list(range(300))
+        middle[150] = -1
+        assert h != compute_hash(middle)
         assert h == compute_hash(list(range(300)))
 
-    def test_hash_large_dict_samples(self):
-        """Dicts with >200 keys hash by length + sorted-key sample (object_hashing 53-54)."""
+    def test_a_large_dict_differing_in_one_value_hashes_differently(self):
         big = {i: i for i in range(300)}
         h = compute_hash(big)
-        assert isinstance(h, str) and len(h) == 64
         assert h == compute_hash({i: i for i in range(300)})
-        # A different key in the sampled prefix changes the hash.
-        alt = {i: i for i in range(1, 301)}
-        assert h != compute_hash(alt)
+        assert h != compute_hash({**big, 150: -1})
 
-    def test_hash_large_set_samples(self):
-        """Sets with >200 items hash by length + sorted sample, not full pickle."""
+    def test_a_large_set_differing_in_one_item_hashes_differently(self):
         h = compute_hash(set(range(300)))
-        assert isinstance(h, str) and len(h) == 64
         assert h == compute_hash(set(range(300)))
+        assert h != compute_hash((set(range(300)) - {150}) | {1000})
 
 
 # ============================================================================

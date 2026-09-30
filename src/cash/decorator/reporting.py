@@ -6,7 +6,6 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
-import os
 import threading
 import time
 from collections import deque
@@ -20,7 +19,7 @@ from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_me
 from ..exceptions import CashCacheIneffectiveWarning
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
-from .explain import MissKind, MissReason, entry_id_of, is_sampled_dep, same_file_key
+from .explain import MissKind, MissReason, entry_id_of
 
 if TYPE_CHECKING:
     from ..config import CashConfig
@@ -57,14 +56,6 @@ def describe_call(entry: dict[str, Any]) -> str:
             line = f"HIT  {name}{tag}  (saved {saved:.2f}s; the lookup took {lookup:.2f}s{verdict})"
         else:
             line = f"HIT  {name}{tag}  (saved {saved:.2f}s)"
-        sampled = entry.get("sampled_files")
-        if sampled:
-            # Larger than file_hash_full_max_bytes: the HIT rests on the
-            # timestamps, and "when it does not recompute I need to be sure
-            # it was right not to" had no way to see that.
-            shown = ", ".join(os.path.basename(p) for p in sampled[:3])
-            more = f" and {len(sampled) - 3} more" if len(sampled) > 3 else ""
-            line += f"  -- trusts the timestamps of {shown}{more} (sampled: larger than file_hash_full_max_bytes)"
         return line
     missed = entry.get("miss_reason") or MissReason(MissKind.FIRST)
     if missed.kind is MissKind.RAISED:
@@ -346,7 +337,6 @@ class CallLog:
         miss: MissReason | None = None,
         body_seconds: float | None = None,
         cash_seconds: float | None = None,
-        file_deps: dict | None = None,
     ) -> None:
         """Record a decorator call event for notebook integration.
 
@@ -404,15 +394,6 @@ class CallLog:
         if slot is not None:
             slot[0] = entry
         if self.per_call_lines():
-            if file_deps:
-                # Only for the line: a hit pays nothing for it otherwise.
-                # One name per file: the tracker can record a file under both
-                # the relative and the absolute path it was opened by.
-                sampled: dict[str, str] = {}
-                for path, rec in file_deps.items():
-                    if is_sampled_dep(rec):
-                        sampled.setdefault(same_file_key(path), path)
-                entry["sampled_files"] = tuple(sampled.values())
             calls_logger.info("%s", describe_call(entry))
 
     def per_call_lines(self) -> bool:
