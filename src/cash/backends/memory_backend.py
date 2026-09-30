@@ -80,6 +80,11 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value is a list of dicts of immutable values: a
         #: hit copies each dict with ``map(dict, ...)`` instead of deepcopy.
         self._dict_rows: builtins.set[str] = set()
+        #: Per key, `_copy_frame`'s verdict on each pandas frame in the stored
+        #: value, by the frame's ``id``: whether its cells need a deep copy.
+        #: Decided once when the value is stored; the stored frames are private
+        #: and alive as long as the entry, so the ids stay theirs.
+        self._frame_cells: dict[str, dict[int, bool]] = {}
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -108,11 +113,15 @@ class InMemoryBackend(CacheBackend):
     #: 100 calls of 5 ms re-ran all 100 on an identical re-run.
     _PRESSURE_KEEPS_BYTES = 16 * 1024**2
 
-    #: Types whose instances cannot be mutated, so SHARING one between the
-    #: stored entry and the caller is safe. Exact-type membership, never
-
     @staticmethod
-    def _safe_deep_copy(value: Any, key: str = "<unknown>", *, required: bool = False) -> Any:
+    def _safe_deep_copy(
+        value: Any,
+        key: str = "<unknown>",
+        *,
+        required: bool = False,
+        known_cells: dict[int, bool] | None = None,
+        record_cells: dict[int, bool] | None = None,
+    ) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
         A RAM-tier hit must hand back something independent, or a caller that
@@ -127,12 +136,19 @@ class InMemoryBackend(CacheBackend):
         Measured against ``deepcopy``: 2.1x for a 200k int list, 3.3x for the
         same as a tuple, 1.6x for 50k strings, and no regression on nested
         dicts, where ``all()`` short-circuits on the first element.
+
+        *known_cells* and *record_cells* carry `_copy_frame`'s verdict on the
+        pandas frames in *value* (see there): a hit looks the stored frames up
+        in *known_cells*, a store records its copies in *record_cells*.
+
+        A polars frame is not a pandas one: it has no ``copy()``, and
+        ``deepcopy`` of it is a ``clone()``, which shares its immutable
+        buffers and so costs about a millisecond whatever its size.
         """
         try:
-            type_name = type(value).__name__
-            if type_name in ("DataFrame", "Series"):
-                return InMemoryBackend._copy_frame(value)
             value_type = type(value)
+            if _is_pandas_frame(value_type):
+                return InMemoryBackend._copy_frame(value, known_cells, record_cells)
             if value_type is list or value_type is tuple:
                 if all(type(item) in IMMUTABLE_PRIMS for item in value):
                     return value if value_type is tuple else list(value)
@@ -150,14 +166,14 @@ class InMemoryBackend(CacheBackend):
                 # shared, a list of immutables gets a new list, and two names
                 # for one object still come back as one object.
                 memo: dict[int, Any] = {}
-                InMemoryBackend._premade_copies(value, memo)
+                InMemoryBackend._premade_copies(value, memo, known_cells, record_cells)
                 return copy.deepcopy(value, memo)
             if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
                 # ``frame, summary, n = build()``: a call's result is a tuple,
                 # and deepcopy copies a frame in it deep even where a shallow
                 # copy is safe (`_copy_frame`).
                 memo = {}
-                InMemoryBackend._premade_copies(dict(enumerate(value)), memo)
+                InMemoryBackend._premade_copies(dict(enumerate(value)), memo, known_cells, record_cells)
                 return copy.deepcopy(value, memo)
             return copy.deepcopy(value)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
@@ -176,7 +192,9 @@ class InMemoryBackend(CacheBackend):
             return value
 
     @staticmethod
-    def _copy_frame(frame: Any) -> Any:
+    def _copy_frame(
+        frame: Any, known_cells: dict[int, bool] | None = None, record_cells: dict[int, bool] | None = None
+    ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
         Under pandas copy-on-write -- always on from pandas 3 -- a SHALLOW copy
@@ -189,24 +207,44 @@ class InMemoryBackend(CacheBackend):
         and every later hit, so ``df["tags"].iloc[0].append(...)`` changed
         what the next call got. A frame holding such cells is copied through
         pickle, which copies them too.
+
+        Finding out scans every object column (``infer_dtype``, O(rows)):
+        22 ms per hit at a million rows. A stored frame is private to its
+        entry and never written, so the answer for it cannot change: the store
+        records it for the copy it keeps (*record_cells*, by ``id``), and a
+        hit reads it back (*known_cells*) instead of scanning again.
         """
-        if _holds_mutable_cells(frame):
+        mutable = known_cells.get(id(frame)) if known_cells is not None else None
+        if mutable is None:
+            mutable = _holds_mutable_cells(frame)
+        copied = None
+        if mutable:
             try:
-                return pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+                copied = pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
             except Exception:  # noqa: BLE001 - cells that cannot be copied are shared, as before
                 logger.debug("could not copy the cells of a %s", type(frame).__name__)
-        return frame.copy(deep=not _pandas_copy_on_write())
+        if copied is None:
+            copied = frame.copy(deep=not _pandas_copy_on_write())
+        if record_cells is not None:
+            record_cells[id(copied)] = mutable
+        return copied
 
     @staticmethod
-    def _premade_copies(value: dict, memo: dict[int, Any], depth: int = 0) -> None:
+    def _premade_copies(
+        value: dict,
+        memo: dict[int, Any],
+        known_cells: dict[int, bool] | None = None,
+        record_cells: dict[int, bool] | None = None,
+        depth: int = 0,
+    ) -> None:
         """Put a copy of each plain container in *value*'s dicts into *memo*."""
         for item in value.values():
             item_type = type(item)
-            if item_type.__name__ in ("DataFrame", "Series") and id(item) not in memo:
-                memo[id(item)] = InMemoryBackend._copy_frame(item)
+            if _is_pandas_frame(item_type) and id(item) not in memo:
+                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells)
             elif item_type is dict:
                 if depth < 4:
-                    InMemoryBackend._premade_copies(item, memo, depth + 1)
+                    InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1)
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
                 if _plain_data.immutable_below(item):
                     memo[id(item)] = item if item_type is tuple else list(item)
@@ -256,7 +294,7 @@ class InMemoryBackend(CacheBackend):
                 return metadata, (list(value) if type(value) is list else value)
             if key in self._dict_rows:
                 return metadata, list(map(dict, value))
-            return metadata, self._safe_deep_copy(value, key)
+            return metadata, self._safe_deep_copy(value, key, known_cells=self._frame_cells.get(key))
         return None, None
 
     def set(
@@ -291,6 +329,7 @@ class InMemoryBackend(CacheBackend):
         if "storage" not in metadata:
             metadata["storage"] = ["RAM"]
 
+        frame_cells: dict[int, bool] = {}
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
@@ -303,7 +342,9 @@ class InMemoryBackend(CacheBackend):
             # variables a cell left behind, and one unisolatable variable among
             # them (an open handle in scope) must not stop the statement being
             # cached -- the notebook re-executes what it cannot restore.
-            stored = self._safe_deep_copy(value, key, required=bool((metadata or {}).get("copy_required")))
+            stored = self._safe_deep_copy(
+                value, key, required=bool((metadata or {}).get("copy_required")), record_cells=frame_cells
+            )
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]
@@ -323,6 +364,10 @@ class InMemoryBackend(CacheBackend):
             self._dict_rows.add(key)
         else:
             self._dict_rows.discard(key)
+        if frame_cells:
+            self._frame_cells[key] = frame_cells
+        else:
+            self._frame_cells.pop(key, None)
         self._current_size_bytes += size
 
         # Check max_entries limit
@@ -342,6 +387,7 @@ class InMemoryBackend(CacheBackend):
         """Remove *key*, keeping the byte-cap running total in sync."""
         self._immutable_below.discard(key)
         self._dict_rows.discard(key)
+        self._frame_cells.pop(key, None)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
         entry = self._store.pop(key, None)
@@ -355,6 +401,7 @@ class InMemoryBackend(CacheBackend):
         self._store.clear()
         self._immutable_below.clear()
         self._dict_rows.clear()
+        self._frame_cells.clear()
         self._gdsf_base.clear()
         self._seq_by_key.clear()
         self._current_size_bytes = 0
@@ -626,6 +673,15 @@ _IMMUTABLE_CELLS = frozenset(
         "period",
     }
 )
+
+
+def _is_pandas_frame(value_type: type) -> bool:
+    """A pandas DataFrame or Series (or a subclass defined in pandas).
+
+    By module as well as name: polars, cudf and others call their frames
+    ``DataFrame`` too, and have no ``copy(deep=...)``.
+    """
+    return value_type.__name__ in ("DataFrame", "Series") and value_type.__module__.startswith("pandas")
 
 
 def _holds_mutable_cells(frame: Any) -> bool:
