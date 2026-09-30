@@ -261,11 +261,11 @@ def is_cow_pandas(value: Any) -> bool:
 def frame_memoable(value: Any) -> bool:
     """Can the copy-on-write memo check *value* instead of reading it
     (`ArgHasher._memo_content_digest`)? A pandas frame under copy-on-write
-    whose blocks pandas alone can write (`_blocks_outside_the_memo`)."""
+    whose blocks pandas alone can write (`frame_borrows_its_data`)."""
     if not is_cow_pandas(value):
         return False
     try:
-        return not _blocks_outside_the_memo(value)
+        return not frame_borrows_its_data(value)
     except Exception:  # noqa: BLE001 - a pandas internals change: no memo
         return False
 
