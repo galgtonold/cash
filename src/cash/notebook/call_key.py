@@ -400,26 +400,34 @@ def _nbytes(value) -> int:
     return 0
 
 
-def global_names_reached(fn, seen: set[int] | None = None, depth: int = 0) -> set[str]:
-    """Global names *fn* loads, and those of the functions it reaches, bounded."""
+def global_names_reached(fn, seen: set[int] | None = None) -> set[str]:
+    """Global names *fn* loads, and those of the functions and classes it
+    reaches, however deep: a loop variable read seven calls down was not
+    seen, so it was left out of the call's key and the call served the
+    value from another iteration. *seen* ends cycles."""
     seen = set() if seen is None else seen
-    code = getattr(fn, "__code__", None)
-    if code is None or id(fn) in seen or depth > 6:
-        return set()
-    seen.add(id(fn))
-    names = set(_code_names(code))
-    namespace = getattr(fn, "__globals__", None) or {}
-    for name in list(names):
-        value = namespace.get(name)
-        if isinstance(value, _types.FunctionType):
-            names |= global_names_reached(value, seen, depth + 1)
-        elif isinstance(value, type) and id(value) not in seen:
-            # A class the callee builds or calls into: its methods read globals too.
-            seen.add(id(value))
-            for member in vars(value).values():
-                member = getattr(member, "__func__", member)
-                if isinstance(member, _types.FunctionType):
-                    names |= global_names_reached(member, seen, depth + 1)
+    names: set[str] = set()
+    pending = [fn]
+    while pending:
+        current = pending.pop()
+        code = getattr(current, "__code__", None)
+        if code is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        own = _code_names(code)
+        names |= own
+        namespace = getattr(current, "__globals__", None) or {}
+        for name in own:
+            value = namespace.get(name)
+            if isinstance(value, _types.FunctionType):
+                pending.append(value)
+            elif isinstance(value, type) and id(value) not in seen:
+                # A class the callee builds or calls into: its methods read globals too.
+                seen.add(id(value))
+                for member in vars(value).values():
+                    member = getattr(member, "__func__", member)
+                    if isinstance(member, _types.FunctionType):
+                        pending.append(member)
     return names
 
 
