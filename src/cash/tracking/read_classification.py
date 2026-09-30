@@ -116,7 +116,9 @@ def is_pseudo_fs(path: str) -> bool:
 # config at import stays tracked; and an installed tool reading its own data
 # file stays tracked for that tool's own cached functions (``own_package``).
 
-#: Modules that look up package METADATA or RESOURCES -- never user data.
+#: Modules that look up package METADATA or RESOURCES. What they read is
+#: never user data, except a resource file of a package outside the
+#: installation: `_resource_is_user_data`.
 _METADATA_MODULES: tuple[str, ...] = (
     "importlib.metadata",
     "importlib_metadata",
@@ -125,6 +127,35 @@ _METADATA_MODULES: tuple[str, ...] = (
     "pkg_resources",
     "pkgutil",
 )
+
+#: The ones of those that also read a package's DATA files for the caller
+#: (``pkgutil.get_data``, ``importlib.resources.read_text``,
+#: ``pkg_resources.resource_string``).
+_RESOURCE_MODULES: tuple[str, ...] = (
+    "importlib.resources",
+    "importlib_resources",
+    "pkg_resources",
+    "pkgutil",
+)
+
+#: Directory segments that hold a distribution's metadata, not its data.
+_METADATA_DIR_SEGMENTS: tuple[str, ...] = (".dist-info/", ".egg-info/")
+
+
+def _resource_is_user_data(path_nc: str) -> bool:
+    """Is a read through a resource API (`_RESOURCE_MODULES`) the user's data?
+
+    A data file of the user's own package is: ``pkgutil.get_data(__package__,
+    "cfg.txt")`` read an edited ``cfg.txt`` and served the old value, because
+    every read through these modules counted as metadata. A file of an
+    installed package never reaches here (`_installed_data_file` ran first).
+    What stays dropped is a distribution's metadata and the directory
+    listings these modules make while they scan ``sys.path``.
+    """
+    if any(seg in path_nc for seg in _METADATA_DIR_SEGMENTS):
+        return False
+    return os.path.isfile(path_nc)
+
 
 #: Modules a read passes through between the code that asked for it and the OS.
 _READ_PLUMBING: tuple[str, ...] = (
@@ -197,10 +228,10 @@ def _module_package_dir(module_name: str) -> str | None:
     return norm_dir(os.path.dirname(file)) if file else None
 
 
-#: module name -> (metadata module?, read plumbing?, top-level name). A read
-#: walks the whole stack, ~30 frames in a kernel, and a folder read does it for
-#: every file, so each module is classified once.
-_module_kinds: LruMemo[str, tuple[bool, bool, str]] = LruMemo(SOURCE_FILES)
+#: module name -> (metadata module?, resource module?, read plumbing?,
+#: top-level name). A read walks the whole stack, ~30 frames in a kernel, and a
+#: folder read does it for every file, so each module is classified once.
+_module_kinds: LruMemo[str, tuple[bool, bool, bool, str]] = LruMemo(SOURCE_FILES)
 
 
 def incidental_read(path: str, own_package: str | None = None) -> str | None:
@@ -220,15 +251,29 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     installed = installed_roots()
     frame = sys._getframe(1)
     reader_seen = False
+    user_resource: bool | None = None
     while frame is not None:
         module = frame.f_globals.get("__name__") or ""
         kind = _module_kinds.get(module)
         if kind is None:
-            kind = (_in_modules(module, _METADATA_MODULES), _in_modules(module, _READ_PLUMBING), module.split(".")[0])
+            kind = (
+                _in_modules(module, _METADATA_MODULES),
+                _in_modules(module, _RESOURCE_MODULES),
+                _in_modules(module, _READ_PLUMBING),
+                module.split(".")[0],
+            )
             _module_kinds[module] = kind
-        is_metadata, is_plumbing, top = kind
+        is_metadata, is_resource, is_plumbing, top = kind
         if is_metadata:
-            return "package metadata"
+            if not is_resource:
+                return "package metadata"
+            if user_resource is None:
+                user_resource = _resource_is_user_data(path_nc)
+            if not user_resource:
+                return "package metadata"
+            # The resource API is only plumbing between the caller and the file.
+            frame = frame.f_back
+            continue
         code = frame.f_code
         # `__main__` is the user's notebook or script -- in a kernel its module
         # object is the ipykernel launcher in site-packages, which must not make

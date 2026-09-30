@@ -54,10 +54,23 @@ _NOT_A_READ = frozenset(
 _TOOL_PACKAGES = frozenset({"coverage"})
 
 
+#: Callers that read a package's data file through its loader's ``get_data``,
+#: which lives in the import system: ``pkgutil.get_data`` and the
+#: ``importlib.resources`` / ``pkg_resources`` functions. That read is data
+#: (`cash.tracking.read_classification` decides whose), not an import.
+_LOADER_DATA_CALLERS = ("pkgutil", "importlib.resources", "importlib_resources", "pkg_resources")
+
+
 def _not_a_read(frame: Any) -> bool:
     """Whether the call *frame* made is the interpreter's or a tool's, not the user's."""
     name = frame.f_globals.get("__name__") or ""
-    return name in _NOT_A_READ or name.partition(".")[0] in _TOOL_PACKAGES
+    if name in _NOT_A_READ:
+        if frame.f_code.co_name == "get_data" and frame.f_back is not None:
+            caller = frame.f_back.f_globals.get("__name__") or ""
+            if any(caller == n or caller.startswith(n + ".") for n in _LOADER_DATA_CALLERS):
+                return False
+        return True
+    return name.partition(".")[0] in _TOOL_PACKAGES
 
 
 def _audited_caller() -> Any:
