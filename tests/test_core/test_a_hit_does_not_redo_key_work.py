@@ -238,3 +238,14 @@ def test_a_generated_method_s_identity_is_read_once(monkeypatch):
     first = code_identity.hash_callable_source(init)
     assert code_identity.hash_callable_source(init) == first
     assert len(reads) == 1
+
+
+def test_what_is_worth_keying_on_its_own_is_decided_by_size():
+    sparse = pytest.importorskip("scipy.sparse")
+    worth = object_hashing._worth_opening
+    assert not worth(np.zeros(8))
+    assert worth(np.zeros(object_hashing.OPEN_UP_BYTES // 8))
+    assert not worth(sparse.eye(10, format="csr"))
+    assert worth(sparse.random(1000, 1000, density=0.2, format="csr", random_state=0))
+    assert not worth(pd.DataFrame({"x": range(10)}))
+    assert worth(pd.DataFrame({"x": np.zeros(object_hashing.OPEN_UP_BYTES // 8)}))

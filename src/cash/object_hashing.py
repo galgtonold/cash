@@ -363,13 +363,20 @@ def _worth_opening(value: Any) -> bool:
     memoable = getattr(CONTENT_DIGEST, "memoable", None)
     if memoable is not None and memoable(value):
         return True
+    family = _builtin_family_of(type(value))
     try:
-        if _builtin_family_of(type(value)) == "pandas":
+        if family == "pandas":
             size = pandas_nbytes(value)
-        elif _builtin_family_of(type(value)) == "polars":
+        elif family == "polars":
             size = value.estimated_size()
+        elif family in ("numpy", "pyarrow"):
+            size = value.nbytes
+        elif family == "scipy.sparse":
+            size = sum(getattr(getattr(value, part, None), "nbytes", 0) for part in _SPARSE_PARTS)
         else:
-            size = getattr(value, "nbytes", None)
+            # A lazy collection (dask, modin) is keyed by its own token,
+            # which costs less than computing it to pickle it.
+            return True
     except Exception:  # noqa: BLE001 - a size we cannot read: pickle it whole, as before
         return False
     return isinstance(size, int) and size >= OPEN_UP_BYTES
