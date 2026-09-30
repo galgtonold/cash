@@ -91,7 +91,10 @@ it): `{"a": 1, "b": 2}` and `{"b": 2, "a": 1}` are separate entries, and so
 are `**kwargs` passed in two orders. Named arguments share a key in any order.
 One list held twice is not two equal lists either: `[[0] * 3] * 3` repeats
 one row, and a write to it shows in every row, so it keys apart from a
-3x3 grid of separate rows.
+3x3 grid of separate rows. The same goes for a list, dict, set or array
+that two arguments, or two records of one argument, share. Which strings,
+dates or numbers are one object never matters: they cannot be written into,
+so a config parsed from JSON hits the equal one written as literals.
 [Custom hashers](../tutorials/feature-guides/custom-hashers.md) covers
 registration.
 

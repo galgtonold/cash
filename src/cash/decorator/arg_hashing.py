@@ -19,8 +19,8 @@ from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
-from ..object_hashing import NOT_HOOKED, builtin_hash, is_native_panic, stable_key_repr
-from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, PLAIN_SEQS
+from ..object_hashing import NOT_HOOKED, builtin_hash, canonical_bytes, is_native_panic, stable_key_repr
+from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -35,33 +35,49 @@ logger = logging.getLogger(__name__)
 PLAIN_CENSUS = threading.local()
 
 
-def plain_census(value: Any) -> tuple[str, Any] | None:
+def plain_census(value: Any) -> tuple[str, Any, dict] | None:
     """What kind of plain data *value* is, memoized for the key build in progress.
 
-    ``("plain", value)`` for lists and tuples of primitives (`_plain_data.is_plain`),
-    ``("plain_aliased", (value, repeats))`` for such data holding one list more than
-    once (`_plain_data.aliases`), ``("plain_numpy", (value, repeats))`` for
-    plain data with numpy scalars among its leaves, ``("dict_rows", (keys, rows))`` for a list
-    of dicts sharing their keys (`_plain_data.dict_rows`), None for anything
-    else.
+    ``("plain", value, shared)`` for lists and tuples of primitives
+    (`_plain_data.is_plain`), ``("plain_aliased", (value, repeats), shared)``
+    for such data holding one list more than once (`_plain_data.aliases`),
+    ``("plain_numpy", (value, repeats), shared)`` for plain data with numpy
+    scalars among its leaves, ``("dict_rows", (keys, rows[, repeats]), shared)``
+    for a list of dicts sharing their keys (`_plain_data.dict_rows`),
+    ``("tree", (value, repeats), shared)`` for other JSON-like data
+    (`_plain_data.tree_levels`), None for anything else. *shared* locates
+    the containers inside that another argument could also hold
+    (`_plain_data.sharing`).
     """
     memo = getattr(PLAIN_CENSUS, "memo", None)
     if memo is not None:
         hit = memo.get(id(value))
         if hit is not None and hit[0] is value:
             return hit[1]
-    found: tuple[str, Any] | None = None
-    shape = _plain_data.aliases(value)
+    found: tuple[str, Any, dict] | None = None
+    shape = _plain_data.sharing(value)
     if shape is not None:
-        repeats, numpy = shape
+        repeats, shared, numpy = shape
         if numpy:
-            found = ("plain_numpy", (value, repeats))
+            found = ("plain_numpy", (value, repeats), shared)
         else:
-            found = ("plain_aliased", (value, repeats)) if repeats else ("plain", value)
+            found = ("plain_aliased", (value, repeats), shared) if repeats else ("plain", value, shared)
     else:
-        rows = _plain_data.dict_rows(value)
+        rows = _plain_data.dict_rows_unchecked(value)
         if rows is not None:
-            found = ("dict_rows", rows)
+            # A row's values are held by its dict and by its tuple in *rows*.
+            shape = _plain_data.sharing(rows[1], held_twice_at=1)
+            if shape is not None and not shape[2]:
+                repeats, shared, _numpy = shape
+                shared.update(_plain_data.shared_rows(value))
+                found = ("dict_rows", (*rows, repeats) if repeats else rows, shared)
+            # Its tuples reference every value: held here, they would make
+            # each one look shared to the next census.
+            del rows
+        if found is None:
+            shape = _plain_data.sharing(value, tree=True)
+            if shape is not None:
+                found = ("tree", (value, shape[0]), shape[1])
     if memo is not None:
         memo[id(value)] = (value, found)
     return found
@@ -74,17 +90,49 @@ def plain_key_part(value: Any) -> Any:
     memo (`_plain_data.pickle_unshared`), so one small dict beside two million
     rows does not send the rows down the general path.
     """
-    if type(value) not in PLAIN_SEQS:
+    if type(value) not in _plain_data.TREE_NODES:
         return value
     census = plain_census(value)
     if census is None:
         return value
-    kind, data = census
+    kind, data, _shared = census
     if kind == "plain_numpy":
         h = hashlib.sha256(_plain_data.level_key_bytes(data[0]))
         h.update(pickle.dumps(data[1], protocol=4))
         return (f"__cash_{kind}__", h.hexdigest())
     return (f"__cash_{kind}__", hashlib.sha256(_plain_data.pickle_unshared(data)).hexdigest())
+
+
+def shared_across(values: list, keyed: list, walked: dict) -> tuple:
+    """Where one writable container is reachable from two arguments.
+
+    ``((argument, level, position), where it was first met)`` per repeat:
+    a container held by two arguments changes in both when written, where
+    two equal copies change in one, so the two calls key apart. Plain and
+    JSON-like arguments are keyed by digests of their own content, so their
+    shared containers come from the census (`plain_census`), and are
+    compared with each other, with every argument itself, and with what
+    the canonical walk of the other arguments met (*walked*, its ``_seen``).
+    *keyed* is what each of *values* is keyed as (`hash_payload`'s digests).
+    """
+    first: dict[int, tuple] = {}
+    found: list = []
+    writable = writable_types()
+    for i, (value, digest) in enumerate(zip(values, keyed)):
+        census = plain_census(value) if digest is value and type(value) in _plain_data.TREE_NODES else None
+        spots = [(id(value), (i, -2, 0))] if isinstance(value, writable) else []
+        if census is not None:
+            spots.extend((oid, (i, *where)) for oid, where in census[2].items())
+        for oid, where in spots:
+            earlier = first.get(oid)
+            if earlier is not None:
+                found.append((where, earlier))
+                continue
+            first[oid] = where
+            met = walked.get(oid) if census is not None else None
+            if met is not None:
+                found.append((where, ("walked", met[0])))
+    return tuple(found)
 
 
 #: Values whose identity is code plus what it captures. A hasher registered for
@@ -424,19 +472,6 @@ def is_opaque(obj: Any) -> bool:
     except Exception as e:  # noqa: BLE001 - opacity check must never break a call
         logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
         return False
-
-
-def _shared_plain_args(values: list) -> tuple:
-    """``(position, first position)`` for each list or bytearray argument
-    that is the same object as an earlier one."""
-    first: dict[int, int] = {}
-    shared = []
-    for pos, value in enumerate(values):
-        if type(value) in (list, bytearray):
-            seen = first.setdefault(id(value), pos)
-            if seen != pos:
-                shared.append((pos, seen))
-    return tuple(shared)
 
 
 def _rough_size(labelled: tuple[str, Any]) -> int:
@@ -880,10 +915,11 @@ class ArgHasher:
         ]
         payload_t0 = _perf_counter()
 
-        # One canonical form (`stable_key_repr`): sets in a stable order,
+        # One canonical form (`canonical_bytes`): sets in a stable order,
         # every container tagged with its type, a container met twice marked.
-        # Plain data is keyed by a digest of each argument on its own, so one
-        # list passed as two arguments is marked here.
+        # Plain and JSON-like data is keyed by a digest of each argument on
+        # its own, so a container two arguments share is marked here
+        # (`shared_across`).
         try:
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
             # it early, and the arguments after it silently left the key.
@@ -891,12 +927,12 @@ class ArgHasher:
                 tuple([plain_key_part(a) for a in hashed_args]),
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
             )
-            shared = _shared_plain_args([*hashed_args, *hashed_kwargs.values()])
-            if shared:
-                form += (("__cash_shared_args__", shared),)
             hook = self._nested_hasher if (self.override_hashers or self.type_hashers) else None
-            payload = stable_key_repr(form, hook=hook)
-            args_bytes = _plain_data.key_dumps(payload)
+            walked: dict = {}
+            args_bytes = canonical_bytes(form, hook=hook, seen=walked)
+            shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
+            if shared:
+                args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise

@@ -17,7 +17,7 @@ from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..object_hashing import held_objects
 from ..source_norm import class_functions
-from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
+from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS
 from .arg_hashing import is_opaque, plain_census
 from .code_identity import is_user_code_object
 
@@ -260,9 +260,9 @@ class CodeArgs:
             and self._frozen.containers[id(value)][0] is value
         ):
             return
-        # Plain data carries no code (`_plain_data.is_plain`); walking two
-        # million rows to find that out was 14% of a warm hit.
-        if _depth == 0 and type(value) in PLAIN_SEQS and plain_census(value) is not None:
+        # Plain and JSON-like data carries no code (`plain_census`); walking
+        # two million rows to find that out was 14% of a warm hit.
+        if _depth == 0 and type(value) in _plain_data.TREE_NODES and plain_census(value) is not None:
             return
         if _seen is None:
             _seen = set()

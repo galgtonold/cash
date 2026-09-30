@@ -69,6 +69,16 @@ def test_a_frozen_result_is_keyed_without_hashing_it(c, monkeypatch):
         return data
 
     monkeypatch.setattr(pickle, "dumps", spy)
+    from cash import _plain_data
+
+    real_dump = _plain_data._dump
+
+    def dump_spy(value, fast):
+        data = real_dump(value, fast)
+        sizes.append(len(data))
+        return data
+
+    monkeypatch.setattr(_plain_data, "_dump", dump_spy)
     assert score(model, 10) == score.__wrapped__(model, 10)
     assert sizes and max(sizes) < 4096, f"the frozen model was pickled into the key: {sizes}"
 
