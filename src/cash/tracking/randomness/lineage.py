@@ -121,7 +121,7 @@ def watch_seeds() -> None:
         # numpy loads `numpy.random` on first attribute access, which is the
         # user's `np.random.seed(...)` itself: load it now to watch that call.
         try:
-            import numpy.random  # noqa: F401
+            import numpy.random  # noqa: F401 - imported to load it, so its seed() can be wrapped
         except Exception:  # noqa: BLE001 - a broken numpy only loses the watch
             pass
     targets = (("random", "random"), ("numpy.random", "numpy.random"))

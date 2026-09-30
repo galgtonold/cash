@@ -718,7 +718,7 @@ these reads is reported where it is called, however it is called: `now()`,
 
 <!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @eb905e12 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @7e3e55a5 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
@@ -1271,7 +1271,7 @@ generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
 
-<!-- claim: cash/decorator/rng.py:unseeded_library_calls @e399e6c4 -->
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @56f56fa1 -->
 A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or

@@ -164,7 +164,7 @@ def test_an_installed_librarys_resource_read_through_pkgutil_is_not_tracked(fake
     """Control: an installed package's data is library data, whoever reads it."""
     import pkgutil
 
-    import fakelib  # noqa: F401
+    import fakelib  # noqa: F401 - imported so pkgutil can find its loader
 
     tracker = _run(lambda: pkgutil.get_data("fakelib", "res.txt"))
     assert not _has(_norm(tracker.get_accessed_files()), fake_site / "fakelib" / "res.txt")

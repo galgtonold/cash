@@ -89,7 +89,7 @@ def test_which_follows_path(c, monkeypatch, tmp_path):
     for sub in ("one", "two"):
         tool = tmp_path / sub / "cash-test-tool"
         tool.parent.mkdir()
-        tool.write_text("#!/bin/sh\n")
+        tool.write_text("#!/bin/sh\n", encoding="utf-8")
         tool.chmod(0o755)
     cached = c.cache(which)
     monkeypatch.setenv("PATH", str(tmp_path / "one"))

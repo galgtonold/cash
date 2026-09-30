@@ -180,7 +180,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
     Lines are relative to *src*.
     """
     from ..analysis.ast_util import resolve_callee
-    from ..analysis.purity_analyzer import _build_namespace, local_import_map, resolve_local_import
+    from ..analysis.purity_analyzer import build_namespace, local_import_map, resolve_local_import
 
     try:
         tree = ast.parse(src)
@@ -189,7 +189,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
     fn = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
     if fn is None:
         return []
-    namespace = _build_namespace(func)
+    namespace = build_namespace(func)
     for local, (module_name, prefix) in local_import_map(fn, func).items():
         obj = resolve_local_import(module_name, prefix, None)
         if obj is not None:

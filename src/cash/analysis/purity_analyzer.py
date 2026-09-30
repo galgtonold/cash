@@ -1626,7 +1626,7 @@ def _clock_helper_read(value: Any) -> str | None:
                 isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and is_log_line(s.value) for s in body[:-1]
             )
         ):
-            namespace = _build_namespace(value)
+            namespace = build_namespace(value)
             # A read the key folds (`environment_input`) is an input, not a
             # frozen value: the helper's own walk lists it.
             if environment_input(body[-1].value, namespace, resolve_constants=True) is None:
@@ -1799,7 +1799,7 @@ def _resolve_in_class_namespaces(cls: type, name: str) -> Any:
     return None
 
 
-def _build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
+def build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
     """Return a merged ``__globals__`` + closure-cell namespace for *func*.
 
     Lets :func:`~cash.analysis.ast_util.resolve_callee` see helpers defined as closures
@@ -2187,7 +2187,7 @@ class PurityAnalyzer:
             # and aliased ambient reads, both need it. Imports written inside
             # the body bind locals the module's globals never see; a local
             # shadows a global of the same name.
-            namespace = _build_namespace(func)
+            namespace = build_namespace(func)
             local_imports = local_import_map(func_def, func)
             for _local, (_mod, _prefix) in local_imports.items():
                 _obj = resolve_local_import(_mod, _prefix, root_module)
