@@ -1042,7 +1042,19 @@ class FileDependencyRegistry:
 
         @functools.wraps(original_func)
         def tracked_metadata(path, *args, **kwargs):
-            result = original_func(path, *args, **kwargs)
+            try:
+                result = original_func(path, *args, **kwargs)
+            except (FileNotFoundError, NotADirectoryError):
+                # `try: getsize(p) except OSError:` answers for a file that is
+                # not there yet, so its appearing is a change.
+                tracker = active_tracker.get()
+                if (
+                    tracker is not None
+                    and isinstance(path, (str, bytes, os.PathLike))
+                    and _asked_by_user_code(sys._getframe(1))
+                ):
+                    tracker.track_absent(path)
+                raise
             if active_tracker.get() is not None and _asked_by_user_code(sys._getframe(1)):
                 _track_regular_file(path)
             return result
@@ -1063,7 +1075,20 @@ class FileDependencyRegistry:
 
         @functools.wraps(original_func)
         def tracked_os_stat(path, *args, **kwargs):
-            result = original_func(path, *args, **kwargs)
+            try:
+                result = original_func(path, *args, **kwargs)
+            except (FileNotFoundError, NotADirectoryError):
+                # `try: os.stat(p) except FileNotFoundError:` answers for a
+                # file that is not there yet, so its appearing is a change.
+                tracker = active_tracker.get()
+                if (
+                    tracker is not None
+                    and isinstance(path, (str, bytes, os.PathLike))
+                    and kwargs.get("dir_fd") is None
+                    and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
+                ):
+                    tracker.track_absent(path)
+                raise
             tracker = active_tracker.get()
             if (
                 tracker is not None

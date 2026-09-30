@@ -66,7 +66,7 @@ cash records a file when your code reads it through one of these:
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
 | file metadata | `Path.stat`, and `os.stat`, `os.lstat`, `os.path.getsize`, `getmtime`, `getctime` and the `stat()` of an `os.scandir` entry called from your code: the file, by content |
-| existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`: a path that was not there counts once it appears, and one your code found (a flag file, an output folder) counts once it is gone |
+| existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`, and an `open`, `os.stat`, `os.lstat`, `getsize`, `getmtime`, `os.listdir` or `os.scandir` that fails because the path is not there: a path that was not there counts once it appears, and one your code found (a flag file, an output folder) counts once it is gone |
 
 A reader counts however a script or a module of your code names it:
 `pq.read_table(...)`, `from pyarrow.parquet import read_table`, or an alias

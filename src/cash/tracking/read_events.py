@@ -184,6 +184,14 @@ def _on_listing(args: tuple) -> None:
     if _not_a_read(_audited_caller()):
         return
     tracker.track_path(path)
+    # `try: os.listdir(d) except FileNotFoundError:` answers for a directory
+    # that is not there yet. The event comes before the listing: ask the disk.
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        tracker.track_absent(path)
+    except (OSError, ValueError, TypeError):
+        pass
 
 
 def _on_glob(args: tuple) -> None:
