@@ -7,6 +7,8 @@ import ast
 import hashlib
 import inspect
 import logging
+import re
+import sys
 import textwrap
 import types
 from collections.abc import Callable
@@ -111,6 +113,126 @@ def seed_parameters(src: str) -> dict[str, tuple[str, str, bool, tuple]]:
             continue
         expr = ast.unparse(seed_arg)
         found.setdefault(expr, (f"{dotted}({expr})", root, is_param, path))
+    return found
+
+
+#: Keywords that seed a library call (``random_state=``, polars' ``seed=``).
+_SEED_KEYWORDS = frozenset({"random_state", "seed", "rng", "generator"})
+
+#: A receiver named as a generator (`rng`, `self.random`, `gen`): its
+#: ``.sample()`` is judged by the source scan, not taken for a DataFrame's.
+_GENERATOR_NAME = re.compile(r"rng|random|gen|state", re.IGNORECASE)
+
+#: ``obj.sample(...)`` passes ``random_state`` as its fifth positional
+#: argument in pandas (``n, frac, replace, weights, random_state``).
+_SAMPLE_SEED_POSITION = 4
+
+
+def _random_state_param(callee: Any) -> tuple[int | None, inspect.Parameter | None] | None:
+    """``(position, shuffle)`` of an installed library callable that takes
+    ``random_state=None``: where it may be passed positionally (None when only
+    by keyword) and its ``shuffle`` parameter, if any. None for anything
+    else, the user's own code included."""
+    from ..install_paths import is_installed_path
+
+    module = sys.modules.get((getattr(callee, "__module__", None) or "").split(".")[0])
+    file = getattr(module, "__file__", None)
+    if not file or not is_installed_path(file):
+        return None
+    try:
+        params = list(inspect.signature(callee).parameters.values())
+    except (TypeError, ValueError):
+        return None
+    by_name = {p.name: p for p in params}
+    rs = by_name.get("random_state")
+    if rs is None or rs.default is not None:
+        return None
+    position = None
+    if rs.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+        position = params.index(rs)
+    return position, by_name.get("shuffle")
+
+
+def _shuffles(call: ast.Call, shuffle: inspect.Parameter | None) -> bool:
+    """Does *call* leave shuffling on (``KFold(shuffle=True)``, a
+    ``train_test_split`` without ``shuffle=False``)? Unknown counts as off: a
+    warning must be true."""
+    if shuffle is None:
+        return True
+    for kw in call.keywords:
+        if kw.arg == "shuffle":
+            return isinstance(kw.value, ast.Constant) and bool(kw.value.value)
+    return bool(shuffle.default)
+
+
+def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
+    """``(call, line)`` for each library call in *func* left without a seed.
+
+    The draw is inside compiled library code, where the source scan cannot
+    see it: ``train_test_split(X)``, ``KFold(shuffle=True)``,
+    ``SGDClassifier()``, ``make_classification()``, ``df.sample(n=3)``. A
+    library function or class that takes ``random_state=None`` counts when the
+    call passes none (and does not turn ``shuffle`` off); so does
+    ``obj.sample(...)`` without ``random_state=`` / ``seed=``. The notebook's
+    rule for a fitted estimator, ``random_state is None``, is the same one.
+    Lines are relative to *src*.
+    """
+    from ..analysis.ast_util import resolve_callee
+    from ..analysis.purity_analyzer import _build_namespace, local_import_map, resolve_local_import
+
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return []
+    fn = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+    if fn is None:
+        return []
+    namespace = _build_namespace(func)
+    for local, (module_name, prefix) in local_import_map(fn, func).items():
+        obj = resolve_local_import(module_name, prefix, None)
+        if obj is not None:
+            namespace[local] = obj
+    # Names the body binds to a generator (`r = random.Random(0)`): their
+    # `.sample()` is a generator's draw, which the source scan judges.
+    generators = {
+        target.id
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+        and ast.unparse(node.value.func).rsplit(".", 1)[-1] in (*_SEEDING_CALLS, "check_random_state")
+    }
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call) or any(kw.arg is None for kw in node.keywords):
+            continue  # `**kwargs` may carry the seed
+        if any(kw.arg in _SEED_KEYWORDS for kw in node.keywords):
+            continue
+        if any(isinstance(a, ast.Starred) for a in node.args):
+            continue
+        func_node = node.func
+        if isinstance(func_node, ast.Attribute) and func_node.attr == "sample":
+            receiver = resolve_callee(func_node.value, namespace)
+            if isinstance(receiver, types.ModuleType) or len(node.args) > _SAMPLE_SEED_POSITION:
+                continue  # `random.sample` is the source scan's; a seed passed by position
+            spelled = ast.unparse(func_node.value)
+            last = spelled.rsplit(".", 1)[-1]
+            if spelled in generators or _GENERATOR_NAME.search(last):
+                continue
+            found.append((f"{spelled if len(spelled) <= 24 else ''}.sample()", node.lineno))
+            continue
+        callee = resolve_callee(func_node, namespace)
+        if callee is None or not callable(callee):
+            continue
+        param = _random_state_param(callee)
+        if param is None:
+            continue
+        position, shuffle = param
+        if position is not None and len(node.args) > position - (1 if isinstance(callee, type) else 0):
+            continue  # passed by position (a class's signature has no `self`)
+        if not _shuffles(node, shuffle):
+            continue
+        found.append((f"{ast.unparse(func_node)}()", node.lineno))
     return found
 
 
@@ -393,6 +515,7 @@ class RngWatch:
             return
 
         if not unseeded:
+            self._warn_unseeded_library_calls(func, func_name, src, first_lineno)
             return
 
         call = unseeded[0]
@@ -427,6 +550,37 @@ class RngWatch:
             fix="seed the RNG to make the value reproducible, leave the "
             "function undecorated for a genuinely fresh draw, or pass "
             "@cash.cache(allow_random=True) to keep it frozen on purpose.",
+        )
+
+    def _warn_unseeded_library_calls(self, func: Callable, func_name: str, src: str, first_lineno: int) -> None:
+        """RANDOM-UNSEEDED for a library call that draws without a seed
+        (`unseeded_library_calls`): ``train_test_split(X)`` or
+        ``SGDClassifier()`` in a cached body froze the first split or fit
+        with nothing said, while the notebook warned about the same fit."""
+        try:
+            calls = unseeded_library_calls(func, src)
+        except Exception:  # the scan must never break caching
+            logger.debug("library randomness scan failed for %s", func_name, exc_info=True)
+            return
+        if not calls:
+            return
+        call, line = calls[0]
+        abs_lineno = line + first_lineno - 1 if first_lineno else line
+        extra = f" (+{len(calls) - 1} more)" if len(calls) > 1 else ""
+        self._notices.warn_once(
+            CashRandomnessWarning,
+            func_name,
+            "",
+            f"@cash.cache on {func_name}: Unseeded randomness detected: "
+            f"{call} without random_state at line {abs_lineno}{extra}. Whatever "
+            f"it draws is unseeded, and the first call's result is cached and "
+            f"replayed on every later call - the value is frozen and not "
+            f"reproducible across a cleared cache.",
+            code="RANDOM-UNSEEDED",
+            fix="pass random_state=<int> (polars: seed=<int>) to make the value "
+            "reproducible, leave the function undecorated for a genuinely "
+            "fresh draw, or pass @cash.cache(allow_random=True) to keep it "
+            "frozen on purpose.",
         )
 
     def warn_if_seed_is_none(self, func: Callable, func_name: str, args: tuple, kwargs: dict) -> None:

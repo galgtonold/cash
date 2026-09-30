@@ -1261,13 +1261,20 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @52f9e356 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @9ccf2e1c -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source, so a `random.seed(0)`
 elsewhere does not silence it. A `seed=None` parameter passed on to the
 generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
+
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @e399e6c4 -->
+A library call that draws inside its own compiled code warns too when the
+function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
+`make_classification()`, an estimator such as `SGDClassifier()` or
+`RandomForestClassifier()`, and `df.sample(3)`. Pass `random_state=0`
+(`seed=0` in polars).
 
 **When it is safe to ignore.** When any fixed value will do: an exploratory
 split, a demo, a smoke test. Not when the number goes into a report or a test
