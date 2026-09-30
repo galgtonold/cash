@@ -485,7 +485,7 @@ def _rough_size(labelled: tuple[str, Any]) -> int:
     except Exception:  # noqa: BLE001 - no length: its size will do
         try:
             return sys.getsizeof(value)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a size is only a guess; none will do
             return 0
 
 
