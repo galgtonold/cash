@@ -332,6 +332,10 @@ def class_data_items(
     return items
 
 
+#: Names whose load means the code reads a docstring at run time.
+DOCSTRING_READS = frozenset({"__doc__", "getdoc", "cleandoc"})
+
+
 #: A plain operand load: the key between a global's load and a subscript store.
 #: 3.12 adds LOAD_FAST_CHECK (a local that may be unbound); 3.14 loads most
 #: locals with LOAD_FAST_BORROW and small int constants with LOAD_SMALL_INT, so
@@ -461,6 +465,8 @@ class GlobalsFold:
         self._module_attr_cache: LruMemo[Any, tuple[tuple[str, str], ...]] = LruMemo(CODE_OBJECTS)
         self._local_binding_cache: LruMemo[Any, tuple | None] = LruMemo(CODE_OBJECTS)
         self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str]] = LruMemo(CODE_OBJECTS)
+        # code object -> whether it reads a docstring; see `_reads_docstrings`.
+        self._docstring_reads: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
         # class -> (its surface functions, the names their code reads); see
         # `class_parts`. A redefined class is a new key.
         self._class_code_cache: LruMemo[type, tuple[tuple, frozenset]] = LruMemo(CODE_OBJECTS)
@@ -803,6 +809,8 @@ class GlobalsFold:
         if pending is not None:
             pending.update(watch)
         parts.extend(self._local_binding_parts(func))
+        if code is not None and self._reads_docstrings(code):
+            parts.extend(self._docstring_parts(code, g, own_pkg))
         # A function default is evaluated where the `def` stands, so what a
         # default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
         # of *func*'s: editing K kept the key.
@@ -829,6 +837,62 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
+
+    def _reads_docstrings(self, code: Any) -> bool:
+        """Does *code* read a docstring at run time (``f.__doc__``,
+        ``inspect.getdoc(tool)``, ``getattr(C, "__doc__")``)? Cached per code."""
+        cached = self._docstring_reads.get(code)
+        if cached is None:
+            cached = any(
+                DOCSTRING_READS & set(scope.co_names or ()) or "__doc__" in (scope.co_consts or ())
+                for scope in iter_code_scopes(code)
+            )
+            self._docstring_reads[code] = cached
+        return cached
+
+    def _docstring_parts(self, code: Any, g: dict, own_pkg: str | None) -> list[tuple[str, str]]:
+        """Key parts for the docstrings code that reads docstrings can reach.
+
+        A docstring is not part of the key: it documents the code. Unless the
+        code reads it -- a tool description, a prompt, help text built from
+        ``__doc__`` -- and then it is an input like any string constant, and
+        editing it served the old answer. Every user function, class and
+        module the code names (and ``module.attr`` of those it reads), and the
+        module's own docstring when it reads ``__doc__``.
+        """
+        parts: list[tuple[str, str]] = []
+        names: dict[str, None] = {}
+        for scope in iter_code_scopes(code):
+            names.update(dict.fromkeys(scope.co_names or ()))
+        attr_reads: dict[str, set[str]] = {}
+        for mod_name, attr in self._module_attr_cache.get(code) or ():
+            attr_reads.setdefault(mod_name, set()).add(attr)
+
+        def fold(label: str, value: Any) -> None:
+            if isinstance(value, types.ModuleType):
+                if not is_user_module(value, own_pkg):
+                    return
+            elif getattr(value, "_cash_cached", False):
+                pass
+            elif not isinstance(value, (types.FunctionType, type)) or not is_user_code_object(value):
+                return
+            doc = getattr(value, "__doc__", None)
+            if isinstance(doc, str):
+                parts.append((f"{label}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest()))
+
+        for name in names:
+            if name not in g:
+                continue
+            value = g[name]
+            if name == "__doc__":
+                if isinstance(value, str):
+                    parts.append(("__doc__", hashlib.sha256(value.encode("utf-8")).hexdigest()))
+                continue
+            fold(name, value)
+            if isinstance(value, types.ModuleType) and is_user_module(value, own_pkg):
+                for attr in sorted(attr_reads.get(name, ())):
+                    fold(f"{name}.{attr}", getattr(value, attr, None))
+        return parts
 
     @staticmethod
     def _function_defaults(func: Callable) -> list[types.FunctionType]:
@@ -1056,6 +1120,14 @@ class GlobalsFold:
         if pending is not None and watch:
             pending.update(watch)
         functions, excluded, read_names, _ = self._class_code(cls)
+        if DOCSTRING_READS & read_names:
+            # `self.__doc__` / `inspect.getdoc(type(self))` in its own code.
+            for base, _, _ in self._class_layout(cls):
+                doc = vars(base).get("__doc__")
+                if isinstance(doc, str):
+                    parts.append(
+                        (f"{label}:{base.__qualname__}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest())
+                    )
         if unhashable:
             self._warn_unhashable_class_data(func_name, unhashable, read_names, reader)
         class_seen = set(seen) if seen is not None else set()
@@ -1073,14 +1145,17 @@ class GlobalsFold:
     def _may_read_data(self, fn: Any) -> bool:
         """Could `GlobalsFold.fold_read_globals` find anything in *fn*? False for
         a method that reads no global, no ``module.attr``, no import in its
-        body and has no function default -- most of a class's
+        body, no docstring and has no function default -- most of a class's
         methods, and every one a dataclass generates -- so a class costs a
         lookup per such method instead of a fold."""
         code = fn.__code__
         cached = self._reads_anything.get(code)
         if cached is None:
             cached = bool(
-                self.read_global_data_names(fn) or self._read_module_attr_pairs(fn) or self._local_binding_plan(fn)
+                self.read_global_data_names(fn)
+                or self._read_module_attr_pairs(fn)
+                or self._reads_docstrings(code)
+                or self._local_binding_plan(fn)
             )
             self._reads_anything[code] = cached
         return cached or bool(self._function_defaults(fn))
