@@ -706,19 +706,22 @@ Something the result depends on may not be in the cache key. Every code here sta
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/effects.py:MODULE_CALLS @7f115c19, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @23325da1 -->
-<!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @81835f7e, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @2d93af7a, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock or a fresh UUID
 (`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`,
 `pd.Timestamp.now()`), an environment variable whose name is only known at
 run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
-`.items()`, `dict(os.environ)`).
+`.items()`, `dict(os.environ)`). A helper whose body only returns one of
+these reads is reported where it is called, however it is called: `now()`,
+`clocks.now()`, `Clock.now()` or `self.stamp()`.
 
-<!-- claim: cash/effects.py:environment_input @124977ae, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
+<!-- claim: cash/effects.py:environment_input @e1c8fa6b, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
 <!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @c1abcb81 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
-`"DEBUG" in os.environ`) and a read of the working directory (`os.getcwd()`,
+`"DEBUG" in os.environ`) or held in a module constant named in capitals
+(`os.getenv(TENANT_VAR)`) and a read of the working directory (`os.getcwd()`,
 `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on a path that may
 be relative) are not reported: their values are folded into the key. A
 reading that only goes into a log line is not reported either.

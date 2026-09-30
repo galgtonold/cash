@@ -512,9 +512,13 @@ def is_environ_read(node: ast.AST) -> bool:
 EnvironmentInput = tuple[str, str]
 
 
-def _variable_name(node: ast.AST | None) -> str | None:
+def _variable_name(node: ast.AST | None, namespace: Mapping[str, Any] | None = None) -> str | None:
     """An environment variable's name written out: a str, or bytes for
-    ``os.environb``."""
+    ``os.environb``; or a module constant holding one (``ENV_NAME =
+    "APP_MODE"``; ``os.environ.get(ENV_NAME)``), named in capitals as a
+    constant is, which *namespace* resolves."""
+    if isinstance(node, ast.Name) and namespace is not None and node.id.isupper():
+        node = ast.Constant(namespace.get(node.id))
     if isinstance(node, ast.Constant):
         if isinstance(node.value, str):
             return node.value
@@ -598,10 +602,10 @@ def environment_input(node: ast.AST, namespace: Mapping[str, Any] | None = None)
     fold.
     """
     if is_environ_read(node):
-        name = _variable_name(node.slice)  # type: ignore[attr-defined]
+        name = _variable_name(node.slice, namespace)  # type: ignore[attr-defined]
         return ("env", name) if name is not None else None
     if environ_membership(node) is not None:
-        name = _variable_name(node.left)  # type: ignore[attr-defined]
+        name = _variable_name(node.left, namespace)  # type: ignore[attr-defined]
         return ("env", name) if name is not None else None
     if not isinstance(node, ast.Call):
         return None
@@ -612,7 +616,7 @@ def environment_input(node: ast.AST, namespace: Mapping[str, Any] | None = None)
         return None
     if effect.name in _CWD_CALLS or effect.name in _CWD_RESOLVERS:
         return ("cwd", "")
-    name = _variable_name(_literal_arg(node, 0, "key"))
+    name = _variable_name(_literal_arg(node, 0, "key"), namespace)
     return ("env", name) if name is not None else None
 
 
