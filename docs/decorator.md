@@ -253,7 +253,9 @@ changed. The second list is what cash does not see, and what to do about it.
       reading, once it is gone.
     - An **environment variable** read by literal name (`os.getenv("TENANT")`,
       `"DEBUG" in os.environ`) and the working directory (`os.getcwd()`,
-      `Path.cwd()`, `os.path.abspath(p)`).
+      `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
+      read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
+      `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 
@@ -292,7 +294,7 @@ All parameters are keyword-only and optional:
 | `ttl=` | `None`: no expiry | Seconds an entry stays valid, or a `datetime.timedelta` |
 | `cache_if=` | `None`: store every result | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
 | `depends_on=` | `None` | A callable or `DataSource` object, or a list of them, to add to the key. Anything else (a path: use `file_depends_on=`) raises `TypeError` |
-| `file_depends_on=` | `None` | A path or list of paths, tracked by content as if the body read them |
+| `file_depends_on=` | `None` | A path or list of paths, tracked by content as if the body read them. A directory covers every file under it, a glob pattern its matches |
 | `dynamic_depends_on=` | `None` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
 | `frozen=` | `False` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
 | `strict=` | `False` | Raise `CashImpureFunctionError` on any purity finding. For CI |
@@ -342,7 +344,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @4027a947 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @b84e70fb -->
 Use `file_depends_on=` for a file the body reads in a way cash cannot see (a C
 library, a subprocess). It is checked by content, like a tracked read. A URL is
 treated as a missing local file, so for `s3://` or `https://` data pass
@@ -389,7 +391,7 @@ result larger than one chunk the predicate cannot run
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @52f9e356 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d580fdbc -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -398,6 +400,13 @@ from an argument, `rng = np.random.default_rng(seed)`.
 Pass
 `allow_random=True` only when a frozen draw is what you want. It silences the
 warning and still caches.
+
+A seed of the global stream set by the caller counts: after
+`np.random.seed(s)` or `random.seed(s)` (at module level, or in the function
+that calls this one), a function seen drawing from that stream is keyed by
+where the stream stands, so each seed and each draw after it gets its own
+entry. A seed set before the function is decorated is not seen. A function
+whose own body seeds the stream is not keyed by where the caller left it.
 
 Don't call the global `np.random.seed()` inside a
 cached function: a hit skips the reseed, so later draws differ between a hit and
@@ -447,12 +456,13 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @908e1e5a broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @50a62fb5 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
 While a miss runs, cash records file writes, outbound connections and subprocesses, and
-warns once about any it had not already reported
+warns once about any it had not already reported (a write into a scratch
+directory the call made and removed again is not one)
 ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). A call to an
 LLM or HTTP SDK shows up this way, as a network read
 ([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and
@@ -479,7 +489,7 @@ that spans lines, or on the line above), so code added later is still checked.
 On the `def` line it covers findings about the whole body. In a helper it
 covers every caller of that helper.
 
-<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @8b9e6cfa, cash/effect_observer.py:EffectObserver.record_effect @c18acbb6, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
+<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @8b9e6cfa, cash/effect_observer.py:EffectObserver.record_effect @dce8a421, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
 **Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
 what the comment waives, on every line inside the block. While the block runs,
 it also waives the effects cash observes, including those of helpers it calls.

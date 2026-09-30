@@ -3,6 +3,7 @@ read, and whether an entry's files are still as recorded."""
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -144,6 +145,46 @@ def argument_paths(args: tuple, kwargs: dict) -> set[str]:
     return found
 
 
+def _track_directory(tracker: Any, path: str) -> None:
+    """A declared directory: every file under it by content, and every
+    directory in it by its listing, so an edit, a new file and a removed one
+    all count. Only the directory itself was recorded, whose timestamp an
+    edit to a file inside does not move: edits were served stale."""
+    for root, dirs, files in os.walk(path):
+        dirs.sort()
+        tracker.add_tracked(normalize_path(os.path.realpath(root)))
+        for name in sorted(files):
+            tracker.add_tracked(normalize_path(os.path.realpath(os.path.join(root, name))))
+
+
+def _track_pattern(tracker: Any, pattern: str) -> None:
+    """A declared glob (``data/*.csv``): each match by content, and the
+    directories the matches were listed from, so a new match counts. It was
+    recorded as a file of that literal name, which never exists, so nothing
+    ever invalidated the entry."""
+    listed = {_glob_base(pattern)}
+    for match in sorted(glob.glob(pattern, recursive=True)):
+        if os.path.isdir(match):
+            _track_directory(tracker, match)
+            continue
+        listed.add(os.path.dirname(match) or ".")
+        tracker.add_tracked(normalize_path(os.path.realpath(match)))
+    for directory in sorted(listed):
+        if os.path.isdir(directory):
+            tracker.add_tracked(normalize_path(os.path.realpath(directory)))
+
+
+def _glob_base(pattern: str) -> str:
+    """The deepest directory of *pattern* with no wildcard in it."""
+    parts = pattern.replace("\\", "/").split("/")
+    base: list[str] = []
+    for part in parts[:-1]:
+        if glob.has_magic(part):
+            break
+        base.append(part)
+    return "/".join(base) or ("/" if pattern.startswith("/") else ".")
+
+
 class FileDeps:
     """The files a cached call depends on: declared with ``file_depends_on=``,
     and read by the body or its helpers."""
@@ -181,7 +222,11 @@ class FileDeps:
 
         cf = self._registry.cached.get(func_name)
         for _, path in cf.declared_files if cf is not None else ():
-            if os.path.exists(path):
+            if glob.has_magic(path):
+                _track_pattern(tracker, path)
+            elif os.path.isdir(path):
+                _track_directory(tracker, path)
+            elif os.path.exists(path):
                 tracker.add_tracked(normalize_path(os.path.realpath(path)))
             else:
                 tracker.add_tracked_absent(normalize_path(path))
@@ -423,7 +468,7 @@ class FileDeps:
             code="STORE-INPUT-CHANGED",
             fix="nothing, if something else writes these files while this runs "
             "-- the next call reads the settled file and caches normally. If "
-            "the function writes a file it also reads, that is why: split the "
-            "read and the write.",
+            "the function reads a file and then writes to it, that is why: "
+            "split the read and the write.",
         )
         return True

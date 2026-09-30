@@ -46,6 +46,7 @@ __all__ = [
     "Action",
     "EffectKind",
     "MODULE_CALLS",
+    "STDIN_NAMES",
     "METHOD_VERBS",
     "MUTATOR_METHODS",
     "CLOCK_WHEN_ARG_CALLS",
@@ -236,6 +237,17 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "Path.cwd": _EV,
     "os.path.abspath": _EV,
     "os.path.realpath": _EV,
+    # Helpers that read the environment for the caller (`_HELPER_READS`).
+    "os.environ.setdefault": _EV,
+    "os.environb.setdefault": _EV,
+    "os.path.expandvars": _EV,
+    "os.path.expanduser": _EV,
+    "pathlib.Path.home": _EV,
+    "Path.home": _EV,
+    "tempfile.gettempdir": _EV,
+    "tempfile.gettempdirb": _EV,
+    "shutil.which": _EV,
+    "getpass.getuser": _EV,
     # -- the console --
     "print": _CO,
     "logging.debug": _CO,
@@ -249,6 +261,13 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "input": _IN,
     "breakpoint": _IN,
     "getpass.getpass": _IN,
+    # Standard input, read directly (`sys.stdin` used whole: `STDIN_NAMES`).
+    "sys.stdin.read": _IN,
+    "sys.stdin.readline": _IN,
+    "sys.stdin.readlines": _IN,
+    "sys.stdin.buffer.read": _IN,
+    "sys.stdin.buffer.readline": _IN,
+    "sys.stdin.buffer.readlines": _IN,
     "exit": _IN,
     "quit": _IN,
 }
@@ -369,6 +388,10 @@ CLOCK_WHEN_ARGS_OMITTED: dict[str, int] = {
 #: twin.
 ENVIRON_NAMES: frozenset[str] = frozenset({"os.environ", "environ", "os.environb", "environb"})
 
+#: Standard input as an object: iterated (``for line in sys.stdin``) or handed
+#: to a reader (``json.load(sys.stdin)``), it is read like ``input()``.
+STDIN_NAMES: frozenset[str] = frozenset({"sys.stdin", "sys.stdin.buffer"})
+
 #: Methods of the environment that change it (a side effect, not a read of
 #: it) or read one named variable (folded like a subscript).
 ENVIRON_KEYED_METHODS: frozenset[str] = frozenset(
@@ -381,6 +404,24 @@ _CWD_CALLS: frozenset[str] = frozenset({"os.getcwd", "os.getcwdb", "pathlib.Path
 _CWD_RESOLVERS: frozenset[str] = frozenset({"os.path.abspath", "os.path.realpath"})
 #: Path methods that do the same (``Path(p).resolve()``).
 _CWD_RESOLVER_METHODS: frozenset[str] = frozenset({"resolve", "absolute"})
+
+#: Standard-library helpers that read the environment for the caller, and what
+#: of it each one's answer depends on (`environment_input`): a variable's name
+#: argument (``setdefault``), a literal argument the helper expands, or a
+#: fixed part of the environment. Their answer went into no key and nothing
+#: warned: ``os.path.expandvars("$DATA_DIR/x")`` froze the first ``DATA_DIR``.
+_HELPER_READS: dict[str, tuple[str, str | None]] = {
+    "os.environ.setdefault": ("env", None),
+    "os.environb.setdefault": ("env", None),
+    "os.path.expandvars": ("expandvars", None),
+    "os.path.expanduser": ("expanduser", "~"),
+    "pathlib.Path.home": ("expanduser", "~"),
+    "Path.home": ("expanduser", "~"),
+    "tempfile.gettempdir": ("tempdir", ""),
+    "tempfile.gettempdirb": ("tempdir", ""),
+    "shutil.which": ("env", "PATH"),
+    "getpass.getuser": ("user", ""),
+}
 
 # matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
 # pyplot's PROCESS-GLOBAL current figure -- drawing (``plt.plot``, ``plt.hist``),
@@ -586,7 +627,9 @@ def _resolves_relative_path(call: ast.Call) -> bool:
     )
 
 
-def environment_input(node: ast.AST, namespace: Mapping[str, Any] | None = None) -> EnvironmentInput | None:
+def environment_input(
+    node: ast.AST, namespace: Mapping[str, Any] | None = None, *, resolve_constants: bool = False
+) -> EnvironmentInput | None:
     """What an environment read reads, when its value can go into a key.
 
     ``os.getenv("NAME")``, ``os.environ.get("NAME")``, ``os.environ["NAME"]``
@@ -595,42 +638,108 @@ def environment_input(node: ast.AST, namespace: Mapping[str, Any] | None = None)
     and making a path that may be relative absolute (``os.path.abspath(p)``,
     ``Path(p).resolve()``) give ``("cwd", "")``. Anything else is None --
     including a read whose name is only known at run time, which no key can
-    fold.
+    fold. The helpers in `_HELPER_READS` give what their answer depends on:
+    ``os.path.expandvars("$A/x")`` gives ``("expandvars", "$A/x")``,
+    ``Path.home()`` and ``Path(p).expanduser()`` ``("expanduser", "~")``.
+
+    With *resolve_constants* (the decorator, whose analysis sees the module
+    the function lives in), a name held in a capitalised module constant
+    counts as written out: ``os.environ.get(ENV_NAME)``.
     """
+    constants = namespace if resolve_constants else None
     if is_environ_read(node):
-        name = _variable_name(node.slice)  # type: ignore[attr-defined]
-        return ("env", name) if name is not None else None
+        return _env_entry(node.slice, constants)  # type: ignore[attr-defined]
     if environ_membership(node) is not None:
-        name = _variable_name(node.left)  # type: ignore[attr-defined]
-        return ("env", name) if name is not None else None
+        return _env_entry(node.left, constants)  # type: ignore[attr-defined]
     if not isinstance(node, ast.Call):
         return None
     if _resolves_relative_path(node):
         return ("cwd", "")
+    if isinstance(node.func, ast.Attribute) and node.func.attr == "expanduser" and not node.args:
+        return ("expanduser", "~")  # `Path(p).expanduser()`: whatever p is, HOME decides
     effect = classify_call(node, namespace)
     if effect is None or effect.kind is not EffectKind.ENVIRONMENT:
         return None
     if effect.name in _CWD_CALLS or effect.name in _CWD_RESOLVERS:
         return ("cwd", "")
-    name = _variable_name(_literal_arg(node, 0, "key"))
-    return ("env", name) if name is not None else None
+    helper = _HELPER_READS.get(effect.name)
+    if helper is not None and helper[1] is not None:
+        return helper
+    if helper is None or helper[0] == "env":
+        return _env_entry(_literal_arg(node, 0, "key"), constants)
+    name = _variable_name(_literal_arg(node, 0, "path"))
+    return (helper[0], name) if name is not None else None
+
+
+def _env_entry(node: ast.AST | None, constants: Mapping[str, Any] | None) -> EnvironmentInput | None:
+    """The entry for a read of the variable *node* names: written out, or
+    held in a capitalised constant of the module *constants* are the globals
+    of. The constant is looked up again on every call (``("env_global",
+    "module:NAME")``): a report is reused while the source is unchanged, and a
+    constant rebound at run time must not leave the key folding the old
+    variable."""
+    name = _variable_name(node)
+    if name is not None:
+        return ("env", name)
+    if constants is None or not isinstance(node, ast.Name) or not node.id.isupper():
+        return None
+    module = constants.get("__name__")
+    if not isinstance(module, str) or not isinstance(getattr(sys.modules.get(module), node.id, None), (str, bytes)):
+        return None
+    return ("env_global", f"{module}:{node.id}")
+
+
+_ENVIRONMENT_LABELS = {
+    "cwd": "the working directory",
+    "expandvars": "the environment variables in {name!r}",
+    "expanduser": "the home directory",
+    "tempdir": "the temporary directory",
+    "user": "the login name",
+    "env_global": "the environment variable {name}",
+}
 
 
 def environment_label(entry: EnvironmentInput) -> str:
     """How a folded environment read is named when it is why a key changed."""
     kind, name = entry
-    return "the working directory" if kind == "cwd" else f"environment variable {name}"
+    return _ENVIRONMENT_LABELS.get(kind, "environment variable {name}").format(name=name)
+
+
+def _environment_value(kind: str, name: str) -> str | None:
+    """What the read *kind* / *name* would answer now."""
+    if kind == "cwd":
+        return os.getcwd()
+    if kind == "expandvars":
+        return os.path.expandvars(name)
+    if kind == "expanduser":
+        return os.path.expanduser(name)
+    if kind == "tempdir":
+        # What `tempfile.gettempdir()` decides from, without the probe file
+        # it writes on its first call in a process.
+        import tempfile
+
+        return repr((tempfile.tempdir, *(os.environ.get(v) for v in ("TMPDIR", "TEMP", "TMP"))))
+    if kind == "user":
+        import getpass
+
+        return getpass.getuser()
+    if kind == "env_global":
+        module, _, constant = name.partition(":")
+        variable = getattr(sys.modules.get(module), constant, None)
+        if isinstance(variable, bytes):
+            variable = os.fsdecode(variable)
+        if not isinstance(variable, str):
+            return None
+        return repr((variable, os.environ.get(variable)))
+    return os.environ.get(name)
 
 
 def _environment_digest(entry: EnvironmentInput) -> str:
     kind, name = entry
-    if kind == "cwd":
-        try:
-            value: str | None = os.getcwd()
-        except OSError:  # the directory was removed under the process
-            value = None
-    else:
-        value = os.environ.get(name)
+    try:
+        value = _environment_value(kind, name)
+    except (OSError, KeyError, ImportError):  # a removed cwd; no login name
+        value = None
     # A digest, never the value: an environment variable is where secrets live,
     # and a key component can end up in a log line or an explain() report.
     return "unset" if value is None else hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:16]

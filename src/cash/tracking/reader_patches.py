@@ -521,6 +521,39 @@ def _sqlite_uri_path(uri: str) -> str | None:
     return path
 
 
+def _track_sqlite_wal(tracker: Any, database: Any) -> None:
+    """Make ``<db>-wal`` part of a WAL-mode database's dependency.
+
+    In WAL mode a commit goes to the ``-wal`` file and the main file stays as
+    it was until a checkpoint, so a query cached on the main file alone was
+    served stale while any writer kept its connection open. The header says
+    the mode (bytes 18 and 19 are 2 for WAL); the ``-wal`` file is tracked by
+    content when it is there and as absent when it is not. A rollback-journal
+    database has no ``-wal``, and switching one to WAL rewrites its header.
+    """
+    try:
+        path = os.fsdecode(database) if isinstance(database, bytes) else os.fspath(database)
+        if not path or path == ":memory:":
+            return
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            header = os.read(fd, 20)
+        finally:
+            os.close(fd)
+    except (OSError, TypeError, ValueError):
+        return
+    if len(header) < 20 or not header.startswith(b"SQLite format 3\x00") or header[18:20] != b"\x02\x02":
+        return
+    wal = path + "-wal"
+    if os.path.lexists(wal):
+        tracker.track_path(wal)
+        # A reader running as root chowns the -wal it opens: its ctime moves
+        # while its content does not.
+        tracker.note_ctime_unreliable(wal)
+    else:
+        tracker.track_absent(wal)
+
+
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
 
@@ -752,6 +785,57 @@ def _unwrapping_set(original_set: Callable[..., Any], tracker: Any) -> Callable[
     return _set
 
 
+class _TrackedDirEntry:
+    """An ``os.DirEntry`` whose ``stat()`` records the regular file it
+    describes. ``os.DirEntry`` cannot be subclassed or patched."""
+
+    __slots__ = ("_entry",)
+
+    def __init__(self, entry: os.DirEntry) -> None:
+        self._entry = entry
+
+    def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+        result = self._entry.stat(follow_symlinks=follow_symlinks)
+        tracker = active_tracker.get()
+        if tracker is not None and stat.S_ISREG(result.st_mode):
+            tracker.track_path(self._entry.path)
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._entry, name)
+
+    def __fspath__(self) -> Any:
+        return self._entry.__fspath__()
+
+    def __repr__(self) -> str:
+        return repr(self._entry)
+
+
+class _TrackedScandir:
+    """The iterator ``os.scandir`` returns, yielding `_TrackedDirEntry`."""
+
+    __slots__ = ("_it",)
+
+    def __init__(self, it: Any) -> None:
+        self._it = it
+
+    def __iter__(self) -> _TrackedScandir:
+        return self
+
+    def __next__(self) -> _TrackedDirEntry:
+        return _TrackedDirEntry(next(self._it))
+
+    def __enter__(self) -> _TrackedScandir:
+        self._it.__enter__()
+        return self
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._it.__exit__(*exc)
+
+    def close(self) -> None:
+        self._it.close()
+
+
 class FileDependencyRegistry:
     """
     Registry for file dependency handlers.
@@ -863,6 +947,10 @@ class FileDependencyRegistry:
             for name in ("getsize", "getmtime", "getctime"):
                 self.register(module, name, self._create_metadata_handler)
         self.register("os", "stat", self._create_os_stat_handler)
+        self.register("os", "lstat", self._create_os_stat_handler)
+        # ``os.scandir`` raises its audit event (the listing), but an entry's
+        # ``stat()`` is a C method on a type that cannot be patched.
+        self.register("os", "scandir", self._create_scandir_handler)
         self._ready = True
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
@@ -962,12 +1050,15 @@ class FileDependencyRegistry:
             uri = kwargs.get("uri", args[7] if len(args) > 7 else False)
             target = args[0] if args else kwargs.get("database")
             if not uri or not isinstance(target, (str, bytes)):
+                if isinstance(target, (str, bytes, os.PathLike)) and active_tracker.get() is not None:
+                    _track_sqlite_wal(active_tracker.get(), target)
                 return path_handler(*args, **kwargs)
             path = _sqlite_uri_path(os.fsdecode(target) if isinstance(target, bytes) else target)
             if path is not None:
                 _tracker = active_tracker.get()
                 if _tracker is not None:
                     _tracker.track_path(path)
+                    _track_sqlite_wal(_tracker, path)
                 else:
                     note_untracked_read(path, sys._getframe(1))
             return original_func(*args, **kwargs)
@@ -987,7 +1078,19 @@ class FileDependencyRegistry:
 
         @functools.wraps(original_func)
         def tracked_metadata(path, *args, **kwargs):
-            result = original_func(path, *args, **kwargs)
+            try:
+                result = original_func(path, *args, **kwargs)
+            except (FileNotFoundError, NotADirectoryError):
+                # `try: getsize(p) except OSError:` answers for a file that is
+                # not there yet, so its appearing is a change.
+                tracker = active_tracker.get()
+                if (
+                    tracker is not None
+                    and isinstance(path, (str, bytes, os.PathLike))
+                    and _asked_by_user_code(sys._getframe(1))
+                ):
+                    tracker.track_absent(path)
+                raise
             if active_tracker.get() is not None and _asked_by_user_code(sys._getframe(1)):
                 _track_regular_file(path)
             return result
@@ -1008,7 +1111,20 @@ class FileDependencyRegistry:
 
         @functools.wraps(original_func)
         def tracked_os_stat(path, *args, **kwargs):
-            result = original_func(path, *args, **kwargs)
+            try:
+                result = original_func(path, *args, **kwargs)
+            except (FileNotFoundError, NotADirectoryError):
+                # `try: os.stat(p) except FileNotFoundError:` answers for a
+                # file that is not there yet, so its appearing is a change.
+                tracker = active_tracker.get()
+                if (
+                    tracker is not None
+                    and isinstance(path, (str, bytes, os.PathLike))
+                    and kwargs.get("dir_fd") is None
+                    and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
+                ):
+                    tracker.track_absent(path)
+                raise
             tracker = active_tracker.get()
             if (
                 tracker is not None
@@ -1021,6 +1137,24 @@ class FileDependencyRegistry:
             return result
 
         return tracked_os_stat
+
+    @staticmethod
+    def _create_scandir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """``os.scandir`` in the user's own code: an entry's ``stat()``
+        reports the file's size and times, so the regular file it describes
+        is a dependency, as through ``os.stat``. The listing itself is
+        tracked by its audit event."""
+
+        @functools.wraps(original_func)
+        def tracked_scandir(*args, **kwargs):
+            result = original_func(*args, **kwargs)
+            if active_tracker.get() is None or frame_kind(sys._getframe(1).f_code.co_filename) != "user":
+                return result
+            if args and isinstance(args[0], int):
+                return result  # a descriptor: entries have no usable path
+            return _TrackedScandir(result)
+
+        return tracked_scandir
 
     @staticmethod
     def _create_isfile_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):

@@ -664,9 +664,9 @@ Each finding has a line number and a label:
 <!-- claim: cash/analysis/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/analysis/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/analysis/purity_flow.py:is_log_line @90d04d4b, cash/effects.py:is_read_only_sql @94e903d1 -->
 | Label | What it flags | Reported as |
 |---|---|---|
-| `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, or a `@stateful` function | this code |
+| `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, or a `@stateful` function; also reading the keyboard or standard input (`input()`, `sys.stdin.read()`, `for line in sys.stdin`) | this code |
 | `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item | this code |
-| `discarded_call` | A call whose return value is thrown away | this code |
+| `discarded_call` | A call whose return value is thrown away, except on an object the function made itself (`d = deque(xs); d.popleft()`, `m = LinearRegression(); m.fit(X, y)`) | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
 | `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
@@ -738,22 +738,28 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @7f115c19, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @23325da1 -->
-<!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @81835f7e, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @2d93af7a, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock or a fresh UUID
 (`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`,
 `pd.Timestamp.now()`), an environment variable whose name is only known at
 run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
-`.items()`, `dict(os.environ)`).
+`.items()`, `dict(os.environ)`). A helper whose body only returns one of
+these reads is reported where it is called, however it is called: `now()`,
+`clocks.now()`, `Clock.now()` or `self.stamp()`.
 
-<!-- claim: cash/effects.py:environment_input @124977ae, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
+<!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @c1abcb81 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @7e3e55a5 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
-`"DEBUG" in os.environ`) and a read of the working directory (`os.getcwd()`,
-`Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on a path that may
-be relative) are not reported: their values are folded into the key. A
+`"DEBUG" in os.environ`) or held in a module constant named in capitals
+(`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
+(`os.path.expandvars("$DATA_DIR/x")`, `os.path.expanduser`, `Path.home()`,
+`tempfile.gettempdir()`, `shutil.which`) and a read of the working directory
+(`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on
+a path that may be relative) are not reported: their values are folded into
+the key. A
 reading that only goes into a log line is not reported either.
 
 **Why it matters.** The value is an input the key cannot see. The first call's
@@ -963,7 +969,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @7f115c19 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
 <!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1291,13 +1297,22 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @52f9e356 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d580fdbc -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source, so a `random.seed(0)`
-elsewhere does not silence it. A `seed=None` parameter passed on to the
+elsewhere does not silence it. Such a seed is still keyed when it is set after
+the decoration: the message says so for a draw from the global `random` or
+`numpy.random` stream. A `seed=None` parameter passed on to the
 generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
+
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @56f56fa1 -->
+A library call that draws inside its own compiled code warns too when the
+function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
+`make_classification()`, an estimator such as `SGDClassifier()` or
+`RandomForestClassifier()`, and `df.sample(3)`. Pass `random_state=0`
+(`seed=0` in polars).
 
 **When it is safe to ignore.** When any fixed value will do: an exploratory
 split, a demo, a smoke test. Not when the number goes into a report or a test
@@ -1453,7 +1468,7 @@ handle), or on Windows a file held open by another process.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @5b620397, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @a2ece8d1 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @61fdcac0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @b6d6c4b7 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @7622ec96 -->
 **What happened.** A file the function read changed before it returned. The
 result was returned but not stored.
@@ -1461,9 +1476,15 @@ result was returned but not stored.
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
 
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e -->
+A file the function creates itself (opened for writing, in a directory it made
+with `tempfile.TemporaryDirectory`, `mkdtemp` or `os.mkdir`, or by
+`tempfile.mkstemp`) is its own output, not an input: writing a scratch file,
+reading it back and removing it caches normally.
+
 **What to do.** Usually nothing: the next call caches normally. If it fires on
-every run, the function probably writes a file it also reads. Split the read
-from the write:
+every run, the function probably reads a file and then writes to it. Split the
+read from the write:
 
 <!-- test:skip reason="illustrative: the point is the split, not a value" -->
 ```python

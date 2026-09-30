@@ -286,7 +286,13 @@ class EffectObserver:
     """
 
     def __init__(self, exclude_under: str | None = None) -> None:
-        self.effects: list[tuple[str, str]] = []
+        self._effects: list[tuple[str, str]] = []
+        #: Directories the block made (``mkdtemp``, ``os.mkdir``), and the
+        #: writes into them, held back: a scratch directory the block removes
+        #: before it returns takes those writes with it, and a hit skipping
+        #: them changes nothing (`effects`).
+        self._created_dirs: list[str] = []
+        self._scratch_writes: list[tuple[str, tuple[str, str]]] = []
         #: The frames that entered this observer. The user's lines that led to
         #: an effect are the frames above these, and no further: the caller of
         #: the cached function did not perform the effect.
@@ -339,12 +345,26 @@ class EffectObserver:
         reset_in_any_context(active_observer, token)
 
     # -- recording ---------------------------------------------------------
-    def record(self, kind: str, detail: str) -> None:
-        if len(self.effects) >= 8:  # a summary, not a log
-            return
-        self.effects.append((kind, detail))
+    @property
+    def effects(self) -> list[tuple[str, str]]:
+        """What the block did, as ``(kind, detail)``: a write into a directory
+        it made only while that directory is still there."""
+        kept = [effect for directory, effect in self._scratch_writes if os.path.isdir(directory)]
+        return (self._effects + kept)[:8]
 
-    def record_effect(self, kind: str, detail: str) -> None:
+    def record(self, kind: str, detail: str) -> None:
+        if len(self._effects) >= 8:  # a summary, not a log
+            return
+        self._effects.append((kind, detail))
+
+    def note_created_dir(self, path: Any) -> None:
+        """A directory the block made (see `effects`)."""
+        try:
+            self._created_dirs.append(os.path.abspath(os.fspath(path)).rstrip(os.sep) + os.sep)
+        except (TypeError, ValueError):
+            pass
+
+    def record_effect(self, kind: str, detail: str, scratch: str | None = None) -> None:
         """Record an effect performed on the stack right now, naming the user's
         line that led to it -- unless ``# @cash:assume-safe`` waives any line
         on the way, or a ``with cash.assume_safe():`` block entered during
@@ -366,6 +386,10 @@ class EffectObserver:
             inner = f"{os.path.basename(sites[0][0])}:{sites[0][1]}"
             outer = f"{os.path.basename(sites[-1][0])}:{sites[-1][1]}"
             detail += f", at {inner}" + (f" (from {outer})" if outer != inner else "")
+        if scratch is not None:
+            if len(self._scratch_writes) < 8:
+                self._scratch_writes.append((scratch, (kind, detail)))
+            return
         self.record(kind, detail)
 
     def _user_sites(self) -> list[tuple[str, int]]:
@@ -392,7 +416,8 @@ class EffectObserver:
             return
         if self._exclude and resolved.startswith(self._exclude):
             return
-        self.record_effect(_LABELS[EffectKind.FILE_WRITE], resolved)
+        scratch = next((d for d in self._created_dirs if resolved.startswith(d)), None)
+        self.record_effect(_LABELS[EffectKind.FILE_WRITE], resolved, scratch)
 
     # -- reporting ---------------------------------------------------------
     def summary(self) -> str | None:

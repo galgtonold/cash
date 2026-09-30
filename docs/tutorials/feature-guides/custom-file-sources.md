@@ -31,7 +31,7 @@ print(load_features.explain())
     /home/you/project/data/features.csv: content changed
 ```
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
 hits. A same-size edit within the same second still recomputes.
 
@@ -43,7 +43,7 @@ modification time must match too. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @56d3c684, cash/tracking/read_events.py:_on_open @5461415d, cash/tracking/read_events.py:_on_listing @82829f4a -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @51a8bdb1, cash/tracking/read_events.py:_on_open @a92e1132, cash/tracking/read_events.py:_on_listing @41ce1606 -->
 cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks (the call recomputes
@@ -57,12 +57,13 @@ A file opened for writing is not a dependency: the entry would then depend on
 its own output. cash reports the write as a side effect instead
 ([Side effects](../../decorator.md#side-effects)).
 
-<!-- claim: cash/tracking/read_classification.py:incidental_read @75e075c3 -->
+<!-- claim: cash/tracking/read_classification.py:incidental_read @567b8121 -->
 Some reads are left out on purpose because they are not your data: files of the
 Python installation, package metadata, reads a library makes while it is
 imported, and an installed package reading its own files (fonts, templates,
 time zones). A library reading a file you named, such as `pd.read_csv(p)` or
-`torch.load(p)`, is tracked.
+`torch.load(p)`, is tracked, and so is a data file of your own package read
+with `pkgutil.get_data` or `importlib.resources`.
 
 ## What is not tracked
 
@@ -74,8 +75,6 @@ time zones). A library reading a file you named, such as `pd.read_csv(p)` or
   (`from polars import read_parquet`) or wrapped in `functools.partial`: call
   it through its module (`pl.read_parquet(...)`) instead.
 - `os.open`, and files a subprocess reads.
-- The size or time a directory listing reports (`entry.stat()` on an
-  `os.scandir` entry): use `os.stat(entry.path)` or `Path.stat()`.
 - Database engines other than `sqlite3.connect`, such as SQLAlchemy.
 
 Name such files with `file_depends_on=`, or teach cash the reader with
@@ -95,11 +94,13 @@ def load_events():
         return pq.read_table(f).to_pandas()
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @4027a947 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @b84e70fb -->
 Pass one path or a list. Each file is recorded as if the body had read it, and
 is checked by content like an automatic read. A path that does not exist yet is
 recorded as absent, so creating the file later recomputes the call. Nothing
-warns you that the file is missing.
+warns you that the file is missing. A directory stands for every file under
+it, and a glob pattern (`"data/*.csv"`, `"data/**/*.csv"`) for the files it
+matches: an edit, a new file or a removed one recomputes the call.
 
 A URL (`s3://…`, `https://…`) is **not** a file here. It is treated as a local
 path that does not exist, so the entry never notices the object changing. Use

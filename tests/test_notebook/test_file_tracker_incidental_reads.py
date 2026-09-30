@@ -111,6 +111,65 @@ def test_a_package_metadata_lookup_is_not_tracked(tmp_path, monkeypatch):
     assert not [t for t in tracked if "meta_root" in t], tracked
 
 
+@pytest.fixture
+def user_package(tmp_path, monkeypatch):
+    """A package of the user's own project (not installed) with a data file."""
+    proj = tmp_path / "proj"
+    pkg = proj / "zz_user_pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "cfg.txt").write_text("v1", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(proj))
+    sys.modules.pop("zz_user_pkg", None)
+    importlib.import_module("zz_user_pkg")
+    yield pkg
+    sys.modules.pop("zz_user_pkg", None)
+
+
+def _read_pkgutil():
+    import pkgutil
+
+    return pkgutil.get_data("zz_user_pkg", "cfg.txt")
+
+
+def _read_resources_text():
+    import importlib.resources as ir
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return ir.read_text("zz_user_pkg", "cfg.txt")
+
+
+def _read_resources_binary():
+    import importlib.resources as ir
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with ir.open_binary("zz_user_pkg", "cfg.txt") as fh:
+            return fh.read()
+
+
+@pytest.mark.parametrize("reader", [_read_pkgutil, _read_resources_text, _read_resources_binary])
+def test_a_data_file_of_the_users_own_package_read_through_a_resource_api_is_tracked(user_package, reader):
+    """``pkgutil.get_data(__package__, "cfg.txt")`` read an edited file and
+    served the old value: every read through these modules counted as
+    package metadata, the user's own package data included."""
+    tracker = _run(reader)
+    assert _has(_norm(tracker.get_accessed_files()), user_package / "cfg.txt")
+
+
+def test_an_installed_librarys_resource_read_through_pkgutil_is_not_tracked(fake_site):
+    """Control: an installed package's data is library data, whoever reads it."""
+    import pkgutil
+
+    import fakelib  # noqa: F401 - imported so pkgutil can find its loader
+
+    tracker = _run(lambda: pkgutil.get_data("fakelib", "res.txt"))
+    assert not _has(_norm(tracker.get_accessed_files()), fake_site / "fakelib" / "res.txt")
+
+
 # --- a library reading its own files -----------------------------------------
 
 

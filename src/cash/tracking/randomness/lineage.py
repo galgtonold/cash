@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import sys
 from collections.abc import Iterable, Mapping
 
 from .detect import get_drawing_rng_modules, get_seeding_rng_modules
@@ -69,16 +70,124 @@ def seed_epochs() -> dict[str, str]:
     return dict(_ACTIVE_SEED_EPOCHS or {})
 
 
+# ---------------------------------------------------------------------------
+# Seeds outside a notebook.
+#
+# Without a statement engine nobody published a ledger, so a seed set by the
+# caller -- ``np.random.seed(0)`` at module level, or in an outer function
+# before it calls a cached function that draws -- never reached that function's
+# key: every seed was served the first seed's draw. ``watch_seeds`` wraps the
+# global ``seed`` functions so the process knows which streams were seeded, and
+# a drawing function is then keyed on where the seeded stream stands when it is
+# called. That position is a pure function of the seed and the draws since, so
+# it is the same in the next process and moves with every draw in between.
+# ---------------------------------------------------------------------------
+#: RNG modules a watched ``seed(<value>)`` seeded in this process.
+_PROCESS_SEEDED: set[str] = set()
+#: The seed functions wrapped so far, by module.
+_WATCHED: set[str] = set()
+
+
+def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
+    value = args[0] if args else kwargs.get("seed", kwargs.get("a"))
+    if value is None:
+        # ``seed()`` / ``seed(None)`` re-randomises: the stream is unseeded
+        # again, and the freeze contract applies to it.
+        _PROCESS_SEEDED.discard(module)
+    else:
+        _PROCESS_SEEDED.add(module)
+
+
+def _seed_wrapper(module: str, original):
+    def seed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        _note_seed(module, args, kwargs)
+        return result
+
+    seed.__wrapped__ = original  # type: ignore[attr-defined]
+    seed.__cash_seed_watch__ = True  # type: ignore[attr-defined]
+    seed.__name__ = getattr(original, "__name__", "seed")
+    seed.__doc__ = getattr(original, "__doc__", None)
+    return seed
+
+
+def watch_seeds() -> None:
+    """Wrap ``random.seed`` and ``numpy.random.seed`` (once each, when imported).
+
+    Cheap to call again: a module already wrapped is skipped. A seed set before
+    the wrap -- before cash saw ``numpy`` imported -- is not seen.
+    """
+    if "numpy.random" not in _WATCHED and "numpy" in sys.modules and "numpy.random" not in sys.modules:
+        # numpy loads `numpy.random` on first attribute access, which is the
+        # user's `np.random.seed(...)` itself: load it now to watch that call.
+        try:
+            import numpy.random  # noqa: F401 - imported to load it, so its seed() can be wrapped
+        except Exception:  # noqa: BLE001 - a broken numpy only loses the watch
+            pass
+    targets = (("random", "random"), ("numpy.random", "numpy.random"))
+    for module, rng in targets:
+        if rng in _WATCHED:
+            continue
+        mod = sys.modules.get(module)
+        original = getattr(mod, "seed", None) if mod is not None else None
+        if original is None:
+            continue
+        if not getattr(original, "__cash_seed_watch__", False):
+            try:
+                mod.seed = _seed_wrapper(rng, original)
+            except (AttributeError, TypeError):  # pragma: no cover - read-only module
+                continue
+        _WATCHED.add(rng)
+
+
+def seeded_rng_modules() -> set[str]:
+    """RNG modules seeded now: the notebook's ledger, or else this process's
+    watched seeds."""
+    if _ACTIVE_SEED_EPOCHS is not None:
+        return set(_ACTIVE_SEED_EPOCHS)
+    return set(_PROCESS_SEEDED)
+
+
+def _stream_position(module: str) -> str | None:
+    """Digest of *module*'s global stream as it stands, or None."""
+    try:
+        if module == "random":
+            import random
+
+            payload = repr(random.getstate()).encode("utf-8")
+        elif module == "numpy.random":
+            np_random = sys.modules.get("numpy.random")
+            if np_random is None:
+                return None
+            name, keys, pos, has_gauss, cached = np_random.get_state()
+            payload = b"%s|%d|%d|%r|" % (str(name).encode(), int(pos), int(has_gauss), float(cached))
+            payload += keys.tobytes()
+        else:
+            return None
+    except Exception:  # noqa: BLE001 - an unreadable stream keeps the plain key
+        return None
+    return hashlib.sha256(payload).hexdigest()[:32]
+
+
 def seed_epoch_component(modules: set[str]) -> str:
     """Cache-key fragment for *modules*, or "" when none of them is seeded.
 
     Empty when unseeded, so a function that draws from an unseeded stream keeps
     the key it has today: the freeze contract still applies and the value is
     replayed. Only an actual seed -- or a change to one -- moves the key.
+    Outside a notebook, a stream seeded in this process is keyed by its
+    position at the call (see `watch_seeds`).
     """
     if not modules:
         return ""
-    epochs = _ACTIVE_SEED_EPOCHS or {}
+    if _ACTIVE_SEED_EPOCHS is None:
+        parts = []
+        for m in sorted(modules & _PROCESS_SEEDED):
+            position = _stream_position(m)
+            if position is not None:
+                parts.append(f"{m}@{position}")
+        return ":rng:" + ":".join(parts) if parts else ""
+    epochs = _ACTIVE_SEED_EPOCHS
     parts = [f"{m}:{epochs[m]}" for m in sorted(modules) if m in epochs]
     return ":rng:" + ":".join(parts) if parts else ""
 

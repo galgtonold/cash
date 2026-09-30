@@ -65,6 +65,7 @@ from ..effects import (
     METHOD_VERBS,
     MODULE_CALLS,
     MUTATOR_METHODS,
+    STDIN_NAMES,
     Action,
     EffectKind,
     classify_call,
@@ -73,6 +74,7 @@ from ..effects import (
     environment_input,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..install_paths import is_user_path
 from ..purity import (
     KNOWN_PURE_BUILTINS,
     is_pure,
@@ -358,6 +360,58 @@ def _file_part(issues: list[PurityIssue]) -> str:
     return f" ({name})" if name else ""
 
 
+#: Methods that set up or train the object they are called on, in place,
+#: and whose return is dropped by design (sklearn's ``fit`` returns self).
+_IN_PLACE_SETUP_METHODS = frozenset(
+    {
+        "fit",
+        "partial_fit",
+        "set_params",
+        "shuffle",
+        "seed",
+        "add_argument",
+        "add_argument_group",
+        "add_mutually_exclusive_group",
+        "add_subparsers",
+        "set_defaults",
+    }
+)
+
+
+def _constructed_locals(func_def: ast.AST | None, params: frozenset[str]) -> frozenset[str]:
+    """Locals every assignment of which is a new instance of a class, named as
+    one is (``m = LinearRegression()``, ``p = argparse.ArgumentParser()``)."""
+    if func_def is None:
+        return frozenset()
+    kinds: dict[str, bool] = {}
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets, value = [node.target], getattr(node, "value", None)
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.withitem, ast.comprehension)):
+            target = getattr(node, "target", None) or getattr(node, "optional_vars", None)
+            targets, value = ([target] if target is not None else []), None
+        else:
+            continue
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name):
+                    made = (
+                        target is name
+                        and isinstance(node, ast.Assign)
+                        and isinstance(value, ast.Call)
+                        and _names_a_class(value.func)
+                    )
+                    kinds[name.id] = kinds.get(name.id, True) and made
+    return frozenset(n for n, made in kinds.items() if made and n not in params)
+
+
+def _names_a_class(func: ast.AST) -> bool:
+    last = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+    return last[:1].isupper() and not last.isupper()
+
+
 class _PurityVisitor(ast.NodeVisitor):
     """Single-function-body visitor that collects :class:`PurityIssue`s.
 
@@ -390,8 +444,23 @@ class _PurityVisitor(ast.NodeVisitor):
         log_only: frozenset[int] = frozenset(),
         namespace: dict[str, Any] | None = None,
         log_helpers: frozenset[str] = frozenset(),
+        ambient_namespace: dict[str, Any] | None = None,
+        func_def: ast.AST | None = None,
     ) -> None:
         self.issues: list[PurityIssue] = []
+        #: *namespace* plus, in a method, its ``self`` / ``cls`` bound to the
+        #: class: what a call site's clock helper is looked up in
+        #: (`_ambient_call`), so ``self.stamp()`` is judged like ``stamp()``.
+        self._ambient_namespace = namespace if ambient_namespace is None else ambient_namespace
+        #: Code objects of the clock helpers this body's call sites judged
+        #: (`_clock_helper_of`): the walk leaves their own read to that judgment.
+        self.judged_helpers: set[Any] = set()
+        #: ids of ``sys.stdin`` nodes reached as a method's receiver.
+        self._stdin_attributes: set[int] = set()
+        #: The function being visited, and the locals only ever bound to a
+        #: new instance (`_constructed_locals`), worked out when first asked.
+        self._func_def = func_def
+        self._constructed: frozenset[str] | None = None
         self.called_callable_nodes: list[ast.AST] = []
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
         #: but their bindings are noted, so a mock put in their place is seen.
@@ -474,7 +543,7 @@ class _PurityVisitor(ast.NodeVisitor):
         environ = environ_membership(node)
         if environ is not None:
             self._environ_keyed.add(id(environ))
-            env = environment_input(node)
+            env = environment_input(node, self._namespace, resolve_constants=True)
             if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
                 if id(node) not in self._log_only:
                     self.environment_reads.add(env)
@@ -496,6 +565,23 @@ class _PurityVisitor(ast.NodeVisitor):
             return
         if isinstance(node.ctx, ast.Load) and isinstance(node.value, (ast.Name, ast.Attribute)):
             self.read_attributes.append(node)
+        if dotted_name(node.value) in STDIN_NAMES:
+            # `sys.stdin.read()` is judged as a call; `.isatty()` reads nothing.
+            self._stdin_attributes.add(id(node.value))
+        elif (
+            isinstance(node.ctx, ast.Load)
+            and id(node) not in self._stdin_attributes
+            and dotted_name(node) in STDIN_NAMES
+        ):
+            self.issues.append(
+                PurityIssue(
+                    kind=ISSUE_IMPURE_CALL,
+                    description=f"{dotted_name(node)} - reads standard input, which a cache hit does not read",
+                    where=self._qualname,
+                    line=getattr(node, "lineno", 0),
+                    effect_kind=EffectKind.INTERACTIVE,
+                )
+            )
         self.generic_visit(node)
 
     def _whole_environment_read(self, node: ast.AST, what: str) -> None:
@@ -525,7 +611,7 @@ class _PurityVisitor(ast.NodeVisitor):
         """
         if get_base_name(node.value) in ENVIRON_NAMES:
             self._environ_keyed.add(id(node.value))
-        env = environment_input(node)
+        env = environment_input(node, self._namespace, resolve_constants=True)
         if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
             if id(node) not in self._log_only:
                 self.environment_reads.add(env)
@@ -791,20 +877,28 @@ class _PurityVisitor(ast.NodeVisitor):
             # carries its module, so a method named `now` on the user's own
             # object is not this.
             if DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
-                env = environment_input(node, self._namespace)
+                env = environment_input(node, self._namespace, resolve_constants=True)
                 if env is not None:
                     if id(node) not in self._log_only:
                         self.environment_reads.add(env)
+                    if dotted in ("os.environ.setdefault", "os.environb.setdefault"):
+                        # Also a write: it sets the variable when it is unset,
+                        # which a cache hit skips.
+                        self.issues.append(
+                            PurityIssue(
+                                kind=ISSUE_IMPURE_CALL,
+                                description=f"{dotted}() - write method",
+                                where=self._qualname,
+                                line=line,
+                            )
+                        )
                     return
-            ambient = _ambient_call(node, self._namespace)
-            if (
-                ambient is not None
-                and isinstance(func_node, ast.Name)
-                and self._namespace
-                and _clock_helper_read(self._namespace.get(func_node.id)) is not None
-            ):
+            ambient = _ambient_call(node, self._ambient_namespace)
+            helper = _clock_helper_of(node, self._ambient_namespace) if ambient is not None else None
+            if helper is not None:
                 # A clock helper is still the user's code: walked, so an edit
                 # to it reaches the key like any helper's.
+                self.judged_helpers.add(helper.__code__)
                 self.called_callable_nodes.append(node)
             if ambient is not None and id(node) in self._log_only:
                 return  # only ever printed or logged: cannot reach a result
@@ -993,6 +1087,7 @@ class _PurityVisitor(ast.NodeVisitor):
                     method not in REPORTED_METHODS
                     and method not in PANDAS_INPLACE_METHODS
                     and not self._reports_effect(call)
+                    and not self._works_on_its_own_object(func_node)
                 ):
                     base = get_base_name(func_node.value)
                     base_str = f"{base}." if base else ""
@@ -1058,6 +1153,22 @@ class _PurityVisitor(ast.NodeVisitor):
         for target in node.targets:
             self._maybe_flag_mutation_target(target, node.lineno)
         self.generic_visit(node)
+
+    def _works_on_its_own_object(self, func_node: ast.Attribute) -> bool:
+        """Is a discarded ``obj.method(...)`` work on an object this function
+        made? Then dropping the return is how it is written: ``d =
+        deque(xs); d.popleft()``, ``r = random.Random(k); r.shuffle(xs)``,
+        and, on a local an unknown class made, the methods that configure or
+        train it in place (``m = LinearRegression(); m.fit(X, y)``,
+        ``p = ArgumentParser(); p.add_argument("--x")``)."""
+        receiver = func_node.value
+        if self._receiver_is_fresh(receiver):
+            return True
+        if not isinstance(receiver, ast.Name) or func_node.attr not in _IN_PLACE_SETUP_METHODS:
+            return False
+        if self._constructed is None:
+            self._constructed = _constructed_locals(self._func_def, self._param_names)
+        return receiver.id in self._constructed
 
     def _receiver_is_fresh(self, value: ast.AST) -> bool:
         """True when *value* holds an object this function made -- mutating
@@ -1574,13 +1685,58 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
         if effect.name in CLOCK_WHEN_ARG_CALLS:
             return f"{effect.name}({node.args[0].value!r})"  # type: ignore[attr-defined]
         return effect.name
-    chain = _callee_chain(node.func)
-    if namespace and chain and len(chain) == 1 and chain[0] in namespace:
-        inner = _clock_helper_read(namespace[chain[0]])
-        if inner is not None:
-            shown = inner if inner.endswith(")") else f"{inner}()"
-            return f"{chain[0]}() (which returns {shown})"
+    helper = _clock_helper_of(node, namespace)
+    if helper is not None:
+        inner = _clock_helper_read(helper)
+        shown = inner if inner.endswith(")") else f"{inner}()"  # type: ignore[union-attr]
+        return f"{'.'.join(_callee_chain(node.func) or ())}() (which returns {shown})"
     return None
+
+
+def _clock_helper_of(node: ast.Call, namespace: dict[str, Any] | None) -> Any:
+    """The clock helper (`_clock_helper_read`) *node* calls, or None.
+
+    Called by name (``now()``) or through a module, a class or a method's own
+    ``self`` (``clocks.now()``, ``Clock.now()``, ``self.stamp()``). Only the
+    bare name was judged, and the helper's own read is left to the call site,
+    so every dotted spelling froze the clock with no warning.
+    """
+    chain = _callee_chain(node.func)
+    if not namespace or not chain or chain[0] not in namespace:
+        return None
+    if len(chain) == 1:
+        helper = namespace[chain[0]]
+    else:
+        helper = resolve_callee(node.func, namespace, modules_only=False)
+    helper = getattr(helper, "__func__", helper)  # a bound method or classmethod
+    return helper if _clock_helper_read(helper) is not None else None
+
+
+def _method_namespace(func: Any, func_def: ast.AST, namespace: dict[str, Any]) -> dict[str, Any]:
+    """*namespace* with a method's first parameter bound to its class.
+
+    For the clock-helper judgment only (`_clock_helper_of`): ``self.stamp()``
+    names ``Class.stamp`` as far as its code goes. A plain function, a
+    static method or a function nested in another function is left alone.
+    """
+    qualname = getattr(func, "__qualname__", "") or ""
+    parts = qualname.split(".")
+    args = getattr(func_def, "args", None)
+    positional = (args.posonlyargs + args.args) if args is not None else []
+    if len(parts) < 2 or "<locals>" in parts or not positional:
+        return namespace
+    owner: Any = getattr(func, "__globals__", {}).get(parts[0])
+    for part in parts[1:-1]:
+        owner = getattr(owner, part, None) if isinstance(owner, type) else None
+    if not isinstance(owner, type):
+        return namespace
+    try:
+        raw = inspect.getattr_static(owner, parts[-1])
+    except AttributeError:
+        return namespace
+    if isinstance(raw, staticmethod):
+        return namespace
+    return {**namespace, positional[0].arg: owner}
 
 
 def _clock_helper_read(value: Any) -> str | None:
@@ -1601,6 +1757,10 @@ def _clock_helper_read(value: Any) -> str | None:
         # Judged by its own analysis. And every cached function shares its
         # wrapper's code object, which the memo below is keyed by: one cached
         # `return time.time()` made every cached callee a clock read.
+        return None
+    if not is_user_path(code.co_filename):
+        # A library function (`os.path.isdir`) is not the user's helper, and
+        # reading its source inside a cached call would record the read.
         return None
     known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
     if known is not _NOT_JUDGED:
@@ -1626,10 +1786,10 @@ def _clock_helper_read(value: Any) -> str | None:
                 isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and is_log_line(s.value) for s in body[:-1]
             )
         ):
-            namespace = _build_namespace(value)
+            namespace = build_namespace(value)
             # A read the key folds (`environment_input`) is an input, not a
             # frozen value: the helper's own walk lists it.
-            if environment_input(body[-1].value, namespace) is None:
+            if environment_input(body[-1].value, namespace, resolve_constants=True) is None:
                 found = _ambient_call(body[-1].value, namespace)
     except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
         found = None
@@ -1799,7 +1959,7 @@ def _resolve_in_class_namespaces(cls: type, name: str) -> Any:
     return None
 
 
-def _build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
+def build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
     """Return a merged ``__globals__`` + closure-cell namespace for *func*.
 
     Lets :func:`~cash.analysis.ast_util.resolve_callee` see helpers defined as closures
@@ -1952,6 +2112,8 @@ class PurityAnalyzer:
             if id(callee) not in cached_seen:
                 cached_seen.add(id(callee))
                 cached_callees.append(_ref(callee))
+        #: Clock helpers judged at a call site: their own read is not reported.
+        judged_helpers: set[Any] = set()
 
         def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
             if path is None or path in seen_bindings:
@@ -2197,29 +2359,34 @@ class PurityAnalyzer:
             # and aliased ambient reads, both need it. Imports written inside
             # the body bind locals the module's globals never see; a local
             # shadows a global of the same name.
-            namespace = _build_namespace(func)
+            namespace = build_namespace(func)
             local_imports = local_import_map(func_def, func)
             for _local, (_mod, _prefix) in local_imports.items():
                 _obj = resolve_local_import(_mod, _prefix, root_module)
                 if _obj is not None:
                     namespace[_local] = _obj
             dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
+            ambient_namespace = _method_namespace(func, func_def, namespace)
             visitor = _PurityVisitor(
                 qualname=qualname,
                 param_names=param_names,
                 fresh_nodes=fresh_name_nodes(func_def),
-                log_only=_log_only_ambient_reads(func_def, func, namespace),
+                log_only=_log_only_ambient_reads(func_def, func, ambient_namespace),
                 namespace=namespace,
                 log_helpers=_log_helper_names(func_def, func),
+                ambient_namespace=ambient_namespace,
+                func_def=func_def,
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
             visitor.issues.extend(dispatch_issues)
             if visitor.opens_tracked_database:
                 visitor.issues = [i for i in visitor.issues if i.effect_kind is not EffectKind.DB_READ]
-            if depth > 0 and _clock_helper_read(func) is not None:
-                # Judged where it is called (`_clock_helper_read`).
+            if depth > 0 and getattr(func, "__code__", None) in judged_helpers:
+                # Judged where it is called (`_clock_helper_read`). Reached
+                # any other way (``fn = now; fn()``), it reports its own read.
                 visitor.issues = [i for i in visitor.issues if i.kind != ISSUE_AMBIENT_READ]
+            judged_helpers |= visitor.judged_helpers
             all_issues.extend(visitor.issues)
             environment_reads |= visitor.environment_reads
 

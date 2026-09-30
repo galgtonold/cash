@@ -130,6 +130,10 @@ class FileAccessTracker:
         # what the body read -- and served, stale, forever after.
         # Comparing against this is what lets the store step refuse instead.
         self.read_stats: dict[str, tuple[int, int, int]] = {}
+        # Files whose inode change time moves without their content changing
+        # (a SQLite ``-wal`` a reader opens as root is chown'ed): compared by
+        # size and mtime only in `inputs_changed_since_read`.
+        self.ctime_unreliable: set[str] = set()
         self.user_ns = user_ns or {}
         # Stack of ContextVar tokens, one per active __enter__. Supports
         # re-entry of the same instance (an async function that reuses
@@ -149,6 +153,13 @@ class FileAccessTracker:
         # Files a memo handed this block data from that was read from an
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
+        # Files and directories this block CREATED (opened with "w"/"x",
+        # made with mkdir/mkdtemp), resolved. What the block reads back from
+        # them is its own output, not an input: unzipping into a temporary
+        # directory, reading the files and removing the directory was refused
+        # on every call as "changed while the call was running".
+        self.created_files: set[str] = set()
+        self.created_dirs: list[str] = []
 
     def __enter__(self):
         # The first open tracker installs the wrappers (see
@@ -207,9 +218,23 @@ class FileAccessTracker:
         """
         moved = []
         for path, before in self.read_stats.items():
-            if regular_file_stat(path) != before:
+            now = regular_file_stat(path)
+            if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
         return moved
+
+    def note_ctime_unreliable(self, path) -> None:
+        """Compare *path* by size and mtime only in the mid-call check, here
+        and in the enclosing trackers (see ``ctime_unreliable``)."""
+        try:
+            raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
+            resolved = normalize_path(os.path.realpath(raw))
+        except (TypeError, ValueError, OSError):
+            return
+        tracker: FileAccessTracker | None = self
+        while tracker is not None:
+            tracker.ctime_unreliable.add(resolved)
+            tracker = tracker._propagation_parent()
 
     def get_accessed_remote_urls(self) -> set[str]:
         """Remote URLs read in this block, tracked by store validator instead."""
@@ -242,6 +267,29 @@ class FileAccessTracker:
                 self._track_path_untimed(path)
         finally:
             _tracking_seconds += _perf_counter() - started
+
+    def note_created(self, path, directory: bool = False) -> None:
+        """Record *path* as created by this block (and, when propagating, by
+        the enclosing ones): not an input from here on (`created_by_block`)."""
+        try:
+            raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
+            resolved = normalize_path(os.path.realpath(raw))
+        except (TypeError, ValueError, OSError):
+            return
+        tracker: FileAccessTracker | None = self
+        while tracker is not None:
+            if resolved not in tracker.accessed_files:  # read first: an input
+                if directory:
+                    tracker.created_dirs.append(resolved.rstrip("/") + "/")
+                else:
+                    tracker.created_files.add(resolved)
+            tracker = tracker._propagation_parent()
+
+    def created_by_block(self, abs_path: str) -> bool:
+        """Did this block create *abs_path*, or a directory it lies in?"""
+        if abs_path in self.created_files:
+            return True
+        return any(abs_path.startswith(d) or abs_path + "/" == d for d in self.created_dirs)
 
     def _track_path_untimed(self, path):
         if not isinstance(path, (str, bytes, os.PathLike)):
@@ -293,6 +341,9 @@ class FileAccessTracker:
             # See `is_cash_internal`. Checked after realpath so a relative
             # or symlinked cache path is caught too.
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
+            return
+        if (self.created_files or self.created_dirs) and self.created_by_block(abs_path):
+            logger.debug("[TRACKER] Ignoring a read of %r, which this block created", abs_path)
             return
         why = incidental_read(abs_path, self._own_package)
         if why is not None:
@@ -495,6 +546,8 @@ class FileAccessTracker:
         # inside its own package is not the user's question either.
         if incidental_read(os.path.abspath(raw), self._own_package) is not None:
             return None
+        if (self.created_files or self.created_dirs) and self.created_by_block(normalize_path(os.path.realpath(raw))):
+            return None  # the block's own output: whether it is there is its doing
         return normalized
 
     def add_tracked_absent(self, path: str) -> None:

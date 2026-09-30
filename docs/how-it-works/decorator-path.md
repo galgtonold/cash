@@ -52,7 +52,7 @@ that can change the result without changing an argument:
 | Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. So is one held in an argument or a data global, at any depth down to 100 containers (deeper, cash warns): an instance's attribute, a list of steps, a transformer inside a library pipeline (a library object is only searched for your code; its own state is not keyed this way). A value a [registered hasher](../tutorials/feature-guides/custom-hashers.md) keys is not searched. |
 | Files named in `file_depends_on=` | The names only; their content is checked on lookup ([Files](#files)). |
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
-| The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. Re-seeding recomputes. |
+| The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made after the function was decorated, by the caller too (module level, or an outer function before it calls this one). Re-seeding recomputes, and two draws in a row under one seed are two entries. |
 
 <!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @34ac7e63 -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
@@ -60,7 +60,7 @@ out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
 through `getattr`, is not seen. Name it with `depends_on=[...]`.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @52a28e20 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @8346a209 -->
 An unseeded draw is not a change. The first value is stored and returned on
 every later call, with a [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded)
 warning; `allow_random=True` accepts that on purpose.
@@ -113,7 +113,7 @@ It never caches under a partial key. The usual causes:
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @5d8d7594, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @5d8d7594, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one
