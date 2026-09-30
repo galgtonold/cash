@@ -33,6 +33,13 @@ logger = logging.getLogger(__name__)
 #: object before it gives up looking for user code there.
 LIBRARY_WALK_BUDGET = 2000
 
+#: How many containers deep the search for user code in a value goes. Deeper
+#: than this, what is left is not searched and `CodeArgs.carrier_parts` says so.
+CODE_SEARCH_DEPTH = 100
+
+#: What `CodeArgs.iter_code_carriers` yields where it stops at the depth limit.
+TOO_DEEP = object()
+
 
 def carrier_name(carrier: Any) -> str:
     """A stable, address-free name for a code carrier.
@@ -197,10 +204,32 @@ class CodeArgs:
             fix,
         )
 
+    def _warn_too_deep_once(self, func_name: str, param: str | None) -> None:
+        """Say once that a value nests deeper than the code search goes."""
+        if _EXPLAINING.get():
+            return
+        mark = ("too-deep", func_name, param)
+        if mark in self._warned_unhashable_code:
+            return
+        self._warned_unhashable_code.add(mark)
+        where = f"the argument `{param}` of {func_name}" if param else f"a value {func_name} reads"
+        what = (
+            f"{where} nests containers more than {CODE_SEARCH_DEPTH} deep, and cash "
+            f"does not search below that for code: a function or class held there "
+            f"is keyed by name, so editing it will NOT invalidate the cache."
+        )
+        fix = (
+            "hold code nearer the top of the value, or name what the result depends "
+            "on with @cash.cache(depends_on=[...])."
+        )
+        log_diagnostic(logger, "KEY-OPAQUE-CALLABLE", what, fix)
+        warn_diagnostic(CashImpurityWarning, "KEY-OPAQUE-CALLABLE", what, fix)
+
     def iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
         """Yield objects in *value* that carry user code.
 
-        Depth-bounded at 8, matching ``stabilize_for_global_hash``. ``_seen``
+        Depth-bounded at `CODE_SEARCH_DEPTH`; where the bound cuts off a
+        value that could hold code, `TOO_DEEP` is yielded. ``_seen``
         guards self-referential containers, and doubles as a once-per-argument
         dedup for the classes yielded on behalf of instances: a list of 50k
         objects of one class must evaluate the user-code gate once, not 50k
@@ -208,7 +237,9 @@ class CodeArgs:
         yielded does not need yielding again, and the fold takes a ``set`` of
         the parts anyway.
         """
-        if _depth > 8:
+        if _depth > CODE_SEARCH_DEPTH:
+            if type(value) not in CODELESS_PRIMS:
+                yield TOO_DEEP
             return
         # Primitives (and numpy numbers) carry no user code, and in a large argument they ARE the
         # argument. Returning before ``_seen`` is touched keeps a list of a
@@ -395,7 +426,7 @@ class CodeArgs:
 
     def _find_user_code(self, values: Any, _depth: int, _seen: set, budget: list[int]):
         """The user code among *values*, searched through library objects."""
-        if _depth > 8:
+        if _depth > CODE_SEARCH_DEPTH:
             return
         for v in values:
             if budget[0] <= 0:
@@ -493,6 +524,9 @@ class CodeArgs:
         # A clock test double's date is the date, not code (`fake_clock`).
         fake_dates = _plain_data.fake_clock()[0]
         for carrier in self.iter_code_carriers(value):
+            if carrier is TOO_DEEP:
+                self._warn_too_deep_once(func_name, param)
+                continue
             if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
                 continue
             if id(carrier) in seen_carriers:

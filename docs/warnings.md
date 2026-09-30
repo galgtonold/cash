@@ -980,7 +980,9 @@ cached call (as an argument or a default), and cash could not hash its code.
 The typical case is a class of yours whose behaviour comes from a compiled
 function, such as `__call__ = staticmethod(abs)`. Library callables do not
 trigger it, and neither do compiled library objects and their methods
-(`re.compile(p).match`, a lock, a stream), wherever they are reached.
+(`re.compile(p).match`, a lock, a stream), wherever they are reached. It
+also fires when an argument or global nests containers more than 100 deep:
+cash does not search below that for code.
 
 **Why it matters.** Editing that code will not invalidate the entry.
 
