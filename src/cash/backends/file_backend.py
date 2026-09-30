@@ -708,19 +708,25 @@ class FileBackend(CacheBackend):
                 key,
                 len(serialized_value) + int(metadata.get("call_ref_bytes") or 0),
                 metadata.get("execution_time") or 0.0,
+                metadata.get("call_refs") or (),
             )
 
-    def _prune_versions(self, slot: str, key: str, size: int, cost: float) -> None:
+    def _prune_versions(self, slot: str, key: str, size: int, cost: float, call_refs: Any = ()) -> None:
         """Remove the superseded versions of *key*'s statement that are not
         worth their bytes (``versions.superseded_to_drop``). Best effort: a
-        failure here leaves entries for the byte cap, never loses the new one."""
+        failure here leaves entries for the byte cap, never loses the new one.
+
+        *call_refs* are the new version's own (its metadata's ``call_refs``).
+        Reading them back from *key*'s entry instead would wait for the write
+        just queued, and make every write of a version synchronous."""
         try:
             versions = self._versions.record(slot, key, size, cost, time.time())
             gone = [k for k in versions if k != key and not os.path.exists(self._get_path(k))]
             for k in gone:
                 versions.pop(k)
             drop = superseded_to_drop(versions, key, self._read_keys)
-            freed = self._call_refs_of(drop) - self._call_refs_of(k for k in versions if k not in drop)
+            kept = self._call_refs_of(k for k in versions if k not in drop and k != key)
+            freed = self._call_refs_of(drop) - kept - set(call_refs)
             for k in drop:
                 self.delete(k)
             # The call entries only the dropped versions referred to go with

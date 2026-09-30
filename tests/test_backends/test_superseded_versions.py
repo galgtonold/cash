@@ -10,6 +10,7 @@ integration arm is
 from __future__ import annotations
 
 import os
+import threading
 
 from cash.backends.file_backend import FileBackend
 from cash.backends.versions import (
@@ -157,4 +158,47 @@ def test_clearing_the_cache_forgets_the_versions(tmp_path):
     _set(b, "v0", "slot")
     b.clear()
     assert not (tmp_path / "_versions.log").exists()
+    b.shutdown()
+
+
+def test_writing_a_version_does_not_wait_for_its_own_write(tmp_path, monkeypatch):
+    """Pruning read the new version's call refs back from its entry, which
+    waited for the background write just queued: a 1M-row frame's ``set``
+    took 174 ms instead of 60."""
+    b = FileBackend(str(tmp_path), flush_interval=0)
+    _set(b, "v0", "slot")
+    release = threading.Event()
+    real_write = b._write_cache_files
+
+    def slow_write(*args, **kwargs):
+        assert release.wait(10)
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(b, "_write_cache_files", slow_write)
+    done = threading.Event()
+    setter = threading.Thread(target=lambda: (b.set("v1", b"x", {"version_slot": "slot"}), done.set()))
+    setter.start()
+    returned = done.wait(2)
+    release.set()
+    setter.join()
+    b._writes.wait_all()
+    assert returned, "set() waited for its own background write"
+    assert _on_disk(b, "v1")
+    b.shutdown()
+
+
+def test_a_call_entry_the_new_version_refers_to_is_kept(tmp_path):
+    """Positive control for the refs taken from the new version's metadata: a
+    call entry that a pruned version and the new one share stays; one only
+    the pruned versions referred to goes."""
+    b = FileBackend(str(tmp_path), flush_interval=0)
+    _set(b, "shared-call", None)
+    _set(b, "old-call", None)
+    for i in range(5):
+        refs = ["shared-call", "old-call"] if i == 0 else ["shared-call"]
+        b.set(f"v{i}", b"x" * (2 * MB), {"execution_time": 0.05, "version_slot": "slot", "call_refs": refs})
+        b._writes.wait_all()
+    assert not _on_disk(b, "v0")
+    assert _on_disk(b, "shared-call")
+    assert not _on_disk(b, "old-call")
     b.shutdown()
