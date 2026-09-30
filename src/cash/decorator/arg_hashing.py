@@ -439,6 +439,21 @@ def _shared_plain_args(values: list) -> tuple:
     return tuple(shared)
 
 
+def _rough_size(labelled: tuple[str, Any]) -> int:
+    """How big an argument looks, to pick the one a key's time is charged
+    to. Never raises: a scipy sparse matrix defines ``__len__`` only to
+    raise, and that TypeError, out of a description, made every sparse
+    argument unhashable."""
+    value = labelled[1]
+    try:
+        return len(value)
+    except Exception:  # noqa: BLE001 - no length: its size will do
+        try:
+            return sys.getsizeof(value)
+        except Exception:  # noqa: BLE001
+            return 0
+
+
 def _raise_panic_as_unhashable(exc: BaseException) -> None:
     """Raise a native library's panic as the TypeError of an unhashable value
     (see `ArgHasher.hash_payload`); return for anything else."""
@@ -888,7 +903,7 @@ class ArgHasher:
         if raw:
             payload_seconds = _perf_counter() - payload_t0
             if costliest is None or payload_seconds > costliest[1]:
-                label, value = max(raw, key=lambda r: len(r[1]) if hasattr(r[1], "__len__") else sys.getsizeof(r[1]))
+                label, value = max(raw, key=_rough_size)
                 producer = getattr(value, "_cash_lineage_producer", None)
                 if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
                     producer = self._frozen.containers[id(value)][1]

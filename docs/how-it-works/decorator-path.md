@@ -71,8 +71,8 @@ warning; `allow_random=True` accepts that on purpose.
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
-2. A built-in content hasher: pandas, numpy, polars, pyarrow, modin and dask
-   values are hashed by content.
+2. A built-in content hasher: pandas, numpy, polars, pyarrow, modin, dask and
+   scipy.sparse values are hashed by content.
 3. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 4. A hasher you registered without `override=True`.

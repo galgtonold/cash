@@ -6,7 +6,7 @@
 
 cash hashes every argument of a cached call to build the key. Built-in values
 and most plain classes are pickled and hashed. pandas, numpy, polars, PyArrow,
-modin and dask values get content hashers of their own. Register a hasher for
+modin, dask and scipy.sparse values get content hashers of their own. Register a hasher for
 your own type when:
 
 - **It can't be pickled** (it holds a lock, a socket, a C handle). cash warns

@@ -360,6 +360,8 @@ def builtin_hash_family(type_: type) -> str | None:
         return "modin"
     if module.startswith("dask"):
         return "dask"
+    if module.startswith("scipy.sparse") and hasattr(type_, "tocsr") and hasattr(type_, "format"):
+        return "scipy.sparse"
     return None
 
 
@@ -387,6 +389,8 @@ def builtin_hash(value: Any) -> str | None:
         return hash_modin(value)
     if family == "dask":
         return hash_dask(value)
+    if family == "scipy.sparse":
+        return hash_sparse(value)
     return None
 
 
@@ -764,6 +768,47 @@ def hash_dask(value: Any) -> str | None:
         return h.hexdigest()
     except (TypeError, ValueError, AttributeError):
         logger.debug("Failed to hash dask object via __dask_keys__")
+        return None
+
+
+#: The arrays a scipy sparse matrix is, by format: everything its values
+#: and their positions are stored in.
+_SPARSE_PARTS = ("data", "indices", "indptr", "offsets")
+
+
+def hash_sparse(value: Any) -> str | None:
+    """Hash a scipy sparse matrix or array by its content, format included.
+
+    The type, shape and dtype, then the arrays its format keeps (`_SPARSE_PARTS`,
+    and a COO's coordinates), each hashed as an array (`hash_numpy`), so an
+    explicit zero, an unsorted index or an ``int32`` against an ``int64``
+    index keys apart: code reading ``.data`` or ``.indices`` sees them. A
+    DOK or LIL matrix, whose entries live in Python dicts and lists, is keyed
+    as the CSR matrix it converts to. Without this every sparse argument --
+    a TF-IDF matrix, a one-hot encoding -- ran uncached.
+    """
+    try:
+        t = type(value)
+        h = hashlib.sha256(f"{t.__module__}.{t.__qualname__}:{value.shape}:{value.dtype}:{value.format}:".encode())
+        if value.format in ("dok", "lil"):
+            canon = value.tocsr()
+            canon.sort_indices()
+            arrays = [(name, getattr(canon, name)) for name in ("data", "indices", "indptr")]
+        else:
+            arrays = [(name, getattr(value, name)) for name in _SPARSE_PARTS if hasattr(value, name)]
+            coords = getattr(value, "coords", None)
+            if coords is None and value.format == "coo":
+                coords = (value.row, value.col)
+            if coords is not None:
+                arrays.extend((f"coords{i}", c) for i, c in enumerate(coords))
+        for name, array in arrays:
+            digest = hash_numpy(array)
+            if digest is None:
+                return None
+            h.update(f"|{name}:{digest}".encode())
+        return h.hexdigest()
+    except (TypeError, ValueError, AttributeError, MemoryError):
+        logger.debug("Failed to hash scipy sparse %s", type(value).__name__)
         return None
 
 
