@@ -21,6 +21,8 @@ import builtins as _builtins
 import logging
 from typing import Any
 
+from ...analysis.cacheability import statement_writes_files
+
 logger = logging.getLogger(__name__)
 
 # Approximate per-statement overhead in seconds (analysis + cache + capture)
@@ -99,8 +101,8 @@ FRESH_ITERATOR_METHODS = frozenset(
     }
 )
 
-# Call names that read or write a file. A loop calling one needs
-# per-iteration file-dependency tracking.
+# Call names that read or write a file. A loop calling one is never split
+# (see :mod:`.split_policy`).
 _FILE_IO_CALLS = frozenset(
     {
         "open",
@@ -120,6 +122,11 @@ _FILE_IO_CALLS = frozenset(
     }
 )
 
+# The names on that list that WRITE. The write analyzer
+# (`statement_writes_files`) is the main check for the single-unit path;
+# these catch the numpy writers it does not know (`np.savez`, `np.savetxt`).
+_FILE_WRITE_CALLS = frozenset({"write", "to_csv", "to_excel", "save", "savez", "savetxt", "to_parquet"})
+
 
 def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> bool:
     """Run this ``for`` loop as one cacheable unit rather than per iteration?
@@ -132,8 +139,10 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
        loop keeps per-iteration granularity, whose overhead is small.
     2. Estimated overhead (iterations x body statements x per-statement
        cost) above ``MIN_OVERHEAD_SEC``.
-    3. No file I/O in the body -- file dependencies need per-iteration
-       tracking.
+    3. The body writes, moves or removes no file (:func:`writes_files`).
+       Reading is fine: the unit runs under one file tracker, like any
+       statement, so its entry depends on every file and folder the loop
+       read, and an edited, added or deleted file is a miss.
 
     Nested loops qualify too: an outer loop's iteration key still moves when
     the inner body changes, because the inner unit's key is part of it.
@@ -158,8 +167,13 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
     if estimated_overhead < MIN_OVERHEAD_SEC:
         return False
 
-    # File I/O needs per-iteration tracking
-    if has_file_io_calls(node.body):
+    # A loop that changes files keeps per-iteration mode (see
+    # `writes_files`). A loop that only reads does not need it: the unit's
+    # own file tracker records every file and folder the loop read, as it
+    # does for a comprehension. Decomposed, `for f in files: d =
+    # pd.read_csv(f)` over 1000 files cost 3.5 ms per statement per
+    # iteration: 11 s cold and 4.6 s warm against 1.8 s with cash off.
+    if writes_files(node.body):
         return False
 
     logger.debug(
@@ -332,12 +346,25 @@ def count_body_statements(body: list[ast.AST]) -> int:
     return count
 
 
+def writes_files(body: list[ast.AST]) -> bool:
+    """Whether any statement in the body writes, moves or removes a file.
+
+    Such a loop stays per-iteration. Run as one unit it would be one
+    statement that both reads and writes files, and it may read what it
+    wrote itself (`open(out).read()` after `df.to_csv(out)`), so the files
+    recorded as its inputs would include its own outputs.
+    """
+    module = ast.Module(body=body, type_ignores=[])
+    if any(isinstance(node, ast.Call) and _call_name(node) in _FILE_WRITE_CALLS for node in ast.walk(module)):
+        return True
+    return statement_writes_files(ast.unparse(module), module)
+
+
 def has_file_io_calls(body: list[ast.AST]) -> bool:
     """Whether any statement in the body performs file I/O.
 
-    File I/O needs per-iteration tracking for proper dependency
-    invalidation, so loops with file operations take neither the
-    single-unit fast path nor a split.
+    The split policy (:mod:`.split_policy`) never splits such a loop. The
+    single-unit policy asks the narrower :func:`writes_files`.
     """
     return any(
         isinstance(node, ast.Call) and _call_name(node) in _FILE_IO_CALLS

@@ -301,13 +301,15 @@ resetting the session.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @aaa994ff, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @95f20033, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length, per-statement
 bookkeeping estimated above one second (about 8 ms per statement per iteration),
-and no file I/O written in the loop body. A loop that appends to a list is an
-in-place change, so as one unit it is not cached at all. The badge row then shows
-`In-place mutation on: out`.
+and no file write, move or delete written in the loop body. A loop that only
+reads files qualifies: the unit depends on every file and folder it read, so
+an edited, added or deleted file runs it again. A loop that appends to a list
+is an in-place change, so as one unit it is not cached at all. The badge row
+then shows `In-place mutation on: out`.
 
 The expensive call inside the loop body (`fetch(e)` in `out.append(fetch(e))`)
 is still cached, so usually there is nothing to do. **Fix** when it is not:

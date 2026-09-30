@@ -206,13 +206,13 @@ def test_fast_loop_skipped_for_small_loop(handler, mock_dispatcher, mock_stateme
     assert mock_statement_processor.process_statement.call_count == 10
 
 
-def test_fast_loop_skipped_when_body_has_file_io(handler, mock_dispatcher, mock_statement_processor):
-    """File-I/O calls in the body disable the fast-loop optimisation.
+def test_fast_loop_skipped_when_body_writes_files(handler, mock_dispatcher, mock_statement_processor):
+    """A file write in the body disables the fast-loop optimisation.
 
     The loop is intentionally small but still clears the single-unit
     thresholds: 100 iterations (> MIN_ITERATIONS_FOR_SINGLE_UNIT = 50) and
     100 × 6 × 8ms = 4.8s estimated overhead (> MIN_OVERHEAD_SEC = 1s). The
-    control assertion below proves file I/O — not loop size — is what flips
+    control assertion below proves the write -- not loop size -- is what flips
     the decision. Kept small on purpose: when single-unit is (correctly)
     declined, ``process`` runs the full per-iteration fallback, which was a
     CI timeout flake at the old 1000×200 size.
@@ -229,7 +229,18 @@ def test_fast_loop_skipped_when_body_has_file_io(handler, mock_dispatcher, mock_
 
     mock_dispatcher.execute_as_single_unit.reset_mock()
 
-    # With file I/O in the body, single-unit is disabled (per-iteration only).
-    io_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)] + ["pd.read_csv('f.csv')"])
+    # With a file write in the body, single-unit is disabled (per-iteration only).
+    io_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)] + ["df.to_csv('f.csv')"])
     handler.process(_parse_for(f"for i in range({n_iter}):\n    {io_body}"), None, True, None)
     assert mock_dispatcher.execute_as_single_unit.call_count == 0
+
+
+def test_fast_loop_fires_when_body_only_reads_files(handler, mock_dispatcher, mock_statement_processor):
+    """A loop that only reads files runs as one unit: the unit's file tracker
+    makes its entry depend on every file it read, as a comprehension's does.
+    Decomposed, `for f in files: d = pd.read_csv(f)` over 1000 files cost
+    about 3.5 ms per statement per iteration."""
+    body = "\n    ".join(["d = pd.read_csv(f)", "text = open(f).read()", "arr = np.load(f)"])
+    handler.process(_parse_for(f"for f in range(100):\n    {body}"), None, True, None)
+    assert mock_dispatcher.execute_as_single_unit.call_count == 1
+    assert mock_statement_processor.process_statement.call_count == 0
