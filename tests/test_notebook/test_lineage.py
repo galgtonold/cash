@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from cash import Cash
+from cash.lineage_tag import own_tag
 
 # Module-level app and cached functions
 app = Cash(register_magic=False)
@@ -41,7 +42,7 @@ def test_lineage_hash():
     df = create_df(100)
 
     # Verify it has the hash attribute
-    assert hasattr(df, "_cash_lineage_hash"), "Created DataFrame should have _cash_lineage_hash attribute"
+    assert own_tag(df) is not None, "Created DataFrame should carry a lineage tag"
 
     # 2. Process DF - should use the hash instead of hashing the whole DF
     res1 = process_df(df)
@@ -49,7 +50,7 @@ def test_lineage_hash():
 
     # 3. Create a new DataFrame without hash (simulates external data)
     df2 = pd.DataFrame({"a": range(100)})
-    assert not hasattr(df2, "_cash_lineage_hash"), "External DataFrame should not have _cash_lineage_hash"
+    assert own_tag(df2) is None, "External DataFrame should not carry a lineage tag"
 
     # Processing df2 should work (fallback to full hash)
     res2 = process_df(df2)
