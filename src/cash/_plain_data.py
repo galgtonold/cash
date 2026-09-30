@@ -80,6 +80,22 @@ def key_dumps(value: Any) -> bytes:
     return _dump(value, fast=False)
 
 
+def content_dumps(value: Any) -> bytes:
+    """The bytes of *value*'s content: pickled without the memo
+    (`pickle_unshared`), or with it when *value* holds a cycle.
+
+    Through the memo, a second reference to one object is written as a
+    back-reference, so a dict whose two values are one string pickled
+    differently from an equal dict whose values are two: equal values keyed
+    apart for how a parser happened to build them. A cycle -- possible only
+    inside an object pickle stores as it asks to -- needs the memo.
+    """
+    try:
+        return _dump(value, fast=True)
+    except (ValueError, RecursionError):  # fast mode refuses a cycle
+        return key_dumps(value)
+
+
 def _levels(value: Any, extra: tuple = ()):
     """Yield ``(flat, types)`` for each level below *value*; stop at leaves.
 
@@ -130,32 +146,49 @@ def aliases(value: Any) -> tuple[tuple, bool] | None:
     three places, where three equal rows change in one. Pickled without the
     memo, the two are the same bytes, so a key must carry this too:
     ``((level, position), (level, position first met))`` per repeat, empty
-    when every list appears once.
-
-    Found at C speed for the common case. A list held once has one
-    reference from its parent and one from the level's flat list; only an
-    item with more (`_unshared_refs`) can repeat, and only those are compared by
-    identity. A reference held elsewhere, such as a variable naming one
-    row, only makes that row a candidate.
+    when every list appears once. See `sharing` for how they are found.
     """
-    if type(value) not in PLAIN_SEQS:
+    found = sharing(value)
+    return None if found is None else (found[0], found[2])
+
+
+def sharing(value: Any, *, tree: bool = False, held_twice_at: int | None = None) -> tuple[tuple, dict, bool] | None:
+    """``(repeats, shared, numpy)`` for plain data -- or, with *tree*, for
+    exact dicts, lists and tuples nested over leaves (`tree_levels`) -- or None.
+
+    *repeats* is `aliases`' list of containers met twice. *shared* is
+    ``{id: (level, position)}`` for every writable container (a list, a dict,
+    a bytearray) that something besides its parent references: the only ones
+    another argument can share. *numpy* says whether numpy scalars are among
+    the leaves (never with *tree*).
+
+    Found at C speed for the common case. A container held once has one
+    reference from its parent and one from the level's flat list; only an
+    item with more (`_unshared_refs`) can repeat, and only those are compared
+    by identity. A reference held elsewhere, such as a variable naming one
+    row, only makes that row a candidate. *held_twice_at* names a level
+    whose items the caller's own temporaries hold once more (`dict_rows`).
+    """
+    kinds = TREE_NODES if tree else PLAIN_SEQS
+    if type(value) not in kinds:
         return None
     repeats: list = []
     first: dict[int, tuple] = {}
     held: list = []
-    numbers = numpy_scalar_types()
+    numbers = () if tree else numpy_scalar_types()
     has_numbers = False
     try:
-        for depth, (flat, types) in enumerate(_levels(value, numbers)):
+        levels = tree_levels(value) if tree else _levels(value, numbers)
+        for depth, (flat, types) in enumerate(levels):
             if numbers and not has_numbers:
                 has_numbers = not types.isdisjoint(numbers)
-            if list not in types and bytearray not in types:
+            if types.isdisjoint(_WRITABLE):
                 continue
             if types <= _WRITABLE:
                 items, extra = flat, 0
             else:
                 items, extra = [x for x in flat if type(x) in _WRITABLE], 1
-            base = _unshared_refs() + extra
+            base = _unshared_refs() + extra + (depth == held_twice_at)
             refs = list(map(sys.getrefcount, items))
             if not refs or max(refs) <= base:
                 continue
@@ -169,7 +202,48 @@ def aliases(value: Any) -> tuple[tuple, bool] | None:
                     repeats.append(((depth, pos), seen))
     except (_NotPlain, TypeError):
         return None
-    return tuple(repeats), has_numbers
+    return tuple(repeats), first, has_numbers
+
+
+#: What a tree nests in (`tree_levels`): exact dicts, lists and tuples.
+TREE_NODES = (dict, list, tuple)
+
+
+def tree_levels(value: Any):
+    """`_levels` for JSON-like data: exact dicts, lists and tuples, nested,
+    over the leaves of plain data; a dict's keys must be leaves too.
+
+    ``flat`` holds a level's items: the items of its lists and tuples, then
+    the values of its dicts. Pickled, such a value is its content and
+    nothing else -- a dict keeps its order, a list and a tuple differ -- so
+    records parsed from JSON are keyed by one pickle at C speed. Walked one
+    container at a time, 20k records cost 16x ``json.dumps`` per hit.
+    """
+    fakes = fake_clock()[0]
+    leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
+    level = [value]
+    for _ in range(MAX_LEVELS):
+        kinds = set(map(type, level))
+        if dict in kinds:
+            if len(kinds) == 1:
+                dicts, seqs = level, []
+            else:
+                dicts = [c for c in level if type(c) is dict]
+                seqs = [c for c in level if type(c) is not dict]
+            if not all(t in leaves for t in set(map(type, chain.from_iterable(dicts)))):
+                raise _NotPlain
+            flat = list(chain.from_iterable(seqs))
+            flat.extend(chain.from_iterable(map(dict.values, dicts)))
+        else:
+            flat = list(chain.from_iterable(level))
+        types = set(map(type, flat))
+        if not all(t in leaves or t in TREE_NODES for t in types):
+            raise _NotPlain
+        yield flat, types
+        if all(t in leaves for t in types):
+            return
+        level = flat if all(t in TREE_NODES for t in types) else [x for x in flat if type(x) in TREE_NODES]
+    raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
 
 
 def numpy_scalar_types() -> tuple:
@@ -221,10 +295,10 @@ def level_key_bytes(value: Any) -> bytes:
     numbers = numpy_scalar_types()
     parts = [type(value).__name__.encode()]
     for flat, types in _levels(value, numbers):
-        if len(types) > 1:
-            parts.append(pickle.dumps(list(map(type, flat)), protocol=4))
-        else:
+        if len(types) == 1:
             parts.append(pickle.dumps(next(iter(types)), protocol=4))
+        else:  # mixed, or none: the level below ``[np.float64(1), []]`` is empty
+            parts.append(pickle.dumps(list(map(type, flat)), protocol=4))
         seqs = flat if types <= _SEQS else [x for x in flat if type(x) in PLAIN_SEQS]
         if seqs:
             parts.append(pickle.dumps(list(map(len, seqs)), protocol=4))
@@ -240,7 +314,7 @@ def level_key_bytes(value: Any) -> bytes:
 _SEQS = frozenset(PLAIN_SEQS)
 
 
-_WRITABLE = frozenset({list, bytearray})
+_WRITABLE = frozenset({list, bytearray, dict})
 
 
 def _shared_probe() -> int:
@@ -276,6 +350,14 @@ def dict_rows(value: Any) -> tuple[tuple, list] | None:
     header, a frame's columns); rows whose orders differ take the general
     path, which keeps each dict's order.
     """
+    found = dict_rows_unchecked(value)
+    if found is None or not is_plain(found[1]):
+        return None
+    return found
+
+
+def dict_rows_unchecked(value: Any) -> tuple[tuple, list] | None:
+    """`dict_rows` before its rows are checked to be plain data."""
     if type(value) is not list or not value or set(map(type, value)) != {dict}:
         return None
     try:
@@ -291,9 +373,16 @@ def dict_rows(value: Any) -> tuple[tuple, list] | None:
         return None
     getter = operator.itemgetter(*keys)
     rows = list(map(getter, value)) if len(keys) > 1 else [(v,) for v in map(getter, value)]
-    if not is_plain(rows):
-        return None
     return keys, rows
+
+
+def shared_rows(value: list) -> dict[int, tuple]:
+    """``{id: (-1, position)}`` for the dicts of a `dict_rows` value that
+    something besides the list references: the ones another argument can
+    share."""
+    refs = list(map(sys.getrefcount, value))
+    base = _unshared_refs() - 1
+    return {id(value[pos]): (-1, pos) for pos in compress(range(len(refs)), map(base.__lt__, refs))}
 
 
 def dict_rows_profile(value: Any) -> int | None:

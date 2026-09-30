@@ -25,7 +25,7 @@ build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca, cash/decorator/code_identity.py:func_key @7ed93e6b -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca, cash/decorator/code_identity.py:func_key @bac7a4fa -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @8a590f3b, cash/dependency_state.py:DependencyStateHasher.compute @3825a447 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @b6b8d2d6, cash/dependency_state.py:DependencyStateHasher.compute @3825a447 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -49,7 +49,7 @@ that can change the result without changing an argument:
 | Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict. Modules, functions and classes are tracked as code instead. |
 | Closures, defaults, a bound method's instance | The values a closure captured (a captured module: its name and the code of the functions and classes read from it), parameter defaults by value, and the `self` of `cash.cache(obj.method)`. |
 | What a callable was built with | The arguments of a `functools.partial`, a factory closure's values, an `operator.itemgetter` key, the attributes of your class's callable instance and a bound method's instance, also when the callable sits in a dict or list global. |
-| Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. So is one held in an argument or a data global, at any depth: an instance's attribute, a list of steps, a transformer inside a library pipeline (a library object is only searched for your code; its own state is not keyed this way). A value a [registered hasher](../tutorials/feature-guides/custom-hashers.md) keys is not searched. |
+| Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. So is one held in an argument or a data global, at any depth down to 100 containers (deeper, cash warns): an instance's attribute, a list of steps, a transformer inside a library pipeline (a library object is only searched for your code; its own state is not keyed this way). A value a [registered hasher](../tutorials/feature-guides/custom-hashers.md) keys is not searched. |
 | Files named in `file_depends_on=` | The names only; their content is checked on lookup ([Files](#files)). |
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. Re-seeding recomputes. |
@@ -67,12 +67,12 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @479611f1 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
-2. A built-in content hasher: pandas, numpy, polars, pyarrow, modin and dask
-   values are hashed by content.
+2. A built-in content hasher: pandas, numpy, polars, pyarrow, modin, dask and
+   scipy.sparse values are hashed by content.
 3. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 4. A hasher you registered without `override=True`.
@@ -91,7 +91,10 @@ it): `{"a": 1, "b": 2}` and `{"b": 2, "a": 1}` are separate entries, and so
 are `**kwargs` passed in two orders. Named arguments share a key in any order.
 One list held twice is not two equal lists either: `[[0] * 3] * 3` repeats
 one row, and a write to it shows in every row, so it keys apart from a
-3x3 grid of separate rows.
+3x3 grid of separate rows. The same goes for a list, dict, set or array
+that two arguments, or two records of one argument, share. Which strings,
+dates or numbers are one object never matters: they cannot be written into,
+so a config parsed from JSON hits the equal one written as literals.
 [Custom hashers](../tutorials/feature-guides/custom-hashers.md) covers
 registration.
 

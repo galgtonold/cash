@@ -6,7 +6,7 @@
 
 cash hashes every argument of a cached call to build the key. Built-in values
 and most plain classes are pickled and hashed. pandas, numpy, polars, PyArrow,
-modin and dask values get content hashers of their own. Register a hasher for
+modin, dask and scipy.sparse values get content hashers of their own. Register a hasher for
 your own type when:
 
 - **It can't be pickled** (it holds a lock, a socket, a C handle). cash warns
@@ -57,7 +57,7 @@ and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
   cover every function passed to any cached call. Pass what a closure captures
   as a plain argument instead.
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @a1ec058f, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @65143507 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @d27cb1fc, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @65143507 -->
 The hasher is the value's whole identity. The code of the value's class still
 counts when the class is yours, but cash does not search the value for code it
 holds: a function stored on an instance, or the handlers and streams a
@@ -128,7 +128,7 @@ data changes.
 
 ## Overriding a built-in content hasher
 
-<!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7 broad="the list enumerates every type the builtin dispatcher recognises", cash/object_hashing.py:builtin_hash_family @ac9cffe9 -->
+<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b broad="the list enumerates every type the builtin dispatcher recognises", cash/object_hashing.py:builtin_hash_family @b0c04a56 -->
 cash hashes these types by their full content, before it looks at your
 registrations:
 
@@ -140,6 +140,7 @@ registrations:
 | PyArrow `Table`, `RecordBatch` | schema and every row, dictionaries included |
 | modin `DataFrame`, `Series` | converted to pandas, then as pandas |
 | dask collections | the task keys and the schema |
+| scipy.sparse matrices and arrays | type, shape, dtype, format and the arrays the format stores |
 
 A plain registration for one of these types could never run, so it raises
 `ValueError`. Pass `override=True` to replace the built-in:
@@ -155,7 +156,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @479611f1 -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result.
 

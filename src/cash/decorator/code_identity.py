@@ -24,6 +24,7 @@ from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_path
+from ..object_hashing import stable_key_repr
 from ..source_norm import (
     bytecode_identity,
     callable_identity,
@@ -147,13 +148,18 @@ def func_key(func: Callable) -> str:
         # process took a fresh namespace and none of them ever hit. Name it after what it
         # wraps, plus what it binds -- two partials of one function stay
         # two namespaces, and each is the same in every process.
+        # The bound values' content, not their ``repr``: that holds an
+        # ordinary object's address, and a new process never found the
+        # namespace again. Only a name: the values themselves are keyed per
+        # call (`ClosureFold.fold_bound_partial`).
         inner = func_key(func.func)
         try:
             bound = hashlib.sha256(
-                repr((func.args, sorted(func.keywords.items()))).encode("utf-8"),
+                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items()))), protocol=4),
             ).hexdigest()[:12]
-        except Exception:  # noqa: BLE001 - an unreprable argument keys on the function
-            bound = "?"
+        except Exception:  # noqa: BLE001 - an unpicklable argument keys on its type
+            shape = [type(v).__qualname__ for v in (*func.args, *func.keywords.values())]
+            bound = hashlib.sha256(repr((shape, sorted(func.keywords))).encode("utf-8")).hexdigest()[:12]
         return f"{inner}[partial:{bound}]"
     module = getattr(func, "__module__", None) or "__unknown__"
     if module in MAIN_MODULE_NAMES:

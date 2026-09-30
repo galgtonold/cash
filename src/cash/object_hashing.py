@@ -35,16 +35,19 @@ from __future__ import annotations
 
 import copyreg
 import dataclasses
+import fractions
 import hashlib
 import logging
 import pickle
 import random
 import sys
+import types
+import uuid
 from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
-from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
+from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES, PLAIN_SEQS
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +93,7 @@ def object_state(value: Any) -> dict:
 _BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
 
 
-def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None) -> tuple:
+def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None, left: list | None = None) -> tuple:
     """*canon*, a container's canonical items, tagged with the container's type.
 
     Every container carries its type, so containers holding equal items key
@@ -117,7 +120,7 @@ def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None) -> 
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
-        state += tuple(sorted((k, stable_key_repr(v, 45, hook=hook)) for k, v in own.items()))
+        state += tuple(sorted((k, stable_key_repr(v, 45, hook=hook, left=left)) for k, v in own.items()))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
@@ -129,6 +132,7 @@ def stable_key_repr(
     _seen: dict | None = None,
     *,
     hook: Callable[[Any], Any] | None = None,
+    left: list | None = None,
 ) -> Any:
     """The form a cache key hashes *value* in: equal values pickle to equal
     bytes, in any process.
@@ -164,10 +168,22 @@ def stable_key_repr(
     uncached). Expanding it path by path to the depth limit never returned,
     and a form that stood in for the loop could make two different graphs key
     alike, which would be a wrong answer.
+
+    *left*, when given, gets an entry for each object left to pickle whole
+    (`canonical_bytes` reads it): only then can the form hold an object
+    pickled twice, whose identity only pickle's memo records.
     """
     if _depth > 50:
+        if left is not None:
+            left.append(value)
         return value
     if type(value) in CODELESS_PRIMS:
+        if type(value) is bytearray and _seen is not None:
+            # Written into, one bytearray held twice changes in two places.
+            first = _seen.get(id(value))
+            if first is not None:
+                return ("__cash_alias__", first[0])
+            _seen[id(value)] = (len(_seen), value)
         return value
     if hook is not None:
         stand_in = hook(value)
@@ -176,15 +192,22 @@ def stable_key_repr(
     if type(value) in _plain_data.numpy_scalar_set():
         # A number: pickled by value, nothing inside to order.
         return ("__cash_np__", value.dtype.char, value.tobytes())
-    family = _builtin_family_of(type(value))
-    if family is not None:
-        digest = builtin_hash(value)
-        if digest is not None:
-            return ("__cash_content__", family, digest)
     if _stack is None:
         _stack = set()
     if _seen is None:
         _seen = {}
+    family = _builtin_family_of(type(value))
+    if family is not None:
+        if family in _WRITABLE_FAMILIES:
+            # One array held twice changes in two places when written.
+            first = _seen.get(id(value))
+            if first is not None:
+                return ("__cash_alias__", first[0])
+        digest = builtin_hash(value)
+        if digest is not None:
+            if family in _WRITABLE_FAMILIES:
+                _seen[id(value)] = (len(_seen), value)
+            return ("__cash_content__", family, digest)
     if id(value) in _stack:
         raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
     if isinstance(value, _MUTABLE_CONTAINERS):
@@ -196,7 +219,7 @@ def stable_key_repr(
         _seen[id(value)] = (len(_seen), value)
     _stack.add(id(value))
     try:
-        return _stable_key_repr_of(value, _depth, _stack, _seen, hook)
+        return _stable_key_repr_of(value, _depth, _stack, _seen, hook, left)
     finally:
         _stack.discard(id(value))
 
@@ -204,6 +227,35 @@ def stable_key_repr(
 #: Containers whose identity code can observe by writing through one
 #: reference and reading through another.
 _MUTABLE_CONTAINERS = (list, dict, set)
+
+#: Content-hashed families whose values can be written into in place.
+_WRITABLE_FAMILIES = frozenset({"numpy", "pandas", "scipy.sparse"})
+
+#: Leaves that pickle as their value, whatever else refers to them.
+_VALUE_LEAVES = (*PARSED_VALUE_TYPES, fractions.Fraction, uuid.UUID)
+
+#: Pickled by name, not by content.
+_BY_NAME = (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType)
+
+
+def canonical_bytes(value: Any, hook: Callable[[Any], Any] | None = None, seen: dict | None = None) -> bytes:
+    """*value*'s canonical form (`stable_key_repr`), pickled: equal values give
+    equal bytes, in any process, however they were built.
+
+    Pickled without the memo when the form is all tuples and leaves: through
+    the memo, a second reference to one string, date or Decimal is written
+    as a back-reference, so ``{"start": s, "end": s}`` and an equal dict
+    parsed from JSON, whose values are two strings, keyed apart. Sharing
+    that matters -- a list, dict, set or array held twice -- is spelled out
+    in the form. Only when an object is left to pickle whole, which may
+    share state inside, is the memo kept. *seen*, when given, is filled with
+    the writable containers the walk met (`stable_key_repr`'s ``_seen``).
+    """
+    left: list = []
+    form = stable_key_repr(value, _seen=seen, hook=hook, left=left)
+    if left:
+        return b"m" + _plain_data.key_dumps(form)
+    return b"u" + _plain_data.content_dumps(form)
 
 
 #: What a `stable_key_repr` hook returns for a value it has no stand-in for.
@@ -225,21 +277,27 @@ def _builtin_family_of(type_: type) -> str | None:
 _FAMILIES: dict[type, str | None] = {}
 
 
-def _stable_key_repr_of(value: Any, _depth: int, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None) -> Any:
+def _stable_key_repr_of(
+    value: Any, _depth: int, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None, left: list | None
+) -> Any:
     """`stable_key_repr` of one object, with the path walked so far."""
 
     def sub(v: Any) -> Any:
-        return stable_key_repr(v, _depth + 1, _stack, _seen, hook=hook)
+        return stable_key_repr(v, _depth + 1, _stack, _seen, hook=hook, left=left)
 
     if isinstance(value, (set, frozenset)):
         items = [sub(v) for v in value]
-        items.sort(key=_plain_data.key_dumps)
-        return _typed(value, tuple(items), hook)
+        items.sort(key=_plain_data.content_dumps)
+        return _typed(value, tuple(items), hook, left)
     if isinstance(value, dict):
-        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), hook)
+        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), hook, left)
     if isinstance(value, (list, tuple)):
-        return _typed(value, tuple(sub(v) for v in value), hook)
+        return _typed(value, tuple(sub(v) for v in value), hook, left)
     if not contains_set(value):
+        if left is not None and not (
+            type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
+        ):
+            left.append(value)
         return value
     t = type(value)
     return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
@@ -325,9 +383,54 @@ def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> 
     if isinstance(value, (list, tuple)):
         return any(contains_set(v, _depth + 1, _seen) for v in value)
     obj_state = object_state(value)
-    if obj_state:
-        return any(contains_set(v, _depth + 1, _seen) for v in obj_state.values())
+    if obj_state and any(contains_set(v, _depth + 1, _seen) for v in obj_state.values()):
+        return True
+    if _holds_native_state(type(value)):
+        try:
+            parts = _pickled_state(value)
+        except Exception:  # noqa: BLE001 - what cannot be reduced fails in the pickle, with its own error
+            return False
+        return contains_set(parts, _depth + 1, _seen)
     return False
+
+
+#: ``Py_TPFLAGS_IMMUTABLETYPE``: set on a class written in C, never on one
+#: a ``class`` statement makes.
+_IMMUTABLE_TYPE_FLAG = 1 << 8
+
+#: Types pickled by name, or leaves: nothing inside them is pickled by value.
+_NO_NATIVE_STATE = (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType)
+
+
+def _holds_native_state(type_: type) -> bool:
+    """Can a *type_* instance hold values outside its ``__dict__`` and slots?
+
+    A standard-library class written in C keeps them in C: a
+    ``functools.partial``'s arguments, a ``deque``'s items, what a list
+    iterator has left. `object_state` does not see them, so a set among them
+    was left to pickle, which writes it in the order PYTHONHASHSEED picks,
+    and the key changed from process to process. Third-party C types are
+    left alone: reducing one can serialise all its data (a tensor's
+    storage) on every call.
+    """
+    try:
+        return _NATIVE_STATE[type_]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return False
+    top = (getattr(type_, "__module__", "") or "").split(".", 1)[0]
+    found = (
+        not issubclass(type_, _NO_NATIVE_STATE)
+        and type_ not in LEAF_TYPES
+        and (top == "builtins" or top in sys.stdlib_module_names)
+        and any(k.__flags__ & _IMMUTABLE_TYPE_FLAG for k in type_.__mro__[:-1])
+    )
+    _NATIVE_STATE[type_] = found
+    return found
+
+
+_NATIVE_STATE: dict[type, bool] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +463,8 @@ def builtin_hash_family(type_: type) -> str | None:
         return "modin"
     if module.startswith("dask"):
         return "dask"
+    if module.startswith("scipy.sparse") and hasattr(type_, "tocsr") and hasattr(type_, "format"):
+        return "scipy.sparse"
     return None
 
 
@@ -387,6 +492,8 @@ def builtin_hash(value: Any) -> str | None:
         return hash_modin(value)
     if family == "dask":
         return hash_dask(value)
+    if family == "scipy.sparse":
+        return hash_sparse(value)
     return None
 
 
@@ -426,7 +533,7 @@ def hash_pandas(value: Any) -> str | None:
             schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
         h = hashlib.sha256(schema.encode("utf-8"))
         if value.attrs:
-            h.update(pickle.dumps(stable_key_repr(value.attrs), protocol=4))
+            h.update(canonical_bytes(value.attrs))
         _fold_pandas_values(h, value, pd)
         return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, pickle.PicklingError):
@@ -516,7 +623,11 @@ def _object_items_bytes(items: list) -> bytes:
     (`stable_key_repr`), so sets and dicts inside are in a stable order."""
     if _plain_data.is_plain(items):
         return b"P" + _plain_data.pickle_unshared(items)
-    return b"S" + pickle.dumps(stable_key_repr(items), protocol=4)
+    # The array or column holds each item besides *items*.
+    tree = _plain_data.sharing(items, tree=True, held_twice_at=0)
+    if tree is not None:
+        return b"T" + _plain_data.pickle_unshared((items, tree[0]))
+    return b"S" + canonical_bytes(items)
 
 
 def _pandas_dtype_key(dtype: Any) -> str:
@@ -687,6 +798,45 @@ def hash_polars(value: Any) -> str | None:
     return None
 
 
+def held_objects(value: Any) -> list | None:
+    """The Python objects a library value keeps in object storage, other
+    than plain leaves; None when it keeps none.
+
+    A numpy ``object`` array, a pandas ``object`` column and a polars
+    ``Object`` column hold arbitrary objects -- a model, a function -- where
+    no attribute walk reaches them: in the array buffer, in the blocks. Their
+    content hashers pickle such an object by reference, so its code is in no
+    key unless the code search is handed them here. Strings, numbers and
+    dates, which fill most object columns, are left out at C speed.
+    """
+    family = _builtin_family_of(type(value))
+    columns: list = []
+    try:
+        if family == "numpy":
+            if getattr(value.dtype, "hasobject", False):
+                columns.append(value.ravel(order="K"))
+        elif family == "pandas":
+            frame = type(value).__name__ == "DataFrame"
+            for pos, dtype in enumerate(value.dtypes if frame else [value.dtype]):
+                if str(dtype) == "object":
+                    columns.append(_np_array(value.iloc[:, pos] if frame else value, object))
+        elif family == "polars":
+            import polars as pl
+
+            if isinstance(value, pl.DataFrame):
+                columns.extend(value.get_column(n).to_list() for n, dt in value.schema.items() if dt == pl.Object)
+            elif isinstance(value, pl.Series) and value.dtype == pl.Object:
+                columns.append(value.to_list())
+    except Exception:  # a library's internals changed: nothing found
+        logger.debug("Could not list the objects a %s holds", type(value).__name__, exc_info=True)
+        return None
+    found: list = []
+    for column in columns:
+        if not all(k in LEAF_TYPES for k in set(map(type, column))):
+            found.extend(v for v in column if type(v) not in LEAF_TYPES)
+    return found or None
+
+
 def is_native_panic(exc: BaseException) -> bool:
     """Is *exc* a panic raised out of a Rust extension (``pyo3``), such as
     polars'? It derives from ``BaseException``, so no ``except Exception``
@@ -764,6 +914,47 @@ def hash_dask(value: Any) -> str | None:
         return h.hexdigest()
     except (TypeError, ValueError, AttributeError):
         logger.debug("Failed to hash dask object via __dask_keys__")
+        return None
+
+
+#: The arrays a scipy sparse matrix is, by format: everything its values
+#: and their positions are stored in.
+_SPARSE_PARTS = ("data", "indices", "indptr", "offsets")
+
+
+def hash_sparse(value: Any) -> str | None:
+    """Hash a scipy sparse matrix or array by its content, format included.
+
+    The type, shape and dtype, then the arrays its format keeps (`_SPARSE_PARTS`,
+    and a COO's coordinates), each hashed as an array (`hash_numpy`), so an
+    explicit zero, an unsorted index or an ``int32`` against an ``int64``
+    index keys apart: code reading ``.data`` or ``.indices`` sees them. A
+    DOK or LIL matrix, whose entries live in Python dicts and lists, is keyed
+    as the CSR matrix it converts to. Without this every sparse argument --
+    a TF-IDF matrix, a one-hot encoding -- ran uncached.
+    """
+    try:
+        t = type(value)
+        h = hashlib.sha256(f"{t.__module__}.{t.__qualname__}:{value.shape}:{value.dtype}:{value.format}:".encode())
+        if value.format in ("dok", "lil"):
+            canon = value.tocsr()
+            canon.sort_indices()
+            arrays = [(name, getattr(canon, name)) for name in ("data", "indices", "indptr")]
+        else:
+            arrays = [(name, getattr(value, name)) for name in _SPARSE_PARTS if hasattr(value, name)]
+            coords = getattr(value, "coords", None)
+            if coords is None and value.format == "coo":
+                coords = (value.row, value.col)
+            if coords is not None:
+                arrays.extend((f"coords{i}", c) for i, c in enumerate(coords))
+        for name, array in arrays:
+            digest = hash_numpy(array)
+            if digest is None:
+                return None
+            h.update(f"|{name}:{digest}".encode())
+        return h.hexdigest()
+    except (TypeError, ValueError, AttributeError, MemoryError):
+        logger.debug("Failed to hash scipy sparse %s", type(value).__name__)
         return None
 
 

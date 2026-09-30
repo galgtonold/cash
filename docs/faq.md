@@ -19,7 +19,8 @@ link to the page that has the details.
     [Knowing when to recompute](how-it-works/invalidation.md).
 
 ??? question "Does it work with pandas, numpy, polars, torch or duckdb?"
-    Built-in hashers cover pandas, numpy, polars, PyArrow, modin and dask. For
+    Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask and
+    scipy.sparse. For
     anything else, register one with `cash.register_hasher`. See
     [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 

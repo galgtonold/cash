@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/object_hashing.py:builtin_hash @bd4210c7, cash/object_hashing.py:compute_hash_full @244ad49e -->
+<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b, cash/object_hashing.py:compute_hash_full @244ad49e -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them for a loop
 iteration's values and for the arguments of a cached call inside a statement.

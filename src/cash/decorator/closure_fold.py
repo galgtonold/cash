@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import dis
+import functools
 import hashlib
 import inspect
 import pickle
@@ -786,6 +787,34 @@ class ClosureFold:
             except TypeError:
                 pass  # not weak-referenceable; recompute per call
         return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
+
+    def fold_bound_partial(self, func: Callable, func_name: str, state_hash: str) -> str:
+        """Mix what a cached ``functools.partial`` binds into the key.
+
+        ``c.cache(partial(total, arr))``: the bound values never appear in
+        the call's arguments, and they were keyed only by a ``repr`` taken at
+        decoration -- which elides the middle of an array, so two arrays
+        differing there shared an entry, and holds an ordinary object's
+        address, so the entry never hit in another process and a change to
+        the object was not seen. They are hashed per call, as arguments are.
+        One that cannot be hashed leaves the call uncached: keying it on
+        anything less would serve one binding's result to another.
+        """
+        if not isinstance(func, functools.partial):
+            return state_hash
+        try:
+            bound = self._args.hash_payload(func.args, func.keywords)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError) as e:
+            suspect = self._args.first_unhashable_arg_type(func.args, func.keywords)
+            what = "a value" if suspect == "<unknown>" else f"a {suspect}"
+            raise KeyBuildFailed(
+                "KEY-UNHASHABLE-ARG",
+                f"@cash.cache on {func_name}: {what} the functools.partial binds could "
+                f"not be hashed ({type(e).__name__}), so this call does not cache.",
+                "pass the value as an argument of the call instead of binding it, or "
+                "register a hasher for its type with cash.register_hasher(...).",
+            ) from e
+        return hashlib.sha256(f"{state_hash}:partial:{bound}".encode("utf-8")).hexdigest()
 
     def fold_bound_self(
         self,
