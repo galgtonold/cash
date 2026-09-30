@@ -431,9 +431,8 @@ class RandomnessVisitor(ast.NodeVisitor):
         if not names:
             return
 
-        kind = self._carrier_kind_of(value)
+        kind, seeded = self._carrier_in(value)
         if kind is not None:
-            seeded = _rng_constructor_is_seeded(value)
             for name in names:
                 self.carrier_assigns[name] = (kind, seeded)
                 self.carrier_clears.discard(name)
@@ -461,6 +460,29 @@ class RandomnessVisitor(ast.NodeVisitor):
         for name in names:
             self.carrier_assigns.pop(name, None)
             self.carrier_clears.add(name)
+
+    def _carrier_in(self, value: ast.expr) -> tuple[str | None, bool]:
+        """The carrier kind *value* may hold, and whether it is surely seeded.
+
+        Looks through a conditional and ``or``: the optional-generator idiom
+        ``rng = np.random.default_rng() if rng is None else rng`` (or ``rng =
+        rng or np.random.default_rng()``) draws from an unseeded generator
+        whenever the caller passes none, as the statement form ``if rng is
+        None: rng = default_rng()`` does -- which warned, while these froze
+        the first draw silently. Seeded only when every constructor is.
+        """
+        if isinstance(value, ast.IfExp):
+            branches: list[ast.expr] = [value.body, value.orelse]
+        elif isinstance(value, ast.BoolOp):
+            branches = list(value.values)
+        else:
+            kind = self._carrier_kind_of(value)
+            return kind, kind is not None and _rng_constructor_is_seeded(value)  # type: ignore[arg-type]
+        found = [self._carrier_in(branch) for branch in branches]
+        kinds = [kind for kind, _ in found if kind is not None]
+        if not kinds:
+            return None, False
+        return kinds[0], all(seeded for kind, seeded in found if kind is not None)
 
     def _carrier_kind_of(self, value: ast.expr) -> str | None:
         """Return the carrier kind *value* constructs, or None."""
