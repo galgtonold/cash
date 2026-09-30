@@ -756,7 +756,7 @@ these reads is reported where it is called, however it is called: `now()`,
 
 <!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @67ea79d5 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @8c633957 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
