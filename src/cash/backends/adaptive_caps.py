@@ -23,7 +23,9 @@ import logging
 import os
 import shutil
 
-import psutil
+from .._lazy_module import LazyModule
+
+psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +153,17 @@ def free_bytes_on_volume(path: str) -> int:
 
 
 def _total_system_ram() -> int | None:
-    """Total physical RAM in bytes, or ``None`` when psutil cannot read it."""
+    """Total physical RAM in bytes, or ``None`` when it cannot be read.
+
+    From ``sysconf`` where the platform has it (Linux, macOS): the same total
+    psutil reports, without importing psutil (~11 ms) in every script that
+    builds a cache. psutil answers elsewhere (Windows)."""
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        if total > 0:
+            return int(total)
+    except (AttributeError, ValueError, OSError):
+        pass
     try:
         return int(psutil.virtual_memory().total)
     except Exception:  # any psutil failure → fixed fallback

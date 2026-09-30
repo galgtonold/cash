@@ -191,10 +191,6 @@ def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
 
 def _in_kernel() -> bool:
     """Whether this runs inside a Jupyter kernel, where widgets can be drawn."""
-    try:
-        from IPython import get_ipython
-    except ImportError:
-        return False
     return getattr(get_ipython(), "kernel", None) is not None
 
 

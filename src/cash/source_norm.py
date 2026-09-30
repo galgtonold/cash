@@ -47,13 +47,14 @@ import textwrap
 import tokenize
 import types
 
-import psutil
-
+from ._lazy_module import LazyModule
 from ._memo import COMPILED_MODULES, LruMemo
 from .analysis.annotations import ANNOTATION_PATTERN, waiver_items
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .tracking.tracker_context import untracked
 from .value_types import IMMUTABLE_PRIMS
+
+psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
 __all__ = [
     "bytecode_identity",
@@ -886,17 +887,40 @@ def stat_has_settled(st: object) -> bool:
     return _time.time() - st.st_mtime > _SETTLED_SECONDS
 
 
+def _proc_start_time() -> float | None:
+    """This process's start time from ``/proc`` (Linux), or None elsewhere.
+
+    psutil's own formula -- boot time plus the start tick over the clock rate
+    -- read directly, so a script does not import psutil (~11 ms) for it.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        # Read untracked (`read_code_file`): cash's own read, not the user's.
+        stat = read_code_file("/proc/self/stat")
+        # Field 22, counted after the ")" that ends the command name (which
+        # may itself hold spaces or parentheses).
+        start_ticks = int(stat[stat.rindex(b")") + 2 :].split()[19])
+        boot = next(
+            int(line.split()[1]) for line in read_code_file("/proc/stat").splitlines() if line.startswith(b"btime ")
+        )
+        return boot + start_ticks / os.sysconf("SC_CLK_TCK")
+    except Exception:  # noqa: BLE001 - not Linux, or no /proc: psutil answers
+        return None
+
+
 def _process_start_time() -> float:
     """Wall-clock time this process started, best effort, cached."""
     global _PROCESS_START
     if _PROCESS_START is not None:
         return _PROCESS_START
 
-    started: float | None = None
-    try:
-        started = float(psutil.Process().create_time())
-    except Exception:  # noqa: BLE001 - no start time just falls back to cash's import time
-        started = None
+    started = _proc_start_time()
+    if started is None:
+        try:
+            started = float(psutil.Process().create_time())
+        except Exception:  # noqa: BLE001 - no start time just falls back to cash's import time
+            started = None
     if started is None:
         # cash's own import time. Misses only a file edited in the gap between
         # this process starting and cash being imported -- normally the first
