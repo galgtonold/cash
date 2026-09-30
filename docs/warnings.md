@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @5de52e8c -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @8568ad55 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -736,6 +736,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
 | [KEY-STALE-CASH-KEY](#key-stale-cash-key) | decorator | one `__cash_key__` stands for two different contents |
 | [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
+| [KEY-UNHASHABLE-CAPTURE](#key-unhashable-capture) | decorator | a value a closure reads cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
 
@@ -1160,6 +1161,26 @@ cash.register_hasher(DatabaseSession, lambda s: s.database_url)
 For a closure, `lambda` or `functools.partial`, pass a module-level function
 and give the captured values as arguments
 ([Code you pass as an argument](decorator-limitations.md#code-you-pass-as-an-argument)).
+
+**When it is safe to ignore.** When you do not need that call cached.
+
+### KEY-UNHASHABLE-CAPTURE {#key-unhashable-capture}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/closure_fold.py:unhashable_capture @5ca7b3b7 -->
+**What happened.** The function, or a helper it calls, is a closure that reads
+a captured variable whose value could not be hashed -- an object holding a
+lock, a socket or a file handle. The call was not cached. The message names
+the variable and its type.
+
+**Why it matters.** The function is not cached while it captures that value.
+Keyed without it, a change to what the value carries (a setting on a config
+object) would have served the old result.
+
+**What to do.** Pass what the function needs as an argument, capture only the
+plain values it reads (`weight = settings.weight` in the factory), or register
+a hasher for the type.
 
 **When it is safe to ignore.** When you do not need that call cached.
 

@@ -56,6 +56,11 @@ class _Writer:
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
+    def __cash_key__(self):
+        # It holds a thread, which cannot be hashed; the body reads it, so
+        # without a key of its own the call would run uncached.
+        return (str(self.path), self.text)
+
     def _run(self):
         self.read_done.wait(10)
         _write(self.path, self.text)
