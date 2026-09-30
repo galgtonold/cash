@@ -65,6 +65,19 @@ def is_mutable(value) -> bool:
     return getattr(type(value), "__dictoffset__", 0) != 0 and hasattr(value, "__dict__")
 
 
+def compared_by_identity(value) -> bool:
+    """Whether *value* is only ever equal to itself (its type keeps ``object.__eq__``).
+
+    A copy of such a value is a different value, so a hit that IS a module
+    global or closure variable of the function hands back that variable's
+    own object (`ResultStore.restore_identity`): ``MISSING = object()``. A
+    class, function or module pickles by reference and needs none of this.
+    """
+    if value is None or isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value):
+        return False
+    return type(value).__eq__ is object.__eq__
+
+
 def shares_memory(result, value) -> bool:
     """Whether *result* and *value* may sit on the same buffer, cheaply.
 
@@ -331,7 +344,8 @@ class PurityChecks:
         globals_ = getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
             for name, value in list(globals_.items()):
-                if value is result and is_mutable(value):
+                # One compared by identity is handed back as itself on a hit.
+                if value is result and is_mutable(value) and not compared_by_identity(value):
                     return "is the module global", name
         return None
 

@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @59543677 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @a4b76be6 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -408,11 +408,13 @@ recompute time you can feel on every restart.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @aabac7c2 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @0d53b612 -->
 **What happened.** The result shares state with an object the caller still
 holds: it is an argument, holds one, is a view of an array argument, or is a
 module global. On the first run, a write through one shows in the other. A
-cache hit returns a separate copy, so from then on it does not.
+cache hit returns a separate copy, so from then on it does not. A module
+global whose type compares by identity (a plain class without `__eq__`, such
+as a sentinel) is not reported: a hit hands back that global itself.
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on
@@ -600,7 +602,7 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @50f5a969, cash/decorator/purity_checks.py:PurityChecks.argument_snapshot @334133e6 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.argument_snapshot @334133e6 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @7507ae49, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that changes an argument is **not stored**, so it runs every time. For
 arguments that take more than about 50 ms to hash, this check is skipped.
@@ -900,7 +902,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @0786c6c6 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @abb5aa4c -->
 **What happened.** A function marked `@cash.cache(frozen=True)` promised its
 result is not modified, and a later check found one of its results modified.
 
@@ -1428,7 +1430,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @cc2d1ab2 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @49b1dc2c -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

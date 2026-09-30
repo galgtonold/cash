@@ -28,6 +28,7 @@ from .call_state import NO_WATCH
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
+from .purity_checks import compared_by_identity
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -51,6 +52,14 @@ STORE_FAILED_FIX = (
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
 #: tried again (`ResultStore.attach_lineage`).
 UNTAGGABLE_TYPES: LruMemo[type, bool] = LruMemo(RESULT_TYPES)
+
+
+def _read_only_array(value: Any) -> bool | None:
+    """False/True for a writable/read-only numpy array, None for anything else."""
+    value_type = type(value)
+    if value_type.__name__ != "ndarray" or not (value_type.__module__ or "").startswith("numpy"):
+        return None
+    return not value.flags.writeable
 
 
 def _snapshot(item: Any) -> Any:
@@ -194,6 +203,57 @@ class ResultStore:
                 f"it changed its argument{'s' if len(mutated) > 1 else ''} {names} in place, which a hit would not do"
             )
         return refusal
+
+    def _result_ref(self, func_name: str, result: Any) -> list | None:
+        """``["global" | "closure", name]`` when *result* is that variable's own
+        object and its type compares by identity (a sentinel), else None."""
+        # A type with its own ``__eq__`` compares by value, which a copy keeps.
+        if type(result) in IMMUTABLE_PRIMS or not compared_by_identity(result):
+            return None
+        spec = self._registry.cached.get(func_name)
+        if spec is None:
+            return None
+        func = inspect.unwrap(spec.func)
+        try:
+            for name, cell in zip(func.__code__.co_freevars, func.__closure__ or ()):
+                if cell.cell_contents is result:
+                    return ["closure", name]
+            for name, value in getattr(func, "__globals__", {}).items():
+                if value is result:
+                    return ["global", name]
+        except (AttributeError, ValueError, RuntimeError):
+            return None
+        return None
+
+    def restore_identity(self, func_name: str, metadata: CacheMetadata, value: Any) -> Any:
+        """What a hit hands back for *value*: the identity and flags the result had.
+
+        A numpy array stored read-only is read-only again, and a sentinel
+        stored as a module global or closure variable is that variable's
+        object, when it still holds one of the same type (`CacheMetadata.result_ref`).
+        """
+        if metadata.read_only and _read_only_array(value) is False:
+            try:
+                value.flags.writeable = False
+            except (AttributeError, ValueError):
+                pass
+        ref = metadata.result_ref
+        if ref and len(ref) == 2:
+            spec = self._registry.cached.get(func_name)
+            if spec is not None:
+                func = inspect.unwrap(spec.func)
+                kind, name = ref
+                try:
+                    if kind == "closure":
+                        cells = dict(zip(func.__code__.co_freevars, func.__closure__ or ()))
+                        current = cells[name].cell_contents
+                    else:
+                        current = func.__globals__[name]
+                except (AttributeError, KeyError, ValueError):
+                    return value
+                if type(current) is type(value):
+                    return current
+        return value
 
     def _refuse_awaitable(self, func_name: str, res: Any) -> str:
         """CACHE-RETURNS-AWAITABLE: a sync function handed back a coroutine.
@@ -372,6 +432,8 @@ class ResultStore:
                 # `frozen=True` does not look undecorated to the rate ceiling
                 # and lose disk persistence.
                 copy_required=not self._registry.is_frozen(func_name),
+                read_only=_read_only_array(result) or None,
+                result_ref=self._result_ref(func_name, result),
                 **(manifest or {}),
             )
 

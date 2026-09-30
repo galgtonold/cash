@@ -32,14 +32,17 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @50f5a969, cash/backends/serialization.py:get_serializer @76cf2c1b -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/backends/serialization.py:get_serializer @76cf2c1b, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
   only on the call that ran it.
 - **A hit returns a copy.** The value is rebuilt from the stored bytes, so
   writing into a result you got from a hit never changes what the next caller
-  gets.
+  gets. The copy keeps what the result was: a read-only numpy array is
+  read-only again, and a result that *is* a module global or closure variable
+  compared by identity (a sentinel such as `MISSING = object()`) comes back as
+  that very object, so `is MISSING` holds on a hit.
 
 To configure your own instance instead of the shared default, create a `Cash`
 and use its `cache` method:
@@ -128,7 +131,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @a08b9044, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @b1adf703, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -370,7 +373,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @50f5a969 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.
@@ -398,7 +401,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @0786c6c6, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @abb5aa4c, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:

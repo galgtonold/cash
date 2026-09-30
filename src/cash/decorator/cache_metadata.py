@@ -84,6 +84,17 @@ class CacheMetadata:
     #: entry, so a hit can leave it where the body did (``RngWatch.replay_parts``).
     rng_replay: dict[str, Any] | None = None
 
+    #: The result was a numpy array marked read-only (``flags.writeable``
+    #: False). Neither a copy nor a pickle keeps the flag, so a hit sets it
+    #: again (`ResultStore.restore_identity`).
+    read_only: bool | None = None
+    #: The result WAS a module global or a closure variable of the function
+    #: whose type compares by identity (``MISSING = object()``):
+    #: ``["global" | "closure", name]``. A copy is a different object, so
+    #: ``is MISSING`` failed on every hit; a hit hands back the object that
+    #: name holds instead (`ResultStore.restore_identity`).
+    result_ref: list | None = None
+
     force_persist: bool | None = None
     metadata_only: bool | None = None
 
