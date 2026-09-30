@@ -258,6 +258,18 @@ def is_cow_pandas(value: Any) -> bool:
     return _COW_PANDAS
 
 
+def frame_memoable(value: Any) -> bool:
+    """Can the copy-on-write memo check *value* instead of reading it
+    (`ArgHasher._memo_content_digest`)? A pandas frame under copy-on-write
+    whose blocks pandas alone can write (`_blocks_outside_the_memo`)."""
+    if not is_cow_pandas(value):
+        return False
+    try:
+        return not _blocks_outside_the_memo(value)
+    except Exception:  # noqa: BLE001 - a pandas internals change: no memo
+        return False
+
+
 def frame_signature(obj: Any) -> tuple:
     """What must stay the same for a pandas object's content hash to hold.
 
@@ -1088,11 +1100,14 @@ class ArgHasher:
             )
             walked: dict = {}
             previous = getattr(CONTENT_DIGEST, "fn", None)
+            previous_memoable = getattr(CONTENT_DIGEST, "memoable", None)
             CONTENT_DIGEST.fn = self._memo_content_digest
+            CONTENT_DIGEST.memoable = frame_memoable
             try:
                 args_bytes = canonical_bytes(form, hook=self._nested_hasher, seen=walked)
             finally:
                 CONTENT_DIGEST.fn = previous
+                CONTENT_DIGEST.memoable = previous_memoable
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)

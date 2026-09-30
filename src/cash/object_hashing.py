@@ -317,9 +317,18 @@ CONTENT_DIGEST = threading.local()
 _HOLDS_SCAN_ITEMS = 256
 
 
+#: An array, frame or table at least this big makes the object holding it
+#: keyed part by part (`holds_content_data`). Below it, pickling the object
+#: whole is cheaper than hashing each part on its own: a fitted random forest
+#: holds a few small arrays per tree, and opened up took 11 ms a hit where
+#: its pickle took 4.
+OPEN_UP_BYTES = 1 << 20
+
+
 def holds_content_data(value: Any) -> bool:
-    """Does the object *value* hold a frame, array or table in an attribute,
-    or in a list, tuple or dict an attribute holds?
+    """Does the object *value* hold a frame, array or table worth keying on
+    its own (`_worth_opening`), in an attribute or in a list, tuple or dict
+    an attribute holds?
 
     ``__dict__`` alone, not `object_state`: this is asked of every object a
     key walk leaves to pickle, and the slots walk up the MRO made keying a
@@ -332,16 +341,38 @@ def holds_content_data(value: Any) -> bool:
     for v in state.values():
         t = type(v)
         if _builtin_family_of(t) is not None:
-            return True
+            if _worth_opening(v):
+                return True
+            continue
         if t is list or t is tuple:
             items: Any = v[:_HOLDS_SCAN_ITEMS]
         elif t is dict:
             items = [x for _, x in zip(range(_HOLDS_SCAN_ITEMS), v.values())]
         else:
             continue
-        if any(_builtin_family_of(type(x)) is not None for x in items):
+        if any(_builtin_family_of(type(x)) is not None and _worth_opening(x) for x in items):
             return True
     return False
+
+
+def _worth_opening(value: Any) -> bool:
+    """Is *value*, a frame, array or table inside an object, cheaper keyed on
+    its own than pickled with the object? When the key's caller can check it
+    instead of reading it (``CONTENT_DIGEST.memoable``: an unchanged
+    copy-on-write pandas frame), or when it is big (`OPEN_UP_BYTES`)."""
+    memoable = getattr(CONTENT_DIGEST, "memoable", None)
+    if memoable is not None and memoable(value):
+        return True
+    try:
+        if _builtin_family_of(type(value)) == "pandas":
+            size = pandas_nbytes(value)
+        elif _builtin_family_of(type(value)) == "polars":
+            size = value.estimated_size()
+        else:
+            size = getattr(value, "nbytes", None)
+    except Exception:  # noqa: BLE001 - a size we cannot read: pickle it whole, as before
+        return False
+    return isinstance(size, int) and size >= OPEN_UP_BYTES
 
 
 def _builtin_family_of(type_: type) -> str | None:
