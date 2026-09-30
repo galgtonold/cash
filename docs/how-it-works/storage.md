@@ -75,7 +75,7 @@ a cap you set reads `(set by max_cache_size)`.
     <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_disk_budget @e5d4f9bb -->
     `%cash_on` prints it, capitalised, under `Cash enabled.`.
 
-<!-- claim: cash/__main__.py:cmd_info @ee74bfe2, cash/__main__.py:cmd_clear @a08b9044 -->
+<!-- claim: cash/__main__.py:cmd_info @ee74bfe2, cash/__main__.py:cmd_clear @b1adf703 -->
 `cash info` prints the folder in use, where that setting came from, and both
 caps. `cash clear` deletes a cache folder: `cash clear analysis.ipynb` clears
 that notebook's whole cache folder, shared with its neighbours, and
@@ -185,13 +185,17 @@ notebook statement also drops its older versions when the new one is written.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer.serialize @97962311, cash/backends/serialization.py:_parquet_keeps @7d0d2a54 -->
+<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer.serialize @97962311, cash/backends/serialization.py:_parquet_keeps @d58d3066 -->
 A pandas `DataFrame` is stored as Parquet when pyarrow or fastparquet is
-installed, and comes back as it was stored, `RangeIndex` included. A frame
-Parquet cannot give back unchanged (non-string, duplicate or multi-level
-column labels, an index with a frequency, no columns, or a column Parquet
-cannot convert) is pickled instead. Everything else, and a DataFrame without a
-Parquet engine, is pickled.
+installed and Parquet gives it back unchanged: a plain `DataFrame` (not a
+subclass) of at most 100 columns with unique string labels, whose columns
+and index hold numbers, booleans, datetimes (finer than seconds) or
+pyarrow-backed strings, with no index frequency, no `attrs` and default
+`flags`. It comes back as it was stored, `RangeIndex` included. Any other
+frame is pickled: object columns (lists, dicts, UUIDs, mixed values),
+categoricals, wide frames (Parquet's cost grows with the column count, pickle's
+barely does), subclasses such as a GeoDataFrame. Everything else, and a
+DataFrame without a Parquet engine, is pickled.
 
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or
