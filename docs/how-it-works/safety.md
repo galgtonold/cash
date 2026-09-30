@@ -146,7 +146,7 @@ into a module; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @22921d14 -->
+<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
 cash spots side effects from the statement's source, without running it. So:
 
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is

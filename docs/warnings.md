@@ -633,7 +633,7 @@ Each finding has a line number and a label:
 <!-- claim: cash/analysis/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/analysis/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/analysis/purity_flow.py:is_log_line @90d04d4b, cash/effects.py:is_read_only_sql @94e903d1 -->
 | Label | What it flags | Reported as |
 |---|---|---|
-| `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, or a `@stateful` function | this code |
+| `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, or a `@stateful` function; also reading the keyboard or standard input (`input()`, `sys.stdin.read()`, `for line in sys.stdin`) | this code |
 | `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item | this code |
 | `discarded_call` | A call whose return value is thrown away | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
@@ -705,7 +705,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @22921d14, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @2d93af7a, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock or a fresh UUID
@@ -936,7 +936,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @22921d14 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
 <!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT

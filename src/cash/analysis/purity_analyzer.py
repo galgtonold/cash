@@ -63,6 +63,7 @@ from ..effects import (
     METHOD_VERBS,
     MODULE_CALLS,
     MUTATOR_METHODS,
+    STDIN_NAMES,
     Action,
     EffectKind,
     classify_call,
@@ -391,6 +392,8 @@ class _PurityVisitor(ast.NodeVisitor):
         #: Code objects of the clock helpers this body's call sites judged
         #: (`_clock_helper_of`): the walk leaves their own read to that judgment.
         self.judged_helpers: set[Any] = set()
+        #: ids of ``sys.stdin`` nodes reached as a method's receiver.
+        self._stdin_attributes: set[int] = set()
         self.called_callable_nodes: list[ast.AST] = []
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
         #: but their bindings are noted, so a mock put in their place is seen.
@@ -490,6 +493,23 @@ class _PurityVisitor(ast.NodeVisitor):
         ):
             self._whole_environment_read(node, f"{dotted_name(node)} as a whole")
             return
+        if dotted_name(node.value) in STDIN_NAMES:
+            # `sys.stdin.read()` is judged as a call; `.isatty()` reads nothing.
+            self._stdin_attributes.add(id(node.value))
+        elif (
+            isinstance(node.ctx, ast.Load)
+            and id(node) not in self._stdin_attributes
+            and dotted_name(node) in STDIN_NAMES
+        ):
+            self.issues.append(
+                PurityIssue(
+                    kind=ISSUE_IMPURE_CALL,
+                    description=f"{dotted_name(node)} - reads standard input, which a cache hit does not read",
+                    where=self._qualname,
+                    line=getattr(node, "lineno", 0),
+                    effect_kind=EffectKind.INTERACTIVE,
+                )
+            )
         self.generic_visit(node)
 
     def _whole_environment_read(self, node: ast.AST, what: str) -> None:

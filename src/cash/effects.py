@@ -46,6 +46,7 @@ __all__ = [
     "Action",
     "EffectKind",
     "MODULE_CALLS",
+    "STDIN_NAMES",
     "METHOD_VERBS",
     "MUTATOR_METHODS",
     "CLOCK_WHEN_ARG_CALLS",
@@ -260,6 +261,13 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "input": _IN,
     "breakpoint": _IN,
     "getpass.getpass": _IN,
+    # Standard input, read directly (`sys.stdin` used whole: `STDIN_NAMES`).
+    "sys.stdin.read": _IN,
+    "sys.stdin.readline": _IN,
+    "sys.stdin.readlines": _IN,
+    "sys.stdin.buffer.read": _IN,
+    "sys.stdin.buffer.readline": _IN,
+    "sys.stdin.buffer.readlines": _IN,
     "exit": _IN,
     "quit": _IN,
 }
@@ -379,6 +387,10 @@ CLOCK_WHEN_ARGS_OMITTED: dict[str, int] = {
 #: or bare ``environ[...]`` after ``from os import environ``; and its bytes
 #: twin.
 ENVIRON_NAMES: frozenset[str] = frozenset({"os.environ", "environ", "os.environb", "environb"})
+
+#: Standard input as an object: iterated (``for line in sys.stdin``) or handed
+#: to a reader (``json.load(sys.stdin)``), it is read like ``input()``.
+STDIN_NAMES: frozenset[str] = frozenset({"sys.stdin", "sys.stdin.buffer"})
 
 #: Methods of the environment that change it (a side effect, not a read of
 #: it) or read one named variable (folded like a subscript).
