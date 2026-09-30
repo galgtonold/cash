@@ -12,6 +12,7 @@ statement that built it read a module that changed.
 """
 
 import os
+import sys
 
 import pytest
 
@@ -294,6 +295,8 @@ def test_a_same_size_edit_in_the_second_of_the_import_reaches_a_restart(nb_runne
     nb_runner.run_all()
     assert "R total 10 0" in nb_runner.get_output(5), nb_runner.get_raw_output(5)
     pyc = tmp_path / "__pycache__"
+    if not pyc.is_dir() and sys.dont_write_bytecode:
+        pytest.skip("PYTHONDONTWRITEBYTECODE is set: no .pyc is written, so there is no stale bytecode to load")
     assert any(p.name.startswith("helpersamesec.") for p in pyc.iterdir()), (
         "no .pyc: the restart cannot load stale bytecode"
     )
