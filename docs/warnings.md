@@ -230,7 +230,7 @@ about, but `f.explain()`, the per-call log and a notebook badge still say
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps._warn_if_local_validation_is_expensive @ba7ad550, cash/remote_source.py:validation_is_expensive @18292cc6 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps._warn_if_local_validation_is_expensive @45f85758, cash/remote_source.py:validation_is_expensive @18292cc6 -->
 **What happened.** Before serving a hit, cash checks every file the call read.
 Here that check cost more than half of the compute it saved, or more than two
 seconds. The result was correct.
@@ -242,9 +242,7 @@ every caller's hit too.
 
 **What to do.** Make the entry depend on less. Split the function so each
 input is read by its own cached loader and the aggregate depends on their
-results. For a few very large files, lowering `file_hash_full_max_bytes`
-makes each check cheaper: files above it are sampled instead of hashed whole
-([Configuration](getting-started/configuration.md)).
+results.
 
 **When it is safe to ignore.** When the numbers in the message are still a good
 trade, such as half a second of checking against a five-minute job. It fires
@@ -1540,7 +1538,7 @@ handle), or on Windows a file held open by another process.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @61fdcac0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @b6d6c4b7 -->
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @7622ec96 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @762c7ef0 -->
 **What happened.** A file the function read changed before it returned. The
 result was returned but not stored.
 

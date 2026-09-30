@@ -31,14 +31,13 @@ print(load_features.explain())
     /home/you/project/data/features.csv: content changed
 ```
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @03b217be -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
 hits. A same-size edit within the same second still recomputes.
 
 When a file's
 size and timestamps have not moved, the check is one `stat` call, so a hit stays
-cheap. Files over 256 MiB are hashed in three sampled regions, and their
-modification time must match too. The full rule is in
+cheap. Every file is hashed in full, whatever its size. The full rule is in
 [What counts as a change](../../how-it-works/invalidation.md#what-counts-as-a-change).
 
 ## What's automatically tracked
@@ -106,7 +105,7 @@ A URL (`s3://…`, `https://…`) is **not** a file here. It is treated as a loc
 path that does not exist, so the entry never notices the object changing. Use
 `RemoteFileDataSource` for remote data (below).
 
-<!-- claim: cash/file_source.py:FileDataSource @69335436 broad="the content-digest contract is a property of the whole class" -->
+<!-- claim: cash/file_source.py:FileDataSource @dc27443c broad="the content-digest contract is a property of the whole class" -->
 !!! note "`file_depends_on=` or `FileDataSource`?"
     `FileDataSource(path)` is the `DataSource` for `depends_on=` and
     `dynamic_depends_on=`. It puts the file's **content digest** in the key,

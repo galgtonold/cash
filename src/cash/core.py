@@ -847,8 +847,8 @@ class Cash:
                 # nothing of cash's -- no key, no analysis, no lookup, no store.
                 if self.config.disable:
                     return _bypass(args, kwargs)
-                # This instance's settings for the file checks the call makes
-                # (`file_hash_full_max_bytes`); see ACTIVE_CONFIG.
+                # This instance's settings for the checks the call makes; see
+                # ACTIVE_CONFIG.
                 token = ACTIVE_CONFIG.set(self.config)
                 slot: list = [None]
                 slot_token = CALL_ENTRY.set(slot)

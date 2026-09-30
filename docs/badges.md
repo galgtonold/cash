@@ -124,13 +124,12 @@ reads or the function's own code.
 
 <iframe class="cash-badge" title="cash badge example: file changed" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @03b217be -->
 A file the statement read (through `pd.read_csv`, `np.load`, `open` and the
 other [tracked readers](how-it-works/invalidation.md#what-counts-as-a-change))
-has different contents. A new timestamp alone does not count for a file up to
-256 MiB (`file_hash_full_max_bytes`): cash compares contents. A bigger file is
-hashed in three sampled regions, so touching it or re-downloading an identical
-copy runs the statement once more.
+has different contents. A new timestamp alone does not count: cash compares
+contents, so touching a file or re-downloading an identical copy does not run
+the statement again.
 
 ### Evicted to make room
 

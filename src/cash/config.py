@@ -254,12 +254,11 @@ class CashConfig:
     every write."""
 
     file_hash_full_max_bytes: int = 256 * 1024 * 1024
-    """Largest tracked file hashed in full to check freshness.
-
-    Larger files hash three sampled regions plus their size and timestamps,
-    which misses a same-size edit outside those regions that keeps the
-    modification time. Only the first check of a file in a process pays for
-    the hash; later checks of an unchanged file cost a ``stat``."""
+    """Has no effect: every tracked file is hashed in full, whatever its
+    size, since a hash of a few regions misses an edit between them. Only
+    the first check of a file in a process pays for the hash; later checks
+    of an unchanged file cost a ``stat``. Accepted so a config that sets it
+    still loads."""
 
     shutdown_write_timeout: float = 60.0
     """Seconds a finishing process waits for its background writes before

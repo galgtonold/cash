@@ -317,10 +317,7 @@ class FileDeps:
             code="CACHE-FRESHNESS-COST",
             fix="depend on fewer or smaller files -- cache a summary rather than "
             "every input -- or split the function so the expensive inputs are "
-            "read by a callee whose deps the aggregates do not inherit. Note "
-            "that files above file_hash_full_max_bytes are sampled rather "
-            "than hashed in full, which is cheaper per file but not per file "
-            "COUNT.",
+            "read by a callee whose deps the aggregates do not inherit.",
         )
 
     def credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:

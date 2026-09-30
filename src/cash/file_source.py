@@ -16,9 +16,8 @@ class FileDataSource(DataSource):
     The token is the file's content digest, the fingerprint a file the function
     reads itself is checked by (:func:`cash.tracking.file_dep_snapshot.file_content_hash`):
     a ``touch`` that leaves the bytes alone keeps the entry, and an edit that
-    leaves the mtime where it was does not. Files above ``full_hash_max_bytes``
-    are hashed by sampling, and the digest is memoized on the file's stat, so
-    an unchanged file costs one ``stat``.
+    leaves the mtime where it was does not. The digest is memoized on the
+    file's stat, so an unchanged file costs one ``stat``.
     """
 
     def __init__(self, filepath: str):

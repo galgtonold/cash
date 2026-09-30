@@ -1,9 +1,8 @@
 """The default ``Cash`` instance, and the config and mode of the code
 running now.
 
-Modules below ``core`` need these answers (a file snapshot needs the size
-above which it samples a file, a remote source its revalidation window, a
-data source whether a warning may fire), and they ask here rather than
+Modules below ``core`` need these answers (a remote source needs its
+revalidation window, a data source whether a warning may fire), and they ask here rather than
 importing the ``cash`` package or ``core``, which import them.
 
 It also hands the default instance's runtime settings (``cash.configure``,

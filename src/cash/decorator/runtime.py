@@ -431,7 +431,6 @@ class CallRunner:
                 cache_key=cache_key,
                 time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time)
                 or 0.0,
-                file_deps=metadata.auto_file_deps,
             )
             return cached_data
         except (TypeError, KeyError) as e:

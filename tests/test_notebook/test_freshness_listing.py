@@ -95,18 +95,6 @@ def test_a_size_change_is_caught(tmp_path):
     assert checker._invalidate_if_direct_file_changed(metadata, "payload") is None
 
 
-@windows_only
-def test_a_sampled_file_gets_a_stat_of_its_own(tmp_path, monkeypatch, per_file_stats):
-    """Above the full-hash cap the timestamps back up a sampled hash, and a
-    listing's timestamps are the one thing that can lag."""
-    monkeypatch.setattr(file_dep_snapshot, "full_hash_max_bytes", lambda: 16)
-    paths = _inputs(tmp_path)
-    checker, metadata = _check(paths)
-    per_file_stats.clear()
-    assert checker._invalidate_if_direct_file_changed(metadata, "payload") == "payload"
-    assert len(set(per_file_stats)) == N
-
-
 def test_cash_own_listing_is_not_the_users_dependency(tmp_path):
     """The file tracker records a directory listed while it is active; a
     listing cash takes for itself must not become the user's dependency."""

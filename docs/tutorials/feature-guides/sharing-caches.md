@@ -49,7 +49,7 @@ only. Cross-process locking needs Redis as the backend itself; see
 
 ## What travels between machines
 
-<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @ce37ff53, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e -->
+<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @ce37ff53, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @03b217be -->
 <!-- claim: cash/remote_source.py:RemoteFileDataSource @754fe5e0 broad="the portability claim is a property of the whole source type" -->
 === "Decorator"
 
@@ -75,11 +75,6 @@ only. Cross-process locking needs Redis as the backend itself; see
     To share expensive file-reading work, move it into a decorated function in
     a module and call that from the notebook; see
     [Moving to a module](production-transition.md).
-
-<!-- claim: cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
-Files over 256 MiB are hashed by sampling, so their check also compares the
-modification time. A fresh clone of a large file therefore recomputes once,
-even when the paths match.
 
 ## Data in object storage
 

@@ -5,9 +5,9 @@
   thread was replacing it, got nothing, and fell back to call-to-call.
 * A changed parameter DEFAULT read "new arguments" for all but the first call.
 * "code or state changed" never said WHAT changed.
-* Changing `file_hash_full_max_bytes` read "content changed" for files whose
-  bytes had not moved.
-* `explain()` and HIT lines printed a sampled fingerprint like a full hash.
+* A file fingerprinted from a sample read "content changed" when checked
+  against a whole-file hash, whose bytes had not moved.
+* `explain()` printed a sampled fingerprint like a full hash.
 * CASH_DEBUG logged "Cannot attach _cash_lineage_hash to dict" on every call.
 * CASH_SUMMARY went through the application's formatter at INFO and raw to
   stderr at WARNING.
@@ -124,59 +124,33 @@ def test_new_arguments_under_unchanged_code_stay_new_arguments(tmp_path):
 # -- in-process ---------------------------------------------------------------
 
 
-def _stored(path, cap):
-    from cash.tracking.file_dep_snapshot import file_content_hash
-
-    st = os.stat(path)
-    rec = {
-        "mtime": st.st_mtime,
-        "size": st.st_size,
-        "mtime_ns": st.st_mtime_ns,
-        "hash": file_content_hash(str(path), st.st_size, cap),
-        "sampled": st.st_size > cap,
-    }
-    if st.st_size > cap:
-        rec.update(ctime_ns=st.st_ctime_ns)
-    return rec
-
-
-@pytest.mark.parametrize("recorded_cap, checked_cap", [(1000, 10**6), (10**6, 1000)])
-def test_a_changed_hashing_threshold_is_not_called_a_content_change(tmp_path, recorded_cap, checked_cap):
+def test_a_sampled_fingerprint_is_not_called_a_content_change(tmp_path):
+    """A snapshot recorded from a sample of the file cannot be compared with a
+    whole-file hash: stale, and said to be the fingerprint, not the data."""
     from cash.tracking.file_dep_snapshot import file_dep_is_fresh
 
     data = tmp_path / "data.bin"
     data.write_bytes(b"x" * 2000)
-    stored = _stored(data, recorded_cap)
-    assert file_dep_is_fresh(str(data), stored, full_hash_max=checked_cap) == (False, "hash-mode")
+    st = os.stat(data)
+    stored = {"mtime": st.st_mtime, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "hash": "ab" * 32, "sampled": True}
+    assert file_dep_is_fresh(str(data), stored) == (False, "hash-mode")
 
 
-def test_a_real_edit_in_one_regime_is_still_a_content_change(tmp_path):
-    from cash.tracking.file_dep_snapshot import file_dep_is_fresh
+def test_a_real_edit_is_still_a_content_change(tmp_path):
+    from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 
     data = tmp_path / "data.bin"
     data.write_bytes(b"x" * 2000)
-    stored = _stored(data, 10**6)
+    stored = snapshot_file_deps({str(data)})[str(data)]
     data.write_bytes(b"y" * 2000)
-    assert file_dep_is_fresh(str(data), stored, full_hash_max=10**6) == (False, "content")
+    assert file_dep_is_fresh(str(data), stored) == (False, "content")
 
 
-def test_a_sampled_fingerprint_is_labelled_and_a_hit_says_it_trusts_timestamps():
+def test_a_sampled_fingerprint_is_labelled():
     from cash.decorator.explain import describe_file_deps
-    from cash.decorator.reporting import describe_call
 
     shown = describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32, "ctime_ns": 1, "sampled": True}})
     assert "sampled hash" in shown["big.npy"], shown
-    line = describe_call(
-        {
-            "func_name": "m.f",
-            "cache_hit": True,
-            "cache_key": "k",
-            "time_saved": 1.0,
-            "execution_time": 0.001,
-            "sampled_files": ("C:/data/big.npy",),
-        }
-    )
-    assert "trusts the timestamps of big.npy" in line, line
 
 
 def test_an_untaggable_result_is_not_logged_on_every_call(tmp_path, caplog):
