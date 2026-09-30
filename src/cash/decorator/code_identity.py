@@ -251,7 +251,14 @@ def hash_callable_source(fn: Callable) -> str:
     keyed_stat = stat_code_file(fn)
     digest = source_digest(fn)
     if digest is None:
-        return compiled_identity(fn)
+        digest = compiled_identity(fn)
+        # A function with no readable source (a dataclass's generated
+        # `__init__`, an exec'd helper) is its bytecode, which its code
+        # object fixes: memoized like a source digest, or every hit re-ran a
+        # failing `inspect.getsource` per generated method.
+        if memo_key is not None and isinstance(memo_owner, types.CodeType):
+            SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+        return digest
     if memo_key is not None:
         SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
     if keyed_stat is not None:
