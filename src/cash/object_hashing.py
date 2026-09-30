@@ -40,11 +40,12 @@ import logging
 import pickle
 import random
 import sys
+import types
 from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
-from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
+from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, LEAF_TYPES, PLAIN_SEQS
 
 logger = logging.getLogger(__name__)
 
@@ -325,9 +326,54 @@ def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> 
     if isinstance(value, (list, tuple)):
         return any(contains_set(v, _depth + 1, _seen) for v in value)
     obj_state = object_state(value)
-    if obj_state:
-        return any(contains_set(v, _depth + 1, _seen) for v in obj_state.values())
+    if obj_state and any(contains_set(v, _depth + 1, _seen) for v in obj_state.values()):
+        return True
+    if _holds_native_state(type(value)):
+        try:
+            parts = _pickled_state(value)
+        except Exception:  # noqa: BLE001 - what cannot be reduced fails in the pickle, with its own error
+            return False
+        return contains_set(parts, _depth + 1, _seen)
     return False
+
+
+#: ``Py_TPFLAGS_IMMUTABLETYPE``: set on a class written in C, never on one
+#: a ``class`` statement makes.
+_IMMUTABLE_TYPE_FLAG = 1 << 8
+
+#: Types pickled by name, or leaves: nothing inside them is pickled by value.
+_NO_NATIVE_STATE = (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType)
+
+
+def _holds_native_state(type_: type) -> bool:
+    """Can a *type_* instance hold values outside its ``__dict__`` and slots?
+
+    A standard-library class written in C keeps them in C: a
+    ``functools.partial``'s arguments, a ``deque``'s items, what a list
+    iterator has left. `object_state` does not see them, so a set among them
+    was left to pickle, which writes it in the order PYTHONHASHSEED picks,
+    and the key changed from process to process. Third-party C types are
+    left alone: reducing one can serialise all its data (a tensor's
+    storage) on every call.
+    """
+    try:
+        return _NATIVE_STATE[type_]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return False
+    top = (getattr(type_, "__module__", "") or "").split(".", 1)[0]
+    found = (
+        not issubclass(type_, _NO_NATIVE_STATE)
+        and type_ not in LEAF_TYPES
+        and (top == "builtins" or top in sys.stdlib_module_names)
+        and any(k.__flags__ & _IMMUTABLE_TYPE_FLAG for k in type_.__mro__[:-1])
+    )
+    _NATIVE_STATE[type_] = found
+    return found
+
+
+_NATIVE_STATE: dict[type, bool] = {}
 
 
 # ---------------------------------------------------------------------------
