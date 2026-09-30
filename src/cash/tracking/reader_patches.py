@@ -752,6 +752,57 @@ def _unwrapping_set(original_set: Callable[..., Any], tracker: Any) -> Callable[
     return _set
 
 
+class _TrackedDirEntry:
+    """An ``os.DirEntry`` whose ``stat()`` records the regular file it
+    describes. ``os.DirEntry`` cannot be subclassed or patched."""
+
+    __slots__ = ("_entry",)
+
+    def __init__(self, entry: os.DirEntry) -> None:
+        self._entry = entry
+
+    def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+        result = self._entry.stat(follow_symlinks=follow_symlinks)
+        tracker = active_tracker.get()
+        if tracker is not None and stat.S_ISREG(result.st_mode):
+            tracker.track_path(self._entry.path)
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._entry, name)
+
+    def __fspath__(self) -> Any:
+        return self._entry.__fspath__()
+
+    def __repr__(self) -> str:
+        return repr(self._entry)
+
+
+class _TrackedScandir:
+    """The iterator ``os.scandir`` returns, yielding `_TrackedDirEntry`."""
+
+    __slots__ = ("_it",)
+
+    def __init__(self, it: Any) -> None:
+        self._it = it
+
+    def __iter__(self) -> _TrackedScandir:
+        return self
+
+    def __next__(self) -> _TrackedDirEntry:
+        return _TrackedDirEntry(next(self._it))
+
+    def __enter__(self) -> _TrackedScandir:
+        self._it.__enter__()
+        return self
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._it.__exit__(*exc)
+
+    def close(self) -> None:
+        self._it.close()
+
+
 class FileDependencyRegistry:
     """
     Registry for file dependency handlers.
@@ -863,6 +914,10 @@ class FileDependencyRegistry:
             for name in ("getsize", "getmtime", "getctime"):
                 self.register(module, name, self._create_metadata_handler)
         self.register("os", "stat", self._create_os_stat_handler)
+        self.register("os", "lstat", self._create_os_stat_handler)
+        # ``os.scandir`` raises its audit event (the listing), but an entry's
+        # ``stat()`` is a C method on a type that cannot be patched.
+        self.register("os", "scandir", self._create_scandir_handler)
         self._ready = True
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
@@ -1021,6 +1076,24 @@ class FileDependencyRegistry:
             return result
 
         return tracked_os_stat
+
+    @staticmethod
+    def _create_scandir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """``os.scandir`` in the user's own code: an entry's ``stat()``
+        reports the file's size and times, so the regular file it describes
+        is a dependency, as through ``os.stat``. The listing itself is
+        tracked by its audit event."""
+
+        @functools.wraps(original_func)
+        def tracked_scandir(*args, **kwargs):
+            result = original_func(*args, **kwargs)
+            if active_tracker.get() is None or frame_kind(sys._getframe(1).f_code.co_filename) != "user":
+                return result
+            if args and isinstance(args[0], int):
+                return result  # a descriptor: entries have no usable path
+            return _TrackedScandir(result)
+
+        return tracked_scandir
 
     @staticmethod
     def _create_isfile_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):

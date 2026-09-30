@@ -53,11 +53,12 @@ def test_patches_exist_only_while_a_scope_is_open():
                 "connect": sqlite3.connect,
                 "exists": os.path.exists,
                 "stat": pathlib.Path.stat,
+                "scandir": os.scandir,
                 "submit": concurrent.futures.ThreadPoolExecutor.submit,
             }
 
         def never_wrapped():
-            return (builtins.open, json.load, os.listdir, os.scandir, socket.socket.connect, subprocess.Popen.__init__)
+            return (builtins.open, json.load, os.listdir, socket.socket.connect, subprocess.Popen.__init__)
 
         before, plain = current(), never_wrapped()
 
