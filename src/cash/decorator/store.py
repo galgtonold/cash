@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._memo import RESULT_TYPES, LruMemo
+from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import get_serializer
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
@@ -48,6 +49,25 @@ STORE_FAILED_FIX = (
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
 #: tried again (`ResultStore.attach_lineage`).
 UNTAGGABLE_TYPES: LruMemo[type, bool] = LruMemo(RESULT_TYPES)
+
+
+def _snapshot(item: Any) -> Any:
+    """A copy of a streamed *item* no later edit reaches, or *item* if it cannot be copied.
+
+    An item that cannot be copied cannot be pickled either: its chunk's write
+    fails and says so (STORE-CHUNK-FAILED), and the caller keeps its item.
+    """
+    if type(item) in IMMUTABLE_PRIMS:
+        return item
+    try:
+        return InMemoryBackend._safe_deep_copy(item)
+    except Exception:  # noqa: BLE001 - a copy is best effort; the write reports the failure
+        return item
+
+
+def _returned(value: Any) -> dict[str, Any]:
+    """The manifest's record of a generator's return value (none for ``None``)."""
+    return {} if value is None else {"return_value": value}
 
 
 def lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
@@ -500,6 +520,7 @@ class ResultStore:
         prefix = chunk_prefix(cache_key, stream)
         #: Why a chunk written so far stayed in RAM, if one did.
         chunks_not_persisted: str | None = None
+        returned: Any = None
 
         try:
             # Entered ONCE. Per item we only suspend around the `yield`, which
@@ -510,13 +531,22 @@ class ResultStore:
                     started = _perf_counter()
                     try:
                         item = next(source)
-                    except StopIteration:
+                    except StopIteration as stop:
                         produced_seconds += _perf_counter() - started
+                        # What `yield from` evaluates to: the caller gets it
+                        # now, and a replay hands it back from the manifest.
+                        returned = stop.value
                         break
                     produced_seconds += _perf_counter() - started
 
-                    buffer.append(item)
-                    buffer_bytes += estimate_object_size(item)
+                    # The item as it is NOW, not a live reference pickled at
+                    # the chunk's end: by then the caller may have edited it
+                    # (`for row in rows(): row.append(...)`) or the producer
+                    # refilled it (a reused buffer), and every hit replayed
+                    # that edit. The caller still gets the object itself.
+                    snapshot = _snapshot(item)
+                    buffer.append(snapshot)
+                    buffer_bytes += estimate_object_size(snapshot)
                     total_items += 1
                     if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
                         if chunk_index == 1 and cache_if is not None:
@@ -559,7 +589,7 @@ class ResultStore:
                     self._store_chunked_manifest(
                         cache_key,
                         func_name,
-                        {"n_chunks": 1 if buffer else 0, "total_items": total_items},
+                        {"n_chunks": 1 if buffer else 0, "total_items": total_items, **_returned(returned)},
                         ttl,
                         current_state_hash,
                         args_hash,
@@ -579,7 +609,7 @@ class ResultStore:
                 self._store_chunked_manifest(
                     cache_key,
                     func_name,
-                    {"n_chunks": chunk_index, "total_items": total_items},
+                    {"n_chunks": chunk_index, "total_items": total_items, **_returned(returned)},
                     ttl,
                     current_state_hash,
                     args_hash,
@@ -590,6 +620,7 @@ class ResultStore:
                 )
 
             committed = True
+            return returned
         finally:
             if not committed:
                 # Abandoned or failed: the chunks written so far are

@@ -420,7 +420,8 @@ class CallRunner:
         if metadata and metadata.iterator_storage == "chunked":
             n_chunks = metadata.n_chunks or 0
             prefix = chunk_prefix(call.cache_key, metadata.chunk_stream)
-            return ChunkedCachedIterator(self._backend_slot, prefix, n_chunks, call.recompute)
+            returned = hit.get("return_value") if isinstance(hit, dict) else None
+            return ChunkedCachedIterator(self._backend_slot, prefix, n_chunks, call.recompute, returned)
         return hit
 
     def _analyze_dependencies(self, func: Callable[..., Any]) -> None:

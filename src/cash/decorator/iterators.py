@@ -77,6 +77,7 @@ class ChunkedCachedIterator:
         cache_key: The stored stream's `chunk_prefix`. Chunk keys are
             derived as ``f"{cache_key}:chunk_{i}"``.
         n_chunks: Total chunk count, taken from the manifest at construction.
+        returned: The generator's return value, from the manifest.
 
     A chunk can go while the caller is still reading: another process clears
     or rewrites the entry, or the RAM tier evicts it. ``CallRunner._chunks_are_intact``
@@ -96,10 +97,21 @@ class ChunkedCachedIterator:
         "_closed",
         "_recompute",
         "_yielded",
+        "_returned",
     )
 
-    def __init__(self, holder: Any, cache_key: str, n_chunks: int, recompute: Callable[[], Any] | None = None):
+    def __init__(
+        self,
+        holder: Any,
+        cache_key: str,
+        n_chunks: int,
+        recompute: Callable[[], Any] | None = None,
+        returned: Any = None,
+    ):
         self._holder = holder
+        #: The generator's return value, raised with the final StopIteration
+        #: as the generator raised it, so `yield from` gets it on a hit too.
+        self._returned = returned
         self._cache_key = cache_key
         self._n_chunks = n_chunks
         self._chunk_index = 0
@@ -125,7 +137,7 @@ class ChunkedCachedIterator:
                     self._yielded += 1
                     return item
             if self._chunk_index >= self._n_chunks:
-                raise StopIteration
+                raise StopIteration(self._returned)
             chunk_key = f"{self._cache_key}:chunk_{self._chunk_index}"
             _, chunk = self._holder.backend.get(chunk_key)
             self._chunk_index += 1

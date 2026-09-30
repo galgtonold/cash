@@ -32,8 +32,10 @@ are cached as ordinary values.
 
 <!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @0e824f20 broad="the loop, the tracker scope and the commit rule are one mechanism" -->
 On a miss you get each item as the function produces it, so caching does not
-delay the first item. cash copies the items into chunks as they pass and
-stores the result once the generator is exhausted. Files the generator reads
+delay the first item. cash copies each item into its chunk as it is yielded,
+so editing the item afterwards (or a producer refilling one buffer it yields
+again) does not change what is stored. The result is stored once the
+generator is exhausted. Files the generator reads
 while it runs are tracked, as in any cached function.
 
 **A generator you don't finish caches nothing.** If you stop early, or the
@@ -70,7 +72,8 @@ next(a), next(a), next(b)          # (0, 1, 0): only chunk 0 read
 
 The replay supports `iter()`, `next()` and `close()`. Generator methods
 `.send()` and `.throw()` raise `AttributeError`, because a replay is not a
-running generator.
+running generator. A generator's `return` value, what `yield from` evaluates
+to, is stored with the entry and comes back on a replay too.
 
 <!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @64b46718, cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
 **A missing chunk is recomputed, never skipped.** A stored result is only
