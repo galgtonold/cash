@@ -221,10 +221,10 @@ def level_key_bytes(value: Any) -> bytes:
     numbers = numpy_scalar_types()
     parts = [type(value).__name__.encode()]
     for flat, types in _levels(value, numbers):
-        if len(types) > 1:
-            parts.append(pickle.dumps(list(map(type, flat)), protocol=4))
-        else:
+        if len(types) == 1:
             parts.append(pickle.dumps(next(iter(types)), protocol=4))
+        else:  # mixed, or none: the level below ``[np.float64(1), []]`` is empty
+            parts.append(pickle.dumps(list(map(type, flat)), protocol=4))
         seqs = flat if types <= _SEQS else [x for x in flat if type(x) in PLAIN_SEQS]
         if seqs:
             parts.append(pickle.dumps(list(map(len, seqs)), protocol=4))

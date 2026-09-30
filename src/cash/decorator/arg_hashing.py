@@ -870,8 +870,10 @@ class ArgHasher:
         # Plain data is keyed by a digest of each argument on its own, so one
         # list passed as two arguments is marked here.
         try:
+            # A list, not ``map``: a StopIteration raised inside ``map`` ends
+            # it early, and the arguments after it silently left the key.
             form: tuple = (
-                tuple(map(plain_key_part, hashed_args)),
+                tuple([plain_key_part(a) for a in hashed_args]),
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
             )
             shared = _shared_plain_args([*hashed_args, *hashed_kwargs.values()])
