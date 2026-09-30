@@ -383,6 +383,8 @@ class PurityChecks:
                     after = self._globals.carried_global_hash(mapping[key], getattr(func, "__module__", None))
                 elif scope == "binding":
                     after = self._globals.carried_state_digest(resolve_binding(*owner))
+                elif scope == "classdata":
+                    after = self._globals.class_data_digest(*owner)[0]
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.
@@ -396,7 +398,7 @@ class PurityChecks:
                 continue
             if after == before:
                 continue
-            if scope in ("carrier", "binding", "instance"):
+            if scope in ("carrier", "binding", "instance", "classdata"):
                 # What a callable carries, moved by calling it: a library's
                 # own state (a generator advanced, a cache filled) or a memo
                 # a callable instance keeps in `self`. Not a result input the

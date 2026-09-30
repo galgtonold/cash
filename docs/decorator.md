@@ -234,6 +234,8 @@ changed. The second list is what cash does not see, and what to do about it.
       your own installed package.
     - **Module globals** read by the function or its helpers, parameter
       defaults, and captured variables.
+    - The **classes it uses**: their code, their class attributes, and the
+      module globals their methods read, inherited ones included.
     - Another **cached function** it calls or passes on
       (`pool.map(inner, xs)`).
     - **Your class or function passed as an argument** or held in an argument
