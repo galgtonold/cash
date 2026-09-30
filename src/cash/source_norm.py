@@ -1068,8 +1068,13 @@ def _windows_start_time() -> float | None:
         from ctypes import wintypes
 
         created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        # A private handle on kernel32, so the signatures set here leave the
+        # shared ``ctypes.windll.kernel32`` as other code expects it. Without
+        # argtypes the pseudo-handle (-1 as a HANDLE) overflowed a C int.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
         kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
         if not kernel32.GetProcessTimes(
             kernel32.GetCurrentProcess(),
             ctypes.byref(created),
