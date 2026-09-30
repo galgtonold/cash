@@ -185,6 +185,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CACHE-LOOP-GROWTH",  # a loop is persisting every state of a growing
         # object, costing the sum of every snapshot
         "CACHE-NET-LOSS",  # key hashing has cost more than it has saved
+        "CACHE-RETURNS-AWAITABLE",  # a sync wrapper returned a coroutine; not stored
         "CACHE-THRASH",  # at the cap, evicting within writes of storing
         "CACHE-CLEAR-INCOMPLETE",  # cache_clear() could not remove some entries,
         # which are still served

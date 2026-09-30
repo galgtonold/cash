@@ -127,6 +127,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-LOOP-GROWTH](#cache-loop-growth) | notebook | a loop stores every state of a growing value |
 | [CACHE-NET-LOSS](#cache-net-loss) | decorator | caching this function costs more time than it saves |
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
+| [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
 | [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with the caller's object |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
@@ -265,6 +266,34 @@ the function simply runs every time.
 cache the part that computes the numbers, and draw in an uncached function.
 
 **When it is safe to ignore.** Almost always, when the function only draws.
+
+### CACHE-RETURNS-AWAITABLE {#cache-returns-awaitable}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/store.py:ResultStore._refuse_awaitable @71438815 -->
+**What happened.** The cached function is a plain (sync) function that
+returned a coroutine or another awaitable, and cash did not store it. This is
+what `@cash.cache` sees over an ordinary wrapper, such as a retry or timing
+decorator, around an `async def`: the wrapper is not itself `async`, so it
+hands back the coroutine and the caller awaits it after cash has returned.
+
+**Why it matters.** The function's value does not exist yet when cash would
+store it, so the call is never cached: the body runs on every call.
+
+**What to do.** Put `@cash.cache` directly on the `async def`, under the
+wrapper:
+
+<!-- test:skip reason="illustrative: retry is the reader's own wrapper" -->
+```python
+@retry
+@cash.cache
+async def fetch(x):
+    ...
+```
+
+**When it is safe to ignore.** When the function is not meant to be cached;
+then remove `@cash.cache`. It fires once per function per process.
 
 ### CACHE-IF-BYPASSED {#cache-if-bypassed}
 

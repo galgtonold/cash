@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import inspect
 import logging
 import secrets
 import time
@@ -146,6 +147,8 @@ class ResultStore:
         # now carries no seed epoch and would be rebuilt and matched forever --
         # serving a result computed under a seed the user has since changed.
         # The next call keys it correctly.
+        if inspect.isawaitable(res):
+            return self._refuse_awaitable(func_name, res)
         refusal = (
             "its first call drew random numbers the key did not yet cover; the next call keys them" if rng_new else None
         )
@@ -190,6 +193,31 @@ class ResultStore:
                 f"it changed its argument{'s' if len(mutated) > 1 else ''} {names} in place, which a hit would not do"
             )
         return refusal
+
+    def _refuse_awaitable(self, func_name: str, res: Any) -> str:
+        """CACHE-RETURNS-AWAITABLE: a sync function handed back a coroutine.
+
+        ``@cash.cache`` over an ordinary sync wrapper (a retry or timing
+        decorator) around an ``async def`` gets the coroutine, not its value:
+        the wrapper is not a coroutine function, so the sync path ran and
+        tried to pickle the coroutine on every call (STORE-FAILED, whose "return
+        the data" fix does not apply). The body has not run yet -- the caller
+        awaits it -- so nothing can be stored; the call goes through uncached.
+        """
+        kind = type(res).__name__
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "",
+            f"@cash.cache on {func_name}: result not cached. It returned a {kind} "
+            f"to await, not a value: the function under @cash.cache is a plain "
+            f"(sync) function, typically a wrapper around an async def, so the "
+            f"value is only produced after cash has returned.",
+            code="CACHE-RETURNS-AWAITABLE",
+            fix="put @cash.cache directly on the async def, under the wrapper: "
+            "@retry above @cash.cache above async def.",
+        )
+        return f"it returned a {kind} to await, not a value"
 
     def attach_lineage(
         self,
