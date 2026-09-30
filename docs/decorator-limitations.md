@@ -8,7 +8,7 @@ cases that need a change on your side, and what that change is.
 
 ## Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @479611f1 -->
 An argument that cannot be pickled (a lock, an open file, a live connection, a
 closure) cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while

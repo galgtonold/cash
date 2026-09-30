@@ -25,7 +25,7 @@ build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca, cash/decorator/code_identity.py:func_key @7ed93e6b -->
+<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca, cash/decorator/code_identity.py:func_key @bac7a4fa -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @8a590f3b, cash/dependency_state.py:DependencyStateHasher.compute @3825a447 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @b6b8d2d6, cash/dependency_state.py:DependencyStateHasher.compute @3825a447 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -67,7 +67,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @34fca9bf -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @479611f1 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
