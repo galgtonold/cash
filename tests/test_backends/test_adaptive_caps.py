@@ -171,3 +171,15 @@ class TestFactoryCapWiring:
         # RAM tier keeps its own modest auto cap regardless.
         assert ram._max_size_bytes == int(0.20 * 16 * _GIB)
         backend.shutdown()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="GlobalMemoryStatusEx is the Windows reading")
+def test_windows_reads_total_ram_without_psutil_and_agrees_with_it():
+    """Windows has no sysconf, so the total came from psutil, which a plain
+    script then imported on its first cached call. The kernel32 reading gives
+    the same number."""
+    import psutil
+
+    from cash.backends.adaptive_caps import _windows_total_ram
+
+    assert _windows_total_ram() == psutil.virtual_memory().total
