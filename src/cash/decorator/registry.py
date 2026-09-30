@@ -3,6 +3,7 @@ inherited along it, and the one-time analysis of each function."""
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import logging
 import os
@@ -26,6 +27,12 @@ if TYPE_CHECKING:
     from .reporting import Notices
 
 logger = logging.getLogger(__name__)
+
+#: ``(registry id, func_name)`` whose effective TTL is being computed on this
+#: thread: a cycle through another instance's cached function stops there.
+_TTL_ACTIVE: contextvars.ContextVar[frozenset[tuple[int, str]]] = contextvars.ContextVar(
+    "_cash_ttl_active", default=frozenset()
+)
 
 
 def resolve_dynamic_dependencies(
@@ -270,12 +277,38 @@ class FunctionRegistry:
         cached = self._effective_ttl_cache.get(func_name)
         if cached is not None or func_name in self._effective_ttl_cache:
             return cached
-        ttls = [t for t in self._collect_dep_ttls(func_name, set()) if t is not None]
+        # A cycle through another instance's function comes back here.
+        active = _TTL_ACTIVE.get()
+        if (id(self), func_name) in active:
+            return own_ttl
+        token = _TTL_ACTIVE.set(active | {(id(self), func_name)})
+        try:
+            ttls = [t for t in self._collect_dep_ttls(func_name, set()) if t is not None]
+        finally:
+            _TTL_ACTIVE.reset(token)
         if own_ttl is not None:
             ttls.append(own_ttl)
         eff = min(ttls) if ttls else None
         self._effective_ttl_cache[func_name] = eff
         return eff
+
+    def reached_callee(self, func_name: str, dep: str) -> Any:
+        """The cached wrapper *func_name* reaches under *dep* when it is NOT
+        this registry's function of that name, else None.
+
+        Another `Cash`'s function, or the one a caller still holds after
+        ``importlib.reload`` registered a new function under the name: the
+        registry's slot describes neither, so the caller's key must ask the
+        wrapper itself (``_cash_state``). One dict lookup and an identity
+        test.
+        """
+        ref = self.cached_callees.get(func_name, {}).get(dep)
+        wrapper = ref() if ref is not None else None
+        if wrapper is None or getattr(wrapper, "_cash_state", None) is None:
+            return None
+        if self.functions.get(dep) is getattr(wrapper, "__wrapped__", None):
+            return None
+        return wrapper
 
     def _collect_dep_ttls(self, func_name: str, visited: set[str]) -> list[int | None]:
         """TTLs of every cached function reachable from *func_name* via the
@@ -285,6 +318,10 @@ class FunctionRegistry:
         visited.add(func_name)
         out: list[int | None] = []
         for dep in self.graph.get_dependencies(func_name):
+            reached = self.reached_callee(func_name, dep)
+            if reached is not None:
+                out.append(reached._cash_effective_ttl())
+                continue
             cf = self.cached.get(dep)
             if cf is not None:
                 out.append(cf.ttl)

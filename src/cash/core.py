@@ -376,6 +376,7 @@ class Cash:
             helper_resolver=SysModulesHelperResolver(self._helpers.identity),
             declared_dep_snapshots=self._registry.declared_dep_snapshots,
             declared_dep_resolver=self._registry.resolve_declared_dep_hash,
+            reached_callee=self._registry.reached_callee,
         )
         self._globals = GlobalsFold(
             self._args, self._code, self._helpers, self._registry, self._state_hasher, self._mutations, self._notices
@@ -912,6 +913,13 @@ class Cash:
         # statement ``x = f()`` gets cached with no TTL under %cash_on and
         # freezes the value the decorator promised to refresh.
         stats_wrapper._cash_declared_ttl = cf.ttl
+        # What a call depends on besides its arguments, built by THIS instance
+        # for THIS function object, and the TTL it refreshes at: how a cached
+        # function reached without an edge in the caller's own registry (on
+        # another instance, passed in, held in a table, or still held after a
+        # reload) reaches the caller's key.
+        stats_wrapper._cash_state = lambda: self._keys.callee_state(func, func_name)
+        stats_wrapper._cash_effective_ttl = lambda: self._registry.effective_ttl(func_name, cf.ttl)
         expose_script_function(func, stats_wrapper)
         cf.wrapper = stats_wrapper
         return stats_wrapper

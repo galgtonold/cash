@@ -234,8 +234,9 @@ changed. The second list is what cash does not see, and what to do about it.
       your own installed package.
     - **Module globals** read by the function or its helpers, parameter
       defaults, and captured variables.
-    - Another **cached function** it calls or passes on
-      (`pool.map(inner, xs)`).
+    - Another **cached function** it reaches, directly, through a helper or
+      an import in the body, on any `Cash` instance, or passes on
+      (`pool.map(inner, xs)`), with what that function reads.
     - **Your class or function passed as an argument** or held in an argument
       or global, also inside a library object (a transformer in an sklearn
       pipeline), and what that code reads.

@@ -140,6 +140,7 @@ class DependencyStateHasher:
         helper_resolver: HelperResolver,
         declared_dep_snapshots: Mapping[str, str] | None = None,
         declared_dep_resolver: Callable[[str], str | None] | None = None,
+        reached_callee: Callable[[str, str], Any] | None = None,
     ):
         self._functions = functions
         self._data_sources = data_sources
@@ -153,6 +154,10 @@ class DependencyStateHasher:
         # because an empty dict is falsy, severing the shared reference.
         self._declared_dep_snapshots = declared_dep_snapshots if declared_dep_snapshots is not None else {}
         self._declared_dep_resolver = declared_dep_resolver
+        # (node, dep) -> the cached wrapper *node* reaches under *dep* when
+        # this registry's function of that name is not it (another instance,
+        # or an object a reload replaced), else None.
+        self._reached_callee = reached_callee
 
     def compute(
         self,
@@ -215,7 +220,11 @@ class DependencyStateHasher:
 
         # 2. Dependencies' state, sorted for determinism.
         for dep in sorted(self._graph.get_dependencies(node)):
-            state = self.compute(dep, visited)
+            reached = self._reached_callee(node, dep) if self._reached_callee is not None else None
+            # A cached function this registry does not describe keys by its
+            # own state, built by the instance that owns it for the object
+            # the caller reaches.
+            state = f"reached:{reached._cash_state()}" if reached is not None else self.compute(dep, visited)
             hashes.append(state)
             if note:
                 ledger_note(("calls", dep), state)
