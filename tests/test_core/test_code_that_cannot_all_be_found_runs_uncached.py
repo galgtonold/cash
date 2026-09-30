@@ -154,7 +154,7 @@ def _annotated_module(name: str) -> types.ModuleType:
     sys.modules[name] = module
     # Compiled on its own: `exec` would otherwise inherit this file's
     # `from __future__ import annotations` and turn every hint into a string.
-    exec(compile(ANNOTATED.format(value=1), name, "exec", dont_inherit=True), module.__dict__)  # noqa: S102
+    exec(compile(ANNOTATED.format(value=1), name, "exec", dont_inherit=True), module.__dict__)  # noqa: S102 - test-built source
     return module
 
 
