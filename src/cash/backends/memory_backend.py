@@ -183,7 +183,18 @@ class InMemoryBackend(CacheBackend):
         is that already: the first write to either side copies then, and only
         what it writes, where a deep copy on every store and RAM hit dominates
         cash's own cost on frame-heavy work. Without copy-on-write, deep.
+
+        Neither copies the Python objects in an object column: a list, dict
+        or array in a cell stayed one object shared by the entry, the caller
+        and every later hit, so ``df["tags"].iloc[0].append(...)`` changed
+        what the next call got. A frame holding such cells is copied through
+        pickle, which copies them too.
         """
+        if _holds_mutable_cells(frame):
+            try:
+                return pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+            except Exception:  # noqa: BLE001 - cells that cannot be copied are shared, as before
+                logger.debug("could not copy the cells of a %s", type(frame).__name__)
         return frame.copy(deep=not _pandas_copy_on_write())
 
     @staticmethod
@@ -589,6 +600,50 @@ def _memory_reading() -> Any | None:
 
 
 _COW: list[bool] = []
+
+
+#: What ``pandas.api.types.infer_dtype`` calls an object column whose cells
+#: are all immutable (str, bytes, numbers, dates, Decimal...), so a copy of
+#: the column may share them. Anything else ("mixed", "unknown-array", ...)
+#: may hold a list, dict or array.
+_IMMUTABLE_CELLS = frozenset(
+    {
+        "empty",
+        "string",
+        "bytes",
+        "integer",
+        "floating",
+        "mixed-integer-float",
+        "decimal",
+        "complex",
+        "boolean",
+        "datetime64",
+        "datetime",
+        "date",
+        "timedelta64",
+        "timedelta",
+        "time",
+        "period",
+    }
+)
+
+
+def _holds_mutable_cells(frame: Any) -> bool:
+    """Does a DataFrame or Series hold a Python object that can be changed in place?
+
+    Only object columns can; each is classified by pandas' C-level
+    ``infer_dtype``, not a Python loop over its cells.
+    """
+    try:
+        from pandas.api.types import infer_dtype
+
+        if getattr(frame, "ndim", 2) == 1:
+            columns = [frame] if str(frame.dtype) == "object" else []
+        else:
+            columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
+        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
+    except Exception:  # noqa: BLE001 - cannot tell: copy as before
+        return False
 
 
 def _pandas_copy_on_write() -> bool:
