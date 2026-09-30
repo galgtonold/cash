@@ -161,24 +161,14 @@ def test_loop_vars_use_the_full_hash_not_the_sampling_one():
     below covers the other branch, where `variable_lineage` already has the
     answer.
 
-    `for_handler.py`'s `_process_one_iteration` learned this exact lesson for
-    the loop variable's own lineage two lines above where it builds
-    `iteration_context`: "a sampled hash keyed two iterations over arrays
-    that agreed in the sample onto ONE entry - wrong result on the first
-    run." `compute_hash` samples any list/tuple over 200 elements down to
-    head-5/tail-5 (`object_hashing._hash_collection`); two 300-element tuples
-    that agree on both ends but differ in the middle are `compute_hash`-equal
-    while being genuinely different values. If `_loop_var_digest`'s fallback
-    used `compute_hash` instead of `compute_hash_full`, this test would fail:
-    both calls below would collapse onto the SAME key, and in a real loop
-    iteration 2 would be served iteration 1's cached value -- first-run
-    wrongness, no pre-existing cache required.
+    Two 300-element tuples that agree on both ends but differ in the middle
+    are genuinely different values. A digest of their ends would collapse
+    both calls below onto the SAME key, and in a real loop iteration 2
+    would be served iteration 1's cached value -- first-run wrongness, no
+    pre-existing cache required.
     """
-    from cash.object_hashing import compute_hash, compute_hash_full
+    from cash.object_hashing import compute_hash_full
 
-    assert compute_hash(_LONG_A) == compute_hash(_LONG_B), (
-        "test setup is broken -- these two tuples must be SAMPLED-equal"
-    )
     assert compute_hash_full(_LONG_A) != compute_hash_full(_LONG_B), (
         "test setup is broken -- these two tuples must be genuinely different"
     )

@@ -73,9 +73,9 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     """The discriminating hash for one loop-var entry: full, never sampled.
 
     A loop variable is the per-iteration discriminator, so it gets the full
-    hash: the sampling ``compute_hash`` reduces a long list to its ends, and
-    two items agreeing there would share one entry (a wrong value on the
-    first run). The fallback must stay ``compute_hash_full``.
+    hash: a hash of a long list's ends would give two items agreeing there
+    one entry (a wrong value on the first run). The fallback stays
+    ``compute_hash_full``, the digest ``for_handler`` records.
 
     A full hash of a large value can cost more than the call it keys, and is
     paid per call, so *loop_var_digests* -- the hashes ``for_handler`` took
@@ -481,20 +481,14 @@ def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict, loop_vars: M
 def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     """PRE-call content hashes of the globals *fn* writes, for the key.
 
-    ``compute_hash_full``, never the sampling ``compute_hash``, for the
-    same reason :func:`_loop_var_digest` documents at length: this IS the
-    discriminator. ``compute_hash`` reduces a collection over 200 elements
-    to its first and last five, so two different accumulator states that
-    agree at both ends would key IDENTICALLY -- and an accumulator is
-    precisely the shape that grows in the middle. That is first-run
-    wrongness, not a missed optimisation.
+    ``compute_hash_full``, every byte, for the same reason
+    :func:`_loop_var_digest` documents: this IS the discriminator. Two
+    accumulator states that agree at both ends must not key alike, and an
+    accumulator is precisely the shape that grows in the middle.
 
     The cost this admits is real and bounded by how rare the case is: a
     callee that writes a global at all is uncommon, and the hash is over
-    the accumulator, not over the arguments. ``hash_args``' sampling trade
-    is fine where it lives (a coarse per-call mutation smoke test on a
-    possibly-huge live argument, allowed to be wrong toward "assume
-    unmutated"); it is not fine here.
+    the accumulator, not over the arguments.
 
     A name that cannot be hashed at all is omitted, which makes the key
     LESS discriminating -- so ``call_effects.capture_globals`` independently

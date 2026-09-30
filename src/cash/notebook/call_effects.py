@@ -253,39 +253,31 @@ def _rebinds(code: _types.CodeType, cells: frozenset[str]) -> bool:
 def hash_args(args: tuple, kwargs: dict) -> tuple:
     """Content hashes of the live arguments, for mutation detection.
 
-    Uses the sampling hash (`compute_hash`) deliberately, not
-    `compute_hash_full`: it is the same one the statement path's own
-    content observation uses, and for a large frame a full hash per call
-    would cost more than the call being cached is worth.
+    Every byte of every argument (`compute_hash`): a callee that edits a
+    frame's 500th row in place and returns something else must read as
+    changed, or its result is stored and a hit skips the edit. Paid only on
+    the miss path, twice per argument; a site whose keying and hashing cost
+    more than the call is run plain by the call-site guard.
 
-    Two DIFFERENT ways this can under-report a mutation, and they get
-    different treatment:
+    An argument whose content cannot be read at all fails closed:
 
-    1. **Sampling.** `compute_hash` samples large objects (ndarray: first
-       100 elements, DataFrame: first 5 rows, collections >200: head/tail).
-       A same-size in-place edit outside the sampled region is invisible
-       here. This is a known, accepted trade -- it errs toward CACHING for
-       objects that still hash BY CONTENT, and the identity check in
-       `CallEntries.storable` stays as a second line of defence for the one shape it
-       fully covers (`return arg`).
-
-    2. **Identity fallback.** `compute_hash`'s tier 3
-       (`object_hashing.identity_hash`) hashes `id(obj)`, not the object's
-       data, once pickling itself has failed (a `threading.Lock`, a socket,
-       an open file, anything with an unpicklable `__reduce__`). `id(obj)`
-       is invariant across an in-place mutation of that SAME object, so
-       this is not "a coarser content hash" the way sampling is -- it is
-       BLIND to every mutation of that argument, always, for the entire
-       unpicklable-object class. Comparing two such hashes before/after a
-       call would silently read as "unchanged" even when the callee
-       mutated the object, which directly contradicts "fail closed": a
-       value flagged via `is_identity_fallback_hash` is therefore replaced
-       with a fresh, single-use sentinel (`object()`) instead of the hash
-       string. Two distinct `object()` instances are never `==`, so the
-       before/after comparison (`CallUnit._did_what_a_hit_cannot`) always
-       reads as "changed" for that argument -- i.e. "cannot prove this argument is clean" is
-       treated the same as "proved it changed", which is the fail-closed
-       direction the task requires.
+    **Identity fallback.** `compute_hash`'s tier 3
+    (`object_hashing.identity_hash`) hashes `id(obj)`, not the object's
+    data, once pickling itself has failed (a `threading.Lock`, a socket,
+    an open file, anything with an unpicklable `__reduce__`). `id(obj)`
+    is invariant across an in-place mutation of that SAME object, so
+    this is not a content hash at all -- it is
+    BLIND to every mutation of that argument, always, for the entire
+    unpicklable-object class. Comparing two such hashes before/after a
+    call would silently read as "unchanged" even when the callee
+    mutated the object, which directly contradicts "fail closed": a
+    value flagged via `is_identity_fallback_hash` is therefore replaced
+    with a fresh, single-use sentinel (`object()`) instead of the hash
+    string. Two distinct `object()` instances are never `==`, so the
+    before/after comparison (`CallUnit._did_what_a_hit_cannot`) always
+    reads as "changed" for that argument -- i.e. "cannot prove this argument is clean" is
+    treated the same as "proved it changed", which is the fail-closed
+    direction the task requires.
     """
     out = []
     for value in (*args, *kwargs.values()):

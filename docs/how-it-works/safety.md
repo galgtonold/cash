@@ -119,8 +119,9 @@ A method call has no assignment target, so cash classifies its object:
   changes the estimator, even in `X = vec.fit_transform(texts)`. These
   statements run every time.
 - **Observed.** Anything else is fingerprinted before and after the call. A
-  DataFrame, array or large collection that can only be sampled cannot be
-  proved unchanged, so it counts as changed. Each variable passed by name to a
+  DataFrame, an array, or a collection of more than 200 items or holding one
+  is not fingerprinted on every statement, so it cannot be proved unchanged
+  and counts as changed. Each variable passed by name to a
   bare call (`im.add_qc(df)`) is fingerprinted in full the same way.
 
 A changed object gets a new lineage from the statement, so everything

@@ -287,16 +287,6 @@ whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
 **Fix:** after such a write, touch the file (`Path(path).touch()`). cash then
 reads its content, and if it changed, everything that read it runs again.
 
-### Large objects are hashed by sampling
-
-<!-- claim: cash/object_hashing.py:compute_hash @7aa554ba -->
-To keep hashing cheap, cash fingerprints a large DataFrame by its shape, dtypes
-and first 5 rows, an array by its first 100 elements, and a long list or dict by
-a sample. Normally cash tracks where a value came from and does not rely on this
-fingerprint. It matters only after `cash.reset_session()`, when a change deep
-inside a large object can go unnoticed. **Fix:** restart the kernel instead of
-resetting the session.
-
 ## Loops
 
 ### A long `for`-append loop can stop caching

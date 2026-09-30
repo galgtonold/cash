@@ -1,8 +1,8 @@
-"""compute_hash_full — full-content hashing for key discrimination.
+"""compute_hash_full and compute_hash — full-content hashing.
 
-``compute_hash`` samples large objects; wherever the hash IS the cache-key
-discriminator (per-iteration loop keys), a difference outside the sample
-collided two keys. These tests pin that compute_hash_full sees every byte.
+Wherever a hash IS the cache-key discriminator (per-iteration loop keys) or
+decides that a value did not change, a difference outside a sample collided
+two keys. These tests pin that both hashes see every byte.
 """
 
 from __future__ import annotations
@@ -16,24 +16,24 @@ from cash.object_hashing import compute_hash, compute_hash_full
 def test_ndarray_out_of_sample_difference_distinct():
     a = np.zeros(2000)
     b = np.zeros(2000)
-    b[1000] = 5.0  # outside compute_hash's flat[:100] sample
-    assert compute_hash(a) == compute_hash(b), "precondition: sampled hash collides"
+    b[1000] = 5.0  # past the first 100 elements
+    assert compute_hash(a) != compute_hash(b)
     assert compute_hash_full(a) != compute_hash_full(b)
 
 
 def test_dataframe_tail_difference_distinct():
     df1 = pd.DataFrame({"v": range(1000)})
     df2 = df1.copy()
-    df2.iloc[999, 0] = -1  # outside compute_hash's head(5) sample
-    assert compute_hash(df1) == compute_hash(df2), "precondition: sampled hash collides"
+    df2.iloc[999, 0] = -1  # past the first 5 rows
+    assert compute_hash(df1) != compute_hash(df2)
     assert compute_hash_full(df1) != compute_hash_full(df2)
 
 
 def test_large_list_middle_difference_distinct():
     l1 = list(range(1000))
     l2 = list(range(1000))
-    l2[500] = -1  # outside the head5/tail5 sample
-    assert compute_hash(l1) == compute_hash(l2), "precondition: sampled hash collides"
+    l2[500] = -1  # between the first and last five
+    assert compute_hash(l1) != compute_hash(l2)
     assert compute_hash_full(l1) != compute_hash_full(l2)
 
 

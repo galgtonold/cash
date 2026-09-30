@@ -337,11 +337,10 @@ def collect_body_input_lineages(
 
     The mutated variable's identity has to answer "did this come from the same
     upstream computation as last time?", and the body's inputs are most of that
-    answer. Without them the only content signal is a sampled hash, which is
-    not enough (see :func:`update_mutated_variable_lineages`).
+    answer (see :func:`update_mutated_variable_lineages`).
 
     Excludes the mutated variables themselves (a loop body almost always reads
-    what it mutates, and folding that in would just re-add the sampled hash by
+    what it mutates, and folding that in would just re-add the value hash by
     another route) and the loop targets (they are bindings the loop creates, not
     upstream inputs). Names with no recorded lineage are skipped rather than
     guessed at: absence is not a lineage, and inventing one would churn the key
@@ -430,13 +429,10 @@ def update_mutated_variable_lineages(
     iterable's lineage (loops), and the lineage of every OTHER variable the
     body read (*input_lineages*).
 
-    The value hash alone cannot carry this: ``compute_hash`` SAMPLES large
-    objects, so two frames that differ past the sampled region hash equal.
-    The lineage must come from provenance -- what went in -- or the next
-    statement to read the variable restores a stale entry under an unchanged
-    key. The ``prev=`` component is the only one left when the loop source
-    matches and the sampled hash collides: a loop over a frame built two
-    different ways upstream must leave with two different lineages.
+    The value hash reads every byte (``compute_hash``); the provenance --
+    what went in -- is folded in beside it, so a loop over a frame built two
+    different ways upstream leaves with two different lineages, as the
+    statements downstream of each were keyed.
 
     Re-running an unchanged mutation does not churn: the statement restore
     puts the receiver's pre-loop lineage back before the loop mints the next.
@@ -456,8 +452,6 @@ def update_mutated_variable_lineages(
             value_hash = statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
-            # The only component left that discriminates when the loop's source
-            # matches and the sampled value hash collides -- see the docstring.
             prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)
             lineage_components = [loop_code_hash, value_hash]
             if prior_lineage:

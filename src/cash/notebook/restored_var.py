@@ -14,18 +14,43 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from cash.object_hashing import builtin_hash_family
+
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
     from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["apply_restored_var"]
+__all__ = ["apply_restored_var", "hashed_by_lineage"]
 
 #: Values whose session hash is their entry's lineage rather than a content
 #: hash: hashing a large frame or array on every restore costs more than the
 #: restore, and the lineage identifies the value just as well.
 _LINEAGE_HASHED_TYPES = frozenset({"DataFrame", "Series", "ndarray"})
+#: A collection with more items than this is lineage-hashed too.
+_LINEAGE_HASHED_ITEMS = 200
+
+
+def hashed_by_lineage(value: Any) -> bool:
+    """Is *value*'s session hash its lineage rather than its content?
+
+    A frame, an array or a table, and a collection of more than
+    ``_LINEAGE_HASHED_ITEMS`` items or holding one of those: hashing it in
+    full on every output and every restore would cost seconds a hit. No
+    check compares such a value's content with its session hash: each one
+    that would reads it as changed instead (fail closed), since a lineage
+    never equals a content hash.
+    """
+    t = type(value)
+    if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None:
+        return True
+    if t in (list, tuple, dict, set, frozenset):
+        if len(value) > _LINEAGE_HASHED_ITEMS:
+            return True
+        items = value.values() if t is dict else value
+        return any(type(v).__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(type(v)) is not None for v in items)
+    return False
 
 
 def apply_restored_var(
@@ -67,7 +92,7 @@ def _record_session_hash(
     lineage: str | None,
     compute_hash: Callable[[Any], str] | None,
 ) -> None:
-    if type(value).__name__ in _LINEAGE_HASHED_TYPES:
+    if hashed_by_lineage(value):
         value_hash = lineage
     elif compute_hash is not None:
         try:

@@ -107,7 +107,7 @@ PANDAS_INPLACE_METHODS = {
 # A name here must be unambiguously non-mutating — being wrong means a real
 # mutation goes undetected. Anything not listed falls through to observation.
 #
-# A DataFrame/Series/ndarray cannot be observed (its content hash is a sample),
+# A DataFrame/Series/ndarray is not observed (its session hash is its lineage),
 # so an unlisted method on one is ASSUMED to mutate it and bumps its lineage:
 # the last line of a cell showing a frame -- ``comparison.round(4)``,
 # ``feat_demo.describe().round(3)`` -- was badged an in-place
@@ -166,7 +166,7 @@ KNOWN_PURE_METHODS = frozenset(
 # pandas ``to_*`` writers: they READ the DataFrame/Series and write it out to a
 # file / external sink.  They do NOT mutate the receiver, so they must never bump
 # its lineage — the receiver-mutation classifier would otherwise assume-mutate a
-# DataFrame receiver (``compute_hash`` samples large frames, so it cannot prove
+# DataFrame receiver (a frame is not content-observed, so it cannot prove
 # purity) and make ``df.to_csv(path)`` a spurious *producer* of ``df``.  That
 # spurious edge makes upstream reconstruction re-schedule the write as if to
 # rebuild ``df``, re-firing a NON-IDEMPOTENT append (``df.to_csv(log, mode='a')``)
@@ -1112,7 +1112,7 @@ def is_pandas_plot_call(method: str, receiver: object) -> bool:
     """``df.plot(...)``, ``df.plot.bar(...)``, ``df.hist()``, ``df.boxplot()``
     on a pandas object: it draws on an Axes and leaves the data alone.
 
-    A DataFrame cannot be content-observed (its hash samples), so any unknown
+    A DataFrame is not content-observed (its session hash is its lineage), so any unknown
     method on one was ASSUMED to mutate it. That bumped ``data``'s lineage for
     ``data.groupby('region')['churn'].mean().plot.bar(ax=ax)``, and every cell
     reading ``data`` above it then re-ran its producers with nothing changed.
