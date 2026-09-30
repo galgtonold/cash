@@ -1,19 +1,13 @@
 """A DataFrame restored from disk is the frame the call returned.
 
-Parquet wrote a RangeIndex out as an int64 column, so a decorated function
-returning ``pd.DataFrame({"a": np.arange(n)})`` handed back a plain Index on
-the next process's hit: code that checked the index type, or the memory it
-used, saw a different frame on a hit than on a miss. Frames Parquet cannot
-store as they are (non-string labels, an index frequency, a column pyarrow
-cannot convert) are pickled instead.
-
-Parquet also converted what it could convert: list and tuple cells came back
-as numpy arrays, dict cells as structs padded with None, UUIDs as bytes, an
-object column of ints and None as float64, ``datetime64[s]`` as ``[ms]``,
-integer axis names as strings, ``attrs`` through JSON (tuples as lists, int
-keys as strings) and ``flags`` reset; a DataFrame subclass came back as a
-plain DataFrame (a GeoDataFrame as WKB bytes with no crs). Only frames of
-dtypes Parquet provably keeps are stored as Parquet now.
+Frames were once stored as Parquet, which changed them: a RangeIndex came
+back as a plain int64 Index, list and tuple cells as numpy arrays, dict cells
+as structs padded with None, UUIDs as bytes, an object column of ints and
+None as float64, ``datetime64[s]`` as ``[ms]``, integer axis names as
+strings, ``attrs`` through JSON (tuples as lists, int keys as strings) and
+``flags`` reset; a DataFrame subclass came back as a plain DataFrame (a
+GeoDataFrame as WKB bytes with no crs). Frames are pickled now, and these
+pin that each of them comes back as it went in.
 """
 
 from __future__ import annotations
@@ -28,11 +22,9 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
-pytest.importorskip("pyarrow")
 
 import cash
-from cash.backends import serialization
-from cash.backends.serialization import ParquetSerializer
+from cash.backends.serialization import PickleSerializer
 
 FRAMES = {
     "range index": lambda: pd.DataFrame({"a": np.arange(5)}),
@@ -101,41 +93,9 @@ def _assert_same_frame(df, back):
 @pytest.mark.parametrize("name", FRAMES)
 def test_the_serializer_gives_the_frame_back_unchanged(name):
     df = FRAMES[name]()
-    s = ParquetSerializer()
+    s = PickleSerializer()
     back = s.deserialize(s.serialize(df))
     _assert_same_frame(df, back)
-
-
-def test_a_plain_frame_is_still_stored_as_parquet():
-    """Positive control: the common frame keeps the Parquet format."""
-    assert ParquetSerializer().serialize(FRAMES["range index"]()).startswith(b"PAR1")
-
-
-def test_the_frames_parquet_keeps_are_stored_as_parquet():
-    """Positive control for the allowlist: these keep the Parquet format."""
-    frames = [
-        pd.DataFrame({"f": [1.5, 2.5], "i": [1, 2], "b": [True, False], "s": ["x", None]}),
-        pd.DataFrame({"t": pd.date_range("2024-01-01", periods=2, tz="UTC")}, index=["p", "q"]),
-        pd.DataFrame({"n": pd.array([1, None], dtype="Int64")}, index=pd.to_datetime(["2024-01-01", "2024-01-05"])),
-    ]
-    s = ParquetSerializer()
-    for df in frames:
-        raw = s.serialize(df)
-        assert raw.startswith(b"PAR1"), df.dtypes
-        _assert_same_frame(df, s.deserialize(raw))
-
-
-def test_a_wide_frame_is_pickled():
-    """Parquet pays per column: a disk hit on 20,000 columns took 2 s where
-    the pickle of the frame takes a few hundredths."""
-    cap = getattr(serialization, "PARQUET_MAX_COLUMNS", 100)
-    narrow = pd.DataFrame(np.ones((2, cap)), columns=[f"c{i}" for i in range(cap)])
-    wide = pd.DataFrame(np.ones((2, cap + 1)), columns=[f"c{i}" for i in range(cap + 1)])
-    s = ParquetSerializer()
-    assert s.serialize(narrow).startswith(b"PAR1")
-    raw = s.serialize(wide)
-    assert not raw.startswith(b"PAR1")
-    _assert_same_frame(wide, s.deserialize(raw))
 
 
 def test_a_disk_hit_in_a_new_process_keeps_the_range_index(tmp_path):

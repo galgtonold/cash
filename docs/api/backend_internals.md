@@ -14,7 +14,7 @@ release. To pick a bundled backend, see [Backends](backends.md).
 ```python
 from cash.backends import (
     CacheBackend, EntryMetadata, MetadataDict,
-    Serializer, PickleSerializer, ParquetSerializer, get_serializer,
+    Serializer, PickleSerializer,
 )
 ```
 
@@ -124,9 +124,8 @@ key the bundled backends read or write.
 ## Serializers
 
 A backend either uses the `serializer` that `set()` is given, as the bundled
-ones do, or always uses one of its own. `get_serializer(value)` picks Parquet
-for a pandas DataFrame when pyarrow or fastparquet is installed, and pickle
-otherwise. Loading a pickle runs code; see [Security](backends.md#security).
+ones do, or always uses one of its own. The decorator stores every result,
+DataFrames included, with `PickleSerializer`. Loading a pickle runs code; see [Security](backends.md#security).
 
 ::: cash.backends.Serializer
     options:
@@ -138,8 +137,3 @@ otherwise. Loading a pickle runs code; see [Security](backends.md#security).
     options:
       members: false
 
-::: cash.backends.ParquetSerializer
-    options:
-      members: false
-
-::: cash.backends.get_serializer

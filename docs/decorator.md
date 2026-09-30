@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/backends/serialization.py:get_serializer @76cf2c1b, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/store.py:ResultStore.store @7d10460b, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears

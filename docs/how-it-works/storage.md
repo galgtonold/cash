@@ -185,17 +185,14 @@ notebook statement also drops its older versions when the new one is written.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer.serialize @97962311, cash/backends/serialization.py:_parquet_keeps @d58d3066 -->
-A pandas `DataFrame` is stored as Parquet when pyarrow or fastparquet is
-installed and Parquet gives it back unchanged: a plain `DataFrame` (not a
-subclass) of at most 100 columns with unique string labels, whose columns
-and index hold numbers, booleans, datetimes (finer than seconds) or
-pyarrow-backed strings, with no index frequency, no `attrs` and default
-`flags`. It comes back as it was stored, `RangeIndex` included. Any other
-frame is pickled: object columns (lists, dicts, UUIDs, mixed values),
-categoricals, wide frames (Parquet's cost grows with the column count, pickle's
-barely does), subclasses such as a GeoDataFrame. Everything else, and a
-DataFrame without a Parquet engine, is pickled.
+<!-- claim: cash/decorator/store.py:ResultStore.store @7d10460b, cash/backends/serialization.py:PickleSerializer.serialize @12f1c6a7 -->
+Every result is stored with `pickle` (protocol 5), pandas DataFrames
+included, so a hit hands back the same frame: its class, index, dtypes, cell
+types, `attrs` and `flags`. Pickle is several times faster than Parquet to
+write and read. Parquet files are smaller for columns with few distinct values
+(small integers, repeated strings, mostly missing values); if disk space
+matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
+setting gets most of that back.
 
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or

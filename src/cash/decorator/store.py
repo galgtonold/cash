@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from .._clock import perf_counter as _perf_counter
 from .._memo import RESULT_TYPES, LruMemo
 from ..backends.memory_backend import InMemoryBackend
-from ..backends.serialization import get_serializer
+from ..backends.serialization import PickleSerializer
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..lineage_tag import set_tags
@@ -374,7 +374,7 @@ class ResultStore:
         happens to the manifest itself.
         """
         try:
-            serializer = get_serializer(result)
+            serializer = PickleSerializer()
 
             # What a later hit saves is the BODY's time. The wall-clock cost
             # also holds cash's own work -- the first call's analysis, the key
@@ -701,7 +701,7 @@ class ResultStore:
         *prefix* is the stream's `chunk_prefix`.
         """
         chunk_key = f"{prefix}:chunk_{chunk_index}"
-        serializer = get_serializer(chunk_buffer)
+        serializer = PickleSerializer()
         chunk_metadata = CacheMetadata(
             key=chunk_key,
             timestamp=time.time(),

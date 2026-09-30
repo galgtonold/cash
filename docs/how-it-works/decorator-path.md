@@ -152,7 +152,7 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @7d10460b -->
 A result is written to the RAM tier and to disk, however cheap it was, unless
 a tier's size cap refuses it; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the

@@ -24,7 +24,6 @@ and does not install them. A few features need a package of their own:
 | Redis backend | `redis` |
 | S3 backend | `boto3` |
 | Tracking `s3://` or `gs://` reads | `s3fs` or `gcsfs` |
-| Storing pandas DataFrames as Parquet (otherwise they are pickled) | `pyarrow` |
 | The `cash.show_stats()` dashboard in Jupyter | `ipywidgets` and `matplotlib` |
 
 Install the one you need with pip, for example the Redis client:

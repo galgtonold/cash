@@ -7,7 +7,7 @@ from importlib import import_module
 from ._base import CacheBackend, EntryMetadata, MetadataDict
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
-from .serialization import ParquetSerializer, PickleSerializer, Serializer, get_serializer
+from .serialization import PickleSerializer, Serializer
 from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
@@ -49,6 +49,4 @@ __all__ = [
     "S3Backend",  # noqa: F822 - served by the module __getattr__
     "Serializer",
     "PickleSerializer",
-    "ParquetSerializer",
-    "get_serializer",
 ]

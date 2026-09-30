@@ -26,10 +26,10 @@ To write a backend of your own, see [Internals](backend_internals.md).
 
 ## Security
 
-<!-- claim: cash/backends/serialization.py:PickleSerializer @eb457c2f broad="the pickle-executes-code warning is about the serializer as a whole", cash/backends/serialization.py:get_serializer @76cf2c1b -->
+<!-- claim: cash/backends/serialization.py:PickleSerializer @108771ca broad="the pickle-executes-code warning is about the serializer as a whole", cash/decorator/store.py:ResultStore.store @7d10460b -->
 !!! danger "Loading a cache runs code"
     `FileBackend`, `SQLiteBackend`, `RedisBackend` and `S3Backend` store
-    values with `pickle` (a DataFrame may use Parquet instead). Loading a
+    values with `pickle`. Loading a
     pickle runs code embedded in it, so a cache is only as safe as whoever
     wrote to it. cash does not sandbox this, and no setting makes an
     untrusted cache safe.

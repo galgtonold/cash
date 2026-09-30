@@ -5,7 +5,7 @@ import time
 
 from cash.backends import FileBackend, InMemoryBackend
 from cash.backends.entry_format import read_entry
-from cash.backends.serialization import PickleSerializer, get_serializer
+from cash.backends.serialization import PickleSerializer
 
 
 class TestInMemoryBackendAdvanced:
@@ -262,18 +262,3 @@ class TestSerializers:
         serialized = s.serialize(data)
         result = s.deserialize(serialized)
         assert result == data
-
-    def test_get_serializer_default(self):
-        """get_serializer returns PickleSerializer for basic types."""
-        s = get_serializer(42)
-        assert isinstance(s, PickleSerializer)
-
-    def test_get_serializer_dict(self):
-        """get_serializer returns PickleSerializer for dicts."""
-        s = get_serializer({"a": 1})
-        assert isinstance(s, PickleSerializer)
-
-    def test_get_serializer_list(self):
-        """get_serializer returns PickleSerializer for lists."""
-        s = get_serializer([1, 2, 3])
-        assert isinstance(s, PickleSerializer)
