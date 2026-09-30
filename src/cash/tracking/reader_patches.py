@@ -521,6 +521,39 @@ def _sqlite_uri_path(uri: str) -> str | None:
     return path
 
 
+def _track_sqlite_wal(tracker: Any, database: Any) -> None:
+    """Make ``<db>-wal`` part of a WAL-mode database's dependency.
+
+    In WAL mode a commit goes to the ``-wal`` file and the main file stays as
+    it was until a checkpoint, so a query cached on the main file alone was
+    served stale while any writer kept its connection open. The header says
+    the mode (bytes 18 and 19 are 2 for WAL); the ``-wal`` file is tracked by
+    content when it is there and as absent when it is not. A rollback-journal
+    database has no ``-wal``, and switching one to WAL rewrites its header.
+    """
+    try:
+        path = os.fsdecode(database) if isinstance(database, bytes) else os.fspath(database)
+        if not path or path == ":memory:":
+            return
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            header = os.read(fd, 20)
+        finally:
+            os.close(fd)
+    except (OSError, TypeError, ValueError):
+        return
+    if len(header) < 20 or not header.startswith(b"SQLite format 3\x00") or header[18:20] != b"\x02\x02":
+        return
+    wal = path + "-wal"
+    if os.path.lexists(wal):
+        tracker.track_path(wal)
+        # A reader running as root chowns the -wal it opens: its ctime moves
+        # while its content does not.
+        tracker.note_ctime_unreliable(wal)
+    else:
+        tracker.track_absent(wal)
+
+
 class _WorkerReads:
     """What a task run in a worker process returned, and the files it read."""
 
@@ -1017,12 +1050,15 @@ class FileDependencyRegistry:
             uri = kwargs.get("uri", args[7] if len(args) > 7 else False)
             target = args[0] if args else kwargs.get("database")
             if not uri or not isinstance(target, (str, bytes)):
+                if isinstance(target, (str, bytes, os.PathLike)) and active_tracker.get() is not None:
+                    _track_sqlite_wal(active_tracker.get(), target)
                 return path_handler(*args, **kwargs)
             path = _sqlite_uri_path(os.fsdecode(target) if isinstance(target, bytes) else target)
             if path is not None:
                 _tracker = active_tracker.get()
                 if _tracker is not None:
                     _tracker.track_path(path)
+                    _track_sqlite_wal(_tracker, path)
                 else:
                     note_untracked_read(path, sys._getframe(1))
             return original_func(*args, **kwargs)

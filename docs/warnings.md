@@ -1432,7 +1432,7 @@ handle), or on Windows a file held open by another process.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @61fdcac0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @a2ece8d1 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @61fdcac0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @b6d6c4b7 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @7622ec96 -->
 **What happened.** A file the function read changed before it returned. The
 result was returned but not stored.

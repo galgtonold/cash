@@ -130,6 +130,10 @@ class FileAccessTracker:
         # what the body read -- and served, stale, forever after.
         # Comparing against this is what lets the store step refuse instead.
         self.read_stats: dict[str, tuple[int, int, int]] = {}
+        # Files whose inode change time moves without their content changing
+        # (a SQLite ``-wal`` a reader opens as root is chown'ed): compared by
+        # size and mtime only in `inputs_changed_since_read`.
+        self.ctime_unreliable: set[str] = set()
         self.user_ns = user_ns or {}
         # Stack of ContextVar tokens, one per active __enter__. Supports
         # re-entry of the same instance (an async function that reuses
@@ -214,9 +218,23 @@ class FileAccessTracker:
         """
         moved = []
         for path, before in self.read_stats.items():
-            if regular_file_stat(path) != before:
+            now = regular_file_stat(path)
+            if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
         return moved
+
+    def note_ctime_unreliable(self, path) -> None:
+        """Compare *path* by size and mtime only in the mid-call check, here
+        and in the enclosing trackers (see ``ctime_unreliable``)."""
+        try:
+            raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
+            resolved = normalize_path(os.path.realpath(raw))
+        except (TypeError, ValueError, OSError):
+            return
+        tracker: FileAccessTracker | None = self
+        while tracker is not None:
+            tracker.ctime_unreliable.add(resolved)
+            tracker = tracker._propagation_parent()
 
     def get_accessed_remote_urls(self) -> set[str]:
         """Remote URLs read in this block, tracked by store validator instead."""

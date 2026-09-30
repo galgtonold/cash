@@ -62,7 +62,7 @@ cash records a file when your code reads it through one of these:
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `parquet.ParquetFile`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `orc.read_table`, `dataset.dataset`, `memory_map`, `input_stream`, `ipc.open_file`, `ipc.open_stream` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
-| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI) |
+| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
 | file metadata | `Path.stat`, and `os.stat`, `os.lstat`, `os.path.getsize`, `getmtime`, `getctime` and the `stat()` of an `os.scandir` entry called from your code: the file, by content |
