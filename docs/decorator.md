@@ -246,7 +246,9 @@ changed. The second list is what cash does not see, and what to do about it.
       reading, once it is gone.
     - An **environment variable** read by literal name (`os.getenv("TENANT")`,
       `"DEBUG" in os.environ`) and the working directory (`os.getcwd()`,
-      `Path.cwd()`, `os.path.abspath(p)`).
+      `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
+      read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
+      `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import warnings
 
 import pytest
@@ -112,9 +113,27 @@ def test_a_name_only_known_at_run_time_still_warns(c, monkeypatch):
     assert [i.kind for i in PurityAnalyzer().analyze(by_runtime_name).issues] == [ISSUE_AMBIENT_READ]
 
 
-def test_a_subscript_through_a_constant_name_still_warns():
-    """`os.environ[_TENANT]`: the name is a global, not written out."""
-    assert [i.kind for i in PurityAnalyzer().analyze(by_subscript).issues] == [ISSUE_AMBIENT_READ]
+def test_a_subscript_through_a_constant_name_is_keyed(c, monkeypatch):
+    """`os.environ[_TENANT]`: a capitalised module constant names the variable."""
+    assert [i.kind for i in PurityAnalyzer().analyze(by_subscript).issues] == []
+    cached = c.cache(by_subscript)
+    monkeypatch.setenv(_VAR, "acme")
+    assert _codes(cached) == []
+    monkeypatch.setenv(_VAR, "globex")
+    assert "globex" in cached()
+
+
+def test_a_constant_name_is_looked_up_on_every_call(c, monkeypatch):
+    """Rebound at run time, the constant names another variable: that one's
+    value is what the key must follow, though the analysis is reused."""
+    cached = c.cache(by_subscript)
+    monkeypatch.setenv(_VAR, "acme")
+    monkeypatch.setenv("CASH_TEST_OTHER_TENANT", "initech")
+    assert "acme" in cached()
+    monkeypatch.setattr(sys.modules[__name__], "_TENANT", "CASH_TEST_OTHER_TENANT")
+    assert "initech" in cached()
+    monkeypatch.setenv("CASH_TEST_OTHER_TENANT", "hooli")
+    assert "hooli" in cached()
 
 
 def test_the_analyzer_lists_what_the_key_folds():

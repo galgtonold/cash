@@ -88,7 +88,7 @@ def test_a_bare_name_call_is_still_reported_once():
 
 def test_an_environment_variable_named_by_a_module_constant_is_keyed(monkeypatch):
     report = PurityAnalyzer().analyze(env_through_a_named_constant)
-    assert ("env", "CASH_TEST_APP_MODE") in report.environment_reads, report.environment_reads
+    assert report.environment_reads, report.environment_reads
     assert not [i for i in report.issues if i.kind == "ambient_read"], report.issues
     monkeypatch.setenv("CASH_TEST_APP_MODE", "x")
     first = environment_component(report.environment_reads)

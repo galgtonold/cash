@@ -469,7 +469,7 @@ class _PurityVisitor(ast.NodeVisitor):
         environ = environ_membership(node)
         if environ is not None:
             self._environ_keyed.add(id(environ))
-            env = environment_input(node)
+            env = environment_input(node, self._namespace, resolve_constants=True)
             if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
                 if id(node) not in self._log_only:
                     self.environment_reads.add(env)
@@ -518,7 +518,7 @@ class _PurityVisitor(ast.NodeVisitor):
         """
         if get_base_name(node.value) in ENVIRON_NAMES:
             self._environ_keyed.add(id(node.value))
-        env = environment_input(node)
+        env = environment_input(node, self._namespace, resolve_constants=True)
         if env is not None and DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
             if id(node) not in self._log_only:
                 self.environment_reads.add(env)
@@ -784,10 +784,21 @@ class _PurityVisitor(ast.NodeVisitor):
             # carries its module, so a method named `now` on the user's own
             # object is not this.
             if DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
-                env = environment_input(node, self._namespace)
+                env = environment_input(node, self._namespace, resolve_constants=True)
                 if env is not None:
                     if id(node) not in self._log_only:
                         self.environment_reads.add(env)
+                    if dotted in ("os.environ.setdefault", "os.environb.setdefault"):
+                        # Also a write: it sets the variable when it is unset,
+                        # which a cache hit skips.
+                        self.issues.append(
+                            PurityIssue(
+                                kind=ISSUE_IMPURE_CALL,
+                                description=f"{dotted}() - write method",
+                                where=self._qualname,
+                                line=line,
+                            )
+                        )
                     return
             ambient = _ambient_call(node, self._ambient_namespace)
             helper = _clock_helper_of(node, self._ambient_namespace) if ambient is not None else None
@@ -1519,7 +1530,7 @@ def _clock_helper_read(value: Any) -> str | None:
             namespace = _build_namespace(value)
             # A read the key folds (`environment_input`) is an input, not a
             # frozen value: the helper's own walk lists it.
-            if environment_input(body[-1].value, namespace) is None:
+            if environment_input(body[-1].value, namespace, resolve_constants=True) is None:
                 found = _ambient_call(body[-1].value, namespace)
     except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
         found = None

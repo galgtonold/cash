@@ -705,7 +705,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @7f115c19, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @23325da1 -->
+<!-- claim: cash/effects.py:MODULE_CALLS @22921d14, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @2d93af7a, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock or a fresh UUID
@@ -716,14 +716,17 @@ run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
 
-<!-- claim: cash/effects.py:environment_input @e1c8fa6b, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
+<!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @c1abcb81 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @f171b9f4 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
-(`os.getenv(TENANT_VAR)`) and a read of the working directory (`os.getcwd()`,
-`Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on a path that may
-be relative) are not reported: their values are folded into the key. A
+(`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
+(`os.path.expandvars("$DATA_DIR/x")`, `os.path.expanduser`, `Path.home()`,
+`tempfile.gettempdir()`, `shutil.which`) and a read of the working directory
+(`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on
+a path that may be relative) are not reported: their values are folded into
+the key. A
 reading that only goes into a log line is not reported either.
 
 **Why it matters.** The value is an input the key cannot see. The first call's
@@ -933,7 +936,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @7f115c19 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @22921d14 -->
 <!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
