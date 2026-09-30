@@ -149,6 +149,13 @@ class FileAccessTracker:
         # Files a memo handed this block data from that was read from an
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
+        # Files and directories this block CREATED (opened with "w"/"x",
+        # made with mkdir/mkdtemp), resolved. What the block reads back from
+        # them is its own output, not an input: unzipping into a temporary
+        # directory, reading the files and removing the directory was refused
+        # on every call as "changed while the call was running".
+        self.created_files: set[str] = set()
+        self.created_dirs: list[str] = []
 
     def __enter__(self):
         # The first open tracker installs the wrappers (see
@@ -243,6 +250,29 @@ class FileAccessTracker:
         finally:
             _tracking_seconds += _perf_counter() - started
 
+    def note_created(self, path, directory: bool = False) -> None:
+        """Record *path* as created by this block (and, when propagating, by
+        the enclosing ones): not an input from here on (`created_by_block`)."""
+        try:
+            raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
+            resolved = normalize_path(os.path.realpath(raw))
+        except (TypeError, ValueError, OSError):
+            return
+        tracker: FileAccessTracker | None = self
+        while tracker is not None:
+            if resolved not in tracker.accessed_files:  # read first: an input
+                if directory:
+                    tracker.created_dirs.append(resolved.rstrip("/") + "/")
+                else:
+                    tracker.created_files.add(resolved)
+            tracker = tracker._propagation_parent()
+
+    def created_by_block(self, abs_path: str) -> bool:
+        """Did this block create *abs_path*, or a directory it lies in?"""
+        if abs_path in self.created_files:
+            return True
+        return any(abs_path.startswith(d) or abs_path + "/" == d for d in self.created_dirs)
+
     def _track_path_untimed(self, path):
         if not isinstance(path, (str, bytes, os.PathLike)):
             # ``open(3)`` opens a file DESCRIPTOR: joblib and loky do, and
@@ -293,6 +323,9 @@ class FileAccessTracker:
             # See `is_cash_internal`. Checked after realpath so a relative
             # or symlinked cache path is caught too.
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
+            return
+        if (self.created_files or self.created_dirs) and self.created_by_block(abs_path):
+            logger.debug("[TRACKER] Ignoring a read of %r, which this block created", abs_path)
             return
         why = incidental_read(abs_path, self._own_package)
         if why is not None:
@@ -495,6 +528,8 @@ class FileAccessTracker:
         # inside its own package is not the user's question either.
         if incidental_read(os.path.abspath(raw), self._own_package) is not None:
             return None
+        if (self.created_files or self.created_dirs) and self.created_by_block(normalize_path(os.path.realpath(raw))):
+            return None  # the block's own output: whether it is there is its doing
         return normalized
 
     def add_tracked_absent(self, path: str) -> None:

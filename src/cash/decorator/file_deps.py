@@ -423,7 +423,7 @@ class FileDeps:
             code="STORE-INPUT-CHANGED",
             fix="nothing, if something else writes these files while this runs "
             "-- the next call reads the settled file and caches normally. If "
-            "the function writes a file it also reads, that is why: split the "
-            "read and the write.",
+            "the function reads a file and then writes to it, that is why: "
+            "split the read and the write.",
         )
         return True

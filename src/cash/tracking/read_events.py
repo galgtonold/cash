@@ -94,8 +94,16 @@ def _on_open(args: tuple) -> None:
     ``os.open`` reports None there and is not watched, and an integer "path"
     is a descriptor being wrapped, which names no file.
     """
-    path, mode, _flags = args
-    if not isinstance(mode, str) or not isinstance(path, (str, bytes, os.PathLike)):
+    path, mode, flags = args
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    if not isinstance(mode, str):
+        # ``os.open``: not watched as a read, but a file it creates
+        # (``tempfile.mkstemp``) is the block's own output.
+        if isinstance(flags, int) and _creates(flags):
+            tracker = active_tracker.get()
+            if tracker is not None:
+                tracker.note_created(path)
         return
     caller = _audited_caller()
     if _not_a_read(caller):
@@ -127,6 +135,32 @@ def _on_open(args: tuple) -> None:
         observer = _active_effect_observer.get()
         if observer is not None and not is_cash_internal(path):
             observer.record_write(path)
+        if "a" not in mode:
+            # Truncated or new: what the block reads back from it is its own
+            # output, not an input (`FileAccessTracker.note_created`).
+            tracker = active_tracker.get()
+            if tracker is not None:
+                tracker.note_created(path)
+
+
+def _creates(flags: int) -> bool:
+    """Do ``os.open`` *flags* make a new file or empty an existing one?"""
+    writes = flags & (os.O_WRONLY | os.O_RDWR)
+    return bool(writes) and (bool(flags & os.O_TRUNC) or (flags & os.O_CREAT and flags & os.O_EXCL) != 0)
+
+
+def _on_mkdir(args: tuple) -> None:
+    """``os.mkdir`` (``mkdtemp``, ``makedirs``, ``Path.mkdir``): a directory
+    the block makes holds only its own output."""
+    path = args[0]
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    tracker = active_tracker.get()
+    if tracker is not None:
+        tracker.note_created(path, directory=True)
+    observer = _active_effect_observer.get()
+    if observer is not None:
+        observer.note_created_dir(path)
 
 
 def _on_listing(args: tuple) -> None:
@@ -187,3 +221,4 @@ def subscribe_read_events() -> None:
     io_watch.subscribe("os.listdir", _on_listing)
     io_watch.subscribe("os.scandir", _on_listing)
     io_watch.subscribe("glob.glob", _on_glob)
+    io_watch.subscribe("os.mkdir", _on_mkdir)

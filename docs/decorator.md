@@ -442,12 +442,13 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @908e1e5a broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @50a62fb5 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
 While a miss runs, cash records file writes, outbound connections and subprocesses, and
-warns once about any it had not already reported
+warns once about any it had not already reported (a write into a scratch
+directory the call made and removed again is not one)
 ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). A call to an
 LLM or HTTP SDK shows up this way, as a network read
 ([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and
@@ -474,7 +475,7 @@ that spans lines, or on the line above), so code added later is still checked.
 On the `def` line it covers findings about the whole body. In a helper it
 covers every caller of that helper.
 
-<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @8b9e6cfa, cash/effect_observer.py:EffectObserver.record_effect @c18acbb6, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
+<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @8b9e6cfa, cash/effect_observer.py:EffectObserver.record_effect @dce8a421, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
 **Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
 what the comment waives, on every line inside the block. While the block runs,
 it also waives the effects cash observes, including those of helpers it calls.

@@ -1430,7 +1430,7 @@ handle), or on Windows a file held open by another process.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @5b620397, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @a2ece8d1 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @61fdcac0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @a2ece8d1 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @270aaafd, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @7622ec96 -->
 **What happened.** A file the function read changed before it returned. The
 result was returned but not stored.
@@ -1438,9 +1438,15 @@ result was returned but not stored.
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
 
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e -->
+A file the function creates itself (opened for writing, in a directory it made
+with `tempfile.TemporaryDirectory`, `mkdtemp` or `os.mkdir`, or by
+`tempfile.mkstemp`) is its own output, not an input: writing a scratch file,
+reading it back and removing it caches normally.
+
 **What to do.** Usually nothing: the next call caches normally. If it fires on
-every run, the function probably writes a file it also reads. Split the read
-from the write:
+every run, the function probably reads a file and then writes to it. Split the
+read from the write:
 
 <!-- test:skip reason="illustrative: the point is the split, not a value" -->
 ```python
