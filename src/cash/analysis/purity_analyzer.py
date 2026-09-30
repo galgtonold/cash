@@ -351,6 +351,58 @@ def _file_part(issues: list[PurityIssue]) -> str:
     return f" ({name})" if name else ""
 
 
+#: Methods that set up or train the object they are called on, in place,
+#: and whose return is dropped by design (sklearn's ``fit`` returns self).
+_IN_PLACE_SETUP_METHODS = frozenset(
+    {
+        "fit",
+        "partial_fit",
+        "set_params",
+        "shuffle",
+        "seed",
+        "add_argument",
+        "add_argument_group",
+        "add_mutually_exclusive_group",
+        "add_subparsers",
+        "set_defaults",
+    }
+)
+
+
+def _constructed_locals(func_def: ast.AST | None, params: frozenset[str]) -> frozenset[str]:
+    """Locals every assignment of which is a new instance of a class, named as
+    one is (``m = LinearRegression()``, ``p = argparse.ArgumentParser()``)."""
+    if func_def is None:
+        return frozenset()
+    kinds: dict[str, bool] = {}
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets, value = [node.target], getattr(node, "value", None)
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.withitem, ast.comprehension)):
+            target = getattr(node, "target", None) or getattr(node, "optional_vars", None)
+            targets, value = ([target] if target is not None else []), None
+        else:
+            continue
+        for target in targets:
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name):
+                    made = (
+                        target is name
+                        and isinstance(node, ast.Assign)
+                        and isinstance(value, ast.Call)
+                        and _names_a_class(value.func)
+                    )
+                    kinds[name.id] = kinds.get(name.id, True) and made
+    return frozenset(n for n, made in kinds.items() if made and n not in params)
+
+
+def _names_a_class(func: ast.AST) -> bool:
+    last = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+    return last[:1].isupper() and not last.isupper()
+
+
 class _PurityVisitor(ast.NodeVisitor):
     """Single-function-body visitor that collects :class:`PurityIssue`s.
 
@@ -383,6 +435,7 @@ class _PurityVisitor(ast.NodeVisitor):
         namespace: dict[str, Any] | None = None,
         log_helpers: frozenset[str] = frozenset(),
         ambient_namespace: dict[str, Any] | None = None,
+        func_def: ast.AST | None = None,
     ) -> None:
         self.issues: list[PurityIssue] = []
         #: *namespace* plus, in a method, its ``self`` / ``cls`` bound to the
@@ -394,6 +447,10 @@ class _PurityVisitor(ast.NodeVisitor):
         self.judged_helpers: set[Any] = set()
         #: ids of ``sys.stdin`` nodes reached as a method's receiver.
         self._stdin_attributes: set[int] = set()
+        #: The function being visited, and the locals only ever bound to a
+        #: new instance (`_constructed_locals`), worked out when first asked.
+        self._func_def = func_def
+        self._constructed: frozenset[str] | None = None
         self.called_callable_nodes: list[ast.AST] = []
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
         #: but their bindings are noted, so a mock put in their place is seen.
@@ -1015,6 +1072,7 @@ class _PurityVisitor(ast.NodeVisitor):
                     method not in REPORTED_METHODS
                     and method not in PANDAS_INPLACE_METHODS
                     and not self._reports_effect(call)
+                    and not self._works_on_its_own_object(func_node)
                 ):
                     base = get_base_name(func_node.value)
                     base_str = f"{base}." if base else ""
@@ -1080,6 +1138,22 @@ class _PurityVisitor(ast.NodeVisitor):
         for target in node.targets:
             self._maybe_flag_mutation_target(target, node.lineno)
         self.generic_visit(node)
+
+    def _works_on_its_own_object(self, func_node: ast.Attribute) -> bool:
+        """Is a discarded ``obj.method(...)`` work on an object this function
+        made? Then dropping the return is how it is written: ``d =
+        deque(xs); d.popleft()``, ``r = random.Random(k); r.shuffle(xs)``,
+        and, on a local an unknown class made, the methods that configure or
+        train it in place (``m = LinearRegression(); m.fit(X, y)``,
+        ``p = ArgumentParser(); p.add_argument("--x")``)."""
+        receiver = func_node.value
+        if self._receiver_is_fresh(receiver):
+            return True
+        if not isinstance(receiver, ast.Name) or func_node.attr not in _IN_PLACE_SETUP_METHODS:
+            return False
+        if self._constructed is None:
+            self._constructed = _constructed_locals(self._func_def, self._param_names)
+        return receiver.id in self._constructed
 
     def _receiver_is_fresh(self, value: ast.AST) -> bool:
         """True when *value* holds an object this function made -- mutating
@@ -2128,6 +2202,7 @@ class PurityAnalyzer:
                 namespace=namespace,
                 log_helpers=_log_helper_names(func_def, func),
                 ambient_namespace=ambient_namespace,
+                func_def=func_def,
             )
             visitor.visit(func_def)
             visitor.finalize_taint()

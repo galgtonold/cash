@@ -107,6 +107,41 @@ _FRESH_CONSTRUCTOR_ATTRS = frozenset(
 )
 _FRESH_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 
+#: Factories that return a new object of the caller's own, by module: a hash,
+#: a compressor, a generator, a parser, a container. ``h = hashlib.sha256();
+#: h.update(b)`` was reported as a write, ``r = random.Random(k);
+#: r.shuffle(xs)`` as a discarded call. None: every function of the module.
+_FRESH_MODULE_FACTORIES: dict[str, frozenset[str] | None] = {
+    "hashlib": None,
+    "collections": frozenset({"Counter", "deque", "OrderedDict", "defaultdict"}),
+    "zlib": frozenset({"compressobj", "decompressobj"}),
+    "bz2": frozenset({"BZ2Compressor", "BZ2Decompressor"}),
+    "lzma": frozenset({"LZMACompressor", "LZMADecompressor"}),
+    "random": frozenset({"Random"}),
+    "argparse": frozenset({"ArgumentParser"}),
+    "np.random": frozenset({"default_rng", "RandomState", "Generator"}),
+    "numpy.random": frozenset({"default_rng", "RandomState", "Generator"}),
+}
+#: The same factories imported by name.
+_FRESH_FACTORY_NAMES = frozenset({"ArgumentParser", "default_rng", "RandomState", "sha256", "sha1", "md5", "blake2b"})
+
+
+def _module_factory(func: ast.Attribute) -> bool:
+    """Is *func* one of `_FRESH_MODULE_FACTORIES` (``hashlib.sha256``)?"""
+    parts: list[str] = []
+    node: ast.AST = func.value
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return False
+    module = ".".join([node.id, *reversed(parts)])
+    if module not in _FRESH_MODULE_FACTORIES:
+        return False
+    names = _FRESH_MODULE_FACTORIES[module]
+    return names is None or func.attr in names
+
+
 #: Readers that hand back an object nobody else holds.
 _FRESH_READER_ATTRS = frozenset(
     {
@@ -339,10 +374,12 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
     if isinstance(node, ast.Call):
         f = node.func
         if isinstance(f, ast.Name):
-            return f.id in _FRESH_CONSTRUCTOR_NAMES
+            return f.id in _FRESH_CONSTRUCTOR_NAMES or f.id in _FRESH_FACTORY_NAMES
         if isinstance(f, ast.Attribute):
             if any(kw.arg == "inplace" for kw in node.keywords):
                 return False
+            if _module_factory(f):
+                return True
             if f.attr in _FRESH_CONSTRUCTOR_ATTRS or f.attr in _FRESH_READER_ATTRS or f.attr in _NEW_OBJECT_METHODS:
                 return True
             if f.attr in _ELEMENT_METHODS:
