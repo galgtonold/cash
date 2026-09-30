@@ -6,6 +6,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
+import sys
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -17,10 +18,10 @@ from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..object_hashing import held_objects
 from ..source_norm import class_functions, unwrap_partials
-from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS
+from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
-from .code_identity import is_user_code_object
+from .code_identity import is_user_code_module, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -101,6 +102,24 @@ def is_user_code_carrier(carrier: Any) -> bool:
     if wrapped is not None:
         return is_user_code_object(wrapped)
     return is_user_code_object(type(carrier))
+
+
+def defined_in_user_code(obj: Any) -> bool:
+    """`is_user_code_carrier`, for a function or class found INSIDE a library
+    object: judged by the module it names when that module has a file.
+
+    `is_user_code_object` takes an object it cannot find again in its module
+    for the user's (the safe side when keying): a function defined in another
+    function (``WeakSet.__init__.<locals>._remove``), one a decorator replaced
+    (traitlets' observers). Inside a library object that is the library's
+    own code, and taking it for the user's walked on through its closure into
+    the rest of the process. A module without a file (a notebook's
+    ``__main__``, exec'd code) keeps the lenient verdict.
+    """
+    mod = sys.modules.get(getattr(obj, "__module__", None) or "")
+    if mod is not None and getattr(mod, "__file__", None) is not None:
+        return is_user_code_module(mod)
+    return is_user_code_carrier(obj)
 
 
 class CodeArgs:
@@ -265,6 +284,10 @@ class CodeArgs:
         # ``iter_contained``'s first line. See `CODELESS_PRIMS` for why this
         # is an exact-type test against a tuple rather than an isinstance.
         if type(value) in CODELESS_PRIMS or type(value) in _plain_data.numpy_scalar_set():
+            return
+        # A lock, a thread, a logger, a stream: no code a result depends on,
+        # and the whole process is reachable through them (`is_runtime_machinery`).
+        if is_runtime_machinery(value):
             return
         # A frozen function's list/tuple/dict result is keyed by the call that
         # produced it (`FrozenResults.remember_container`), code inside it included:
@@ -453,11 +476,13 @@ class CodeArgs:
         for v in values:
             if type(v) in CODELESS_PRIMS or id(v) in _seen or isinstance(v, types.ModuleType):
                 continue
+            if is_runtime_machinery(v):
+                continue
             if type(v) in BUILTIN_CONTAINERS:
                 _seen.add(id(v))
                 yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen)
             elif isinstance(v, (types.FunctionType, type)):
-                if is_user_code_carrier(v):
+                if defined_in_user_code(v):
                     yield from self._walk_carriers(v, _depth, _seen)
             elif isinstance(v, types.MethodType):
                 _seen.add(id(v))
@@ -465,7 +490,7 @@ class CodeArgs:
             elif isinstance(v, functools.partial):
                 _seen.add(id(v))
                 yield from self._find_user_code((v.func, *v.args, *v.keywords.values()), _depth + 1, _seen)
-            elif self._is_user_instance(v):
+            elif self._is_user_instance(v) and defined_in_user_code(type(v)):
                 yield from self._walk_carriers(v, _depth, _seen)
             elif self._keyed_by_registration(v):
                 continue

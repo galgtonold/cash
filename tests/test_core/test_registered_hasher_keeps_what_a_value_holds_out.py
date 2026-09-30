@@ -106,13 +106,15 @@ def test_a_registered_logger_inside_an_argument_is_not_searched_either(tmp_path,
 
 @pytest.mark.parametrize(
     ("register", "hits"),
-    [(True, 1), (False, 0)],
-    ids=["registered-logger-hits", "control-unregistered-logger-misses"],
+    [(True, 1), (False, 1)],
+    ids=["registered-logger-hits", "unregistered-logger-hits"],
 )
 def test_code_a_registered_value_holds_is_not_in_the_key(tmp_path, logger, register, hits):
     """With the hasher, swapping what the logger's handler holds is not a new
-    call. The control: without it, the handler's function is reached and is
-    in the key, so the same swap misses."""
+    call. Without it neither: a logger is not searched for code at all
+    (`is_runtime_machinery`), since through its manager and handlers the
+    whole process is reachable, and what a handler does with a record does
+    not change the result."""
     handler = Echo(upper)
     logger.addHandler(handler)
     c = _cash(tmp_path, register=register)

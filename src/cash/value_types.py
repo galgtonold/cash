@@ -117,3 +117,47 @@ def mro_kind(value: Any, bases: Mapping[str, str], prefixes: tuple[str, ...]) ->
         if kind is not None:
             return kind
     return None
+
+
+def _runtime_machinery_types() -> tuple[type, ...]:
+    import io
+    import logging
+    import socket
+    import threading
+
+    return (
+        type(threading.Lock()),
+        type(threading.RLock()),
+        threading.Condition,
+        threading.Event,
+        threading.Semaphore,  # BoundedSemaphore too
+        threading.Barrier,
+        threading.Thread,
+        logging.Logger,  # the root logger and every placeholder's
+        logging.LoggerAdapter,
+        logging.Handler,
+        logging.Filter,
+        logging.Manager,
+        io.IOBase,  # files and streams, ipykernel's output stream among them
+        socket.socket,
+    )
+
+
+#: The process's running machinery: locks, events, threads, loggers, log
+#: handlers, streams and sockets. They hold no code a result depends on, and
+#: through them -- a handler's stream, a thread's target -- nearly everything
+#: in the process is reachable: in a kernel, ipykernel's session and shell,
+#: the notebook's namespace, cash's own objects. Searched for user code, the
+#: key of a function that only logs moved with all of it. Tested with
+#: ``isinstance``, through `is_runtime_machinery`.
+RUNTIME_MACHINERY_TYPES: tuple[type, ...] = _runtime_machinery_types()
+
+#: Modules whose classes are all such machinery, matched by name so nothing
+#: is imported to test a value against them.
+_RUNTIME_MACHINERY_MODULES = ("asyncio.locks", "multiprocessing.synchronize")
+
+
+def is_runtime_machinery(value: Any) -> bool:
+    """Is *value* a lock, event, thread, logger, handler, stream or socket
+    (`RUNTIME_MACHINERY_TYPES`)?"""
+    return isinstance(value, RUNTIME_MACHINERY_TYPES) or type(value).__module__ in _RUNTIME_MACHINERY_MODULES
