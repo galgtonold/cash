@@ -151,23 +151,38 @@ def changes_its_closure(fn) -> bool:
     return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
 
 
-def holds_a_closure_with_state(value, depth: int = 2) -> bool:
-    """Whether *value* is, or directly holds, a function that changes what
-    its closure holds when called: a counter or a log a factory returned.
+#: Values with nothing inside them to look at: skipped without a call.
+_ATOMS = (int, float, complex, str, bytes, bool, type(None))
+
+
+def holds_a_closure_with_state(value) -> bool:
+    """Whether *value* is, or holds in its tuples, lists, sets and dicts
+    however deeply nested, a function that changes what its closure holds
+    when called: a counter or a log a factory returned.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
     everything it has counted or collected since: ``counter =
-    make_counter(0)`` run again gave a counter that went on from 2.
+    make_counter(0)`` run again gave a counter that went on from 2. Only two
+    levels of containers were looked into, so ``{"on": {"click":
+    [counter]}}`` was served; a seen set now ends a container that holds
+    itself.
     """
-    if isinstance(value, _types.FunctionType):
-        return changes_its_closure(value)
-    if depth <= 0:
-        return False
-    if isinstance(value, (tuple, list, set, frozenset)):
-        return any(holds_a_closure_with_state(item, depth - 1) for item in value)
-    if isinstance(value, dict):
-        return any(holds_a_closure_with_state(item, depth - 1) for item in value.values())
+    stack = [value]
+    seen: set[int] = set()
+    while stack:
+        item = stack.pop()
+        if isinstance(item, _ATOMS):
+            continue
+        if isinstance(item, _types.FunctionType):
+            if changes_its_closure(item):
+                return True
+            continue
+        if isinstance(item, (tuple, list, set, frozenset, dict)):
+            if id(item) in seen:
+                continue
+            seen.add(id(item))  # the containers stay alive inside *value*
+            stack.extend(item.values() if isinstance(item, dict) else item)
     return False
 
 
