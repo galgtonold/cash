@@ -223,7 +223,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @a7bad3ba, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -391,7 +391,7 @@ result larger than one chunk the predicate cannot run
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d580fdbc -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d89d19fb -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -550,7 +550,7 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @7736721e -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @657dd3dc -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 

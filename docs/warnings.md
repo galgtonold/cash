@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @7dee89e4 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @5de52e8c -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -631,7 +631,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @2ddd6f7b -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @aa5b9707 -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -729,6 +729,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-DYNAMIC-DEPENDENCY](#key-dynamic-dependency) | decorator | code in an argument picks what it calls at run time |
 | [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | a `frozen=True` result was modified |
 | [KEY-FROZEN-NO-EFFECT](#key-frozen-no-effect) | decorator | `frozen=True` cannot mark this result |
+| [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | decorator | the helpers a function reaches never end; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
@@ -755,7 +756,7 @@ these reads is reported where it is called, however it is called: `now()`,
 
 <!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @90d90753 -->
+<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @67ea79d5 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
@@ -814,7 +815,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @5765b31b -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -947,6 +948,24 @@ functions receiving it still hash it in full.
 object that takes attributes. Or remove `frozen=True`.
 
 **When it is safe to ignore.** When the result is small.
+
+### KEY-HELPERS-UNWALKABLE {#key-helpers-unwalkable}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+**What happened.** cash keys a function by the code of every helper it can
+reach, however deep. Here the helpers never ran out: something hands out a new
+function each time it is read (a module `__getattr__` that builds one, for
+example), so the walk passed thousands of them. The function ran uncached.
+
+**Why it matters.** That function is never cached. Nothing stale can be served:
+cash does not cache under a key that leaves code out.
+
+**What to do.** Stop creating the helper on every read (build it once and keep
+it), or name what the result depends on with `depends_on=[...]`.
+
+**When it is safe to ignore.** When the function is cheap enough to run every
+time.
 
 ### KEY-INSTANCE-STATE {#key-instance-state}
 
@@ -1111,7 +1130,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @5765b31b -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, or says the value is nested in a container. A
 value a cached `functools.partial` binds counts as an argument too. The
@@ -1166,7 +1185,7 @@ is the classic case.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @a7bad3ba -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99 -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 
@@ -1349,7 +1368,7 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d580fdbc -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d89d19fb -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source, so a `random.seed(0)`
 elsewhere does not silence it. Such a seed is still keyed when it is set after

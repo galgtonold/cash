@@ -50,7 +50,6 @@ import textwrap
 import threading
 import time
 import types
-import warnings
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -74,7 +73,8 @@ from ..effects import (
     environ_membership,
     environment_input,
 )
-from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashWarning
+from ..diagnostics import warn_diagnostic
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_path
 from ..purity import (
     KNOWN_PURE_BUILTINS,
@@ -2086,10 +2086,11 @@ class PurityAnalyzer:
 
         report = self._analyze_uncached(func)
         if report.unwalkable:
-            warnings.warn(
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-HELPERS-UNWALKABLE",
                 f"cash cannot key {_qualname_of(func)}: {report.unwalkable}. It runs uncached.",
-                CashWarning,
-                stacklevel=2,
+                "Name the helpers it reaches with depends_on=[...] instead of creating them on every read.",
             )
         if is_stateful(func):
             # The user has spoken: one finding for the function itself.

@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @0271cffb, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @916718e1, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -54,7 +54,7 @@ that can change the result without changing an argument:
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made after the function was decorated, by the caller too (module level, or an outer function before it calls this one). Re-seeding recomputes, and two draws in a row under one seed are two entries. |
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @a7bad3ba -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99 -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
@@ -67,7 +67,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @a7c962d4, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c5c13b57, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -87,10 +87,13 @@ Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
 everything else is pickled.
 
-<!-- claim: cash/object_hashing.py:holds_content_data @5abef4f5, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @29c96359 -->
+<!-- claim: cash/object_hashing.py:holds_content_data @7d325c04, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @29c96359 -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
 dict attribute, is keyed part by part rather than pickled whole: each frame
-by its content, the rest as pickle would store it. Under pandas 3, a frame
+by its content, the rest as pickle would store it. That happens when it holds
+a frame cash can check for changes (below) or an array, frame or table of
+1 MiB or more; an object holding only small ones, such as a fitted
+scikit-learn model, is pickled whole, which is faster. Under pandas 3, a frame
 cash has already hashed is checked for changes instead of read again, so a
 repeat call on an unchanged object costs milliseconds however large its
 frames are, also when other frames share its data. A frame whose memory can
@@ -116,7 +119,7 @@ registration.
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @b144476a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @5765b31b -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
