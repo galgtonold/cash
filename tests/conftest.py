@@ -385,6 +385,22 @@ _MAIN = sys.modules["__main__"]
 
 
 @pytest.fixture(autouse=True)
+def _process_seeds_put_back():
+    """Forget which global RNG streams a test seeded.
+
+    Outside a notebook a watched ``np.random.seed(...)`` makes every later
+    drawing function key on the stream's position; a seed one test set would
+    otherwise turn the next test's unseeded draw into a seeded one.
+    """
+    from cash.tracking.randomness import lineage
+
+    seeded = getattr(lineage, "_PROCESS_SEEDED", set())
+    seeded.clear()
+    yield
+    seeded.clear()
+
+
+@pytest.fixture(autouse=True)
 def _main_module_put_back():
     """Put the process's ``__main__`` back after every test.
 

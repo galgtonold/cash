@@ -1261,10 +1261,12 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @9ccf2e1c -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @246c732b -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source, so a `random.seed(0)`
-elsewhere does not silence it. A `seed=None` parameter passed on to the
+elsewhere does not silence it. Such a seed is still keyed when it is set after
+the decoration: the message says so for a draw from the global `random` or
+`numpy.random` stream. A `seed=None` parameter passed on to the
 generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.

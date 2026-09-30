@@ -24,7 +24,8 @@ from ..tracking.randomness import (
     restore_rng_state,
     rng_modules_changed,
     seed_epoch_component,
-    seed_epochs,
+    seeded_rng_modules,
+    watch_seeds,
 )
 
 if TYPE_CHECKING:
@@ -313,6 +314,7 @@ class RngWatch:
         self._registry = registry
         self._backend_slot = backend_slot
         self._notices = notices
+        watch_seeds()
 
     def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
         """Fold the current seed epoch into the key, for RNG-drawing functions.
@@ -336,6 +338,7 @@ class RngWatch:
         draw has already been stored under an epoch-free key; the next call
         recomputes once and is stable from then on.
         """
+        watch_seeds()
         cf = self._registry.cached.get(func_name)
         modules = cf.rng_modules if cf is not None else None
         if modules is None:
@@ -417,7 +420,7 @@ class RngWatch:
         # drawn module is actually SEEDED. An unseeded draw has no epoch that can
         # change, so its frozen value is correct from the first call; skipping the
         # write there would redraw and break the freeze-from-first-call contract.
-        return bool(drew & set(seed_epochs()))
+        return bool(drew & seeded_rng_modules())
 
     def replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
@@ -477,6 +480,9 @@ class RngWatch:
           purity analyzer has the identical blind spot and treats it the same
           way: no source, no claim.
         """
+        # A seed the caller sets must be seen from now on (`watch_seeds`), and
+        # the module that imports numpy has usually just been imported.
+        watch_seeds()
         if allow_random:
             return
 
@@ -530,10 +536,18 @@ class RngWatch:
         abs_lineno = call.lineno + first_lineno - 1 if first_lineno else call.lineno
 
         # ASCII only: this lands in a terminal whose codepage may not be UTF-8.
+        # A draw from the global stream may be seeded by the caller, which the
+        # source cannot show: say what happens in each case (`watch_seeds`).
+        then = "The first"
+        if call.carrier is None and call.module in ("random", "numpy.random", "np.random", "numpy"):
+            then = (
+                "A seed set with random.seed() or np.random.seed() after this "
+                "decoration, by the caller too, is part of the key; without one, the first"
+            )
         message = (
             f"@cash.cache on {func_name}: Unseeded randomness detected: "
             f"{describe_random_call(call)} at line {abs_lineno}{extra}. "
-            f"The first call's result is cached and replayed on every later "
+            f"{then} call's result is cached and replayed on every later "
             f"call - the RNG is never consulted again, so the value is frozen "
             f"and not reproducible across a cleared cache."
         )

@@ -33,6 +33,8 @@ from .lineage import (
     seed_cells_not_yet_run,
     seed_epoch_component,
     seed_epochs,
+    seeded_rng_modules,
+    watch_seeds,
 )
 from .state import (
     capture_object_rng_states,
@@ -68,7 +70,9 @@ __all__ = [
     "seed_cells_not_yet_run",
     "seed_epoch_component",
     "seed_epochs",
+    "seeded_rng_modules",
     "warn_stale_estimator_fit",
     "warn_stale_randomness",
     "warn_unseeded_estimator_fit",
+    "watch_seeds",
 ]
