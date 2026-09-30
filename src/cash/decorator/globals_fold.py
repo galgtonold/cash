@@ -189,9 +189,54 @@ def stabilize_for_global_hash(
     However deep the containers nest: past eight levels a callable was left
     as it was, which pickles by name, so editing it kept the key. *_path*
     (the containers and callables being rewritten) ends one that holds itself.
+
+    An object whose state is its ``__dict__`` (`_state_is_its_dict`) and that
+    holds code is rewritten as its class's name and that dict: left to be
+    pickled, ``CFG = {"b": Box(lambda x: x + 1)}`` could not be, and the
+    global was dropped from the key, so editing the lambda served the old
+    result. An object that holds no code is left as it is, keyed as before.
     """
+    return _stabilized(v, hash_callable, _path, carried)[0]
+
+
+#: `_state_is_its_dict` per class: asked of every object a global holds.
+_STATE_IS_DICT: dict[type, bool] = {}
+
+#: Values with nothing in them that can hold code.
+_NO_CODE_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
+
+
+def _state_is_its_dict(t: type) -> bool:
+    """Does an instance of *t* pickle as its class and its ``__dict__``, and
+    nothing else? No custom reduce or getstate, no slots: then its dict,
+    rewritten, stands for all of it. ``SimpleNamespace`` reduces to exactly
+    that."""
+    try:
+        return _STATE_IS_DICT[t]
+    except KeyError:
+        known = _STATE_IS_DICT[t] = _reads_as_its_dict(t)
+        return known
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _reads_as_its_dict(t)
+
+
+def _reads_as_its_dict(t: type) -> bool:
+    """`_state_is_its_dict`, worked out."""
+    if t is types.SimpleNamespace:
+        return True
+    if t.__reduce_ex__ is not object.__reduce_ex__ or t.__reduce__ is not object.__reduce__:
+        return False
+    if getattr(t, "__getstate__", object.__getstate__) is not object.__getstate__:
+        return False
+    return all(set(getattr(k, "__slots__", ())) <= {"__dict__", "__weakref__"} for k in t.__mro__)
+
+
+def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> tuple[Any, bool]:
+    """`stabilize_for_global_hash`, and whether any code was rewritten."""
+    if type(v) in _NO_CODE_LEAVES:
+        return v, False
     if id(v) in _path:
-        return ("__cash_cycle__", type(v).__qualname__)
+        return ("__cash_cycle__", type(v).__qualname__), False
     if callable(v) and not isinstance(v, type):
         try:
             ident: Any = hash_callable(v)
@@ -199,15 +244,35 @@ def stabilize_for_global_hash(
             ident = getattr(v, "__qualname__", repr(v))
         payload = carried_payload(v) if carried else None
         if payload is None:
-            return ("__cash_callable__", ident)
-        return ("__cash_callable__", ident, stabilize_for_global_hash(payload, hash_callable, _path | {id(v)}))
+            return ("__cash_callable__", ident), True
+        return ("__cash_callable__", ident, _stabilized(payload, hash_callable, _path | {id(v)}, True)[0]), True
     if isinstance(v, dict):
         inner = _path | {id(v)}
-        return {k: stabilize_for_global_hash(val, hash_callable, inner, carried=carried) for k, val in v.items()}
+        out, changed = {}, False
+        for k, val in v.items():
+            out[k], moved = _stabilized(val, hash_callable, inner, carried)
+            changed = changed or moved
+        return out, changed
     if isinstance(v, (list, tuple)):
+        if all(type(x) in _NO_CODE_LEAVES for x in v):
+            return v, False
         inner = _path | {id(v)}
-        return type(v)(stabilize_for_global_hash(x, hash_callable, inner, carried=carried) for x in v)
-    return v
+        parts = [_stabilized(x, hash_callable, inner, carried) for x in v]
+        return type(v)(x for x, _ in parts), any(moved for _, moved in parts)
+    state = getattr(v, "__dict__", None)
+    if (
+        type(state) is dict
+        and state
+        and not isinstance(v, (type, types.ModuleType))
+        and _state_is_its_dict(type(v))
+        # A record of plain values holds no code: nothing to rewrite.
+        and not all(type(x) in _NO_CODE_LEAVES for x in state.values())
+    ):
+        rewritten, changed = _stabilized(state, hash_callable, _path | {id(v)}, carried)
+        if changed:
+            t = type(v)
+            return ("__cash_object__", f"{t.__module__}.{t.__qualname__}", rewritten), True
+    return v, False
 
 
 #: Leaves of plain data (`plain_data_kind`): exact types that cannot change.
