@@ -285,95 +285,298 @@ def frame_signature(obj: Any) -> tuple:
     are the index ``freq`` and ``attrs``, which the hash also holds.
 
     Two ways around copy-on-write are closed separately. An Arrow-backed
-    array (pandas 3's strings) is written by swapping the Arrow array it
-    holds, so that array's identity is in the signature. Every other array
-    is written in place through ``s.array``, which is recorded, or is not
-    memoised at all (`_blocks_outside_the_memo`).
+    array (pandas 3's strings, in a column or an axis) is written by
+    swapping the Arrow array it holds, so that array's identity is in the
+    signature. Every other array is written in place through ``.array``,
+    which is recorded, or is not memoised at all (`frame_borrows_its_data`).
     """
     mgr = obj._mgr
     blocks = tuple((id(block.values), id(getattr(block.values, "_pa_array", None))) for block in mgr.blocks)
     attrs = pickle.dumps(stable_key_repr(obj.attrs), protocol=4) if obj.attrs else None
-    index = (id(obj.index), tuple(obj.index.names), repr(getattr(obj.index, "freq", None)), attrs)
+    index = (id(obj.index), _axis_arrays_signature(obj.index), tuple(obj.index.names))
+    index += (repr(getattr(obj.index, "freq", None)), attrs)
     if hasattr(obj, "columns"):
-        return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names), *index)
+        columns = (id(obj.columns), _axis_arrays_signature(obj.columns), tuple(obj.columns.names))
+        return (id(mgr), blocks, *columns, *index)
     return (id(mgr), blocks, *index, obj.name)
 
 
+def _axis_arrays_signature(axis: Any) -> tuple:
+    return tuple((id(values), id(getattr(values, "_pa_array", None))) for values in _axis_arrays(axis))
+
+
+def _axis_arrays(axis: Any) -> list:
+    """The arrays an axis keeps its labels in; a ``RangeIndex`` keeps none
+    (and its ``_data`` would build one)."""
+    kind = type(axis).__name__
+    if kind == "RangeIndex":
+        return []
+    if kind == "MultiIndex":
+        return [level._data for level in axis._levels] + list(axis._codes)
+    return [axis._data]
+
+
 def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
-    """Whether *obj*'s blocks sit on memory something else may write.
+    """Whether *obj*'s data sits in memory something outside pandas may write.
 
-    Copy-on-write is what makes the block identities an exact change
-    signal, and it only governs writes through PANDAS. ``pd.DataFrame(arr,
-    copy=False)`` keeps the caller's ndarray, and ``arr[0, 0] = 100`` goes
-    straight past pandas: same blocks, changed data. The memo answered 10.0
-    where the frame really summed to 109.0. Such a frame is re-hashed on every call.
+    The memo trusts copy-on-write: while the memo's shallow copy *held*
+    shares the blocks, every write through pandas gives *obj* new arrays,
+    which `frame_signature` sees. Copy-on-write only governs pandas' own
+    objects. An ndarray the frame was built over with ``copy=False`` (or as
+    ``index=arr``, which pandas does not copy), or a view of the ndarray a
+    block is a view of, is written straight past it: same blocks, changed
+    data. The memo answered 10.0 where the frame really summed to 109.0.
 
-    *held* is the memo's own shallow copy of *obj*. Its blocks are views
-    whose ``base`` is *obj*'s array, one reference each. Those references
-    are cash's, not an outside writer's, so they are not counted against
-    the baseline; counting them made every memoised frame look borrowed,
-    and it was re-hashed on every call.
+    So every array *obj*'s blocks and axes keep their data in, and every
+    array those are views of (up to the ndarray that owns the memory), must
+    be referenced only by pandas: by a block or an axis of *obj*, of *held*,
+    or of another pandas object copy-on-write tracks as sharing them
+    (``df.assign(...)``, ``df[cols]``, ``df["c"]``, ``df.reset_index()``),
+    or by one of those arrays' views. ``sys.getrefcount`` says how many
+    references an array has; any it has beyond those is someone else's
+    handle and the frame is hashed afresh. A reference counted as pandas'
+    that is not would let a handle through, so each one counted is a
+    reference known to exist: an attribute, a list slot, a view's ``base``.
+
+    Memory an ndarray does not own at the end of the chain -- an Arrow
+    buffer (``read_parquet``), a memory map, a Python buffer -- can be
+    shared in ways no reference count shows, and so can an extension array
+    other than dates, durations and Arrow strings (a categorical or nullable
+    array is handed out writable by ``.values``). Such frames are hashed on
+    every call. The same goes for any handle ``.array`` has handed out since
+    the memo started (`watch_array_handles`), and for a check that cannot
+    run (a pandas internals change).
+
+    Called when the memo stores a frame, as well as when it is looked up:
+    a caller's array written and then dropped between two calls leaves no
+    reference to find at the second.
     """
-    if _blocks_outside_the_memo(obj):
+    if -1 in _EXPOSED:
         return True
     try:
-        ours = _held_block_refs(held) if held is not None else {}
-        for block in obj._mgr.blocks:
-            # Counted before this loop binds the array to a name of its
-            # own, exactly as the baseline was measured.
-            refcount = _block_refcount(block)
-            values = block.values
-            base = getattr(values, "base", None)
-            if base is not None or not getattr(getattr(values, "flags", None), "owndata", True):
-                return True
-            # A 1-D block IS the caller's array (`pd.Series(arr,
-            # copy=False)`), with no base and owning its data -- only the
-            # extra reference the caller still holds tells them apart. A
-            # count above the baseline can only make cash re-hash a frame
-            # it could have memoised: slower, never wrong.
-            if refcount > _block_refcount_baseline() + ours.get(id(values), 0):
-                return True
-            del values, base
+        found = _frame_memory(obj, held)
+        if found is None:
+            return True
+        arrays, pandas_refs = found
+        if _EXPOSED and any(id(array) in _EXPOSED for array in arrays):
+            return True
+        return any(extra != _refcount_baseline() for extra in _refs_beyond(arrays, pandas_refs))
     except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
         return True
-    return False
 
 
-#: ``id -> weak reference`` for every array ``Series.array`` has handed out
+def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
+    """``(arrays, {id(array): references pandas holds})`` for everything
+    *obj* keeps its data in, or ``None`` when some of it cannot be vouched
+    for (see `frame_borrows_its_data`).
+
+    A function of its own so that none of its locals is left pointing at an
+    array when the references are counted.
+    """
+    import numpy as np
+    import pandas as pd
+    from pandas.core.indexes.frozen import FrozenList
+
+    date_arrays = (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray)
+    holders: dict[int, Any] = {}
+    todo: list = []
+
+    def hold(holder: Any) -> None:
+        if id(holder) not in holders:
+            holders[id(holder)] = holder
+            todo.append(holder)
+
+    for frame in (obj, held) if held is not None else (obj,):
+        for block in frame._mgr.blocks:
+            hold(block)
+        hold(frame.index)
+        if hasattr(frame, "columns"):
+            hold(frame.columns)
+
+    arrays: list = []
+    pandas_refs: dict[int, int] = {}
+
+    def reference(array: Any) -> bool:
+        """Count one reference pandas holds to *array*, then the ones it
+        holds itself; False when some of that memory cannot be vouched for."""
+        while True:
+            key = id(array)
+            if key in pandas_refs:
+                pandas_refs[key] += 1
+                return True
+            if getattr(array, "_pa_array", None) is not None:
+                # Immutable; a write swaps the Arrow array, which the
+                # signature sees. Only strings: a numeric Arrow array can
+                # be a zero-copy view of an ndarray someone else writes.
+                return _is_arrow_string(array._pa_array.type)
+            pandas_refs[key] = 1
+            arrays.append(array)
+            if isinstance(array, date_arrays):
+                array = array._ndarray
+            elif type(array) is not np.ndarray:
+                return False
+            elif array.base is None:
+                return bool(array.flags.owndata)
+            elif type(array.base) is np.ndarray:
+                array = array.base
+            else:
+                return False
+
+    block_type = pd.core.internals.blocks.Block
+    while todo:
+        holder = todo.pop()
+        if isinstance(holder, block_type):
+            values = holder.values
+            if type(values) is np.ndarray and values.dtype == object:
+                return None  # Python objects change in place: `s[0].append(...)`
+            if not reference(values):
+                return None
+            shared = holder.refs.referenced_blocks
+        elif isinstance(holder, pd.MultiIndex):
+            for level in holder._levels:
+                hold(level)
+            hold(holder._codes)  # a list indexes made by ``_view`` share
+            shared = holder._references.referenced_blocks if holder._references is not None else []
+            _hold_cached_indexes(holder, hold, pd)
+        elif isinstance(holder, pd.RangeIndex):
+            continue
+        elif type(holder) is FrozenList:
+            if not all(reference(codes) for codes in holder):
+                return None
+            continue
+        elif type(holder).__module__ == "pandas._libs.index":
+            if not reference(holder.values):
+                return None
+            continue
+        elif isinstance(holder, pd.Index):
+            values = holder._data
+            if not reference(values):
+                return None
+            engine = holder._cache.get("_engine")
+            if engine is not None:
+                # pandas' lookup table for the labels; indexes made from this
+                # one by ``_view`` share it, so it is counted once, as a holder.
+                hold(engine)
+            shared = holder._references.referenced_blocks if holder._references is not None else []
+            _hold_cached_indexes(holder, hold, pd)
+        else:
+            return None
+        for ref in shared:
+            other = ref()
+            if other is not None:
+                hold(other)
+    return arrays, pandas_refs
+
+
+def _hold_cached_indexes(index: Any, hold: Callable, pd: Any) -> None:
+    """Indexes pandas keeps in *index*'s cache (a MultiIndex's ``levels``)
+    hold its arrays too."""
+    for cached in index._cache.values():
+        for item in cached if isinstance(cached, (list, tuple)) else (cached,):
+            if isinstance(item, pd.Index):
+                hold(item)
+
+
+def _is_arrow_string(arrow_type: Any) -> bool:
+    import pyarrow as pa
+
+    kinds = (pa.types.is_string, pa.types.is_large_string, getattr(pa.types, "is_string_view", None))
+    return any(kind is not None and kind(arrow_type) for kind in kinds)
+
+
+def _refs_beyond(arrays: list, pandas_refs: dict[int, int]) -> list[int]:
+    """``sys.getrefcount`` of each of *arrays* less the references pandas
+    holds; `_refcount_baseline` for an array nothing else references."""
+    return [sys.getrefcount(array) - pandas_refs[id(array)] for array in arrays]
+
+
+def _refcount_baseline() -> int:
+    """What `_refs_beyond` reads for an array only its list holds.
+
+    Measured rather than written down: what ``sys.getrefcount`` counts
+    besides the holders varies across Python versions (3.14 counts one
+    fewer), and a baseline one too high lets a caller's array through
+    as the frame's own -- the stale answer this check exists to stop.
+    """
+    global _REFCOUNT_BASELINE
+    baseline = _REFCOUNT_BASELINE
+    if baseline is None:
+        import numpy as np
+
+        probe = [np.empty(1)]
+        baseline = _REFCOUNT_BASELINE = _refs_beyond(probe, {id(probe[0]): 0})[0]
+    return baseline
+
+
+#: See ``_refcount_baseline``.
+_REFCOUNT_BASELINE: int | None = None
+
+
+#: ``id -> weak reference`` for every array ``.array`` has handed out
 #: since the frame memo started (`watch_array_handles`).
 _EXPOSED: dict[int, Any] = {}
 
 
 def watch_array_handles() -> None:
-    """Wrap ``pd.Series.array`` so each handle it gives out is recorded.
+    """Record each writable handle pandas gives out to the memory it keeps.
     Done once, when the frame memo first stores a frame: until then nothing
     relies on a frame staying unwritten.
 
-    ``s.array`` is the one public handle to a numpy-backed block's own
-    array: ``s.array[0] = 100.0`` writes into the block while its identity
-    stays, and the memo served the old content hash, a stale result. The
-    handle is usually gone by the next call, so the only trace is the one
-    left here. pandas does not call ``Series.array`` itself, so an ordinary
-    workload records nothing.
+    ``.array`` (of a Series or an Index), ``pd.array(s, copy=False)`` and a
+    date index's ``asi8`` are the public handles to a numpy-backed array
+    pandas keeps: ``s.array[0] = 100.0`` writes into the block while its
+    identity stays, and the memo served the old content hash, a stale
+    result. So does ``pd.Index(df["a"]).array[0] = 100.0``, since the index
+    shares the column's memory. The handle is usually gone by the next
+    call, so the only trace is the one left here. pandas does not call
+    ``.array`` or ``pd.array`` itself, so an ordinary workload records
+    nothing; it reads ``asi8`` (``resample``, ``rolling``), so that one is
+    recorded only when code outside pandas asks for it.
     """
     global _WATCHING
     if _WATCHING:
         return
     import pandas as pd
+    from pandas.core.indexes.datetimelike import DatetimeIndexOpsMixin
 
-    original = pd.Series.__dict__.get("array")
-    if isinstance(original, property) and original.fget is not None:
-        pd.Series.array = property(_noting(original.fget), original.fset, original.fdel, original.__doc__)
+    for cls, name, outside_only in (
+        (pd.Series, "array", False),
+        (pd.Index, "array", False),
+        (DatetimeIndexOpsMixin, "asi8", True),
+    ):
+        original = cls.__dict__.get(name)
+        if isinstance(original, property) and original.fget is not None:
+            getter = original.fget
+        elif hasattr(original, "__get__"):  # Index.array: a cached property
+            getter = functools.partial(_get_through, original)
+        else:
+            continue
+        setattr(cls, name, property(_noting(getter, outside_only), doc=original.__doc__))
+    original_array = pd.array
+    noting_array = _noting(original_array, False)
+
+    @functools.wraps(original_array)
+    def array(*args: Any, **kwargs: Any) -> Any:
+        copy = kwargs.get("copy", args[2] if len(args) > 2 else True)
+        return (original_array if copy else noting_array)(*args, **kwargs)
+
+    pd.array = array
     _WATCHING = True
 
 
 _WATCHING = False
 
 
-def _noting(accessor: Callable) -> Callable:
+def _get_through(descriptor: Any, instance: Any) -> Any:
+    return descriptor.__get__(instance, type(instance))
+
+
+def _noting(accessor: Callable, outside_only: bool) -> Callable:
     @functools.wraps(accessor)
     def noting(*args: Any, **kwargs: Any) -> Any:
         handle = accessor(*args, **kwargs)
+        if outside_only and sys._getframe(1).f_globals.get("__name__", "").startswith("pandas."):
+            return handle
         try:
             _note_exposed(handle)
         except Exception:  # noqa: BLE001 - recording must never break the user's read
@@ -409,80 +612,6 @@ def _memory_of(value: Any) -> list:
             views.append(base)
             base = getattr(base, "base", None)
     return found + views
-
-
-def _blocks_outside_the_memo(obj: Any) -> bool:
-    """Could a block of *obj* change in place with its identity kept?
-
-    Copy-on-write governs numpy blocks, and dates and durations over numpy:
-    ``.values`` and ``to_numpy()`` give read-only views of them, and
-    ``.array`` is recorded (`watch_array_handles`). An Arrow-backed block is
-    written by swapping the Arrow array it holds, which `frame_signature`
-    sees. Any other extension array -- nullable ``Int64``, a categorical,
-    Python-backed strings -- is handed out writable by ``.values`` itself,
-    which pandas calls internally (the ``.cat`` accessor does), and an
-    object block holds Python objects that change in place (``s[0].append``).
-    Those frames are hashed on every call.
-    """
-    if -1 in _EXPOSED:
-        return True
-    import numpy as np
-    import pandas as pd
-
-    date_arrays = (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray)
-    for block in obj._mgr.blocks:
-        values = block.values
-        if getattr(values, "_pa_array", None) is not None:
-            continue
-        if not (type(values) is np.ndarray and values.dtype != object) and not isinstance(values, date_arrays):
-            return True
-        if _EXPOSED and any(id(part) in _EXPOSED for part in _memory_of(values)):
-            return True
-    return False
-
-
-def _held_block_refs(held: Any) -> dict[int, int]:
-    """``{id(array): n}``: the references *held*'s blocks keep to arrays.
-
-    A function of its own so that no loop variable outlives it: one left
-    pointing at an array would itself be a reference over the baseline.
-    """
-    refs: dict[int, int] = {}
-    for block in held._mgr.blocks:
-        values = block.values
-        for ref in (values, getattr(values, "base", None)):
-            if ref is not None:
-                refs[id(ref)] = refs.get(id(ref), 0) + 1
-    return refs
-
-
-def _block_refcount(block: Any) -> int:
-    """``sys.getrefcount`` of *block*'s array, taken the same way for the
-    baseline and for every check."""
-    return sys.getrefcount(block.values)
-
-
-def _block_refcount_baseline() -> int:
-    """What `_block_refcount` reads for an array only its block holds.
-
-    Measured rather than written down: what ``sys.getrefcount`` counts
-    besides the holders varies across Python versions (3.14 counts one
-    fewer), and a baseline one too high lets a caller's array through
-    as the frame's own -- the stale answer this check exists to stop.
-    """
-    global _BLOCK_REFCOUNT_BASELINE
-    baseline = _BLOCK_REFCOUNT_BASELINE
-    if baseline is None:
-        import pandas as pd
-
-        probe = pd.Series([0.0, 1.0, 2.0])
-        baseline = _BLOCK_REFCOUNT_BASELINE = _block_refcount(probe._mgr.blocks[0])
-    return baseline
-
-
-#: See ``_block_refcount_baseline``; anything above it means something
-#: outside can write to the array, see ``frame_borrows_its_data``.
-_BLOCK_REFCOUNT_BASELINE: int | None = None
 
 
 #: Types whose code must not participate in any cache key. Process-wide,
@@ -820,10 +949,16 @@ class ArgHasher:
         write. Cost: the first in-place write to each block afterwards copies
         that block, once. The entry, copy included, goes when *obj* is
         collected, or when the memo drops it to make room.
+
+        Nothing is stored for a frame whose data something outside pandas
+        can write (`frame_borrows_its_data`): a caller could write through
+        its array and drop it before the next call, leaving nothing to see.
         """
         try:
             watch_array_handles()
             held = obj.copy(deep=False)
+            if frame_borrows_its_data(obj, held):
+                return
             signature = frame_signature(obj)
             memo = self._frame_memo
             key = id(obj)
