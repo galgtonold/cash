@@ -1597,6 +1597,11 @@ def _clock_helper_read(value: Any) -> str | None:
     code = getattr(value, "__code__", None)
     if not isinstance(value, types.FunctionType) or code is None:
         return None
+    if getattr(value, "_cash_cached", False):
+        # Judged by its own analysis. And every cached function shares its
+        # wrapper's code object, which the memo below is keyed by: one cached
+        # `return time.time()` made every cached callee a clock read.
+        return None
     known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
     if known is not _NOT_JUDGED:
         return known

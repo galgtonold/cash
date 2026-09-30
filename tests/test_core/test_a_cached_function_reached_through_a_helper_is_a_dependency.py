@@ -135,3 +135,38 @@ def test_the_caller_refreshes_at_the_ttl_of_a_cached_function_behind_a_helper(tm
     assert report(1) == first, "the control failed: a second call should hit"
     time.sleep(1.2)
     assert report(1) != first
+
+
+def test_a_cached_clock_read_is_not_blamed_on_other_cached_functions(tmp_path):
+    """Linking cached callees through helpers must not make every cached
+    callee look like the clock read one of them returns (they share cash's
+    wrapper code)."""
+    import warnings
+
+    from cash.exceptions import CashImpurityWarning
+
+    c = cash.Cash(cache_dir=str(tmp_path / "c"))
+
+    @c.cache(assume_safe=True)
+    def stamp(n):
+        return time.time()
+
+    @c.cache
+    def uses_stamp(n):
+        return stamp(n)
+
+    uses_stamp(1)
+
+    @c.cache
+    def load(n):
+        return n * 2
+
+    @c.cache
+    def top(n):
+        return load(n) + 1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert top(1) == 3
+    ambient = [str(w.message) for w in caught if issubclass(w.category, CashImpurityWarning)]
+    assert not ambient, ambient
