@@ -15,6 +15,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
+from ..object_hashing import held_objects
 from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
 from .arg_hashing import is_opaque, plain_census
@@ -376,8 +377,17 @@ class CodeArgs:
         caches and fitted state cannot churn it. Bounded by
         `LIBRARY_WALK_BUDGET` values per object.
         """
+        if id(value) in _seen:
+            return
+        # What an object array or column holds: every element is looked at,
+        # as a list's are (`held_objects`).
+        held = held_objects(value)
+        if held:
+            _seen.add(id(value))
+            for v in held:
+                yield from self.iter_code_carriers(v, _depth + 1, _seen)
         attrs = getattr(value, "__dict__", None)
-        if not isinstance(attrs, dict) or not attrs or id(value) in _seen:
+        if not isinstance(attrs, dict) or not attrs:
             return
         _seen.add(id(value))
         budget = [LIBRARY_WALK_BUDGET]

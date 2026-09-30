@@ -737,6 +737,45 @@ def hash_polars(value: Any) -> str | None:
     return None
 
 
+def held_objects(value: Any) -> list | None:
+    """The Python objects a library value keeps in object storage, other
+    than plain leaves; None when it keeps none.
+
+    A numpy ``object`` array, a pandas ``object`` column and a polars
+    ``Object`` column hold arbitrary objects -- a model, a function -- where
+    no attribute walk reaches them: in the array buffer, in the blocks. Their
+    content hashers pickle such an object by reference, so its code is in no
+    key unless the code search is handed them here. Strings, numbers and
+    dates, which fill most object columns, are left out at C speed.
+    """
+    family = _builtin_family_of(type(value))
+    columns: list = []
+    try:
+        if family == "numpy":
+            if getattr(value.dtype, "hasobject", False):
+                columns.append(value.ravel(order="K"))
+        elif family == "pandas":
+            frame = type(value).__name__ == "DataFrame"
+            for pos, dtype in enumerate(value.dtypes if frame else [value.dtype]):
+                if str(dtype) == "object":
+                    columns.append(_np_array(value.iloc[:, pos] if frame else value, object))
+        elif family == "polars":
+            import polars as pl
+
+            if isinstance(value, pl.DataFrame):
+                columns.extend(value.get_column(n).to_list() for n, dt in value.schema.items() if dt == pl.Object)
+            elif isinstance(value, pl.Series) and value.dtype == pl.Object:
+                columns.append(value.to_list())
+    except Exception:  # a library's internals changed: nothing found
+        logger.debug("Could not list the objects a %s holds", type(value).__name__, exc_info=True)
+        return None
+    found: list = []
+    for column in columns:
+        if not all(k in LEAF_TYPES for k in set(map(type, column))):
+            found.extend(v for v in column if type(v) not in LEAF_TYPES)
+    return found or None
+
+
 def is_native_panic(exc: BaseException) -> bool:
     """Is *exc* a panic raised out of a Rust extension (``pyo3``), such as
     polars'? It derives from ``BaseException``, so no ``except Exception``
