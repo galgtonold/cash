@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import dis
+import functools
 import hashlib
 import inspect
 import pickle
@@ -44,6 +45,25 @@ def is_immutable_capture(v: Any, _depth: int = 0) -> bool:
     if isinstance(v, (tuple, frozenset)):
         return all(is_immutable_capture(x, _depth + 1) for x in v)
     return False
+
+
+#: Callables that are code, not an object holding data: followed as helpers.
+_CODE_CALLABLES = (
+    types.FunctionType,
+    types.MethodType,
+    types.BuiltinFunctionType,
+    type,
+    functools.partial,
+)
+
+
+def is_user_callable_instance(value: Any) -> bool:
+    """Is *value* an instance of the user's own class with a ``__call__``,
+    rather than a function, method, class or partial?"""
+    if isinstance(value, _CODE_CALLABLES) or getattr(value, "_cash_cached", False):
+        return False
+    cls = type(value)
+    return is_user_code_object(cls) and not is_opaque(value)
 
 
 def unsafe_uses_of(
@@ -391,6 +411,17 @@ class HelperIdentity:
             try:
                 value = cell.cell_contents
             except ValueError:
+                continue
+            if callable(value) and is_user_callable_instance(value):
+                # A callable INSTANCE of the user's class -- `make(Scorer(10))`,
+                # `c = Scale(10)` in a decorator -- is a function to the
+                # helper walk and data to nothing: `Scorer(11)` shared the
+                # key of `Scorer(10)`. What it holds is keyed like any
+                # captured object's; its code, like any function's, is not.
+                try:
+                    captures.append((name, self._args.hash_payload((value,), {})))
+                except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                    pass
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
