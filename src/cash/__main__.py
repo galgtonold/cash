@@ -801,6 +801,13 @@ def cmd_clear(args: argparse.Namespace) -> None:
 
     only_entry = getattr(args, "entry", None)
     only_function = getattr(args, "function", None)
+    for flag, value in (("--entry", only_entry), ("--function", only_function)):
+        # `--entry "$ID"` with $ID unset arrives as "": falsy, so it fell
+        # through to clearing the whole path. A selector that selects nothing
+        # must never widen to everything.
+        if value is not None and not value.strip():
+            print(f"cash clear: {flag} needs a non-empty value; nothing was cleared.")
+            sys.exit(2)
     if getattr(args, "expired", False):
         if only_entry or only_function:
             # --function would otherwise win and delete the live entries too.
