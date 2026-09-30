@@ -256,19 +256,14 @@ def test_decorator_silent_when_source_unavailable():
     assert cached() == cached(), "source-less function should still cache"
 
 
-def test_decorator_silent_on_unseeded_sklearn_fit():
-    """OUT OF SCOPE for the decorator's source-based check: randomness inside `.fit()`.
+def test_decorator_warns_on_an_estimator_made_without_random_state():
+    """An unseeded estimator is a freeze hazard whose randomness lives in
+    sklearn's compiled ``.fit()``, where no draw is visible in the source.
 
-    An unseeded estimator is a real freeze hazard, but the randomness lives in
-    sklearn's compiled `.fit()` -- bootstrap sampling, weight init -- not in any
-    Python call an AST can see. The notebook path catches this via a separate
-    RUNTIME channel that inspects the live estimator
-    (`get_params()['random_state'] is None`).
-
-    That channel cannot be lifted to decoration time: it needs the estimator
-    OBJECT, which only exists once the function runs. Porting it would mean a
-    per-call check, which the decorator check explicitly rules out. Recorded here as a known,
-    deliberate gap so it is not mistaken for the bug the decorator check fixed.
+    The decorator resolves the constructor at decoration time instead: an
+    installed library class whose ``random_state`` defaults to None, called
+    without one, warns ``RANDOM-UNSEEDED`` naming the call -- the notebook's
+    rule, ``random_state is None``, read off the signature.
     """
     sk = pytest.importorskip("sklearn.ensemble")
     c = _fresh_cash()
@@ -286,8 +281,5 @@ def test_decorator_silent_on_unseeded_sklearn_fit():
             return m.feature_importances_.tolist()
 
     assert fit_model(5) == fit_model(5), "fit was not frozen"
-    # Documents the gap; flip this if the runtime channel is ever ported.
-    assert not _randomness_warnings(rec), (
-        "decorator now warns on unseeded fit -- the notebook's runtime channel "
-        "appears to have been ported; update this test to assert the new behaviour"
-    )
+    found = _randomness_warnings(rec)
+    assert any("RandomForestClassifier() without random_state" in m for m in found), found
