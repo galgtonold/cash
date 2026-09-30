@@ -15,6 +15,7 @@ import logging
 import os
 import threading
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -80,6 +81,20 @@ class _Changes:
         doc["warned"].update(self.warned)
 
 
+# Every live record, for `_reset_after_fork_in_child`.
+_LIVE_RECORDS: weakref.WeakSet = weakref.WeakSet()
+
+
+def _reset_after_fork_in_child() -> None:
+    """New locks for every live `StoredKeyRecord` in a forked child (`_after_fork_in_child`)."""
+    for record in list(_LIVE_RECORDS):
+        record._after_fork_in_child()
+
+
+if hasattr(os, "register_at_fork"):  # not on Windows, which cannot fork
+    os.register_at_fork(after_in_child=_reset_after_fork_in_child)
+
+
 class StoredKeyRecord:
     """Reads and writes the per-function records of one `Cash` instance."""
 
@@ -105,6 +120,23 @@ class StoredKeyRecord:
         self._scheduled: set[str] = set()
         self._writes: PendingWrites | None = None
         self._closed = False
+        _LIVE_RECORDS.add(self)
+
+    def _after_fork_in_child(self) -> None:
+        """Start the record's writing afresh in a forked child.
+
+        Only the forking thread survives a fork. The background writer, busy
+        rewriting a record at that moment, held ``_io_lock`` -- and in the
+        child nothing would ever release it: the child's first record write
+        blocked, and its exit waited on that write forever. The write queue
+        itself is reset by ``_writes``; the writes the parent had scheduled or
+        started are the parent's to finish, so the child forgets them and
+        schedules its own changes anew.
+        """
+        self._lock = threading.Lock()
+        self._io_lock = threading.Lock()
+        self._scheduled = set()
+        self._writing = {}
 
     def path(self, func_name: str) -> str | None:
         """Where *func_name*'s record lives, or None.
