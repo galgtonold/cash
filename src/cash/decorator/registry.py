@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
 from ..data_source import DataSource, state_token_of
+from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity, callable_identity, compiled_identity, extension_file_digest
@@ -537,9 +538,15 @@ class FunctionRegistry:
                     if dep_func is not None:
                         stack.append((dep_func, dep))
             return reason
-        except Exception:  # never break a call over this
+        except Exception as e:  # noqa: BLE001 - never break a call over this
+            # The bindings could not be checked, so the reports may describe
+            # helpers that are no longer the ones called: no key rather than
+            # one that may leave the current helpers out.
             logger.debug("[CORE] binding refresh failed for %s", func_name, exc_info=True)
-            return None
+            return MissReason(
+                MissKind.UNWALKABLE,
+                f"cash could not check the helpers {func_name} calls ({type(e).__name__}), so the call ran uncached",
+            )
 
     def populate(self, func: Callable[..., Any], func_name: str) -> None:
         """Record *func*'s cached-call graph edges and purity report (no
@@ -547,17 +554,26 @@ class FunctionRegistry:
         cheap on repeated registrations.
         """
         self.populated.add(func_name)
-        called_names = CodeAnalyzer.find_called_functions(func, self.functions, include_references=True)
-        for called in called_names:
-            if called != func_name:
-                self.graph.add_dependency(func_name, called)
         try:
+            called_names = CodeAnalyzer.find_called_functions(func, self.functions, include_references=True)
+            for called in called_names:
+                if called != func_name:
+                    self.graph.add_dependency(func_name, called)
             report = get_analyzer().analyze(func)
-        except (OSError, TypeError, SyntaxError, RecursionError) as e:
-            # Analyzer must never break caching. On error, treat as clean -
-            # the user's compute still runs.
-            logger.debug("Purity analyzer failed for %s: %s", func_name, e)
-            report = PurityReport()
+        except Exception as e:  # noqa: BLE001 - any failure: the helpers are unknown
+            # The analysis is what finds the helpers the key folds. A report
+            # of none, as a failure used to give, keyed the function by its
+            # own code alone, and an edit to any helper served the old
+            # result. The function still runs, uncached.
+            logger.debug("Purity analyzer failed for %s: %s", func_name, e, exc_info=True)
+            reason = f"cash could not find the helpers {func_name} calls ({type(e).__name__}: {e})"
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-HELPERS-UNWALKABLE",
+                f"cash cannot key {func_name}: {reason}. It runs uncached.",
+                "If the function itself runs fine, this is a bug in cash: report it with the error.",
+            )
+            report = PurityReport(unwalkable=reason)
         self.purity_reports[func_name] = report
         # Every cached function the analysis reached is an edge, however it is
         # reached: through a plain helper, a function-local import, a name

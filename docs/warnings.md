@@ -729,7 +729,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-DYNAMIC-DEPENDENCY](#key-dynamic-dependency) | decorator | code in an argument picks what it calls at run time |
 | [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | a `frozen=True` result was modified |
 | [KEY-FROZEN-NO-EFFECT](#key-frozen-no-effect) | decorator | `frozen=True` cannot mark this result |
-| [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | decorator | the helpers a function reaches never end; not cached |
+| [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | decorator | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
@@ -954,15 +954,20 @@ object that takes attributes. Or remove `frozen=True`.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 **What happened.** cash keys a function by the code of every helper it can
-reach, however deep. Here the helpers never ran out: something hands out a new
-function each time it is read (a module `__getattr__` that builds one, for
-example), so the walk passed thousands of them. The function ran uncached.
+reach, however deep, and so the code an argument's code reaches and every
+function a decorated callable wraps. Here that code could not all be found.
+Either it never ran out: something hands out a new function each time it is
+read (a module `__getattr__` that builds one, for example), so the walk passed
+thousands of them. Or finding it failed: reading the function's helpers raised,
+or an object it runs could not be looked into (the message names the error).
+The function ran uncached.
 
 **Why it matters.** That function is never cached. Nothing stale can be served:
 cash does not cache under a key that leaves code out.
 
 **What to do.** Stop creating the helper on every read (build it once and keep
-it), or name what the result depends on with `depends_on=[...]`.
+it). If the message names an error that is not your code's, report it as a
+bug with that error.
 
 **When it is safe to ignore.** When the function is cheap enough to run every
 time.

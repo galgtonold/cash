@@ -1287,10 +1287,21 @@ def own_code_is_user(obj: Any, root_module: str | None) -> bool:
         return False
 
 
-#: Upper bounds on `callable_layers`, per callable: a wrong answer is worth a
-#: few more objects visited, a cycle through a registry is not.
-_LAYER_DEPTH = 6
-_LAYER_COUNT = 32
+#: How many objects `callable_layers` may visit for one callable. Not a depth
+#: or a count real code meets: every layer is followed, however deep, and the
+#: seen set ends cycles. What can pass it is an object that hands out a NEW
+#: wrapper on every read, where the walk would never end; then it raises
+#: `UnwalkableLayers` rather than leave the rest out of the key.
+_LAYER_LIMIT = 5_000
+
+
+_NO_LAYER = object()
+
+
+class UnwalkableLayers(Exception):
+    """`callable_layers` could not find every function a callable runs; the
+    message says why. The helper walk turns it into ``PurityReport.unwalkable``,
+    so the call runs uncached instead of keyed without them."""
 
 
 def _function_like(value: Any) -> bool:
@@ -1320,18 +1331,17 @@ def callable_layers(obj: Any) -> list[Any]:
       (``functools.singledispatch``'s ``registry``).
 
     Returns FUNCTION objects only, deduplicated, never *obj* itself; whether
-    each is user code is the caller's decision. Bounded in depth and count.
+    each is user code is the caller's decision. Every layer is followed,
+    however deep and however many (a singledispatch registry of 40
+    implementations, eight stacked decorators): one left out was not keyed,
+    and editing it served the old result. Raises `UnwalkableLayers` when
+    the layers do not end, or an object cannot be looked into.
     """
     found: list[Any] = []
     seen: set[int] = {id(obj)}
-
-    def add(value: Any, depth: int) -> None:
-        if len(found) >= _LAYER_COUNT or id(value) in seen:
-            return
-        seen.add(id(value))
-        if isinstance(value, types.FunctionType):
-            found.append(value)
-        expand(value, depth + 1)
+    # Every object visited stays alive until the walk ends, so an id in
+    # ``seen`` cannot be handed to a new object.
+    keep: list[Any] = [obj]
 
     def candidates(value: Any):
         if isinstance(value, types.MethodType):
@@ -1372,20 +1382,44 @@ def callable_layers(obj: Any) -> list[Any]:
             if _function_like(attr):
                 yield attr
             elif isinstance(attr, (dict, types.MappingProxyType)):
-                for item in list(attr.values())[:_LAYER_COUNT]:
+                for item in list(attr.values()):
                     if _function_like(item):
                         yield item
 
-    def expand(value: Any, depth: int) -> None:
-        if depth > _LAYER_DEPTH:
-            return
+    def expand(value: Any) -> Any:
         try:
-            for candidate in candidates(value):
-                add(candidate, depth)
-        except Exception:  # noqa: BLE001 - arbitrary objects; best effort
-            return
+            return iter(list(candidates(value)))
+        except Exception as e:  # noqa: BLE001 - arbitrary objects
+            raise UnwalkableLayers(
+                f"cash could not look inside {type(value).__qualname__}, which {_qualname_of(obj)} "
+                f"runs ({type(e).__name__}: {e})"
+            ) from e
 
-    expand(obj, 0)
+    # Depth first, each object's layers in the order it holds them: the walk
+    # order names helpers that share a name (``PurityAnalyzer``), so it must
+    # not depend on anything but the objects.
+    stack = [expand(obj)]
+    while stack:
+        value = next(stack[-1], _NO_LAYER)
+        if value is _NO_LAYER:
+            stack.pop()
+            continue
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        keep.append(value)
+        if is_mock(value):
+            # A mock makes a new attribute on every read, so its layers never
+            # end; it has no code to key (the walk says so where it meets one).
+            continue
+        if len(keep) > _LAYER_LIMIT:
+            raise UnwalkableLayers(
+                f"the functions {_qualname_of(obj)} runs do not end (over {_LAYER_LIMIT} wrappers; "
+                "an object that makes a new wrapper on every read can cause this)"
+            )
+        if isinstance(value, types.FunctionType):
+            found.append(value)
+        stack.append(expand(value))
     return found
 
 
@@ -2219,6 +2253,9 @@ class PurityAnalyzer:
         # still decides the result, so it is keyed like any other helper's.
         root_reported = not (is_pure(root_func) or is_stateful(root_func))
         stack: list[tuple[Callable[..., Any], int, bool, bool]] = [(root_func, 0, False, root_reported)]
+        # Why `callable_layers` could not find every function one callable
+        # runs: the walk stops and the function runs uncached.
+        layer_failures: list[str] = []
         if (
             isinstance(root_func, types.FunctionType)
             and hasattr(root_func, "__wrapped__")
@@ -2227,11 +2264,12 @@ class PurityAnalyzer:
             # `@cash.cache` over a LIBRARY decorator (`@retry(...)`,
             # `@torch.no_grad()`): the wrapper's own body is someone else's
             # code, so start from the user functions it runs instead.
-            starts = [
-                (layer, 0, False, root_reported)
-                for layer in callable_layers(root_func)
-                if own_code_is_user(layer, root_module)
-            ]
+            try:
+                root_layers = callable_layers(root_func)
+            except UnwalkableLayers as e:
+                root_layers = []
+                layer_failures.append(str(e))
+            starts = [(layer, 0, False, root_reported) for layer in root_layers if own_code_is_user(layer, root_module)]
             if starts:
                 stack = starts
         # id -> whether that walk reported findings, and the name it took.
@@ -2256,6 +2294,9 @@ class PurityAnalyzer:
             walked_reported = visited_ids.get(walk_id)
             if walked_reported is not None and (walked_reported or not reported):
                 continue
+            if layer_failures:
+                unwalkable = layer_failures[0]
+                break
             if len(keep_alive) >= self._WALK_LIMIT:
                 unwalkable = (
                     f"the helpers {_qualname_of(root_func)} reaches do not end (over {self._WALK_LIMIT} "
@@ -2522,7 +2563,12 @@ class PurityAnalyzer:
                 # singledispatch implementation. Each user-code one is walked
                 # in its own right, under its own name and namespace.
                 layers = []
-                for layer in callable_layers(callee):
+                try:
+                    callee_layers = callable_layers(callee)
+                except UnwalkableLayers as e:
+                    layer_failures.append(str(e))
+                    return
+                for layer in callee_layers:
                     if getattr(layer, "_cash_cached", False) and not is_mock(layer):
                         _note_cached(layer)
                     elif own_code_is_user(layer, root_module):
@@ -2613,6 +2659,8 @@ class PurityAnalyzer:
                 elif isinstance(_val, type):
                     _queue_hash_only(_val, func, depth)
             _queue_annotation_refs(func, depth)
+        if layer_failures and not unwalkable:
+            unwalkable = layer_failures[0]
 
         # Stable order: by where (insertion) then line then kind.
         all_issues_sorted = tuple(

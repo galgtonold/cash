@@ -8,9 +8,10 @@ a result from before the edit.
 
 So what an annotation names is followed like code a body loads: a hint that
 never runs costs a recompute when its class is edited, never a stale value.
-Resolution is best effort and never raises: a string annotation is resolved by
-name in the owner's module, generics are walked through ``typing.get_args``,
-and anything that cannot be resolved is skipped.
+A string annotation is resolved by name in the owner's module, generics are
+walked through ``typing.get_args``, and a name that resolves to nothing is
+skipped. A broken ``__annotations__`` or ``__annotate__`` counts as none; any
+other error propagates, so the call that asked runs uncached.
 """
 
 from __future__ import annotations
@@ -118,35 +119,35 @@ def annotation_referents(obj: Any, is_user: Any = None) -> list[Any]:
     """
     out: list[Any] = []
     seen: dict = {}
-    try:
-        if isinstance(obj, type):
-            owners = []
-            for base in obj.__mro__:
-                if base is object or (is_user is not None and not is_user(base)):
+    # No blanket guard: what raises here is an object the key cannot see
+    # through, and a key without what it names would serve an edit to it
+    # stale. The caller's key build or helper walk runs the call uncached.
+    if isinstance(obj, type):
+        owners = []
+        for base in obj.__mro__:
+            if base is object or (is_user is not None and not is_user(base)):
+                continue
+            owners.append(base)
+            for member in vars(base).values():
+                if isinstance(member, property):
+                    owners.extend(a for a in (member.fget, member.fset) if a is not None)
                     continue
-                owners.append(base)
-                for member in vars(base).values():
-                    if isinstance(member, property):
-                        owners.extend(a for a in (member.fget, member.fset) if a is not None)
-                        continue
-                    member = getattr(member, "__func__", member)
-                    if isinstance(member, types.FunctionType):
-                        owners.append(getattr(member, "__wrapped__", member))
-        else:
-            obj = getattr(obj, "__func__", obj)
-            owners = [getattr(obj, "__wrapped__", obj)]
-        for owner in owners:
-            namespace = _module_namespace(owner)
-            for value in _raw_annotations(owner).values():
-                _walk(value, namespace, out, seen)
-        if isinstance(obj, type):
-            fields = getattr(obj, "model_fields", None)
-            if isinstance(fields, dict):
-                namespace = _module_namespace(obj)
-                for info in fields.values():
-                    _walk(getattr(info, "annotation", None), namespace, out, seen)
-                    for meta in getattr(info, "metadata", ()) or ():
-                        _walk(meta, namespace, out, seen)
-    except Exception:  # noqa: BLE001 - following annotations must never break a call
-        return out
+                member = getattr(member, "__func__", member)
+                if isinstance(member, types.FunctionType):
+                    owners.append(getattr(member, "__wrapped__", member))
+    else:
+        obj = getattr(obj, "__func__", obj)
+        owners = [getattr(obj, "__wrapped__", obj)]
+    for owner in owners:
+        namespace = _module_namespace(owner)
+        for value in _raw_annotations(owner).values():
+            _walk(value, namespace, out, seen)
+    if isinstance(obj, type):
+        fields = getattr(obj, "model_fields", None)
+        if isinstance(fields, dict):
+            namespace = _module_namespace(obj)
+            for info in fields.values():
+                _walk(getattr(info, "annotation", None), namespace, out, seen)
+                for meta in getattr(info, "metadata", ()) or ():
+                    _walk(meta, namespace, out, seen)
     return out

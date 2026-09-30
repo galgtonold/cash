@@ -222,8 +222,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-FROZEN-MUTATED",  # a result declared frozen=True was modified
         "KEY-FROZEN-NO-EFFECT",  # frozen=True on a function whose result it cannot mark
         # after it was returned; keyed by content now
-        "KEY-HELPERS-UNWALKABLE",  # the helpers it reaches never end (a new
-        # function on every read); the function runs uncached
+        "KEY-HELPERS-UNWALKABLE",  # the code it runs cannot all be found (a new
+        # function on every read, or finding it raised); the function runs uncached
         "KEY-INSTANCE-STATE",  # a bound method's instance could not be hashed;
         # falling back to its process-local identity
         "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
