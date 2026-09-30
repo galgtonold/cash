@@ -101,3 +101,55 @@ def test_cash_does_not_track_its_own_store_as_a_dependency(tmp_path):
     from cash.backends.cache_dir import is_cash_file
 
     assert is_cash_file(compute_baselines._STORE_FILENAME)
+
+
+def _on_disk(tmp_path):
+    path = tmp_path / compute_baselines._STORE_FILENAME
+    return json.loads(path.read_text(encoding="utf-8"))["baselines"] if path.exists() else {}
+
+
+def test_cheap_measurements_are_not_written_after_every_cell(tmp_path):
+    """At the cap the file is ~100 KB, and rewriting it after every quick cell
+    cost ~7 ms per cell from the first cell of a session."""
+    store = compute_baselines.get_store(str(tmp_path))
+    store.record("a = 1", 0.002)
+    store.flush_soon()  # the first write of a session is not held back
+    store.record("b = 2", 0.003)
+    store.flush_soon()
+    assert compute_baselines._key("b = 2") not in _on_disk(tmp_path)
+    store.flush()  # what the exit hook runs
+    assert compute_baselines._key("b = 2") in _on_disk(tmp_path)
+
+
+def test_cheap_measurements_are_written_once_the_interval_passes(tmp_path, monkeypatch):
+    store = compute_baselines.get_store(str(tmp_path))
+    store.record("a = 1", 0.002)
+    store.flush_soon()
+    store.record("b = 2", 0.003)
+    monkeypatch.setattr(compute_baselines, "_FLUSH_INTERVAL_S", 0.0)
+    store.flush_soon()
+    assert compute_baselines._key("b = 2") in _on_disk(tmp_path)
+
+
+def test_a_measurement_worth_keeping_is_written_by_the_next_cell(tmp_path):
+    """A Restart & Run All kills the kernel without running exit hooks: a
+    costly statement's baseline must already be on disk by then."""
+    store = compute_baselines.get_store(str(tmp_path))
+    store.record("a = 1", 0.002)
+    store.flush_soon()
+    store.record("m = fit(x)", 3.0)
+    store.flush_soon()
+    assert _on_disk(tmp_path)[compute_baselines._key("m = fit(x)")] == pytest.approx(3.0)
+
+
+def test_the_cap_is_not_enforced_by_a_pass_per_new_measurement(tmp_path, monkeypatch):
+    monkeypatch.setattr(compute_baselines, "_MAX_ENTRIES", 100)
+    store = compute_baselines.get_store(str(tmp_path))
+    passes = []
+    real = store._evict
+    monkeypatch.setattr(store, "_evict", lambda: (passes.append(1), real()))
+    for i in range(400):
+        store.record(f"s{i}", float(i + 1))
+    assert len(store._items) <= 100
+    assert store.get("s399") == pytest.approx(400.0)
+    assert len(passes) <= 400 // 10, f"{len(passes)} passes over the store for 300 measurements past the cap"

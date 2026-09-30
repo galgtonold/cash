@@ -28,6 +28,8 @@ from __future__ import annotations
 import atexit
 import contextlib
 import hashlib
+import heapq
+import time
 
 from cash.backends.cache_dir import COMPUTE_BASELINES_FILENAME
 
@@ -40,6 +42,20 @@ _STORE_VERSION = 1
 #: go: they are the ones whose credit is worth least, and a statement that
 #: matters is re-measured the next time it runs anyway.
 _MAX_ENTRIES = 4000
+
+#: A store over the cap is cut to this share of it, so the cut (a pass over
+#: every entry) runs once per few hundred new baselines, not on every one.
+_EVICT_TO = 0.9
+
+#: `flush_soon` writes at most this often while only cheap measurements
+#: changed. The whole file is rewritten each time (about 7 ms at the cap), and
+#: a notebook of quick cells would pay that on every cell.
+_FLUSH_INTERVAL_S = 5.0
+
+#: A measurement at least this long is written by the next `flush_soon`
+#: whatever the interval: it is a credit worth keeping should the kernel be
+#: killed (a Restart & Run All), and its cell took far longer than the write.
+_URGENT_SECONDS = 0.5
 
 
 def _key(identity: str) -> str:
@@ -62,6 +78,8 @@ class ComputeBaselineStore(VersionedJsonStore[float]):
     def __init__(self, cache_dir: str | None) -> None:
         super().__init__(cache_dir)
         self._dirty = False
+        self._urgent = False
+        self._last_write = 0.0
 
     def _load_value(self, value: object) -> float | None:
         return float(value) if isinstance(value, (int, float)) and value > 0 else None
@@ -77,11 +95,11 @@ class ComputeBaselineStore(VersionedJsonStore[float]):
     def record(self, identity: str, seconds: float) -> None:
         """Note a measurement. Only a new minimum changes anything.
 
-        Writing is left to :meth:`flush`, which the caller runs once per cell.
-        Writing here would put file I/O on the per-statement path; writing
-        only at exit would lose the session, since a Restart & Run All kills
-        the kernel and no hook runs -- which is exactly the session whose
-        measurements the next kernel needs.
+        Writing is left to :meth:`flush_soon`, which the caller runs once per
+        cell. Writing here would put file I/O on the per-statement path;
+        writing only at exit would lose the session, since a Restart & Run
+        All kills the kernel and no hook runs -- which is exactly the session
+        whose measurements the next kernel needs.
         """
         if not seconds or seconds <= 0:
             return
@@ -92,17 +110,31 @@ class ComputeBaselineStore(VersionedJsonStore[float]):
             return
         self._items[key] = float(seconds)
         self._dirty = True
+        if seconds >= _URGENT_SECONDS:
+            self._urgent = True
         if len(self._items) > _MAX_ENTRIES:
             self._evict()
 
     def _evict(self) -> None:
-        keep = sorted(self._items.items(), key=lambda kv: kv[1], reverse=True)
-        self._items = dict(keep[:_MAX_ENTRIES])
+        keep = heapq.nlargest(int(_MAX_ENTRIES * _EVICT_TO), self._items.items(), key=lambda kv: kv[1])
+        self._items = dict(keep)
 
     def flush(self) -> None:
-        """Write the store out, if anything changed."""
+        """Write the store out now, if anything changed."""
         if self._dirty and self._write():
             self._dirty = False
+            self._urgent = False
+            self._last_write = time.monotonic()
+
+    def flush_soon(self) -> None:
+        """`flush`, at most every `_FLUSH_INTERVAL_S` unless a measurement
+        worth keeping (`_URGENT_SECONDS`) is waiting.
+
+        A kernel killed outright loses what the last few seconds of cheap
+        cells measured: a smaller credit in ``%cash_stats``, never a wrong one.
+        """
+        if self._dirty and (self._urgent or time.monotonic() - self._last_write >= _FLUSH_INTERVAL_S):
+            self.flush()
 
     def clear(self) -> None:
         """Forget every measurement, on disk too.
@@ -118,9 +150,9 @@ class ComputeBaselineStore(VersionedJsonStore[float]):
 
 
 def _flush_at_exit(store: ComputeBaselineStore) -> None:
-    # The magics flush the store at the end of every cell, so this only
-    # catches what was recorded since -- and a kernel killed outright runs no
-    # hook at all. Cheap insurance, never relied upon.
+    # The magics flush the store after a cell that measured something worth
+    # keeping, and every few seconds otherwise, so this catches the cheap
+    # measurements since -- and a kernel killed outright runs no hook at all.
     with contextlib.suppress(Exception):
         atexit.register(store.flush)
 

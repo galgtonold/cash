@@ -1233,10 +1233,10 @@ class CashMagics(InspectionMagicsMixin, Magics):
         # Floor at 0: the wall time always covers the compute it contains, but
         # clamp defensively against clock skew / partial timing.
         stats["total_overhead"] += max(0.0, cell_total_time - cell_compute_time)
-        # One small write per cell that measured something new, and none at
-        # all for a cell that restored everything. A Restart & Run All kills
-        # the kernel, so nothing may be left for an exit hook to write.
-        baselines.flush()
+        # A write after a cell that measured something worth keeping, since a
+        # Restart & Run All kills the kernel and no exit hook runs; cheap
+        # measurements are written every few seconds, not after every cell.
+        baselines.flush_soon()
 
     def _credit_decorator_calls(
         self,

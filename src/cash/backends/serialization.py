@@ -12,6 +12,11 @@ from typing import Any
 
 __all__ = ["Serializer", "PickleSerializer"]
 
+#: Buffers at least this large are handed out of band by `serialize_split`;
+#: smaller ones stay in the stream, where a separate part costs more than the
+#: copy it saves.
+OUT_OF_BAND_MIN_BYTES = 64 * 1024
+
 
 class Serializer(ABC):
     """Abstract base class for serializers."""
@@ -42,3 +47,28 @@ class PickleSerializer(Serializer):
 
     def deserialize(self, data: bytes) -> Any:
         return pickle.loads(data)
+
+    def serialize_split(self, data: Any) -> tuple[bytes, list[bytes]]:
+        """The pickle stream and, apart from it, the large buffers it refers to.
+
+        What the file backend writes (``entry_format.MAGIC_SPLIT``): a large
+        array is copied once, here, instead of into the stream, then into a
+        joined blob, then out of it. Copied at all because the write runs
+        later, on another thread, and the caller may change the value in the
+        meantime.
+        """
+        buffers: list[bytes] = []
+
+        def take(buffer: pickle.PickleBuffer) -> bool:
+            raw = buffer.raw()
+            if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
+                return True  # in band
+            buffers.append(raw.tobytes())
+            return False
+
+        stream = pickle.dumps(data, protocol=5, buffer_callback=take)
+        return stream, buffers
+
+    def deserialize_split(self, stream: Any, buffers: list) -> Any:
+        """The value `serialize_split` split, using *buffers*' memory as it is."""
+        return pickle.loads(stream, buffers=buffers)
