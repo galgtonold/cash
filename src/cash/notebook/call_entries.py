@@ -169,20 +169,13 @@ class CallEntries:
            A function is kept by reference too, so a hit hands back the one
            the last run made, still holding what it counted.
 
-        A caching optimisation must never be why user code fails. The two
-        ``is`` loops above cannot themselves raise -- identity comparison
-        never does -- so the only place this can fail is the
-        ``identity_coupled_reason`` call, guarded below. Refusing to store is
-        free (the call just runs uncached next time); wrongly storing is not
-        (it is exactly the silent-wrong-answer / hijacked-identity bug this
-        method exists to prevent), which argues for failing toward ``False``.
-        But ``identity_coupled_reason`` is pure MRO-qualname introspection --
-        by design it never imports matplotlib and has no I/O -- so this
-        except is a belt no realistic value should ever reach; returning
-        ``True`` here mirrors the already-shipped fallback in
-        ``call_unit._is_storable`` (same delegation, same except
-        clause) so a call's storability does not silently depend on which of
-        the two dispatch paths happened to route it.
+        A caching optimisation must never be why user code fails, so a check
+        that raises is caught -- and answers "not storable". Refusing to store
+        is free (the call just runs uncached next time); wrongly storing is
+        not: it is exactly the silent wrong answer this method exists to
+        prevent, handed back on every hit. ``call_unit._is_storable`` fails the
+        same way, so a call's storability does not depend on which of the two
+        dispatch paths routed it.
         """
         if type(result) not in _IDENTITY_FREE:
             for arg in args:
@@ -198,7 +191,8 @@ class CallEntries:
                 and not holds_a_closure_with_state(result)
             )
         except Exception:  # noqa: BLE001 - never let the predicate break the call
-            return True
+            logger.debug("storability check raised; the result is not stored", exc_info=True)
+            return False
 
     def lookup(self, key: str) -> tuple[bool, Any, float, dict]:
         """``(hit, value, recorded_execution_time, metadata)`` -- one backend read.

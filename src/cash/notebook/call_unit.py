@@ -878,11 +878,16 @@ def _is_storable(result) -> bool:
     Nor a consumable the store cannot copy (an open file, a generator): the RAM
     tier keeps it by reference, so a hit would hand back the object a reader
     already drained. Everything else the decorator would cache is still cached.
+
+    A check that raises answers "not stored": the call then runs again next
+    time, where storing a value nothing could judge might hand back the very
+    object these checks exist to keep out of the cache.
     """
     try:
         return identity_coupled_reason("<intercepted call>", result) is None and not is_consumable_unrestorable(result)
     except Exception:  # noqa: BLE001 - never let the predicate break the call
-        return True
+        logger.debug("storability check raised; the result is not stored", exc_info=True)
+        return False
 
 
 class CallCache:
