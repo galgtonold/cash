@@ -262,6 +262,11 @@ def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
     return isinstance(value, Cash) or value is sys.modules.get("cash")
 
 
+#: The opcodes that read a module global by name (``LOAD_NAME`` in a class
+#: body or at module level; ``LOAD_FROM_DICT_OR_GLOBALS`` in 3.12+ class bodies).
+_GLOBAL_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS"})
+
+
 class GlobalsFold:
     """The module data a function and its helpers read, folded into the state
     segment: globals, ``module.ATTR`` reads, data reached through local
@@ -375,11 +380,17 @@ class GlobalsFold:
             for instr in dis.get_instructions(scope)
             if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL")
         }
+        # Names LOADED as globals, not every name in ``co_names``: that also
+        # holds attribute names, so `b.lock` read the module's unrelated `lock`
+        # and warned KEY-UNHASHABLE-GLOBAL about a global never read.
         candidates = {
-            n
+            instr.argval
             for scope in scopes
-            for n in (scope.co_names or ())
-            if n in g and n not in MACHINERY_DUNDERS and n not in written
+            for instr in dis.get_instructions(scope)
+            if instr.opname in _GLOBAL_LOADS
+            and instr.argval in g
+            and instr.argval not in MACHINERY_DUNDERS
+            and instr.argval not in written
         }
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
