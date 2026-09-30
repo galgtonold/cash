@@ -25,16 +25,19 @@ _MAX_DEPTH = 8
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
+try:  # Python 3.14+; resolved once, a failed import costs ~40us per try
+    import annotationlib as _annotationlib
+except ImportError:
+    _annotationlib = None
+
+
 def _raw_annotations(owner: Any) -> dict:
     """*owner*'s own annotations, unevaluated where the runtime allows it."""
-    try:
-        import annotationlib  # Python 3.14+
-
-        return dict(annotationlib.get_annotations(owner, format=annotationlib.Format.FORWARDREF))
-    except ImportError:
-        pass
-    except Exception:  # noqa: BLE001 - a broken __annotate__ is not ours to raise
-        return {}
+    if _annotationlib is not None:
+        try:
+            return dict(_annotationlib.get_annotations(owner, format=_annotationlib.Format.FORWARDREF))
+        except Exception:  # noqa: BLE001 - a broken __annotate__ is not ours to raise
+            return {}
     try:
         if isinstance(owner, type):
             found = owner.__dict__.get("__annotations__", {})
