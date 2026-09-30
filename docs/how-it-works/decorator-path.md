@@ -93,8 +93,11 @@ dict attribute, is keyed part by part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. Under pandas 3, a frame
 cash has already hashed is checked for changes instead of read again, so a
 repeat call on an unchanged object costs milliseconds however large its
-frames are. A frame built straight on a numpy array is read in full every
-time, since the array can be written without pandas noticing.
+frames are, also when other frames share its data. A frame whose memory can
+be written without pandas noticing is read in full every time: one built with
+`copy=False` (or `index=`) over a numpy array you still hold, one from
+`read_parquet` (its memory belongs to Arrow), and one with categorical or
+nullable columns.
 
 Content comes before any in-memory tag, so a stored entry is still found after
 a restart. Equal values share a key, but the type counts: `[1, 2]` and
