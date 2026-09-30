@@ -236,11 +236,11 @@ def bytecode_global_refs(func: Any) -> list[tuple[str, ...]]:
     if code is None or not isinstance(g, dict):
         return []
     names: dict[str, None] = {}
+    # The nested code objects form a finite tree: walked whole, so a name
+    # used only in a deeply nested lambda or comprehension is not left out.
     stack = [code]
-    seen = 0
-    while stack and seen < 64:
+    while stack:
         c = stack.pop()
-        seen += 1
         names.update(dict.fromkeys(c.co_names))
         stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
     chains: list[tuple[str, ...]] = [(n,) for n in names if n in g]

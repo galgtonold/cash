@@ -22,6 +22,7 @@ from ..source_norm import bytecode_identity, callable_identity, compiled_identit
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .code_identity import func_key, hash_callable_source
+from .explain import MissKind, MissReason
 
 if TYPE_CHECKING:
     from .reporting import Notices
@@ -489,8 +490,8 @@ class FunctionRegistry:
                 if dep_func is not None:
                     stack.append(dep_func)
 
-    def refresh_helper_bindings(self, func: Callable[..., Any], func_name: str) -> str | None:
-        """Re-analyse any report whose call-site bindings moved; name a mock.
+    def refresh_helper_bindings(self, func: Callable[..., Any], func_name: str) -> MissReason | None:
+        """Re-analyse any report whose call-site bindings moved; say why a call has no key.
 
         Walks *func* and its cached-dependency closure. A report is built once
         per function, from whatever its call sites' names held at that moment,
@@ -500,16 +501,17 @@ class FunctionRegistry:
         function is analysed again from the current bindings (the analyzer's
         own cache applies the same check).
 
-        Returns a description when the tree reaches a mock -- there is no code
-        to key and its answer is whatever the test configured, so the caller
-        runs this call uncached -- and None otherwise. Never raises: a failure
+        Returns why the call has no key, and the caller runs it uncached: the
+        tree reaches a mock (there is no code to key and its answer is
+        whatever the test configured), or the helper walk had no end
+        (``PurityReport.unwalkable``). None otherwise. Never raises: a failure
         here leaves the reports as they were.
 
         Per call: one ``sys.modules`` lookup, an attribute chain and an
         identity test per binding, no hashing.
         """
         try:
-            reason: str | None = None
+            reason: MissReason | None = None
             stack: list[tuple[Callable[..., Any], str]] = [(func, func_name)]
             seen: set[str] = set()
             while stack:
@@ -522,8 +524,14 @@ class FunctionRegistry:
                     with self.analysis_lock:
                         self.populate(f, name)
                     report = self.report_for(f, name)
-                if report is not None and report.unkeyable and reason is None:
-                    reason = report.unkeyable[0]
+                if report is not None and reason is None:
+                    if report.unwalkable:
+                        reason = MissReason(MissKind.UNWALKABLE, f"{report.unwalkable}, so the call ran uncached")
+                    elif report.unkeyable:
+                        reason = MissReason(
+                            MissKind.MOCKED,
+                            f"{report.unkeyable[0]}, which has no code to key, so the call ran uncached",
+                        )
                 for dep in self.graph.get_dependencies(name):
                     dep_func = self.functions.get(dep)
                     if dep_func is not None:

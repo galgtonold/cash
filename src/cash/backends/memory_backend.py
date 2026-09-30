@@ -12,15 +12,16 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import psutil
-
 from cash.exceptions import CacheBackendError
 
 from .. import _plain_data
+from .._lazy_module import LazyModule
 from ..object_hashing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
 from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
+
+psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
 logger = logging.getLogger(__name__)
 

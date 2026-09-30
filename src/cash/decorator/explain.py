@@ -137,6 +137,7 @@ class MissKind(str, Enum):
     UNHASHABLE = "unhashable argument"
     KEY_FAILED = "key could not be built"
     MOCKED = "a helper is a mock"
+    UNWALKABLE = "helpers could not all be keyed"
     RAISED = "raised"
 
     __str__ = str.__str__
@@ -755,8 +756,9 @@ class Explainer:
                 reason=EXPLAIN_KEY_UNCOMPUTABLE,
                 func_name=func_name,
                 details={
-                    "error": MissKind.MOCKED.value,
-                    "hint": f"{unkeyable}, which has no code to key, so the call would run uncached.",
+                    "error": unkeyable.kind.value,
+                    "hint": unkeyable.detail.replace("so the call ran uncached", "so the call would run uncached")
+                    + ".",
                 },
             )
 

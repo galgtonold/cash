@@ -43,13 +43,15 @@ def interactive_shell_is_running() -> bool:
 
     There is no "running script" in an interactive session anyway. The cwd is
     the right answer, and it is the one a notebook has always had.
+
+    A running shell has imported IPython, so a process that has not is not in
+    one: a plain script is answered without importing IPython (50-160 ms).
     """
-    try:
-        from IPython import get_ipython  # type: ignore[import-not-found]
-    except ImportError:
+    ipython = sys.modules.get("IPython")
+    if ipython is None:
         return False
     try:
-        return get_ipython() is not None
+        return ipython.get_ipython() is not None
     except Exception:  # noqa: BLE001 - a half-initialised IPython is not one
         return False
 

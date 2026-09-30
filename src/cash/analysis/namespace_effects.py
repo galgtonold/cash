@@ -22,6 +22,7 @@ from .._memo import USER_CALLEES, LruMemo
 from ..effects import is_open_write_mode
 from ..install_paths import installed_roots, normcase_path
 from ..purity import is_pure
+from ..source_norm import getsource
 from .ast_util import resolve_callee
 from .file_effects import (
     READ_TEXT_MARKERS,
@@ -151,7 +152,7 @@ def user_callee_writing_files(func: Any, _depth: int = 0) -> str | None:
     if normcase_path(os.path.abspath(code_obj.co_filename)).startswith(installed_roots()):
         return None
     try:
-        source = textwrap.dedent(inspect.getsource(func))
+        source = textwrap.dedent(getsource(func))
     except (OSError, TypeError):
         return None
     key = (code_obj.co_filename, code_obj.co_firstlineno, source, _depth)

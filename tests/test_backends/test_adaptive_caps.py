@@ -10,7 +10,10 @@ that an explicit ``max_cache_size`` still wins.
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from cash.backends import adaptive_caps as ac
 
@@ -109,10 +112,20 @@ class TestResolvers:
         monkeypatch.setattr(ac, "_total_system_ram", lambda: 16 * _GIB)
         assert ac.resolve_ram_cap() == int(0.20 * 16 * _GIB)
 
+    @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="psutil's figure is compared on Linux")
+    def test_total_ram_from_sysconf_is_psutils(self):
+        import psutil
+
+        assert ac._total_system_ram() == psutil.virtual_memory().total
+
     def test_resolve_ram_cap_when_psutil_cannot_read_memory(self, monkeypatch):
         def broken():
             raise OSError("no /proc/meminfo")
 
+        def no_sysconf(name):
+            raise ValueError(name)
+
+        monkeypatch.setattr(ac.os, "sysconf", no_sysconf, raising=False)
         monkeypatch.setattr(ac.psutil, "virtual_memory", broken)
         assert ac._total_system_ram() is None
         assert ac.resolve_ram_cap() == ac.RAM_FALLBACK

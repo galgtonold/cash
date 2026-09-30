@@ -20,6 +20,7 @@ from ..analysis.annotations import assume_safe_block_lines
 from ..analysis.purity_analyzer import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
+from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
@@ -154,7 +155,7 @@ def waived_use_filter(func: Callable, tree: ast.AST) -> Callable[[ast.AST], bool
     blocks = assume_safe_block_lines(tree, func)
     try:
         filename = inspect.getsourcefile(func) or inspect.getfile(func)
-        first = inspect.getsourcelines(func)[1]
+        first = getsourcelines(func)[1]
     except SOURCE_RETRIEVAL_ERRORS:
         filename, first = None, 1
     if not filename and not blocks:
@@ -342,7 +343,7 @@ class CaptureAnalysis:
         freevars = set(code.co_freevars or ())
         provisional: frozenset = frozenset()
         try:
-            tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+            tree = ast.parse(textwrap.dedent(getsource(func)))
         except SOURCE_RETRIEVAL_ERRORS:
             # No source: the conservative answer. Nothing can be told
             # apart, so nothing is folded and nothing is provisional.
