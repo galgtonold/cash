@@ -85,6 +85,11 @@ def test_an_edit_after_the_recheck_is_still_caught(tmp_path, monkeypatch):
     stored = snapshot_file_deps({path})[path]
     _later(monkeypatch, 3600)
     assert file_dep_is_fresh(path, stored) == (True, None)
+    # Only this module's clock is an hour on: the edit really follows the
+    # first write at once, and Windows can stamp both with the same tick.
+    import time
+
+    time.sleep(0.1)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("a,b\n9,9\n")  # same size
     assert file_dep_is_fresh(path, stored)[0] is False
