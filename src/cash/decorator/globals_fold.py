@@ -33,7 +33,7 @@ from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
 from ..source_norm import own_source
-from ..value_types import CODELESS_PRIMS
+from ..value_types import CODELESS_PRIMS, IMMUTABLE_LEAF_TYPES
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
@@ -202,10 +202,72 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried
     return v
 
 
+#: Leaves of plain data (`plain_data_kind`): exact types that cannot change.
+_PLAIN_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
+#: Containers and depth `plain_data_kind` looks through before giving up.
+_PLAIN_BUDGET = 4096
+_PLAIN_DEPTH = 16
+
+
+def plain_data_kind(value: Any) -> str | None:
+    """``"immutable"`` for a number, string, date or ``None``, or tuples and
+    frozensets of them; ``"plain"`` for such data in exact dicts, lists and
+    sets too; None for anything else (an object, a callable, a subclass,
+    something too big or too deep to look through, a container that holds
+    itself).
+
+    Plain data holds no code and no instance, so a data global of it needs
+    no callable replaced and no code searched for; immutable plain data
+    cannot change while the global holds the same object.
+    """
+    leaves = _PLAIN_LEAVES
+    if type(value) in leaves:
+        return "immutable"
+    budget = _PLAIN_BUDGET
+    mutable = False
+    level = [value]
+    for _ in range(_PLAIN_DEPTH):
+        nested = []
+        for x in level:
+            t = type(x)
+            if t in leaves:
+                continue
+            budget -= 1
+            if budget < 0:
+                return None
+            if t is tuple or t is frozenset:
+                nested.extend(x)
+            elif t is list or t is set:
+                mutable = True
+                nested.extend(x)
+            elif t is dict:
+                mutable = True
+                nested.extend(x.keys())
+                nested.extend(x.values())
+            else:
+                return None
+        if not nested:
+            return "plain" if mutable else "immutable"
+        if len(nested) > _PLAIN_BUDGET * 16:
+            return None
+        level = nested
+    return None
+
+
 #: The classes `GlobalsFold.class_parts` has folded during one key build, by
 #: id. A class's methods can read a global instance of that same class, and
 #: the instance leads back to the class: without this the walk never ended.
 CLASSES_FOLDED: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar("_cash_classes_folded", default=None)
+
+#: ``(id(function), id(owner code), extra names) -> (function, the *seen*
+#: entries its fold skipped)`` for each function whose globals
+#: `GlobalsFold.fold_read_globals` folded during one key build. A class's
+#: method is reached both by the helper walk and by its class's
+#: `GlobalsFold.class_parts`: folded again, every global it reads was
+#: already in *seen* and skipped, and only the parts *seen* does not govern
+#: were hashed once more, as duplicates -- 200us of a hit on a function that
+#: builds two small classes. None outside a key build.
+READS_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_reads_folded", default=None)
 
 #: Synchronization objects kept on a class (`_lock = threading.Lock()`): no
 #: result is computed from them, so one that cannot be hashed is left out of
@@ -482,6 +544,9 @@ class GlobalsFold:
         # code object -> whether folding its globals can find anything; see
         # `_may_read_data`.
         self._reads_anything: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
+        # id(value) -> (value, digest) for immutable plain data globals; see
+        # `global_value_digest`. The value is held, so its id is not reused.
+        self._immutable_digests: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
@@ -689,6 +754,53 @@ class GlobalsFold:
         purity analyzer / dependency graph), and classes are excluded; unhashable
         data globals warn once and are skipped.
         """
+        if (
+            seen is not None
+            and not extra_names
+            and isinstance(func, types.FunctionType)
+            and not self._may_read_data(func)
+        ):
+            # A helper that reads no data (most methods, every one a dataclass
+            # generates): the fold would find nothing.
+            return state_hash
+        folded = READS_FOLDED.get() if seen is not None else None
+        if folded is None:
+            return self._fold_read_globals(func, func_name, state_hash, owner_code, seen, extra_names)
+        done_key = (id(func), id(owner_code), extra_names)
+        done = folded.get(done_key)
+        pairs = self._read_pairs(func, extra_names)
+        if done is not None and done[0] is func and done[1] <= seen:
+            # Folded earlier in this key, for the same cached function. Each
+            # global and default that fold skipped as seen is skipped here too;
+            # everything else it hashed and put into this key, the same values.
+            # Folding again would add each of them once more, nothing new.
+            seen.update(pairs)
+            return state_hash
+        skipped = frozenset(p for p in pairs if p in seen)
+        state_hash = self._fold_read_globals(func, func_name, state_hash, owner_code, seen, extra_names)
+        folded[done_key] = (func, skipped)
+        return state_hash
+
+    def _read_pairs(self, func: Callable, extra_names: tuple[str, ...]) -> list[tuple]:
+        """The *seen* entries `GlobalsFold.fold_read_globals` records for
+        *func*: each global it reads by name, and each function default."""
+        g = getattr(func, "__globals__", None)
+        if not isinstance(g, dict):
+            return []
+        gid = id(g)
+        pairs: list[tuple] = [(gid, n) for n in (*self.read_global_data_names(func), *extra_names) if n in g]
+        pairs.extend(("default", id(default)) for default in self._function_defaults(func))
+        return pairs
+
+    def _fold_read_globals(
+        self,
+        func: Callable,
+        func_name: str,
+        state_hash: str,
+        owner_code: Any,
+        seen: set | None,
+        extra_names: tuple[str, ...],
+    ) -> str:
         names = self.read_global_data_names(func)
         if extra_names:
             names = tuple(dict.fromkeys(names + extra_names))
@@ -748,9 +860,9 @@ class GlobalsFold:
                 payload = carried_payload(v)
                 if payload is None or payload[0] != "instance":
                     continue
+            plain = plain_data_kind(v)
             try:
-                stabilized = stabilize_for_global_hash(v, self.data_callable_identity)
-                h = self._args.hash_payload((stabilized,), {})
+                h = self.global_value_digest(v, plain)
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
                 # what makes the post-call check cost one hash instead of two.
@@ -773,6 +885,10 @@ class GlobalsFold:
                     code="KEY-UNHASHABLE-GLOBAL",
                     fix=UNHASHABLE_GLOBAL_FIX,
                 )
+                continue
+            if plain is not None:
+                # Numbers, strings, dates in builtin containers: no class, no
+                # instance and no code anywhere inside for the walks below.
                 continue
             # A pre-built user-class INSTANCE (or a container of them) is only
             # value-hashed above -- its class's method SOURCE is invisible to the
@@ -843,6 +959,31 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
+
+    def global_value_digest(self, value: Any, plain: str | None = None) -> str:
+        """The digest a data global's *value* is keyed by, and checked against
+        after the call (`PurityChecks`). *plain* is `plain_data_kind` of it.
+
+        Plain data is hashed as it is: it holds no callable for
+        `stabilize_for_global_hash` to replace. Immutable plain data -- a
+        number, a string, a tuple of them -- cannot change, so its digest is
+        kept while the global holds that same object: a module constant read
+        on every hit cost a full hash each time.
+        """
+        if plain is None:
+            return self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {})
+        args = self._args
+        memo = plain == "immutable" and not (args.override_hashers or args.type_hashers)
+        if memo:
+            entry = self._immutable_digests.get(id(value))
+            if entry is not None and entry[0] is value:
+                return entry[1]
+        digest = args.plain_value_digest(value)
+        if digest is None:
+            digest = args.hash_payload((value,), {})
+        if memo:
+            self._immutable_digests[id(value)] = (value, digest)
+        return digest
 
     def _reads_docstrings(self, code: Any) -> bool:
         """Does *code* read a docstring at run time (``f.__doc__``,

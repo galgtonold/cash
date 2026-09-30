@@ -38,7 +38,7 @@ from ..exceptions import (
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
 from .code_identity import func_key, is_user_module, own_package
-from .globals_fold import stabilize_for_global_hash
+from .globals_fold import plain_data_kind
 
 if TYPE_CHECKING:
     from ..config import CashConfig
@@ -405,9 +405,8 @@ class PurityChecks:
                     g = owner if isinstance(owner, dict) else own_globals
                     if not isinstance(g, dict) or name not in g:
                         continue
-                    after = self._args.hash_payload(
-                        (stabilize_for_global_hash(g[name], self._globals.data_callable_identity),), {}
-                    )
+                    value = g[name]
+                    after = self._globals.global_value_digest(value, plain_data_kind(value))
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
             if after == before:

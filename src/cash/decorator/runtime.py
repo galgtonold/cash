@@ -37,7 +37,7 @@ from .call_state import (
 from .code_identity import func_key
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
-from .globals_fold import CLASSES_FOLDED
+from .globals_fold import CLASSES_FOLDED, READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
@@ -231,6 +231,7 @@ class KeyBuilder:
         watch_token = CAPTURE_WATCH.set(None)
         # The callee's digest folds its own classes, whatever the caller folded.
         classes_token = CLASSES_FOLDED.set(set())
+        reads_token = READS_FOLDED.set({})
         try:
             if self._registry.functions.get(func_name) is func:
                 self._registry.ensure_closure_analyzed(func)
@@ -244,6 +245,7 @@ class KeyBuilder:
                 "give the default a hashable value, or register a hasher for its type with cash.register_hasher.",
             ) from None
         finally:
+            READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
@@ -274,6 +276,8 @@ class KeyBuilder:
         PLAIN_CENSUS.memo = {}
         # Each class's data is folded once per key (`GlobalsFold.class_parts`).
         classes_token = CLASSES_FOLDED.set(set())
+        # Each function's globals are folded once per key (`READS_FOLDED`).
+        reads_token = READS_FOLDED.set({})
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
@@ -298,6 +302,7 @@ class KeyBuilder:
             self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
+            READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
             raise UnhashableArgs
