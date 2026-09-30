@@ -232,11 +232,14 @@ changed. The second list is what cash does not see, and what to do about it.
 
     - The **arguments**, by content and type. Equal values share an entry.
     - The function's **own code**. Comments, docstrings and formatting are
-      ignored.
+      ignored, unless the code reads a docstring (`f.__doc__`,
+      `inspect.getdoc(tool)`): then the docstrings it reaches count.
     - The code of every **helper it calls**, transitively, in your project or
       your own installed package.
     - **Module globals** read by the function or its helpers, parameter
       defaults, and captured variables.
+    - The **classes it uses**: their code, their class attributes, and the
+      module globals their methods read, inherited ones included.
     - Another **cached function** it calls or passes on
       (`pool.map(inner, xs)`).
     - **Your class or function passed as an argument** or held in an argument

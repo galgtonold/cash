@@ -140,8 +140,9 @@ def func_key(func: Callable) -> str:
     imported — see `resolve_main_module`.
 
     A ``functools.partial`` is named after the function it wraps plus a
-    digest of what it binds. Any other callable without ``__qualname__``
-    or ``__name__`` falls back to ``repr`` so keying it never crashes.
+    digest of what it binds, a callable instance after its class. Anything
+    else without ``__qualname__`` or ``__name__`` falls back to ``repr`` so
+    keying it never crashes.
     """
     if isinstance(func, functools.partial):
         # `repr(partial)` holds the wrapped function's ADDRESS, so every
@@ -161,11 +162,22 @@ def func_key(func: Callable) -> str:
             shape = [type(v).__qualname__ for v in (*func.args, *func.keywords.values())]
             bound = hashlib.sha256(repr((shape, sorted(func.keywords))).encode("utf-8")).hexdigest()[:12]
         return f"{inner}[partial:{bound}]"
+    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None)
+    if not qualname and callable(func) and not isinstance(func, type):
+        # A callable INSTANCE (`cash.cache(Scaler(2))`) reprs with its address,
+        # so every process took a fresh namespace and none ever hit. Named
+        # after its class; what it holds is keyed per call
+        # (`ClosureFold.fold_bound_self`).
+        cls = type(func)
+        module = getattr(cls, "__module__", None) or "__unknown__"
+        if module in MAIN_MODULE_NAMES:
+            call = getattr(cls, "__call__", None)
+            module = resolve_main_module(call) if hasattr(call, "__globals__") else module
+        return f"{module}.{cls.__qualname__}[instance]"
     module = getattr(func, "__module__", None) or "__unknown__"
     if module in MAIN_MODULE_NAMES:
         module = resolve_main_module(func)
-    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None) or repr(func)
-    return f"{module}.{qualname}"
+    return f"{module}.{qualname or repr(func)}"
 
 
 def hash_callable_source(fn: Callable) -> str:

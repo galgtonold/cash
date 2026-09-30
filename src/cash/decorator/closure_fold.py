@@ -47,6 +47,25 @@ def is_immutable_capture(v: Any, _depth: int = 0) -> bool:
     return False
 
 
+#: Callables that are code, not an object holding data: followed as helpers.
+_CODE_CALLABLES = (
+    types.FunctionType,
+    types.MethodType,
+    types.BuiltinFunctionType,
+    type,
+    functools.partial,
+)
+
+
+def is_user_callable_instance(value: Any) -> bool:
+    """Is *value* an instance of the user's own class with a ``__call__``,
+    rather than a function, method, class or partial?"""
+    if isinstance(value, _CODE_CALLABLES) or getattr(value, "_cash_cached", False):
+        return False
+    cls = type(value)
+    return is_user_code_object(cls) and not is_opaque(value)
+
+
 def unsafe_uses_of(
     tree: ast.AST,
     names: set[str],
@@ -392,6 +411,17 @@ class HelperIdentity:
             try:
                 value = cell.cell_contents
             except ValueError:
+                continue
+            if callable(value) and is_user_callable_instance(value):
+                # A callable INSTANCE of the user's class -- `make(Scorer(10))`,
+                # `c = Scale(10)` in a decorator -- is a function to the
+                # helper walk and data to nothing: `Scorer(11)` shared the
+                # key of `Scorer(10)`. What it holds is keyed like any
+                # captured object's; its code, like any function's, is not.
+                try:
+                    captures.append((name, self._args.hash_payload((value,), {})))
+                except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                    pass
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
@@ -832,13 +862,25 @@ class ClosureFold:
         decoration, where ``self`` arrives via ``args``). Hashed per call,
         not at decoration: instance state may change between calls.
 
+        A callable instance passed to ``cash.cache`` is its own ``self``.
+
         Unhashable instances fall back to ``id(self)`` — correct (distinct
         instances stay distinct) but process-local; a one-shot warning points
         at ``register_hasher``.
         """
-        if not inspect.ismethod(func):
+        if is_user_callable_instance(func):
+            # `cash.cache(Scaler(2))`: the instance is its own `self`, and
+            # what its code reads besides is the class's
+            # (`GlobalsFold.class_parts`). `sc.k = 5` served the result for 2.
+            owner = func
+            parts = self._globals.class_parts(type(func), func_name)
+            if parts:
+                payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
+                state_hash = hashlib.sha256(f"{state_hash}:classes:{payload}".encode("utf-8")).hexdigest()
+        elif inspect.ismethod(func):
+            owner = func.__self__
+        else:
             return state_hash
-        owner = func.__self__
         try:
             self_hash = self._args.hash_payload((owner,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
@@ -847,7 +889,7 @@ class ClosureFold:
                 CashCacheIneffectiveWarning,
                 func_name,
                 owner_type,
-                f"@cash.cache on bound method {func_name}: the instance's state "
+                f"@cash.cache on {'bound method ' if owner is not func else ''}{func_name}: the instance's state "
                 f"could not be hashed ({type(e).__name__}), so cash fell back "
                 f"to the instance's identity - entries are not shared across "
                 f"equal instances and do not survive the process.",

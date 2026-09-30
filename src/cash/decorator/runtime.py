@@ -36,6 +36,7 @@ from .call_state import (
 from .code_identity import func_key
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
+from .globals_fold import CLASSES_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
@@ -182,6 +183,8 @@ class KeyBuilder:
         # (`plain_census`).
         previous = getattr(PLAIN_CENSUS, "memo", None)
         PLAIN_CENSUS.memo = {}
+        # Each class's data is folded once per key (`GlobalsFold.class_parts`).
+        classes_token = CLASSES_FOLDED.set(set())
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
@@ -231,6 +234,7 @@ class KeyBuilder:
             self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
+            CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
             raise UnhashableArgs
         cache_key = compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)

@@ -565,10 +565,11 @@ class CodeArgs:
         """
 
         if isinstance(carrier, type):
-            functions = class_functions(carrier)
-        else:
-            fn = getattr(carrier, "__func__", carrier)
-            functions = [fn] if isinstance(fn, types.FunctionType) else []
+            # A class: what it holds and what every function it can run --
+            # inherited, a property, `__init__` -- reads (`GlobalsFold.class_parts`).
+            return [f"argclass:{label}:{h}" for label, h in self._globals.class_parts(carrier, func_name)]
+        fn = getattr(carrier, "__func__", carrier)
+        functions = [fn] if isinstance(fn, types.FunctionType) else []
         parts: list[str] = []
         for fn in functions:
             g = getattr(fn, "__globals__", None)
