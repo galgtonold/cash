@@ -2112,6 +2112,7 @@ class PurityAnalyzer:
             if id(callee) not in cached_seen:
                 cached_seen.add(id(callee))
                 cached_callees.append(_ref(callee))
+
         #: Clock helpers judged at a call site: their own read is not reported.
         judged_helpers: set[Any] = set()
 

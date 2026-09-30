@@ -286,9 +286,7 @@ def _run(tmp_path, proj, argv, *, disable=False):
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if disable:
         env["CASH_DISABLE"] = "1"
-    out = subprocess.run(
-        [sys.executable, "main.py", str(argv)], cwd=str(proj), capture_output=True, text=True, env=env
-    )
+    out = subprocess.run([sys.executable, "main.py", str(argv)], cwd=str(proj), capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1]), out.stderr.count("RAN")
 
