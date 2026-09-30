@@ -125,8 +125,10 @@ class TestResolvers:
         def no_sysconf(name):
             raise ValueError(name)
 
-        monkeypatch.setattr(ac.os, "sysconf", no_sysconf, raising=False)
+        # psutil first: importing it reads sysconf itself.
         monkeypatch.setattr(ac.psutil, "virtual_memory", broken)
+        monkeypatch.setattr(ac.os, "sysconf", no_sysconf, raising=False)
+        monkeypatch.setattr(ac, "_windows_total_ram", lambda: None)
         assert ac._total_system_ram() is None
         assert ac.resolve_ram_cap() == ac.RAM_FALLBACK
 
