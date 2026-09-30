@@ -1058,6 +1058,33 @@ def _proc_start_time() -> float | None:
         return None
 
 
+def _windows_start_time() -> float | None:
+    """This process's start time from ``GetProcessTimes`` (Windows), the call
+    psutil makes, so a script does not import psutil for it. None elsewhere."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        if not kernel32.GetProcessTimes(
+            kernel32.GetCurrentProcess(),
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        # 100 ns ticks since 1601-01-01, the FILETIME epoch.
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return ticks / 1e7 - 11644473600.0
+    except Exception:  # noqa: BLE001 - no kernel32: psutil answers
+        return None
+
+
 def _process_start_time() -> float:
     """Wall-clock time this process started, best effort, cached."""
     global _PROCESS_START
@@ -1065,6 +1092,8 @@ def _process_start_time() -> float:
         return _PROCESS_START
 
     started = _proc_start_time()
+    if started is None:
+        started = _windows_start_time()
     if started is None:
         try:
             started = float(psutil.Process().create_time())

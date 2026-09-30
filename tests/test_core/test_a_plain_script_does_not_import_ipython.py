@@ -49,7 +49,19 @@ def test_a_script_calling_a_cached_function_imports_neither(tmp_path):
     )
     assert done.returncode == 0, done.stderr[-2000:]
     assert "ANSWER 2 2" in done.stdout
-    assert "LOADED False False" in done.stdout, done.stdout
+    if sys.platform.startswith(("linux", "win32")):
+        assert "LOADED False False" in done.stdout, done.stdout
+    else:  # macOS: psutil still reads the process start time
+        assert "LOADED False " in done.stdout, done.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="GetProcessTimes is the Windows reading")
+def test_windows_reads_the_process_start_time_without_psutil_and_agrees_with_it():
+    import psutil
+
+    from cash.source_norm import _windows_start_time
+
+    assert abs(_windows_start_time() - psutil.Process().create_time()) < 0.1
 
 
 def test_no_shell_is_running_until_ipython_is_imported(monkeypatch):
