@@ -77,7 +77,7 @@ A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file
 read another way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @b9d64ecd, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @344bca2e, cash/tracking/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 268435456, cash/tracking/file_dep_snapshot.py:_note_settled @4c164986 -->
 When the result is stored, each file is recorded with its size, modification
 time and a content hash. Before the result is reused:
 
@@ -87,7 +87,10 @@ time and a content hash. Before the result is reused:
    been left alone for ten seconds before it was hashed, it is unchanged and
    is not read.
 3. Otherwise the content hash decides. A bare `touch` does not count as a
-   change; a same-size edit within the same second does.
+   change; a same-size edit within the same second does. A file hashed
+   within ten seconds of being written is read once more after it has
+   settled; when nothing moved, that check counts as its hash for step 2
+   from then on, in later processes too.
 
 A file that was read but cannot be stat'ed when the result is stored (a
 permission error, a name the file system rejects) is recorded as never fresh:

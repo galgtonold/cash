@@ -719,6 +719,28 @@ def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
     return hashed_at - st.st_mtime > _HASH_MEMO_MIN_AGE_SECONDS
 
 
+def _note_settled(st: os.stat_result, stored: dict[str, Any], checked_at: float) -> None:
+    """Move *stored*'s ``hashed_at`` to *checked_at* when the digest just
+    re-taken shows what `_unchanged_since_hashed` needs: the same content,
+    under the same metadata, of a file that had settled by then.
+
+    A file read within ``_HASH_MEMO_MIN_AGE_SECONDS`` of being written kept
+    the ``hashed_at`` of that first read for the life of the entry, so it was
+    hashed in full on every check, in every process -- 0.6 s a hit for a 200
+    MB intermediate a pipeline stage had written seconds before the next one
+    read it. The snapshot is the entry's own metadata, held by the backend:
+    the file backend writes it back with the entry's access stamps, so later
+    processes take the stat-only path too.
+    """
+    if stored.get("hashed_at") is not None and stored["hashed_at"] >= checked_at:
+        return
+    if _unchanged_since_hashed(st, {**stored, "hashed_at": checked_at}):
+        try:
+            stored["hashed_at"] = checked_at
+        except TypeError:  # a read-only mapping: nothing to remember it in
+            pass
+
+
 def file_dep_is_fresh(
     resolved_path: str,
     stored: dict[str, Any],
@@ -806,7 +828,10 @@ def file_dep_is_fresh(
             return True, None
         if full_hash_max is None:
             full_hash_max = full_hash_max_bytes()
+        checked_at = time.time()  # after the stat, before the read
         cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max, st)
+        if cur_hash == stored_hash:
+            _note_settled(st, stored, checked_at)
         if cur_hash != stored_hash:
             # Recorded in one regime and checked in the other -- the size is
             # the same, so `file_hash_full_max_bytes` moved across it. The
