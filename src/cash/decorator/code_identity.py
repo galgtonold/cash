@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_path
@@ -35,8 +36,10 @@ from ..source_norm import (
     loaded_code_matches_disk,
     own_source_digest,
     source_digest,
+    unwrap_partials,
 )
 from .arg_hashing import is_opaque
+from .call_state import KeyBuildFailed
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -269,7 +272,7 @@ def hash_callable_source(fn: Callable) -> str:
     return digest
 
 
-def code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:
+def code_fingerprint(code: types.CodeType) -> str:
     """A digest of what a code object DOES, independent of where it sits.
 
     Source text is not enough on its own for a lambda: two different
@@ -282,7 +285,8 @@ def code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:
     constants, never from ``repr`` of a nested code object -- that carries a
     memory address, which would make the key unstable across processes and
     turn every restart into a miss. Nested code (a lambda inside a lambda)
-    recurses instead, bounded.
+    recurses instead, however deep: code objects form a finite tree, and a
+    level left out would let two lambdas differing only there collide.
     """
     parts: list[str] = [
         code.co_code.hex(),
@@ -292,24 +296,25 @@ def code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:
     ]
     for const in code_consts_without_docstring(code):
         if isinstance(const, types.CodeType):
-            parts.append(code_fingerprint(const, _depth + 1) if _depth < 4 else "<deep>")
+            parts.append(code_fingerprint(const))
         else:
             parts.append(repr(const))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
-# Bounds on the reference walk. Depth 4 and 64 targets are far past any
-# real object graph; they exist so a pathological one degrades into a
-# coarser digest rather than a hang. Exceeding them can only UNDER-fold,
-# which is the pre-existing behaviour, never a wrong-but-confident answer.
-MAX_CODE_REF_DEPTH = 4
+#: How many user-code objects one reference walk (`CodeIdentity._code_ref_closure`)
+#: may reach. Not a depth or a count that real code meets: the walk follows
+#: every reference, however deep, and its seen set ends cycles. What can pass
+#: it is code that makes a NEW object on every read (a module ``__getattr__``
+#: building a function per lookup), where the walk would never end. Past it
+#: the key would leave code out, so the call runs uncached instead
+#: (KEY-HELPERS-UNWALKABLE), as the helper walk does
+#: (``PurityAnalyzer._WALK_LIMIT``).
+MAX_CODE_REF_TARGETS = 5_000
 
 
-MAX_CODE_REF_TARGETS = 64
-
-
-def walk_nested_code(code: types.CodeType, glb: dict, _depth: int = 0):
-    """Yield *code* and the code objects nested in its constants.
+def walk_nested_code(code: types.CodeType, glb: dict):
+    """Yield *code* and the code objects nested in its constants, however deep.
 
     A comprehension, a lambda, or a nested ``def`` compiles to its own
     code object stored in ``co_consts``; the names IT references do not
@@ -318,12 +323,11 @@ def walk_nested_code(code: types.CodeType, glb: dict, _depth: int = 0):
     lambda -- so a walk that stopped at the top level would miss the case
     this exists for.
     """
-    yield code, glb
-    if _depth >= MAX_CODE_REF_DEPTH:
-        return
-    for const in code.co_consts:
-        if isinstance(const, types.CodeType):
-            yield from walk_nested_code(const, glb, _depth + 1)
+    stack = [code]
+    while stack:
+        current = stack.pop()
+        yield current, glb
+        stack.extend(const for const in reversed(current.co_consts) if isinstance(const, types.CodeType))
 
 
 def iter_contained(obj: Any):
@@ -698,10 +702,11 @@ class CodeIdentity:
         # invalidate. Walk the reachable self-members, folding each once. Keyed
         # by attribute name -- within one class hierarchy ``self.X`` always
         # resolves to the same member -- so a ``seen`` set both dedups and stops
-        # a mutually-recursive method pair from looping. Bounded for safety.
+        # a mutually-recursive method pair from looping. Every member reached
+        # is folded: the names come from the class's source, so they end.
         seen: set[str] = set()
         worklist: list[str] = list(attrs)
-        while worklist and len(seen) < 512:
+        while worklist:
             attr = worklist.pop()
             if attr in seen:
                 continue
@@ -780,10 +785,7 @@ class CodeIdentity:
         # in every process, so a cached partial never hit across processes.
         # What it wraps is the code that runs; what it binds is already in the
         # namespace name (`get_func_key`).
-        depth = 0
-        while isinstance(func, functools.partial) and depth < 8:
-            func = func.func
-            depth += 1
+        func = unwrap_partials(func)
         # An id outlives nothing: once a redefined function dies, a later
         # definition can get its address. So an entry counts only while it
         # still refers to this very object, and the decorator (which passes
@@ -855,6 +857,21 @@ class CodeIdentity:
             return weakref.ref(owner, _drop)
         except TypeError:
             return lambda: owner
+
+    def user_layers(self, fn: Any) -> list[Any]:
+        """The user-code functions *fn* runs besides its own code
+        (`callable_layers`): what its decorators wrap, the functions its
+        closure holds. Raises `KeyBuildFailed` when they cannot all be found."""
+        try:
+            layers = callable_layers(fn)
+        except UnwalkableLayers as e:
+            raise KeyBuildFailed(
+                "KEY-HELPERS-UNWALKABLE",
+                f"cash cannot key the code {getattr(fn, '__qualname__', type(fn).__qualname__)} runs: {e}, "
+                f"so the call ran uncached.",
+                "Name what the result depends on with depends_on=[...].",
+            ) from e
+        return [layer for layer in layers if is_user_code_object(layer)]
 
     def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
@@ -936,7 +953,7 @@ class CodeIdentity:
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             return self._unpicklable_identity(v)
 
-    def _unpicklable_identity(self, v: Any, _depth: int = 0) -> str:
+    def _unpicklable_identity(self, v: Any, _path: frozenset[int] = frozenset()) -> str:
         """Process-stable stand-in for a value ``ArgHasher.hash_payload`` refused.
 
         Recursive because ``__defaults__`` is hashed as a WHOLE TUPLE: one
@@ -956,10 +973,15 @@ class CodeIdentity:
         where the only thing distinguishing two objects was an address that
         changed every process: noise, never signal.
         """
-        if _depth > 4:
-            return "<deep>"
+        # However deep the containers nest: a lambda five lists down was
+        # "<deep>", and editing it kept the key. *_path* (the containers
+        # being walked) ends a container that holds itself.
+        if isinstance(v, (list, tuple, set, frozenset, dict)):
+            if id(v) in _path:
+                return f"<cycle:{type(v).__qualname__}>"
+            _path = _path | {id(v)}
         if isinstance(v, (list, tuple, set, frozenset)):
-            inner = [self._unpicklable_identity(x, _depth + 1) for x in v]
+            inner = [self._unpicklable_identity(x, _path) for x in v]
             if isinstance(v, (set, frozenset)):
                 # Set iteration order follows the hash table, and string
                 # hashing is randomized per process -- sort or reintroduce the
@@ -971,7 +993,7 @@ class CodeIdentity:
                 "dict["
                 + "|".join(
                     sorted(
-                        f"{self._unpicklable_identity(k, _depth + 1)}={self._unpicklable_identity(val, _depth + 1)}"
+                        f"{self._unpicklable_identity(k, _path)}={self._unpicklable_identity(val, _path)}"
                         for k, val in v.items()
                     )
                 )
@@ -1030,10 +1052,7 @@ class CodeIdentity:
         # the wrapped function's, which pickle names only by reference -- so an
         # edit to that function's body kept the key, and the partial was
         # reported as uncomputable code instead (KEY-OPAQUE-CALLABLE).
-        depth = 0
-        while isinstance(obj, functools.partial) and depth < 8:
-            obj = obj.func
-            depth += 1
+        obj = unwrap_partials(obj)
         # Dispatch FIRST, memo read second. Every argument to a cached
         # function passes through here (Task 4), and most are not a
         # class or callable at all -- a list, dict, set, numpy array,
@@ -1061,6 +1080,13 @@ class CodeIdentity:
             if not ident:
                 return None
             parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
+            # And the user functions it runs besides its own code: what a
+            # decorator wraps, a function a closure holds. A decorated
+            # function passed as an argument was keyed by its wrapper's code
+            # alone, which every function that decorator wraps shares, so an
+            # edit to the function itself served the old result.
+            for layer in self.user_layers(obj):
+                parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
         if not parts:
             return None
         digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
@@ -1099,11 +1125,13 @@ class CodeIdentity:
             else:
                 accessors = [member]
             for accessor in accessors:
-                accessor = getattr(accessor, "__wrapped__", accessor)
-                code = getattr(accessor, "__code__", None)
-                glb = getattr(accessor, "__globals__", None)
-                if isinstance(code, types.CodeType) and isinstance(glb, dict):
-                    yield from walk_nested_code(code, glb)
+                # Every layer: a function under two decorators was read one
+                # layer down, and what its body names was never reached.
+                for layer in (accessor, *self.user_layers(accessor)):
+                    code = getattr(layer, "__code__", None)
+                    glb = getattr(layer, "__globals__", None)
+                    if isinstance(code, types.CodeType) and isinstance(glb, dict):
+                        yield from walk_nested_code(code, glb)
 
     def _code_ref_targets(self, obj: Any) -> list[Any]:
         """User-code objects that *obj*'s code references by global name.
@@ -1189,7 +1217,7 @@ class CodeIdentity:
         ``A(value=B(value=1000))``, a wrong answer rather than a stale one.
 
         Reachability is STATIC: names the code loads from its globals,
-        transitively, bounded. Code selected at runtime (a class picked out of
+        transitively, however deep. Code selected at runtime (a class picked out of
         a dict) still cannot be followed, so this narrows the gap rather than
         closing it.
         """
@@ -1215,8 +1243,7 @@ class CodeIdentity:
         keep: list[Any] = [obj]
         digests: list[str] = []
         frontier: list[Any] = [obj]
-        depth = 0
-        while frontier and depth < MAX_CODE_REF_DEPTH:
+        while frontier:
             following: list[Any] = []
             for source in frontier:
                 for target in self._code_ref_targets(source):
@@ -1224,14 +1251,21 @@ class CodeIdentity:
                         continue
                     seen.add(id(target))
                     keep.append(target)
+                    if len(keep) > MAX_CODE_REF_TARGETS:
+                        name = getattr(obj, "__qualname__", None) or type(obj).__qualname__
+                        raise KeyBuildFailed(
+                            "KEY-HELPERS-UNWALKABLE",
+                            f"cash cannot key the code {name} reaches: it does not end (over "
+                            f"{MAX_CODE_REF_TARGETS} functions and classes; code that makes a new "
+                            f"function on every read can cause this), so the call ran uncached.",
+                            "Name what the result depends on with depends_on=[...] instead of "
+                            "creating it on every read.",
+                        )
                     digest = self._code_surface_own(target)
                     if digest is not None:
                         digests.append(f"{getattr(target, '__qualname__', '?')}:{digest}")
                     following.append(target)
-                    if len(digests) >= MAX_CODE_REF_TARGETS:
-                        return digests
             frontier = following
-            depth += 1
         return digests
 
     def _dataclass_field_parts(self, base: type, field_map: dict) -> list[tuple]:
@@ -1315,12 +1349,13 @@ class CodeIdentity:
             )
         return parts
 
-    def class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
+    def class_surface_parts(self, cls: type, _path: tuple[type, ...] = ()) -> list[tuple]:
         """Every user-code member of *cls* and its user base classes.
 
         Walked in reverse MRO so a subclass override lands after the base it
         replaces, and sorted within each class so dict ordering cannot change
-        the digest.
+        the digest. *_path* is the chain of classes whose nested members led
+        here, which ends a cycle.
         """
         parts: list[tuple] = self._pydantic_field_parts(cls)
         for base in reversed(cls.__mro__):
@@ -1386,12 +1421,25 @@ class CodeIdentity:
                 # an unchanging descriptor repr. Measured: editing any of
                 # these three wrapped method bodies left the digest unchanged
                 # without this step.
+                outer = target
                 target = getattr(target, "__wrapped__", target)
                 if not hasattr(target, "__code__"):
                     func_attr = getattr(target, "func", None)
                     if func_attr is not None and hasattr(func_attr, "__code__"):
                         target = func_attr
                 ident = self._code_identity(target)
+                if ident and callable(outer):
+                    # Every other user function it runs: the decorator's own
+                    # wrapper, and the layers below the first ``__wrapped__``.
+                    # Under two decorators the method body itself was never
+                    # reached.
+                    extra = [
+                        layer
+                        for layer in (outer, *self.user_layers(outer))
+                        if layer is not target and isinstance(layer, types.FunctionType) and is_user_code_object(layer)
+                    ]
+                    if extra:
+                        ident = (ident, tuple(self._code_identity(layer) for layer in extra))
                 if callable(member):
                     if ident:
                         # When `ident` was reached by UNWRAPPING (``.func`` /
@@ -1426,21 +1474,27 @@ class CodeIdentity:
                     #
                     # The nested walk recurses into ``CodeIdentity.class_surface_parts``
                     # DIRECTLY, not through the memoized ``CodeIdentity.code_surface_hash``,
-                    # and is bounded by DEPTH rather than by a cycle set. A
-                    # cycle set would make the digest depend on which class
-                    # happened to be hashed first (the memo would hold a cut
-                    # result for one order and a full one for the other) --
-                    # reintroducing exactly the cross-process instability
-                    # ``_value_identity`` was just fixed for. A depth bound
-                    # gives every process the same answer regardless of order.
+                    # and a cycle ends on the PATH that led to it, never on a
+                    # set shared across the walk. A shared set would make the
+                    # digest depend on which class happened to be hashed first
+                    # (the memo would hold a cut result for one order and a
+                    # full one for the other) -- reintroducing exactly the
+                    # cross-process instability ``_value_identity`` was just
+                    # fixed for. The path is fixed by *cls* alone, so every
+                    # process gets the same answer regardless of order. No
+                    # depth bound: a nested class three levels down whose
+                    # method was edited left the digest unchanged.
                     nested = None
                     inner_cls = member if isinstance(member, type) else type(member)
-                    if _depth < 2 and is_user_code_object(inner_cls):
-                        sub_parts = self.class_surface_parts(inner_cls, _depth + 1)
-                        if sub_parts:
-                            nested = hashlib.sha256(
-                                repr(sub_parts).encode("utf-8"),
-                            ).hexdigest()
+                    if is_user_code_object(inner_cls):
+                        if inner_cls is cls or inner_cls in _path:
+                            nested = f"cycle:{inner_cls.__qualname__}"
+                        else:
+                            sub_parts = self.class_surface_parts(inner_cls, (*_path, cls))
+                            if sub_parts:
+                                nested = hashlib.sha256(
+                                    repr(sub_parts).encode("utf-8"),
+                                ).hexdigest()
                     try:
                         content = self._args.hash_payload((member,), {})
                     except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
@@ -1545,7 +1599,6 @@ class CodeIdentity:
         self,
         value: Any,
         _seen: set | None = None,
-        _depth: int = 0,
         own_pkg: str | None = None,
     ) -> list[tuple[str, str]]:
         """``(qualname, source-hash)`` for the user classes behind an INSTANCE.
@@ -1555,8 +1608,8 @@ class CodeIdentity:
         only VALUE-hashed: its ``__dict__`` pickle carries no method source, so an
         edit to ``MyTransformer.transform`` left the key unchanged and served a
         stale result (found replaying a real repo's git history). Fold the source
-        of the instance's class -- and, bounded, of the user-class instances it
-        holds -- so a method-body edit invalidates.
+        of the instance's class -- and of the user-class instances it holds,
+        however deep -- so a method-body edit invalidates.
 
         The walk recurses only into user-class instances: a third-party object
         (a fitted sklearn estimator, a numpy array) is not user-editable and its
@@ -1565,24 +1618,32 @@ class CodeIdentity:
         container is not folded here; `CodeArgs.carrier_parts`, which a data
         global also goes through, searches library objects for it.
         """
-        if _depth > 4:
-            return []
         if _seen is None:
             _seen = set()
-        if id(value) in _seen:
-            return []
-        _seen.add(id(value))
         parts: list[tuple[str, str]] = []
-        cls = type(value)
-        if is_user_class(cls, own_pkg):
-            try:
-                parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
-            except SOURCE_RETRIEVAL_ERRORS:
-                pass
-        held = getattr(value, "__dict__", None)
-        if isinstance(held, dict):
-            for attr_val in held.values():
-                for item in iter_contained(attr_val):
-                    if is_user_class(type(item), own_pkg):
-                        parts.extend(self.instance_class_source_parts(item, _seen, _depth + 1, own_pkg=own_pkg))
+        # Depth-first with an explicit stack, however deep the instances nest
+        # (a linked list of user objects is as deep as it is long): a class
+        # held five objects down was not folded, and an edit to its method
+        # served the old result. ``_seen`` ends cycles.
+        stack = [value]
+        while stack:
+            item = stack.pop()
+            if id(item) in _seen:
+                continue
+            _seen.add(id(item))
+            cls = type(item)
+            if is_user_class(cls, own_pkg):
+                try:
+                    parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
+                except SOURCE_RETRIEVAL_ERRORS:
+                    pass
+            held = getattr(item, "__dict__", None)
+            if isinstance(held, dict):
+                found = [
+                    inner
+                    for attr_val in held.values()
+                    for inner in iter_contained(attr_val)
+                    if is_user_class(type(inner), own_pkg)
+                ]
+                stack.extend(reversed(found))
         return parts

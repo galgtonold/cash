@@ -63,6 +63,7 @@ __all__ = [
     "compiled_identity",
     "module_identity",
     "opaque_identity",
+    "unwrap_partials",
     "own_source",
     "own_source_digest",
     "source_digest",
@@ -574,12 +575,6 @@ def source_identity_digest(source: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-# Nested code nests: a comprehension inside a closure inside a method. The cap
-# is a runaway guard, not a real limit -- eight levels is far past anything a
-# human writes, and stopping early only makes the digest coarser, never wrong.
-_MAX_CONST_DEPTH = 8
-
-
 _CO_OPTIMIZED = 0x0001
 # Python 3.14 flags a code object whose ``co_consts[0]`` is its docstring.
 _CO_HAS_DOCSTRING = 0x4000000
@@ -611,27 +606,29 @@ def code_consts_without_docstring(code: types.CodeType) -> tuple:
     return (None,) + consts[1:] if has_doc else consts
 
 
-def _stabilize_const(const: object, depth: int) -> str:
-    """Describe one const so the description never embeds an address."""
+def _stabilize_const(const: object) -> str:
+    """Describe one const so the description never embeds an address.
+
+    Nested code (a comprehension inside a closure inside a method) is
+    described however deep it nests: code objects form a finite tree, and a
+    level cut off would hide an edit made inside it."""
     if isinstance(const, IMMUTABLE_PRIMS):
         return repr(const)
     if isinstance(const, types.CodeType):
-        if depth >= _MAX_CONST_DEPTH:
-            return "<code:depth>"
-        return "code(" + _code_atoms(const, depth + 1) + ")"
+        return "code(" + _code_atoms(const) + ")"
     if isinstance(const, tuple):
-        return "(" + ",".join(_stabilize_const(c, depth) for c in const) + ")"
+        return "(" + ",".join(_stabilize_const(c) for c in const) + ")"
     if isinstance(const, frozenset):
-        return "{" + ",".join(sorted(_stabilize_const(c, depth) for c in const)) + "}"
+        return "{" + ",".join(sorted(_stabilize_const(c) for c in const)) + "}"
     # Anything else (a rare exotic const) contributes its TYPE only: its repr
     # may carry an address, and a wrong-but-stable digest beats a right-but-
     # unstable one, which would miss forever.
     return f"<{type(const).__name__}>"
 
 
-def _code_atoms(code: types.CodeType, depth: int = 0) -> str:
+def _code_atoms(code: types.CodeType) -> str:
     """Serialize a code object's behaviour-bearing fields."""
-    consts = ",".join(_stabilize_const(c, depth) for c in code_consts_without_docstring(code))
+    consts = ",".join(_stabilize_const(c) for c in code_consts_without_docstring(code))
     return _SEP.join(
         (
             code.co_code.hex(),
@@ -848,35 +845,37 @@ def _wrapped_of(fn: object) -> object | None:
     return None
 
 
-def _with_wrapped(own: str, fn: object, depth: int) -> str:
+def _with_wrapped(own: str, fn: object, walked: frozenset[int]) -> str:
     """*own*, the digest of *fn*'s own code, joined with the identity of the
     function it wraps, if it is a ``functools.wraps`` wrapper.
 
     A wrapper's own code is shared by every function its decorator wraps, so
     on its own it cannot tell ``@timed def a`` from ``@timed def b`` -- nor see
     an edit to either body. The wrapped function is what the wrapper runs.
+
+    Every layer is followed, however many decorators are stacked; *walked*
+    (the layers already in this identity) ends a ``__wrapped__`` cycle.
     """
     wrapped = _wrapped_of(fn)
-    if wrapped is None or depth >= _MAX_WRAP_DEPTH:
+    if wrapped is None:
         return own
-    inner = _callable_identity(wrapped, depth + 1)
+    walked = walked | {id(fn)}
+    if id(wrapped) in walked:
+        return hashlib.sha256(f"{own}:wraps:cycle".encode("utf-8")).hexdigest()
+    inner = _callable_identity(wrapped, walked)
     return hashlib.sha256(f"{own}:wraps:{inner}".encode("utf-8")).hexdigest()
-
-
-#: How many ``__wrapped__`` layers an identity follows; a runaway guard.
-_MAX_WRAP_DEPTH = 8
 
 
 def source_digest(fn: object) -> str | None:
     """*fn*'s identity read from its source file -- `source_identity_digest`
     of its own source (`own_source`), with what a ``functools.wraps`` wrapper
     wraps folded in -- or ``None`` when there is no source to read."""
-    return _source_digest(fn, 0)
+    return _source_digest(fn, frozenset())
 
 
-def _source_digest(fn: object, depth: int) -> str | None:
+def _source_digest(fn: object, walked: frozenset[int]) -> str | None:
     own = own_source_digest(fn)
-    return None if own is None else _with_wrapped(own, fn, depth)
+    return None if own is None else _with_wrapped(own, fn, walked)
 
 
 def own_source_digest(fn: object) -> str | None:
@@ -889,6 +888,22 @@ def own_source_digest(fn: object) -> str | None:
         return None
 
 
+def unwrap_partials(fn: object) -> object:
+    """What a chain of ``functools.partial`` objects finally calls, however long.
+
+    CPython flattens a partial of a plain partial, but not of a subclass, so a
+    chain can be any length; one that stopped after eight left the function
+    it wraps out of every identity built from the result. A partial whose
+    ``func`` leads back to itself (only ``__setstate__`` can build one) ends
+    at the first repeat.
+    """
+    seen: set[int] = set()
+    while isinstance(fn, functools.partial) and id(fn) not in seen:
+        seen.add(id(fn))
+        fn = fn.func
+    return fn
+
+
 def opaque_identity(fn: object) -> str:
     """A stable ``module.qualname`` for a callable with no source and no code:
     a builtin, a C-extension function, a ufunc, a ``functools.partial``.
@@ -898,10 +913,7 @@ def opaque_identity(fn: object) -> str:
     never hit across processes. What it wraps is stable; what it binds reaches
     a key through the arguments and the function's own namespace name.
     """
-    depth = 0
-    while isinstance(fn, functools.partial) and depth < 8:
-        fn = fn.func
-        depth += 1
+    fn = unwrap_partials(fn)
     module = getattr(fn, "__module__", None) or "?"
     qualname = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None) or repr(fn)
     return f"{module}.{qualname}"
@@ -911,10 +923,10 @@ def compiled_identity(fn: object) -> str:
     """*fn*'s identity when its source cannot be read: its `bytecode_identity`
     (a wrapper's with what it wraps folded in), or for a callable with no
     code at all a digest of its `opaque_identity`."""
-    return _compiled_identity(fn, 0)
+    return _compiled_identity(fn, frozenset())
 
 
-def _compiled_identity(fn: object, depth: int) -> str:
+def _compiled_identity(fn: object, walked: frozenset[int]) -> str:
     own = bytecode_identity(fn)
     built = extension_file_digest(fn)
     if own is None:
@@ -924,7 +936,7 @@ def _compiled_identity(fn: object, depth: int) -> str:
         return hashlib.sha256(opaque.encode("utf-8")).hexdigest()
     if built is not None:
         own = hashlib.sha256(f"{own}:built:{built}".encode()).hexdigest()
-    return _with_wrapped(own, fn, depth)
+    return _with_wrapped(own, fn, walked)
 
 
 #: extension file path -> (the module loaded from it, its content digest).
@@ -975,12 +987,12 @@ def callable_identity(fn: object) -> str:
     so an edit to either half moves it and two functions wrapped by one
     decorator never share it. Never raises.
     """
-    return _callable_identity(fn, 0)
+    return _callable_identity(fn, frozenset())
 
 
-def _callable_identity(fn: object, depth: int) -> str:
-    digest = _source_digest(fn, depth)
-    return digest if digest is not None else _compiled_identity(fn, depth)
+def _callable_identity(fn: object, walked: frozenset[int]) -> str:
+    digest = _source_digest(fn, walked)
+    return digest if digest is not None else _compiled_identity(fn, walked)
 
 
 # ---------------------------------------------------------------------------

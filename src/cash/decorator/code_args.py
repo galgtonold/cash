@@ -16,7 +16,7 @@ from ..analysis.purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..object_hashing import held_objects
-from ..source_norm import class_functions
+from ..source_norm import class_functions, unwrap_partials
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
@@ -30,16 +30,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: How many values `CodeArgs._iter_library_held` looks at inside one library
-#: object before it gives up looking for user code there.
-LIBRARY_WALK_BUDGET = 2000
-
-#: How many containers deep the search for user code in a value goes. Deeper
-#: than this, what is left is not searched and `CodeArgs.carrier_parts` says so.
+#: How many containers deep one recursive stretch of the search for user code
+#: goes. Not a limit on what is searched: what lies deeper is set aside and
+#: searched from there once the stretch is done (`CodeArgs.iter_code_carriers`),
+#: so the search reaches everything, however deep, without running out of stack.
 CODE_SEARCH_DEPTH = 100
 
-#: What `CodeArgs.iter_code_carriers` yields where it stops at the depth limit.
-TOO_DEEP = object()
+
+class _Deeper:
+    """A value the search reached past `CODE_SEARCH_DEPTH`, to search on from.
+
+    *find* is True for values met while SEARCHING a library object
+    (`CodeArgs._find_user_code`), False for values walked as an argument is.
+    """
+
+    __slots__ = ("find", "values")
+
+    def __init__(self, values: Any, find: bool) -> None:
+        self.values = values
+        self.find = find
 
 
 def carrier_name(carrier: Any) -> str:
@@ -63,10 +72,7 @@ def carrier_name(carrier: Any) -> str:
 
 def cached_function_in(carrier: Any) -> Any:
     """The ``@cash.cache`` wrapper *carrier* is, or a partial wraps; else None."""
-    for _ in range(8):
-        if not isinstance(carrier, functools.partial):
-            break
-        carrier = carrier.func
+    carrier = unwrap_partials(carrier)
     if isinstance(carrier, types.FunctionType) and getattr(carrier, "_cash_cached", False) is True:
         return carrier
     return None
@@ -216,42 +222,41 @@ class CodeArgs:
             fix,
         )
 
-    def _warn_too_deep_once(self, func_name: str, param: str | None) -> None:
-        """Say once that a value nests deeper than the code search goes."""
-        if _EXPLAINING.get():
-            return
-        mark = ("too-deep", func_name, param)
-        if mark in self._warned_unhashable_code:
-            return
-        self._warned_unhashable_code.add(mark)
-        where = f"the argument `{param}` of {func_name}" if param else f"a value {func_name} reads"
-        what = (
-            f"{where} nests containers more than {CODE_SEARCH_DEPTH} deep, and cash "
-            f"does not search below that for code: a function or class held there "
-            f"is keyed by name, so editing it will NOT invalidate the cache."
-        )
-        fix = (
-            "hold code nearer the top of the value, or name what the result depends "
-            "on with @cash.cache(depends_on=[...])."
-        )
-        log_diagnostic(logger, "KEY-OPAQUE-CALLABLE", what, fix)
-        warn_diagnostic(CashImpurityWarning, "KEY-OPAQUE-CALLABLE", what, fix)
+    def iter_code_carriers(self, value: Any, _seen: set | None = None):
+        """Yield objects in *value* that carry user code, however deep.
 
-    def iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
-        """Yield objects in *value* that carry user code.
+        ``_seen`` guards self-referential containers, and doubles as a
+        once-per-argument dedup for the classes yielded on behalf of
+        instances: a list of 50k objects of one class must evaluate the
+        user-code gate once, not 50k times. Dedup by identity is safe in both
+        roles -- a class already yielded does not need yielding again, and
+        the fold takes a ``set`` of the parts anyway.
 
-        Depth-bounded at `CODE_SEARCH_DEPTH`; where the bound cuts off a
-        value that could hold code, `TOO_DEEP` is yielded. ``_seen``
-        guards self-referential containers, and doubles as a once-per-argument
-        dedup for the classes yielded on behalf of instances: a list of 50k
-        objects of one class must evaluate the user-code gate once, not 50k
-        times. Dedup by identity is safe in both roles -- a class already
-        yielded does not need yielding again, and the fold takes a ``set`` of
-        the parts anyway.
+        The walk recurses `CODE_SEARCH_DEPTH` containers at a time; what lies
+        deeper is set aside and walked from there after. It stopped there
+        before, and a function held deeper was keyed by its name only, so
+        editing it served the old result.
         """
+        if _seen is None:
+            _seen = set()
+        pending = [_Deeper(value, False)]
+        while pending:
+            deeper = pending.pop()
+            if deeper.find:
+                walk = self._find_user_code(deeper.values, 0, _seen)
+            else:
+                walk = self._walk_carriers(deeper.values, 0, _seen)
+            for carrier in walk:
+                if type(carrier) is _Deeper:
+                    pending.append(carrier)
+                else:
+                    yield carrier
+
+    def _walk_carriers(self, value: Any, _depth: int, _seen: set):
+        """`iter_code_carriers` for one stretch of `CODE_SEARCH_DEPTH` containers."""
         if _depth > CODE_SEARCH_DEPTH:
             if type(value) not in CODELESS_PRIMS:
-                yield TOO_DEEP
+                yield _Deeper(value, False)
             return
         # Primitives (and numpy numbers) carry no user code, and in a large argument they ARE the
         # argument. Returning before ``_seen`` is touched keeps a list of a
@@ -276,8 +281,6 @@ class CodeArgs:
         # two million rows to find that out was 14% of a warm hit.
         if _depth == 0 and type(value) in _plain_data.TREE_NODES and plain_census(value) is not None:
             return
-        if _seen is None:
-            _seen = set()
         # ``_seen`` is recorded on the paths that need it -- containers, for
         # cycle safety, and yielded carriers, to yield each once -- and NOT for
         # a leaf instance. A leaf cannot contain itself, and its class is
@@ -331,9 +334,9 @@ class CodeArgs:
                     yield cls
             for k, v in value.items():
                 if type(k) not in CODELESS_PRIMS:
-                    yield from self.iter_code_carriers(k, _depth + 1, _seen)
+                    yield from self._walk_carriers(k, _depth + 1, _seen)
                 if type(v) not in CODELESS_PRIMS:
-                    yield from self.iter_code_carriers(v, _depth + 1, _seen)
+                    yield from self._walk_carriers(v, _depth + 1, _seen)
         elif isinstance(value, (list, tuple, set, frozenset)):
             if id(value) in _seen:
                 return
@@ -344,7 +347,7 @@ class CodeArgs:
                     yield cls
             for v in value:
                 if type(v) not in CODELESS_PRIMS:
-                    yield from self.iter_code_carriers(v, _depth + 1, _seen)
+                    yield from self._walk_carriers(v, _depth + 1, _seen)
         else:
             # An instance contributes its class's code. Deliberately NOT gated
             # on ``hasattr(value, "__dict__")``: a class using ``__slots__``
@@ -412,7 +415,7 @@ class CodeArgs:
             return
         _seen.add(id(value))
         for v in held:
-            yield from self.iter_code_carriers(v, _depth + 1, _seen)
+            yield from self._walk_carriers(v, _depth + 1, _seen)
 
     def _iter_library_held(self, value: Any, _depth: int, _seen: set):
         """User code a LIBRARY object holds: looked for, not keyed on the way.
@@ -423,8 +426,9 @@ class CodeArgs:
         The library's own attributes are only searched: what is found and is
         user code (a function, a class, an instance of one) is walked like an
         argument, and nothing of the library's own reaches the key, so its
-        caches and fitted state cannot churn it. Bounded by
-        `LIBRARY_WALK_BUDGET` values per object.
+        caches and fitted state cannot churn it. Every value is looked at:
+        a search that gave up after 2000 missed the user function in a
+        pipeline whose fitted step held a large vocabulary.
         """
         if id(value) in _seen:
             return
@@ -434,45 +438,42 @@ class CodeArgs:
         if held:
             _seen.add(id(value))
             for v in held:
-                yield from self.iter_code_carriers(v, _depth + 1, _seen)
+                yield from self._walk_carriers(v, _depth + 1, _seen)
         attrs = getattr(value, "__dict__", None)
         if not isinstance(attrs, dict) or not attrs:
             return
         _seen.add(id(value))
-        budget = [LIBRARY_WALK_BUDGET]
-        yield from self._find_user_code(attrs.values(), _depth + 1, _seen, budget)
+        yield from self._find_user_code(attrs.values(), _depth + 1, _seen)
 
-    def _find_user_code(self, values: Any, _depth: int, _seen: set, budget: list[int]):
+    def _find_user_code(self, values: Any, _depth: int, _seen: set):
         """The user code among *values*, searched through library objects."""
         if _depth > CODE_SEARCH_DEPTH:
+            yield _Deeper(list(values), True)
             return
         for v in values:
-            if budget[0] <= 0:
-                return
-            budget[0] -= 1
             if type(v) in CODELESS_PRIMS or id(v) in _seen or isinstance(v, types.ModuleType):
                 continue
             if type(v) in BUILTIN_CONTAINERS:
                 _seen.add(id(v))
-                yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen, budget)
+                yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen)
             elif isinstance(v, (types.FunctionType, type)):
                 if is_user_code_carrier(v):
-                    yield from self.iter_code_carriers(v, _depth, _seen)
+                    yield from self._walk_carriers(v, _depth, _seen)
             elif isinstance(v, types.MethodType):
                 _seen.add(id(v))
-                yield from self._find_user_code((v.__func__, v.__self__), _depth + 1, _seen, budget)
+                yield from self._find_user_code((v.__func__, v.__self__), _depth + 1, _seen)
             elif isinstance(v, functools.partial):
                 _seen.add(id(v))
-                yield from self._find_user_code((v.func, *v.args, *v.keywords.values()), _depth + 1, _seen, budget)
+                yield from self._find_user_code((v.func, *v.args, *v.keywords.values()), _depth + 1, _seen)
             elif self._is_user_instance(v):
-                yield from self.iter_code_carriers(v, _depth, _seen)
+                yield from self._walk_carriers(v, _depth, _seen)
             elif self._keyed_by_registration(v):
                 continue
             else:
                 attrs = getattr(v, "__dict__", None)
                 if isinstance(attrs, dict) and attrs:
                     _seen.add(id(v))
-                    yield from self._find_user_code(attrs.values(), _depth + 1, _seen, budget)
+                    yield from self._find_user_code(attrs.values(), _depth + 1, _seen)
 
     def _is_user_instance(self, value: Any) -> bool:
         """Is *value*'s class user code? Memoized per class, as for the attribute walk."""
@@ -542,9 +543,6 @@ class CodeArgs:
         # A clock test double's date is the date, not code (`fake_clock`).
         fake_dates = _plain_data.fake_clock()[0]
         for carrier in self.iter_code_carriers(value):
-            if carrier is TOO_DEEP:
-                self._warn_too_deep_once(func_name, param)
-                continue
             if fake_dates and (type(carrier) in fake_dates or carrier in fake_dates):
                 continue
             if id(carrier) in seen_carriers:

@@ -2,7 +2,8 @@
 
 The search for code stopped eight containers down without a word, so a
 function ten lists deep was keyed by name and an edit to it served the old
-result. It now goes much deeper, and says so where it stops.
+result. Later it stopped at a hundred, with a warning. It now reaches code
+however deep it is held.
 """
 
 from __future__ import annotations
@@ -12,12 +13,12 @@ import subprocess
 import sys
 import textwrap
 import time
+import types
 import warnings
 
 import pytest
 
 from cash import Cash, FileBackend
-from cash.exceptions import CashImpurityWarning
 
 HELPER = """
     def fn(x):
@@ -73,18 +74,37 @@ def _deep(value, depth):
     return value
 
 
-def test_a_value_deeper_than_the_search_warns(tmp_path):
+def _fileless_function(module_name: str, body: str):
+    """``fn`` defined in a registered module with no file, as a notebook
+    cell or ``exec`` defines it: pickled by name, keyed by its code."""
+    module = sys.modules.get(module_name) or types.ModuleType(module_name)
+    sys.modules[module_name] = module
+    exec(textwrap.dedent(body), module.__dict__)
+    return module.fn
+
+
+def test_a_function_far_deeper_than_one_search_stretch_is_keyed_by_its_code(tmp_path):
+    """The search stopped 100 containers down and keyed what lay deeper by
+    name, so editing a function 150 lists deep served the old result."""
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
 
     @c.cache
     def run(tree):
-        return 1
+        while isinstance(tree, list):
+            tree = tree[0]
+        return tree(10)
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        run(_deep(len, 150))  # deeper than the search goes
-    messages = [str(w.message) for w in caught if issubclass(w.category, CashImpurityWarning)]
-    assert any("KEY-OPAQUE-CALLABLE" in m and "deep" in m for m in messages), messages
+    name = "_cash_test_deep_code_arg"
+    try:
+        fn = _fileless_function(name, "def fn(x):\n    return x * 1\n")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert run(_deep(fn, 150)) == 10
+        assert not [w for w in caught if "KEY-OPAQUE-CALLABLE" in str(w.message)]
+        fn = _fileless_function(name, "def fn(x):\n    return x * 2\n")
+        assert run(_deep(fn, 150)) == 20
+    finally:
+        sys.modules.pop(name, None)
 
 
 def test_a_deep_value_of_plain_data_does_not_warn(tmp_path):

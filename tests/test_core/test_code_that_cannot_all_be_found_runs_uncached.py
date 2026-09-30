@@ -10,6 +10,7 @@ finds everything or runs the call uncached with KEY-HELPERS-UNWALKABLE.
 
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 import typing
@@ -17,6 +18,7 @@ import warnings
 
 import pytest
 
+import cash.decorator.code_identity as code_identity
 import cash.decorator.registry as registry
 from cash import Cash
 from cash.analysis.purity_analyzer import callable_layers
@@ -79,6 +81,49 @@ def test_a_function_calling_such_a_callable_runs_uncached(tmp_path):
     c = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
     seen = _uncached_twice(c.cache(_through_opaque), 1)
     assert any("KEY-HELPERS-UNWALKABLE" in m and "not now" in m for m in seen["warnings"]), seen
+
+
+def _class_name(cls):
+    return cls.__name__
+
+
+ENDLESS = """
+import sys
+
+_module = sys.modules[__name__]
+
+
+def __getattr__(name):
+    if name.startswith("__"):
+        raise AttributeError(name)
+
+    def made():
+        return getattr(_module, "next_one")()
+
+    made.__qualname__ = made.__name__ = name
+    return made
+
+
+class Model:
+    def go(self):
+        return getattr(_module, "next_one")()
+"""
+
+
+def test_argument_code_whose_references_never_end_runs_uncached(tmp_path, monkeypatch):
+    """Each lookup makes a new function that looks one up: the reference walk
+    from an argument's code cannot finish, and a key of the part it saw
+    (four references, before) is not a key of the code that runs."""
+    monkeypatch.setattr(code_identity, "MAX_CODE_REF_TARGETS", 40)  # the real bound only costs time
+    monkeypatch.syspath_prepend(str(tmp_path))
+    name = f"_endless_refs_{tmp_path.name}"
+    monkeypatch.delitem(sys.modules, name, raising=False)
+    (tmp_path / f"{name}.py").write_text(ENDLESS, encoding="utf-8")
+    module = importlib.import_module(name)
+
+    c = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
+    seen = _uncached_twice(c.cache(_class_name), module.Model)
+    assert any("KEY-HELPERS-UNWALKABLE" in m for m in seen["warnings"]), seen
 
 
 ANNOTATED = """

@@ -172,7 +172,9 @@ def carried_payload(value: Any) -> Any:
     return ("wrapped partials", held) if held else None
 
 
-def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried: bool = True) -> Any:
+def stabilize_for_global_hash(
+    v: Any, hash_callable, _path: frozenset[int] = frozenset(), *, carried: bool = True
+) -> Any:
     """Rewrite *v* so callables (incl. lambdas held in containers) are
     replaced by their code identity, making a container of callables
     hashable and content-sensitive (dict-dispatch channel).
@@ -183,9 +185,13 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried
     the same key; so did ``{"scale": partial(mul, k=10)}`` after ``k=11``.
     *carried* False keeps the code alone, the fallback for a carried state
     that cannot be hashed.
+
+    However deep the containers nest: past eight levels a callable was left
+    as it was, which pickles by name, so editing it kept the key. *_path*
+    (the containers and callables being rewritten) ends one that holds itself.
     """
-    if _depth > 8:
-        return v
+    if id(v) in _path:
+        return ("__cash_cycle__", type(v).__qualname__)
     if callable(v) and not isinstance(v, type):
         try:
             ident: Any = hash_callable(v)
@@ -194,11 +200,13 @@ def stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0, *, carried
         payload = carried_payload(v) if carried else None
         if payload is None:
             return ("__cash_callable__", ident)
-        return ("__cash_callable__", ident, stabilize_for_global_hash(payload, hash_callable, _depth + 1))
+        return ("__cash_callable__", ident, stabilize_for_global_hash(payload, hash_callable, _path | {id(v)}))
     if isinstance(v, dict):
-        return {k: stabilize_for_global_hash(val, hash_callable, _depth + 1, carried=carried) for k, val in v.items()}
+        inner = _path | {id(v)}
+        return {k: stabilize_for_global_hash(val, hash_callable, inner, carried=carried) for k, val in v.items()}
     if isinstance(v, (list, tuple)):
-        return type(v)(stabilize_for_global_hash(x, hash_callable, _depth + 1, carried=carried) for x in v)
+        inner = _path | {id(v)}
+        return type(v)(stabilize_for_global_hash(x, hash_callable, inner, carried=carried) for x in v)
     return v
 
 
@@ -309,9 +317,9 @@ def _function_layers(fn: Any) -> list[types.FunctionType]:
     globals are the library's, and the user's function is inside it.
     """
     layers: list[types.FunctionType] = []
-    for _ in range(8):
-        if fn is None:
-            break
+    walked: set[int] = set()
+    while fn is not None and id(fn) not in walked:  # every layer; a cycle ends
+        walked.add(id(fn))
         if isinstance(fn, types.FunctionType) and not getattr(fn, "_cash_cached", False):
             layers.append(fn)
         fn = getattr(fn, "__wrapped__", None)
@@ -332,25 +340,31 @@ def _member_functions(member: Any) -> list[types.FunctionType]:
     return [layer for c in candidates for layer in _function_layers(c)]
 
 
-def class_surface_functions(cls: type, _depth: int = 0) -> list[types.FunctionType]:
+def class_surface_functions(cls: type) -> list[types.FunctionType]:
     """Every function an instance of *cls* can run: its own methods and every
     user base's, inherited ``__init__`` and ``__init_subclass__`` included,
     property and ``cached_property`` accessors, its metaclass's methods, and
     the methods of user objects it holds as class attributes (a descriptor's
-    ``__get__``, a callable instance's ``__call__``)."""
+    ``__get__``, a callable instance's ``__call__``) -- and of the user
+    objects THEIR classes hold, however deep."""
     found: list[types.FunctionType] = []
-    for base in _user_bases(cls):
-        for member in list(vars(base).values()):
-            functions = _member_functions(member)
-            found.extend(functions)
-            if (
-                not functions
-                and _depth < 2
-                and not isinstance(member, (type, types.ModuleType))
-                and not wraps_code(member)
-                and is_user_code_object(type(member))
-            ):
-                found.extend(class_surface_functions(type(member), _depth + 1))
+    classes = [cls]
+    walked: set[type] = {cls}
+    while classes:
+        current = classes.pop(0)
+        for base in _user_bases(current):
+            for member in list(vars(base).values()):
+                functions = _member_functions(member)
+                found.extend(functions)
+                if (
+                    not functions
+                    and not isinstance(member, (type, types.ModuleType))
+                    and not wraps_code(member)
+                    and type(member) not in walked
+                    and is_user_code_object(type(member))
+                ):
+                    walked.add(type(member))
+                    classes.append(type(member))
     seen: set[int] = set()
     return [f for f in found if not (id(f) in seen or seen.add(id(f)))]
 

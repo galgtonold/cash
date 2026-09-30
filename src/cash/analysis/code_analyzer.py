@@ -23,7 +23,7 @@ from typing import Any
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import getsource
+from ..source_norm import getsource, unwrap_partials
 from .ast_util import bytecode_global_refs, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
@@ -478,12 +478,14 @@ def _callee_name(obj: Any, known_by_id: Mapping[int, str]) -> str | None:
     caller of it recorded no edge: editing ``inner`` never reached it.
     """
     inner = obj
-    for _ in range(8):
+    walked: set[int] = set()
+    while id(inner) not in walked:  # every layer, however many; a cycle ends
+        walked.add(id(inner))
         name = known_by_id.get(id(inner))
         if name is not None:
             return name
         nxt = getattr(inner, "__wrapped__", None)
-        if nxt is None or nxt is inner:
+        if nxt is None:
             break
         inner = nxt
     qualname = getattr(obj, "__qualname__", None)
@@ -551,10 +553,7 @@ class CodeAnalyzer:
                 try:
                     for part in parts[1:]:
                         obj = getattr(obj, part)
-                    for _ in range(8):
-                        if not isinstance(obj, functools.partial):
-                            break
-                        obj = obj.func
+                    obj = unwrap_partials(obj)
                     fqn = _callee_name(obj, known_by_id)
                     if fqn is not None and (known_functions is None or fqn in known_functions):
                         resolved_qualnames.add(fqn)
@@ -588,10 +587,7 @@ class CodeAnalyzer:
                 if not isinstance(obj, (types.ModuleType, type)):
                     return None
                 obj = inspect.getattr_static(obj, part, None)
-            for _ in range(8):
-                if not isinstance(obj, functools.partial):
-                    break
-                obj = obj.func
+            obj = unwrap_partials(obj)
             if not callable(obj) or isinstance(obj, type):
                 return None
             return _callee_name(obj, known_by_id or {})

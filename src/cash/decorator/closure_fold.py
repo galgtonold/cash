@@ -33,18 +33,17 @@ if TYPE_CHECKING:
     from .reporting import Notices
 
 
-def is_immutable_capture(v: Any, _depth: int = 0) -> bool:
+def is_immutable_capture(v: Any) -> bool:
     """True for values that are immutable and so define a closure's
     behaviour without drifting between calls. Mutable captures (dict/list/
     set/objects) are excluded: they are typically side-effect accumulators
     (e.g. a hit counter) whose value changes every call - folding those into
-    the key would make every call miss."""
-    if _depth > 8:
-        return False
+    the key would make every call miss. Tuples are looked through however deep
+    they nest: one cannot hold itself."""
     if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
         return True
     if isinstance(v, (tuple, frozenset)):
-        return all(is_immutable_capture(x, _depth + 1) for x in v)
+        return all(is_immutable_capture(x) for x in v)
     return False
 
 
@@ -194,7 +193,7 @@ def defaults_of(func: Callable) -> tuple[tuple, dict]:
     seen: set[int] = set()
     fn: Any = func
     depth = 0
-    while fn is not None and id(fn) not in seen and depth < 8:
+    while fn is not None and id(fn) not in seen:  # every layer; a cycle ends
         seen.add(id(fn))
         pos.extend(getattr(fn, "__defaults__", None) or ())
         # Qualify by depth so a wrapper and its wrappee can't collide on a
@@ -561,7 +560,9 @@ class ClosureFold:
         # re-hashed per call to stay correct.
         self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
-    def fold_closure(self, func: Callable, func_name: str, state_hash: str, _depth: int = 0) -> str:
+    def fold_closure(
+        self, func: Callable, func_name: str, state_hash: str, _walked: frozenset[int] = frozenset()
+    ) -> str:
         """Mix a fingerprint of *func*'s captured free variables into the
         state hash.
 
@@ -658,14 +659,19 @@ class ClosureFold:
                 # `outer(2)` and `outer(3)` fingerprint identically and collide
                 # again one level down (measured: both returned 20). Recurse so
                 # the captured function's own captures fold under the same
-                # rules. Bounded, because a wrong answer is worth a few frames
-                # and a cycle is not.
-                if _depth < 4:
+                # rules, however deep the factories nest (five levels down
+                # was not followed, and `outer(2)` collided with `outer(3)`
+                # again). *_walked*, the closures on this path, ends a cycle:
+                # a recursive local function captures itself.
+                walked = _walked | {id(func)}
+                if id(v) in walked:
+                    fingerprint = f"{fingerprint}:cycle"
+                else:
                     fingerprint = self.fold_closure(
                         v,
                         f"{func_name}.{name}",
                         str(fingerprint),
-                        _depth + 1,
+                        walked,
                     )
                 captures.append((name, fingerprint))
                 continue
