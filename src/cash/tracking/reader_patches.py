@@ -1242,7 +1242,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         # It's a target. We need to let the real import happen, then patch.
         self._skip.add(fullname)
         try:
-            spec = importlib.util.find_spec(fullname, path)
+            spec = importlib.util.find_spec(fullname)
         finally:
             self._skip.remove(fullname)
 
@@ -1255,15 +1255,31 @@ class PostImportHook(importlib.abc.MetaPathFinder):
 
 
 class _PatchingLoader:
+    """Runs the original loader, then patches the module.
+
+    It stands in for the original loader during this one import only: the
+    module's ``__loader__`` and ``__spec__.loader`` are set back to the
+    original before it executes, so ``importlib.resources``, ``pkgutil``
+    and a later reload see the real loader. Anything else asked of it
+    goes to the original loader.
+    """
+
     def __init__(self, original_loader, fullname):
         self.original_loader = original_loader
         self.fullname = fullname
+
+    def __getattr__(self, name):
+        return getattr(self.original_loader, name)
 
     def create_module(self, spec):
         return self.original_loader.create_module(spec)
 
     def exec_module(self, module):
-        # execute module
+        spec = getattr(module, "__spec__", None)
+        if spec is not None and spec.loader is self:
+            spec.loader = self.original_loader
+        if getattr(module, "__loader__", None) is self:
+            module.__loader__ = self.original_loader
         self.original_loader.exec_module(module)
 
         # Now patch it via the module-level dispatcher installer —
