@@ -190,7 +190,7 @@ class CallEntries:
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
             )
-        except Exception:  # noqa: BLE001 - never let the predicate break the call
+        except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
 

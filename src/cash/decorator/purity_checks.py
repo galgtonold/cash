@@ -602,7 +602,7 @@ class PurityChecks:
                 return
         try:
             after = self._args.serialize_args(func_name, args, kwargs)
-        except Exception:  # noqa: BLE001 - user arguments' hashing
+        except Exception:
             # Hashed for the key, not after the body: nothing says the body
             # left them as they were, and a hit would skip whatever it did.
             logger.debug("[PURITY] %s: arguments could not be hashed again", func_name, exc_info=True)

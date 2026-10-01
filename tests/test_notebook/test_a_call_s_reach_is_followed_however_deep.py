@@ -17,12 +17,12 @@ def _chain(length: int) -> types.FunctionType:
     namespace: dict = {}
     source = [f"def f{i}():\n    return f{i + 1}()\n" for i in range(length - 1)]
     source.append(f"def f{length - 1}():\n    return FACTOR\n")
-    exec("\n".join(source), namespace)  # noqa: S102 - test-built source
+    exec("\n".join(source), namespace)
     return namespace["f0"]
 
 
 def test_a_global_read_twelve_calls_down_is_reached_and_a_cycle_ends():
     assert "FACTOR" in global_names_reached(_chain(12))
     namespace: dict = {}
-    exec("def a():\n    return b()\n\ndef b():\n    return a() + FACTOR\n", namespace)  # noqa: S102 - test-built source
+    exec("def a():\n    return b()\n\ndef b():\n    return a() + FACTOR\n", namespace)
     assert {"b", "a", "FACTOR"} <= global_names_reached(namespace["a"])

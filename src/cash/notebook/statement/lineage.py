@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ..cache_key import statement_source_hash
-from ..restored_var import hashed_by_lineage
 from ..lineage_formula import (
     callable_source_component,
     input_lineage,
@@ -43,6 +42,7 @@ from ..lineage_formula import (
     output_lineage,
     statement_environment_component,
 )
+from ..restored_var import hashed_by_lineage
 from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,

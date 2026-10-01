@@ -206,6 +206,10 @@ _STATE_IS_DICT: dict[type, bool] = {}
 _NO_CODE_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 
+# None before Python 3.11, where ``object`` has no ``__getstate__``.
+_OBJECT_GETSTATE = getattr(object, "__getstate__", None)
+
+
 def _state_is_its_dict(t: type) -> bool:
     """Does an instance of *t* pickle as its class and its ``__dict__``, and
     nothing else? No custom reduce or getstate, no slots: then its dict,
@@ -226,7 +230,7 @@ def _reads_as_its_dict(t: type) -> bool:
         return True
     if t.__reduce_ex__ is not object.__reduce_ex__ or t.__reduce__ is not object.__reduce__:
         return False
-    if getattr(t, "__getstate__", object.__getstate__) is not object.__getstate__:
+    if getattr(t, "__getstate__", _OBJECT_GETSTATE) is not _OBJECT_GETSTATE:
         return False
     return all(set(getattr(k, "__slots__", ())) <= {"__dict__", "__weakref__"} for k in t.__mro__)
 

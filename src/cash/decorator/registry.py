@@ -538,7 +538,7 @@ class FunctionRegistry:
                     if dep_func is not None:
                         stack.append((dep_func, dep))
             return reason
-        except Exception as e:  # noqa: BLE001 - never break a call over this
+        except Exception as e:
             # The bindings could not be checked, so the reports may describe
             # helpers that are no longer the ones called: no key rather than
             # one that may leave the current helpers out.
@@ -560,7 +560,7 @@ class FunctionRegistry:
                 if called != func_name:
                     self.graph.add_dependency(func_name, called)
             report = get_analyzer().analyze(func)
-        except Exception as e:  # noqa: BLE001 - any failure: the helpers are unknown
+        except Exception as e:
             # The analysis is what finds the helpers the key folds. A report
             # of none, as a failure used to give, keyed the function by its
             # own code alone, and an edit to any helper served the old

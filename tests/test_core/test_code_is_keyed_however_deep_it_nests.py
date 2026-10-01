@@ -227,7 +227,7 @@ def test_captured_lambdas_on_one_line_differing_ten_levels_down_do_not_collide()
 
     ten_1, ten_2 = _nested_lambdas(10, 1), _nested_lambdas(10, 2)
     # One line, so both lambdas have the same source text.
-    a, b = eval(f"(make({ten_1}), make({ten_2}))", {"make": make})  # noqa: S307 - test-built source, one line on purpose
+    a, b = eval(f"(make({ten_1}), make({ten_2}))", {"make": make})
     assert a() == 1
     assert b() == 2
 

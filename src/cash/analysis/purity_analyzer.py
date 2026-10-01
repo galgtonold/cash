@@ -58,6 +58,7 @@ from typing import Any
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, PURITY_REPORTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from ..diagnostics import warn_diagnostic
 from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
     ENVIRON_KEYED_METHODS,
@@ -73,7 +74,6 @@ from ..effects import (
     environ_membership,
     environment_input,
 )
-from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_path
 from ..purity import (
@@ -1389,7 +1389,7 @@ def callable_layers(obj: Any) -> list[Any]:
     def expand(value: Any) -> Any:
         try:
             return iter(list(candidates(value)))
-        except Exception as e:  # noqa: BLE001 - arbitrary objects
+        except Exception as e:
             raise UnwalkableLayers(
                 f"cash could not look inside {type(value).__qualname__}, which {_qualname_of(obj)} "
                 f"runs ({type(e).__name__}: {e})"
