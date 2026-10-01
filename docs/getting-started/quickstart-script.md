@@ -79,7 +79,7 @@ print(pipeline.cache_info())     # {'hits': 1, 'misses': 2, ...}
 
 The answer changed and `misses` went up.
 
-<!-- claim: cash/decorator/code_identity.py:is_user_module @8bcf4264 -->
+<!-- claim: cash/install_paths.py:is_user_module @a54a6d7a -->
 This also works for helpers imported from other modules of your project. cash
 stops at installed code (`site-packages` and the standard library); if a
 third-party function matters to a result, name it with `depends_on=`.

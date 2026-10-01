@@ -347,17 +347,6 @@ CLASSES_FOLDED: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar
 READS_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_reads_folded", default=None)
 
 
-def is_user_data_class(cls: Any, own_pkg: str | None = None) -> bool:
-    """A class the user edits: one of their modules (`is_user_class`), or a
-    notebook cell's or exec'd module, which has no file to judge by."""
-    if not isinstance(cls, type):
-        return False
-    if is_user_class(cls, own_pkg):
-        return True
-    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
-    return mod is not None and getattr(mod, "__file__", None) is None and is_user_code_object(cls)
-
-
 def _user_bases(cls: type) -> list[type]:
     """*cls*'s own user classes in method-resolution order, and its metaclass's."""
     found = [b for b in cls.__mro__ if b is not object and not is_opaque(b) and is_user_code_object(b)]
@@ -928,7 +917,7 @@ class GlobalsFold:
             if isinstance(v, type):
                 # A class's code is keyed as code; what it holds and what its
                 # methods read is data (`GlobalsFold.class_parts`).
-                if is_user_data_class(v, own_pkg):
+                if is_user_class(v, own_pkg):
                     classes.append(v)
                 continue
             if isinstance(v, types.ModuleType):
@@ -1575,7 +1564,7 @@ class GlobalsFold:
         self, cls: type, func: Callable, func_name: str, state_hash: str, owner_code: Any, seen: set
     ) -> str:
         """`GlobalsFold.class_parts` for a class the helper walk reached, into *state_hash*."""
-        if not is_user_data_class(cls, own_package(func)):
+        if not is_user_class(cls, own_package(func)):
             return state_hash
         parts = self.class_parts(cls, func_name, owner_code=owner_code, seen=seen)
         if not parts:
@@ -2022,7 +2011,7 @@ class GlobalsFold:
             if isinstance(value, type):
                 # `cfg.Cfg.RATE`, `cfg.Color.RED.value`: the pair is (cfg, Cfg)
                 # and the constant is one attribute further in.
-                if is_mod and is_user_data_class(value, own_pkg):
+                if is_mod and is_user_class(value, own_pkg):
                     parts.extend(self.class_parts(value, func_name, owner_code=owner_code, seen=seen, reader=func))
                 continue
             if isinstance(value, types.ModuleType):
@@ -2032,7 +2021,7 @@ class GlobalsFold:
                 # attributes, not what its class holds (`helper = CC(10)`).
                 item_types = {type(item) for item in iter_contained(value) if type(item) not in CODELESS_PRIMS}
                 for item_type in sorted(item_types, key=lambda t: f"{t.__module__}.{t.__qualname__}"):
-                    if item_type is not type and is_user_data_class(item_type, own_pkg):
+                    if item_type is not type and is_user_class(item_type, own_pkg):
                         parts.extend(
                             self.class_parts(item_type, func_name, owner_code=owner_code, seen=seen, reader=func)
                         )

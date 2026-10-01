@@ -21,7 +21,8 @@ from ..source_norm import class_functions, unwrap_partials
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
-from .code_identity import is_user_code_module, is_user_code_object
+from ..install_paths import is_user_code_module
+from .code_identity import is_user_code_object
 from .globals_fold import class_surface_functions
 
 if TYPE_CHECKING:

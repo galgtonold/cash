@@ -26,7 +26,7 @@ from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
-from ..install_paths import is_user_path
+from ..install_paths import in_own_package, is_user_code_module, is_user_module, top_package
 from ..object_hashing import stable_key_repr
 from ..source_norm import (
     bytecode_identity,
@@ -351,75 +351,24 @@ def iter_contained(obj: Any):
 
 def own_package(func: Any) -> str | None:
     """The top-level package of the module that defines *func*."""
-    top = (getattr(func, "__module__", None) or "").split(".")[0]
-    return top or None
-
-
-def in_own_package(module_name: str | None, own_pkg: str | None) -> bool:
-    """Is *module_name* inside *own_pkg* (the cached function's package)?
-
-    ``__main__`` never counts: a script is not a package, and everything
-    it imports is judged on its own merits.
-    """
-    if not module_name or not own_pkg or own_pkg in MAIN_MODULE_NAMES:
-        return False
-    return module_name == own_pkg or module_name.startswith(own_pkg + ".")
+    return top_package(getattr(func, "__module__", None))
 
 
 def is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
-    """True for a class defined in user code (not stdlib / third-party).
+    """Is *cls* a class of the user's: inside *own_pkg*, or in a module
+    `is_user_code_module` accepts (a notebook cell's class included)?
 
-    Used to fold ``ClassName.CONSTANT`` reads: editing a class-level config
-    constant should invalidate, but ``np.float64.something`` or a library
-    class's attributes should not churn the key.
-
-    *own_pkg*: the cached function's top-level package, which counts as
-    user code wherever it is installed -- see ``is_user_module``.
+    Used to fold what a class holds (``ClassName.CONSTANT``, an instance's
+    class): editing a class-level constant invalidates, while a library
+    class's attributes do not churn the key.
     """
-
-    if in_own_package(getattr(cls, "__module__", None), own_pkg):
+    name = getattr(cls, "__module__", None)
+    if in_own_package(name, own_pkg):
         return True
-    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
-    return mod is not None and is_user_module(mod)
+    mod = sys.modules.get(name or "")
+    return mod is not None and is_user_code_module(mod)
 
 
-def is_user_module(mod: Any, own_pkg: str | None = None) -> bool:
-    """True for a module the user is plausibly editing between runs.
-
-    Third-party and stdlib modules are excluded deliberately: their
-    contents are expected to be fixed for a given environment, and folding
-    e.g. ``os.environ`` or numpy's internals would churn the key on every
-    call. Editing your venv is not a case worth keying on.
-
-    Except the cached function's OWN package (*own_pkg*), which is user code
-    wherever it is installed. The path test alone put a user's own tool,
-    once `pip install`ed, in the same bucket as numpy: `settings.FACTOR`
-    in the tool's own `settings.py` stopped reaching the key, and a
-    reinstall with a changed constant served the old report -- while
-    `from settings import FACTOR`, a helper in a sibling module and a
-    same-module global all still invalidated.
-    """
-    if in_own_package(getattr(mod, "__name__", None), own_pkg):
-        return True
-    path = getattr(mod, "__file__", None)
-    if not path or not isinstance(path, str):
-        return False  # builtin / namespace package - nothing to edit
-    return is_user_path(path)
-
-
-#: Fileless modules that are NOT the user's code. Everything else without a
-#: __file__ is a notebook cell, a REPL, or exec'd source -- i.e. something
-#: the user is plausibly editing between runs, which is the whole point.
-FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
-    "builtins",
-    "__future__",
-    "_frozen_importlib",
-    "_frozen_importlib_external",
-}
-
-
-#: ``__spec__.origin`` of a module compiled into the interpreter or frozen
-#: into it: never the user's code, whatever its ``__name__`` says.
 def is_immutable_capture(v: Any) -> bool:
     """True for values that are immutable and so define a closure's
     behaviour without drifting between calls. Mutable captures (dict/list/
@@ -459,30 +408,6 @@ SYNC_TYPES: tuple[type, ...] = (
 
 #: A memory address in a repr (``<object object at 0x7f...>``).
 _ADDRESS_REPR = re.compile(r"\bat 0x[0-9a-fA-F]+")
-
-_INTERPRETER_ORIGINS = frozenset({"built-in", "frozen"})
-
-
-def is_user_code_module(mod: Any) -> bool:
-    """Like :meth:`is_user_module`, but a module with no ``__file__``
-    counts as user code rather than being disqualified.
-
-    ``is_user_module`` returns False for a fileless module ("nothing to
-    edit"). That is right for its callers and wrong here: a class defined
-    in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
-    is precisely the thing the user edits between runs.
-
-    A built-in module is judged by its spec, not its name: ``_io`` calls
-    itself ``io``, which is not a built-in module name, so every file and
-    stream type counted as user code.
-    """
-    name = getattr(mod, "__name__", "") or ""
-    path = getattr(mod, "__file__", None)
-    if path is None:
-        origin = getattr(getattr(mod, "__spec__", None), "origin", None)
-        return origin not in _INTERPRETER_ORIGINS and name not in FILELESS_NON_USER
-    return is_user_module(mod)
-
 
 _HEAPTYPE = 1 << 9
 _IMMUTABLETYPE = 1 << 8
