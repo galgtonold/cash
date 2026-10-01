@@ -11,11 +11,8 @@ import re
 import types
 from typing import TYPE_CHECKING, Any
 
-from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..install_paths import is_user_module
 from ..source_norm import (
     code_consts_without_docstring,
     source_digest,
@@ -23,9 +20,10 @@ from ..source_norm import (
 )
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
+from .code_refs import CodeRefs
 from .function_identity import hash_callable_source
 from .key_values import SYNC_TYPES, is_immutable_capture, iter_contained
-from .user_code import cash_wrapped, is_user_class, is_user_code_object
+from .user_code import cash_wrapped, is_user_class, is_user_code_object, user_layers
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -44,34 +42,6 @@ PYDANTIC_COMPILED = frozenset(
         "__pydantic_validator__",
     }
 )
-
-
-#: How many user-code objects one reference walk (`CodeIdentity._code_ref_closure`)
-#: may reach. Not a depth or a count that real code meets: the walk follows
-#: every reference, however deep, and its seen set ends cycles. What can pass
-#: it is code that makes a NEW object on every read (a module ``__getattr__``
-#: building a function per lookup), where the walk would never end. Past it
-#: the key would leave code out, so the call runs uncached instead
-#: (KEY-HELPERS-UNWALKABLE), as the helper walk does
-#: (``PurityAnalyzer._WALK_LIMIT``).
-MAX_CODE_REF_TARGETS = 5_000
-
-
-def walk_nested_code(code: types.CodeType, glb: dict):
-    """Yield *code* and the code objects nested in its constants, however deep.
-
-    A comprehension, a lambda, or a nested ``def`` compiles to its own
-    code object stored in ``co_consts``; the names IT references do not
-    appear in the parent's ``co_names``. ``field(default_factory=lambda:
-    B(0))`` is exactly that shape -- ``B`` is reachable only through the
-    lambda -- so a walk that stopped at the top level would miss the case
-    this exists for.
-    """
-    stack = [code]
-    while stack:
-        current = stack.pop()
-        yield current, glb
-        stack.extend(const for const in reversed(current.co_consts) if isinstance(const, types.CodeType))
 
 
 def _defaults_pin(functions: list[Any]) -> tuple | None:
@@ -105,26 +75,7 @@ class CodeIdentity:
         # aware); see `code_surface_hash`. Keyed on the object itself, not
         # id(), so a redefinition (a new object) is a distinct memo entry.
         self._code_surface_cache: LruMemo[Any, tuple[tuple | None, list, str]] = LruMemo(CODE_OBJECTS)
-        # object -> tuple of (code object, globals dict) it carries. Static for
-        # as long as that object exists (a redefinition makes a new one), so it
-        # is safe to memo; the NAMES those code objects reference are resolved
-        # fresh per call, because what a name is bound to can change.
-        self._code_refs_cache: LruMemo[Any, tuple] = LruMemo(CODE_OBJECTS)
-
-    def user_layers(self, fn: Any) -> list[Any]:
-        """The user-code functions *fn* runs besides its own code
-        (`callable_layers`): what its decorators wrap, the functions its
-        closure holds. Raises `KeyBuildFailed` when they cannot all be found."""
-        try:
-            layers = callable_layers(fn)
-        except UnwalkableLayers as e:
-            raise KeyBuildFailed(
-                "KEY-HELPERS-UNWALKABLE",
-                f"cash cannot key the code {getattr(fn, '__qualname__', type(fn).__qualname__)} runs: {e}, "
-                f"so the call ran uncached.",
-                "Name what the result depends on with depends_on=[...].",
-            ) from e
-        return [layer for layer in layers if is_user_code_object(layer)]
+        self._refs = CodeRefs()
 
     def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
@@ -334,7 +285,7 @@ class CodeIdentity:
             # decorator wraps, a function a closure holds. A decorator's
             # wrapper code is shared by every function it wraps; the
             # function itself is what tells them apart.
-            layers = [obj, *self.user_layers(obj)]
+            layers = [obj, *user_layers(obj)]
             for layer in layers[1:]:
                 parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
         if not parts:
@@ -350,116 +301,6 @@ class CodeIdentity:
             except TypeError:
                 pass  # unhashable object - skip the memo, keep the answer
         return digest
-
-    def _iter_code_and_globals(self, obj: Any):
-        """Yield ``(code object, globals)`` for the code *obj* carries."""
-        carriers: list[Any] = []
-        if isinstance(obj, type):
-            for base in obj.__mro__:
-                if base is object or is_opaque(base):
-                    continue
-                if not is_user_code_object(base):
-                    continue
-                carriers.extend(vars(base).values())
-                # Same blind spot as class_surface_parts: a field declaring
-                # default_factory has no class attribute to find in vars().
-                fields_map = getattr(base, "__dataclass_fields__", None)
-                if isinstance(fields_map, dict):
-                    for fld in fields_map.values():
-                        factory = getattr(fld, "default_factory", None)
-                        if factory is not None and factory is not dataclasses.MISSING:
-                            carriers.append(factory)
-        else:
-            carriers.append(obj)
-
-        for member in carriers:
-            if isinstance(member, (classmethod, staticmethod)):
-                member = member.__func__
-            if isinstance(member, property):
-                accessors = [a for a in (member.fget, member.fset, member.fdel) if a]
-            else:
-                accessors = [member]
-            for accessor in accessors:
-                # Every layer: a function under two decorators was read one
-                # layer down, and what its body names was never reached.
-                for layer in (accessor, *self.user_layers(accessor)):
-                    code = getattr(layer, "__code__", None)
-                    glb = getattr(layer, "__globals__", None)
-                    if isinstance(code, types.CodeType) and isinstance(glb, dict):
-                        yield from walk_nested_code(code, glb)
-
-    def _code_ref_targets(self, obj: Any) -> list[Any]:
-        """User-code objects that *obj*'s code references by global name.
-
-        Resolution happens on every call, deliberately. Only the (code,
-        globals) pairs are memoized -- those are fixed for as long as *obj*
-        exists -- because what a NAME is bound to can change underneath us,
-        and that change is precisely what must invalidate.
-
-        Names come from ``co_names``, i.e. what the code actually LOADS, and
-        from *obj*'s annotations. An annotation is not always a hint that never
-        runs: pydantic runs ``B``'s validators for a field ``b: B``, and a
-        ``typing.get_type_hints`` builder constructs ``B`` from ``A``'s hints
-        (see ``cash._annotation_refs``). A hint that really is inert costs a
-        recompute when its class is edited, never a stale value.
-        """
-        pairs = None
-        try:
-            pairs = self._code_refs_cache.get(obj)
-        except TypeError:
-            pass  # unhashable - recompute each time rather than fail
-        if pairs is None:
-            pairs = tuple(self._iter_code_and_globals(obj))
-            try:
-                self._code_refs_cache[obj] = pairs
-            except TypeError:
-                pass
-
-        targets: list[Any] = []
-        seen_names: set[str] = set()
-
-        def consider(value: Any) -> None:
-            value = cash_wrapped(value)
-            if value is None or value is obj:
-                return
-            if not (isinstance(value, type) or callable(value)):
-                return
-            try:
-                if is_opaque(value) or not is_user_code_object(value):
-                    return
-            except Exception:  # noqa: BLE001 - never break a call
-                return
-            targets.append(value)
-
-        for code, glb in pairs:
-            for name in code.co_names:
-                if name in seen_names:
-                    continue
-                seen_names.add(name)
-                consider(glb.get(name))
-            # A name spelled as a string: `getattr(MOD, "fun1")()`,
-            # `globals()["fun1"]`. The string is a constant, not a loaded name,
-            # so `co_names` does not have it. Resolved in the code's
-            # module and in the user modules it loads; a string that only
-            # happens to match a function costs a needless recompute, never a
-            # stale value.
-            names = [c for c in code.co_consts if isinstance(c, str) and c.isidentifier() and c not in seen_names]
-            if not names:
-                continue
-            modules = [glb.get(n) for n in code.co_names]
-            modules = [m for m in modules if isinstance(m, types.ModuleType) and is_user_module(m)]
-            for name in names:
-                seen_names.add(name)
-                consider(glb.get(name))
-                for module in modules:
-                    consider(getattr(module, name, None))
-        if isinstance(obj, type) or callable(obj):
-            seen_ids = {id(t) for t in targets}
-            for value in annotation_referents(obj, is_user_code_object):
-                if id(value) not in seen_ids:
-                    seen_ids.add(id(value))
-                    consider(value)
-        return targets
 
     def code_surface_hash(self, obj: Any) -> str | None:
         """A digest of *obj*'s code AND the user code that code reaches.
@@ -484,42 +325,13 @@ class CodeIdentity:
         return hashlib.sha256(":".join([own, *sorted(reached)]).encode("utf-8")).hexdigest()
 
     def _code_ref_closure(self, obj: Any) -> list[str]:
-        """Own-digests of every user-code object reachable from *obj*'s code.
-
-        Breadth-first with an identity ``seen`` set, so a mutually-referential
-        pair (``A.make`` returns ``B``, ``B.make`` returns ``A``) terminates
-        instead of recursing forever. Reached objects are held in *keep* for
-        the duration: ``id()`` is only unique among LIVE objects, and a
-        collected one could otherwise let a later object reuse its id and be
-        skipped as already-seen.
-        """
-        seen: set[int] = {id(obj)}
-        keep: list[Any] = [obj]
+        """Own-digests of every user-code object reachable from *obj*'s code
+        (`CodeRefs.reached`), in the order the walk reaches them."""
         digests: list[str] = []
-        frontier: list[Any] = [obj]
-        while frontier:
-            following: list[Any] = []
-            for source in frontier:
-                for target in self._code_ref_targets(source):
-                    if id(target) in seen:
-                        continue
-                    seen.add(id(target))
-                    keep.append(target)
-                    if len(keep) > MAX_CODE_REF_TARGETS:
-                        name = getattr(obj, "__qualname__", None) or type(obj).__qualname__
-                        raise KeyBuildFailed(
-                            "KEY-HELPERS-UNWALKABLE",
-                            f"cash cannot key the code {name} reaches: it does not end (over "
-                            f"{MAX_CODE_REF_TARGETS} functions and classes; code that makes a new "
-                            f"function on every read can cause this), so the call ran uncached.",
-                            "Name what the result depends on with depends_on=[...] instead of "
-                            "creating it on every read.",
-                        )
-                    digest = self._code_surface_own(target)
-                    if digest is not None:
-                        digests.append(f"{getattr(target, '__qualname__', '?')}:{digest}")
-                    following.append(target)
-            frontier = following
+        for target in self._refs.reached(obj):
+            digest = self._code_surface_own(target)
+            if digest is not None:
+                digests.append(f"{getattr(target, '__qualname__', '?')}:{digest}")
         return digests
 
     def _dataclass_field_parts(self, base: type, field_map: dict) -> list[tuple]:
@@ -681,7 +493,7 @@ class CodeIdentity:
                     # reached.
                     extra = [
                         layer
-                        for layer in (outer, *self.user_layers(outer))
+                        for layer in (outer, *user_layers(outer))
                         if layer is not target and isinstance(layer, types.FunctionType) and is_user_code_object(layer)
                     ]
                     if extra:

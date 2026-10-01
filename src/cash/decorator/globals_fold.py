@@ -497,7 +497,7 @@ class GlobalsFold:
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
         # old answer -- 20 where an uncached run gives 500. The code channel already resolves string
-        # constants this way (`CodeIdentity._code_ref_targets`); this is its data twin.
+        # constants this way (`CodeRefs.targets`); this is its data twin.
         # A string that merely happens to match a global costs a fold, never a
         # stale value.
         candidates |= {

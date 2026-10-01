@@ -9,8 +9,10 @@ import sys
 import types
 from typing import Any
 
+from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, top_package
 from ..source_norm import unwrap_partials
+from .call_state import KeyBuildFailed
 
 
 def is_cash_wrapper(value: Any) -> bool:
@@ -179,3 +181,19 @@ def wraps_code(value: Any) -> bool:
     return hasattr(type(value), "__get__") and any(
         callable(getattr(value, name, None)) for name in ("__func__", "fget", "func")
     )
+
+
+def user_layers(fn: Any) -> list[Any]:
+    """The user-code functions *fn* runs besides its own code
+    (`callable_layers`): what its decorators wrap, the functions its
+    closure holds. Raises `KeyBuildFailed` when they cannot all be found."""
+    try:
+        layers = callable_layers(fn)
+    except UnwalkableLayers as e:
+        raise KeyBuildFailed(
+            "KEY-HELPERS-UNWALKABLE",
+            f"cash cannot key the code {getattr(fn, '__qualname__', type(fn).__qualname__)} runs: {e}, "
+            f"so the call ran uncached.",
+            "Name what the result depends on with depends_on=[...].",
+        ) from e
+    return [layer for layer in layers if is_user_code_object(layer)]
