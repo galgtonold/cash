@@ -31,6 +31,7 @@ from ..lineage_formula import (
     key_hidden_reads,
 )
 from ._types import key_inputs, key_lineages
+from .cache_probe import CacheProbe
 
 if TYPE_CHECKING:
     from .virtual_lineage import VirtualLineage
@@ -356,18 +357,16 @@ class CacheRestorer:
                     outputs=outputs,
                     occurrence_index=occurrence_index,
                 )
-                metadata = self.virtual_lineage._get_metadata_only(cache_key)
+                metadata = self.virtual_lineage.probe.metadata(cache_key)
             except (KeyError, TypeError, ValueError, OSError):
                 metadata = None
             # A metadata-only record (the value stayed in RAM, or was too large
             # to write) restores nothing; file deps must still be valid (mtime +
-            # size, both forms -- see _validate_file_freshness for rationale).
+            # size, both forms -- see ``CacheProbe.files_fresh``).
             if (
                 not metadata
                 or metadata.get("metadata_only")
-                or not self.virtual_lineage._validate_file_freshness(
-                    metadata.get("file_dependencies", {}), memo_key=cache_key
-                )
+                or not CacheProbe.files_fresh(metadata.get("file_dependencies", {}), memo_key=cache_key)
             ):
                 needed_first |= unresolved
                 continue
@@ -487,7 +486,7 @@ class CacheRestorer:
                 ),
                 outputs=outputs,
             )
-            metadata = self.virtual_lineage._get_metadata_only(cache_key)
+            metadata = self.virtual_lineage.probe.metadata(cache_key)
             if metadata:
                 saved_time = metadata.get("execution_time", 0.0)
                 is_metadata_only = metadata.get("metadata_only", False)

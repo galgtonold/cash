@@ -192,7 +192,9 @@ class ReexecutionPlanner:
         self.classifier = classifier
         self.tracking_state = virtual_lineage.tracking_state
         #: The file-writer pass, with the memos it keeps.
-        self.file_writers = FileWriterScheduler(virtual_lineage)
+        self.file_writers = FileWriterScheduler(
+            virtual_lineage.shell, virtual_lineage.tracking_state, virtual_lineage.probe
+        )
 
     @staticmethod
     def _drop_scheduled_from_restored(simulation_trace, stmts_to_run_indices, restored):

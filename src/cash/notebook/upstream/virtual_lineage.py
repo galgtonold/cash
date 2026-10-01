@@ -12,7 +12,6 @@ from __future__ import annotations
 import ast
 import base64
 import builtins
-import importlib.util
 import logging
 import marshal
 import os
@@ -38,7 +37,6 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
 from ...source_norm import exact_source_digest, source_identity_digest
-from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ...tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
@@ -51,9 +49,6 @@ from ..cache_key import (
     called_function_dependencies,
     called_function_globals,
     compute_cache_key,
-    control_outcome_key,
-    import_bindings_key,
-    mutation_verdict_key,
     statement_source_hash,
     virtual_callable_key,
     virtual_namespace,
@@ -69,8 +64,8 @@ from ..lineage_formula import (
     output_lineage,
     statement_environment_component,
 )
-from ..loop_split import is_split_half, loop_source_hash, split_nodes, store_for_backend
-from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
+from ..loop_split import split_nodes
+from ..run_memo import stats_this_run
 from ..statement import is_control_body
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
@@ -83,6 +78,7 @@ from ._types import (
     SimulationResult,
     TraceEntry,
 )
+from .cache_probe import CacheProbe
 from .cache_restore import CacheRestorer
 from .loop_rules import LoopRules
 from .unsaved_edits import UnsavedEdits
@@ -171,10 +167,8 @@ class VirtualLineage:
         #: simulation must reproduce the runtime's key inputs exactly.
         self.tracking_state = tracking_state
 
-        # Simulator-owned caches.
-        # Resolved on first loop-split lookup; None means 'not yet
-        # resolved', not 'no splits'. See ``_loop_split_k``.
-        self._split_store = None
+        #: Metadata and file-freshness reads from the backend.
+        self.probe = CacheProbe(cash_instance)
         self.cache = cache if cache is not None else SimulationCache()
         #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
         #: addressed, so an entry never goes stale; the cap bounds memory.
@@ -195,8 +189,6 @@ class VirtualLineage:
         self._sim_func_sources: dict[str, str] = {}
         #: ``TrackingState.module_generation`` the last pass 1 saw.
         self._simulated_module_generation = 0
-        #: ``_import_bindings`` answers by statement; cleared with the caches.
-        self._import_bindings_memo: dict[str, dict[str, dict]] = {}
         #: Restores from the cache, keyed as simulated here.
         self.restorer = CacheRestorer(self)
         #: Loop and accumulator rules.
@@ -261,7 +253,14 @@ class VirtualLineage:
         def load_verdict() -> set[str] | None:
             source_hash = statement_source_hash(stmt_code)
             verdict = self.tracking_state.mutation_verdicts.get(source_hash)
-            return verdict if verdict is not None else self._persisted_mutation_verdict(source_hash)
+            if verdict is not None:
+                return verdict
+            # An earlier kernel's, kept once read; the runtime overwrites it
+            # when the statement runs again.
+            verdict = self.probe.mutation_verdict(source_hash)
+            if verdict is not None:
+                self.tracking_state.mutation_verdicts.setdefault(source_hash, verdict)
+            return verdict
 
         # Bare-call arguments: the live ones the runtime watches, and, after a
         # restart, the ones not live yet, whose recorded verdict is all there
@@ -277,26 +276,7 @@ class VirtualLineage:
     def reset_caches(self) -> None:
         """Forget every cell snapshot of the previous simulation."""
         self.cache.reset()
-        self._import_bindings_memo.clear()
-
-    def _get_metadata_only(self, cache_key: str) -> dict | None:
-        """Get only metadata for a cache key without deserializing the full value.
-
-        Delegates to ``backend.get_metadata()``, which every
-        :class:`cash.backends.CacheBackend` provides (the base supplies a
-        ``get()``-discard-value fallback; ``FileBackend`` overrides for a
-        cheaper metadata-only read path). Lets callers skip the expensive
-        deserialization of large cached objects (e.g. DataFrames) when
-        only metadata is needed.
-        """
-        backend = self.backend()
-        if backend is None:
-            return None
-        return backend.get_metadata(cache_key)
-
-    def backend(self):
-        """The cache backend the simulation probes, or None without a Cash."""
-        return self.cash_instance.backend if self.cash_instance else None
+        self.probe.reset()
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         """Add the files behind the *rerecorded* variables to the snapshots of
@@ -943,7 +923,7 @@ class VirtualLineage:
         # record holding means the loop's inputs, files and callees are what
         # they were, so it has nothing to re-run and its outputs are the
         # recorded ones; any change falls through to the split.
-        split_k = self._loop_split_k(node)
+        split_k = self.probe.loop_split(node)
         if split_k is not None and not self._recorded_outcome_holds(node, sim):
             try:
                 halves = split_nodes(node, split_k)
@@ -956,29 +936,6 @@ class VirtualLineage:
                 return
 
         self._simulate_one_control_unit(node, sim)
-
-    def _loop_split_k(self, node: ast.AST) -> int | None:
-        """Persisted split point for *node*, or ``None`` if it is not split.
-
-        Best-effort: any failure to resolve the store reads as "not split",
-        which is the pre-split behaviour. A simulator that cannot find the
-        store must never start guessing -- a split it invents would be one
-        the runtime never recorded.
-        """
-        if not isinstance(node, ast.For):
-            return None
-        try:
-            if is_split_half(node):
-                return None  # never split a half; that recurses
-            if self._split_store is None:
-                backend = self.cash_instance.backend if self.cash_instance else None
-                self._split_store = store_for_backend(backend)
-                if self._split_store is None:
-                    return None
-            return self._split_store.get(loop_source_hash(node))
-        except Exception:  # never let a lookup break simulation
-            logger.debug("[UPSTREAM_DEBUG] loop split lookup failed", exc_info=True)
-            return None
 
     def _simulate_one_control_unit(self, node: ast.AST, sim: SimulationResult) -> None:
         """Simulate ONE control structure as a single statement.
@@ -1090,7 +1047,10 @@ class VirtualLineage:
         else an earlier kernel's that may still be trusted."""
         recorded = self.tracking_state.control_outcomes.get(exact_source_digest(stmt_code))
         if recorded is None:
-            recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
+            variable_lineage = self.tracking_state.variable_lineage
+            recorded = self.probe.control_outcome(
+                stmt_code, lambda name: virtual_lineage.get(name) or variable_lineage.get(name) or "ABSENT"
+            )
         return recorded
 
     def _recorded_outcome_holds(self, node: ast.AST, sim: SimulationResult) -> bool:
@@ -1110,63 +1070,6 @@ class VirtualLineage:
             logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
             return False
 
-    def _persisted_mutation_verdict(self, source_hash: str) -> set[str] | None:
-        """The runtime's verdict on a bare method call, from an earlier kernel.
-
-        See ``mutation_verdict_key``. Kept in ``mutation_verdicts`` once read,
-        where the runtime overwrites it when the statement runs again.
-        """
-        backend = self.backend()
-        if backend is None:
-            return None
-
-        try:
-            record = backend.get_metadata(mutation_verdict_key(source_hash))
-        except (OSError, TypeError, ValueError, AttributeError):
-            return None
-        if not record or not record.get("mutation_verdict"):
-            return None
-        verdict = set(record.get("receivers") or ())
-        self.tracking_state.mutation_verdicts.setdefault(source_hash, verdict)
-        return verdict
-
-    def _persisted_control_outcome(
-        self,
-        stmt_code: str,
-        virtual_lineage: dict[str, str],
-    ) -> tuple[dict[str, str], dict[str, str], frozenset[str], str] | None:
-        """A loop's outcome from an earlier kernel, when it may still be trusted.
-
-        See ``control_outcome_key``. Written only for a loop whose outcome was
-        all it did; trusted only when every global its callees read has, here,
-        the lineage it had then -- the entry lineages and file state are
-        checked by the caller, exactly as for the session's own record. Any
-        doubt returns None, and the loop is replayed.
-        """
-        backend = self.backend()
-        if backend is None:
-            return None
-
-        try:
-            record = backend.get_metadata(control_outcome_key(stmt_code))
-        except (OSError, TypeError, ValueError, AttributeError):
-            return None
-        if not record or not record.get("control_outcome") or record.get("code") != stmt_code:
-            return None
-        try:
-            for name, then in (record.get("callees") or {}).items():
-                now = virtual_lineage.get(name) or self.tracking_state.variable_lineage.get(name) or "ABSENT"
-                if now != then:
-                    return None
-            return (
-                dict(record["entry"]),
-                dict(record["left"]),
-                frozenset(record["files"]),
-                str(record["file_component"]),
-            )
-        except (KeyError, TypeError, ValueError, AttributeError):
-            return None
-
     @staticmethod
     def _may_write_files(node: ast.AST, stmt_code: str) -> bool:
         """A write in the text, or a call to something that might be a
@@ -1177,33 +1080,6 @@ class VirtualLineage:
         return any(not hasattr(builtins, name) for name in called_names(node))
 
     # -- Helpers for _update_virtual_lineage ----------------------------------
-
-    @staticmethod
-    def _validate_file_freshness(
-        hist_files: dict[str, Any],
-        memo_key: str | None = None,
-    ) -> bool:
-        """Return True if all historical file dependencies are still fresh.
-
-        Each entry is ``{path: {'mtime': ..., 'size': ...}}``. When ``size``
-        is recorded it is checked too — that catches rewrites within a
-        single mtime tick on coarse-resolution filesystems (HFS+/APFS,
-        some ext4 configs).
-
-        *memo_key* -- the entry's cache key. A "fresh" verdict holds for the
-        rest of the cell run (see :mod:`cash.notebook.run_memo`): the
-        simulation re-validated the same upstream entry for every statement
-        of the cell, twice -- 5,222 files x 2 x 24 statements of one notebook.
-        """
-        if known_fresh_entry(memo_key):
-            return True
-        run = file_state_this_run()
-        fresh, stale = snapshot_is_fresh(hist_files, run["memo"] if run is not None else None)
-        if not fresh:
-            logger.debug("[UPSTREAM] Forward prop failed: stale file dependency (%s)", stale)
-            return False
-        note_fresh_entry(memo_key)
-        return True
 
     def _resolve_virtual_input_lineages(
         self, stmt_code: str, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str]
@@ -1234,14 +1110,6 @@ class VirtualLineage:
                 [ln[:12] + "..." for ln in input_lineages_all],
             )
         return input_lineages_all
-
-    @staticmethod
-    def _stat_file_deps(hist_files: dict[str, float]) -> dict[str, float]:
-        """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files.
-
-        Once per path per cell run (``run_memo.stats_this_run``), and from a directory
-        listing where many share a directory."""
-        return {p: st.st_mtime for p, (_resolved, st) in stats_this_run(hist_files).items() if st is not None}
 
     def _apply_cache_hit_propagation(
         self,
@@ -1290,7 +1158,7 @@ class VirtualLineage:
                             out,
                             lineage_val[:12],
                         )
-        stmt_file_deps = self._stat_file_deps(hist_files)
+        stmt_file_deps = CacheProbe.stat_file_deps(hist_files)
         return ("hit", 0.0, stmt_file_deps)
 
     def _collect_historical_file_deps(
@@ -1302,7 +1170,7 @@ class VirtualLineage:
         Returns ``(file_deps_to_check, stmt_file_deps)``.
         """
         file_deps_to_check: set[str] = set(hist_files.keys())
-        stmt_file_deps = self._stat_file_deps(hist_files)
+        stmt_file_deps = CacheProbe.stat_file_deps(hist_files)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM] Found historical file deps (validation failed/skipped): %s",
@@ -1343,13 +1211,13 @@ class VirtualLineage:
             logger.debug("[UPSTREAM] Virtual lookup Key: %s", cache_key)
 
             t_lookup = _perf_counter()
-            metadata = self._get_metadata_only(cache_key)
+            metadata = self.probe.metadata(cache_key)
             cache_lookup_time = _perf_counter() - t_lookup
 
             if metadata:
                 hist_files = metadata.get("file_dependencies", {})
                 output_lineages = metadata.get("output_lineages", {})
-                files_valid = not hist_files or self._validate_file_freshness(hist_files, memo_key=cache_key)
+                files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
 
                 if files_valid and output_lineages:
                     self._last_hit_bumped = set()
@@ -1460,7 +1328,7 @@ class VirtualLineage:
         lineage the runtime never gave ``EXPORTS`` -- so nothing built from it
         restored. The digest comes from the module object
         when it is already imported (``pathlib`` always is), else from what the
-        statement bound when it last ran (``_import_bindings``): the simulation
+        statement bound when it last ran (``CacheProbe.import_bindings``): the simulation
         never imports anything itself.
         """
         if tree is None:
@@ -1486,7 +1354,7 @@ class VirtualLineage:
                     code = getattr(obj, "__code__", None)
                     is_class = isinstance(obj, type)
                 else:
-                    entry = self._import_bindings(stmt_code).get(name) if stmt_code else None
+                    entry = self.probe.import_bindings(stmt_code).get(name) if stmt_code else None
                     if not entry or entry.get("module"):
                         continue
                     digest, is_class, code = entry.get("digest"), bool(entry.get("is_class")), None
@@ -1638,7 +1506,7 @@ class VirtualLineage:
         simulation never found that statement's entry.
 
         A name not bound yet is answered by what the statement bound when it
-        last ran (``_import_bindings``), and without that record keeps the old
+        last ran (``CacheProbe.import_bindings``), and without that record keeps the old
         answer: a module.
         """
         if tree is None:
@@ -1647,7 +1515,7 @@ class VirtualLineage:
             alias.asname or alias.name for node in tree.body if isinstance(node, ast.ImportFrom) for alias in node.names
         }
         user_ns = self.shell.user_ns
-        recorded = self._import_bindings(stmt_code) if stmt_code and (from_bound - set(user_ns)) else {}
+        recorded = self.probe.import_bindings(stmt_code) if stmt_code and (from_bound - set(user_ns)) else {}
 
         def is_module(out: str) -> bool:
             if out in user_ns:
@@ -1657,28 +1525,6 @@ class VirtualLineage:
             return True
 
         return {out for out in outputs if out not in from_bound or is_module(out)}
-
-    def _import_bindings(self, stmt_code: str) -> dict[str, dict]:
-        """What *stmt_code* (a ``from`` import) bound when it last ran -- see
-        ``import_bindings_key`` -- or ``{}``. Memoized; cleared with the caches."""
-        memo = self._import_bindings_memo
-        if stmt_code in memo:
-            return memo[stmt_code]
-        found: dict[str, dict] = {}
-        backend = self.backend()
-        if backend is not None:
-            try:
-                record = backend.get_metadata(import_bindings_key(stmt_code))
-            except (OSError, TypeError, ValueError, AttributeError):
-                record = None
-            if record and record.get("import_bindings") and record.get("code") == stmt_code:
-                found = dict(record.get("bindings") or {})
-                found = {k: v for k, v in found.items() if isinstance(v, dict)}
-                if record.get("magic") != importlib.util.MAGIC_NUMBER.hex():
-                    for entry in found.values():
-                        entry.pop("code", None)  # another interpreter's bytecode
-        memo[stmt_code] = found
-        return found
 
     def _propagate_import_lineage(
         self,

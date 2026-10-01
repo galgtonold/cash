@@ -17,11 +17,11 @@ import types
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
+from cash.notebook.upstream.simulator import NotebookSimulator
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=TrackingState())
-    return ReexecutionPlanner(vl, classifier=None)
+    return NotebookSimulator(types.SimpleNamespace(user_ns=user_ns), None, TrackingState()).planner
 
 
 def _entry(stmt, outputs=(), inputs=()):

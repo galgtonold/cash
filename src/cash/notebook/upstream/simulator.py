@@ -100,7 +100,7 @@ class NotebookSimulator:
         #: Inputs stale in memory though their lineage matches.
         self.stale_values = StaleValueGuard(shell, tracking_state, self.virtual_lineage, compute_hash_fn)
         #: The files the checked cell depends on.
-        self.read_scope = ReadScope(shell, tracking_state, self.virtual_lineage)
+        self.read_scope = ReadScope(shell, tracking_state, self.virtual_lineage.probe)
 
     def reset_caches(self) -> None:
         """Forget the previous simulation.

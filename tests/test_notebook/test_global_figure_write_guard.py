@@ -20,11 +20,11 @@ from cash.exceptions import CashWarning
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
+from cash.notebook.upstream.simulator import NotebookSimulator
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=TrackingState())
-    return ReexecutionPlanner(vl, classifier=None)
+    return NotebookSimulator(types.SimpleNamespace(user_ns=user_ns), None, TrackingState()).planner
 
 
 def _entry(stmt, outputs=(), inputs=()):
@@ -150,8 +150,7 @@ class TestHealthyShapeUntouched:
             _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),
             _entry("plt.savefig('x.png')", inputs=("plt",)),
         ]
-        vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=None), tracking_state=TrackingState())
-        planner = ReexecutionPlanner(vl, classifier=None)
+        planner = NotebookSimulator(types.SimpleNamespace(user_ns=None), None, TrackingState()).planner
         # producer [0] not scheduled -> refuse the write [1]
         with pytest.warns(CashWarning):
             remaining, _ = planner._guard_global_figure_writes([1], trace, [])

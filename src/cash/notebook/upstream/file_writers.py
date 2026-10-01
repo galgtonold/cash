@@ -33,7 +33,9 @@ from ..carrier_history import carrier_history_fingerprint
 from ._types import key_lineages
 
 if TYPE_CHECKING:
-    from .virtual_lineage import VirtualLineage
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
+    from .cache_probe import CacheProbe
 
 __all__ = ["FileWriterScheduler"]
 
@@ -83,9 +85,10 @@ def _only_defines(code: str) -> bool:
 class FileWriterScheduler:
     """Schedules the upstream file writers whose output is out of date."""
 
-    def __init__(self, virtual_lineage: VirtualLineage) -> None:
-        self.virtual_lineage = virtual_lineage
-        self.tracking_state = virtual_lineage.tracking_state
+    def __init__(self, shell: ShellProtocol, tracking_state: TrackingState, probe: CacheProbe) -> None:
+        self.shell = shell
+        self.tracking_state = tracking_state
+        self.probe = probe
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
@@ -93,7 +96,7 @@ class FileWriterScheduler:
         self._trace_defs_memo: tuple[list, int, dict] | None = None
 
     def _user_ns(self) -> dict:
-        return self.virtual_lineage.shell.user_ns
+        return self.shell.user_ns
 
     def schedule(
         self,
@@ -665,13 +668,7 @@ class FileWriterScheduler:
         written = statement_written_paths(stmt_code, namespace=namespace)
         if written:
             return written
-        backend = self.virtual_lineage.backend()
-        if backend is None:
-            return None
-        try:
-            record = backend.get_metadata(write_provenance_key(stmt_code))
-        except (OSError, TypeError, ValueError, AttributeError):
-            return None
+        record = self.probe.record(write_provenance_key(stmt_code))
         if not record or not record.get("write_provenance") or not record.get("paths"):
             return None
         return set(record["paths"])
@@ -839,7 +836,7 @@ class FileWriterScheduler:
             trace_event("writer_not_fresh", stmt=stmt_code[:80], reason=reason, **detail)
             return reason
 
-        backend = self.virtual_lineage.backend()
+        backend = self.probe.backend()
         if backend is None:
             return "no backend"
         try:
