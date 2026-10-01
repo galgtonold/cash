@@ -18,7 +18,7 @@ from cash.exceptions import CashCacheStoreFailedWarning
 
 def test_a_database_under_a_regular_file_warns_and_misses(tmp_path):
     blocker = tmp_path / "not-a-dir"
-    blocker.write_text("x")
+    blocker.write_text("x", encoding="utf-8")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         backend = SQLiteBackend(db_path=str(blocker / "sub" / "cache.db"))
@@ -31,7 +31,7 @@ def test_a_database_under_a_regular_file_warns_and_misses(tmp_path):
 
 def test_a_cached_function_runs_over_an_unusable_sqlite_cache(tmp_path):
     blocker = tmp_path / "not-a-dir"
-    blocker.write_text("x")
+    blocker.write_text("x", encoding="utf-8")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         c = cash.Cash(backend="sqlite", cache_dir=str(blocker / "sub"))
