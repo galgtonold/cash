@@ -103,8 +103,9 @@ class FunctionTracker:
     """
 
     def __init__(self):
-        # Maps (func_id, func_qualname) -> source_hash
-        self._source_cache: LruMemo[tuple[int, str], str | None] = LruMemo(NOTEBOOK_FUNCTIONS)
+        # Maps (func_id, func_module, func_qualname) -> source_hash. The
+        # module is in the key so a reload can drop exactly its entries.
+        self._source_cache: LruMemo[tuple[int, str | None, str], str | None] = LruMemo(NOTEBOOK_FUNCTIONS)
         # Maps function_name -> source_hash (for tracking changes)
         self._function_hashes: dict[str, str] = {}
         # Module file tracking: module_name -> last known mtime
@@ -172,8 +173,8 @@ class FunctionTracker:
         func_module = getattr(func, "__module__", None)
         use_cache = not self._tracked_module_file_changed(func_module)
 
-        # Check cache using id + qualname (id alone isn't enough since objects can be recycled)
-        cache_key = (id(func), getattr(func, "__qualname__", ""))
+        # id alone is not enough: a freed function's address is reused.
+        cache_key = (id(func), func_module, getattr(func, "__qualname__", ""))
         if use_cache:
             cached = self._source_cache.get(cache_key, _UNCACHED)
             if cached is not _UNCACHED:
@@ -857,7 +858,7 @@ class FunctionTracker:
     def _invalidate_module_functions(self, module_name: str):
         """Clear cached source hashes for functions from a specific module."""
         for key in self._source_cache.keys():
-            if module_name in key[1]:
+            if key[1] == module_name:
                 self._source_cache.pop(key)
 
         # Also clear function_hashes for functions from this module
