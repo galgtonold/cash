@@ -184,6 +184,13 @@ format is cleared on first open.
   shared fixtures and says why. Read state through `magics.tracking_state` and
   `%cash_status` (`cash_status("dict")`) where they have it, not private
   attributes. Use `tmp_path` for files. Never mock `IPython` in `sys.modules`.
+- Decorator unit tests use `disk_cash` (a `Cash` over `tmp_path/.cash`) or
+  `cash_instance` (in memory). A test that runs a script in a fresh
+  interpreter calls `run_python` from `tests/_scripts.py`, never
+  `subprocess.run` with an environment of its own: it drops inherited
+  `CASH_*` settings, writes no `.pyc`, puts the cash under test on the path
+  and sets a timeout. Write plain pytest functions or classes, not
+  `unittest.TestCase`, so the shared fixtures reach them.
 - The root conftest points `CASH_CACHE_DIR` at a per-test directory under the
   pytest base temp, and fails a test that leaves `.cash/` in the checkout. A test
   of the default cache location must set or clear `CASH_CACHE_DIR` itself.

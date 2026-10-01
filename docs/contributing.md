@@ -205,6 +205,21 @@ Pass `cells=[...]` when the upstream check needs the notebook's other cells.
 Read state through `cash_magics.tracking_state` or
 `cash_magics.cash_status("dict")`, not private attributes.
 
+A decorator test takes `disk_cash` (a `Cash` over a cache folder of the
+test's own) or `cash_instance` (in memory). To show that a result survives
+into the next process, run the script with `run_python` from
+`tests/_scripts.py`; it gives every child the same clean environment (no
+inherited `CASH_*` settings, no `.pyc` files, a timeout):
+
+```python
+from tests._scripts import run_python
+
+def test_a_second_process_hits(tmp_path):
+    (tmp_path / "job.py").write_text(JOB, encoding="utf-8")
+    assert "RAN" in run_python("job.py", cwd=tmp_path).stderr
+    assert "RAN" not in run_python("job.py", cwd=tmp_path).stderr
+```
+
 An integration test drives a real kernel with the `nb_runner` fixture:
 
 ```python
