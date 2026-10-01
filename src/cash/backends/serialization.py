@@ -10,7 +10,7 @@ import pickle
 from abc import ABC, abstractmethod
 from typing import Any
 
-__all__ = ["Serializer", "PickleSerializer"]
+__all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "restore_value"]
 
 #: Buffers at least this large are handed out of band by `serialize_split`;
 #: smaller ones stay in the stream, where a separate part costs more than the
@@ -72,3 +72,30 @@ class PickleSerializer(Serializer):
     def deserialize_split(self, stream: Any, buffers: list) -> Any:
         """The value `serialize_split` split, using *buffers*' memory as it is."""
         return pickle.loads(stream, buffers=buffers)
+
+
+#: What turning stored bytes back into an object raises when the entry is
+#: damaged (truncated by a killed process or a full disk, overwritten) or
+#: names a binding this process lacks (a class renamed, a module gone, a
+#: ``__main__`` class from another run). Every backend reads such an entry as
+#: a miss: the value is recomputed, never a reason to fail the caller.
+RESTORE_ERRORS: tuple[type[BaseException], ...] = (
+    pickle.PickleError,
+    EOFError,
+    ValueError,
+    TypeError,
+    KeyError,
+    IndexError,
+    AttributeError,
+    ImportError,
+    OverflowError,
+)
+
+
+def restore_value(metadata: dict, payload: bytes) -> Any:
+    """The value *payload* holds, rebuilt by the serializer *metadata* names.
+
+    Raises one of `RESTORE_ERRORS` when it cannot be rebuilt.
+    """
+    serializer_cls = metadata.get("serializer_cls", PickleSerializer)
+    return serializer_cls().deserialize(payload)

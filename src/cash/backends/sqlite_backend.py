@@ -11,11 +11,9 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from cash.exceptions import CacheSerializationError
-
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
-from .serialization import PickleSerializer, Serializer
+from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 
 logger = logging.getLogger(__name__)
 
@@ -147,21 +145,21 @@ class SQLiteBackend(CacheBackend):
             )
             self._conn.commit()
 
-            # Deserialize
             try:
                 metadata = pickle.loads(meta_bytes)
                 metadata["last_access"] = now
                 metadata["access_count"] = current_access_count + 1
+                value = restore_value(metadata, data_bytes)
+            except RESTORE_ERRORS as e:
+                # Unrestorable, so absent; dropped, so the recomputed value
+                # replaces it instead of failing every later read the same way.
+                logger.debug("Unrestorable cache entry %s, dropped: %s", key, e)
+                self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
+                self._conn.commit()
+                return None, None
 
-                serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-                serializer = serializer_cls()
-                value = serializer.deserialize(data_bytes)
-
-                metadata.setdefault("source", self.source_label)
-                return metadata, value
-            except (pickle.UnpicklingError, KeyError, TypeError, ValueError, EOFError) as e:
-                logger.debug("Error deserializing cache entry %s: %s", key, e)
-                raise CacheSerializationError(f"Failed to deserialize cache entry '{key}': {e}") from e
+            metadata.setdefault("source", self.source_label)
+            return metadata, value
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """Read an entry's metadata without touching its value.
@@ -191,7 +189,7 @@ class SQLiteBackend(CacheBackend):
 
         try:
             metadata = pickle.loads(row["metadata"])
-        except (pickle.UnpicklingError, KeyError, TypeError, ValueError, EOFError) as e:
+        except RESTORE_ERRORS as e:
             logger.debug("Error deserializing metadata for %s: %s", key, e)
             return None
 
@@ -287,7 +285,7 @@ class SQLiteBackend(CacheBackend):
             for row in cursor:
                 try:
                     entries.append(pickle.loads(row["metadata"]))
-                except (pickle.UnpicklingError, KeyError, TypeError, EOFError):
+                except RESTORE_ERRORS:
                     logger.debug("Failed to deserialize SQLite cache metadata")
         return entries
 
@@ -311,7 +309,7 @@ class SQLiteBackend(CacheBackend):
                     meta = pickle.loads(row["metadata"])
                     if is_expired(meta):
                         keys_to_delete.append(row["key"])
-                except (pickle.UnpicklingError, KeyError, TypeError, EOFError):
+                except RESTORE_ERRORS:
                     logger.debug("Failed to deserialize metadata during cleanup for key %s", row["key"])
 
             for key in keys_to_delete:

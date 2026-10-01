@@ -12,7 +12,7 @@ from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
 from ._base import CacheBackend, MetadataDict
 from ._writes import PendingWrites
-from .serialization import PickleSerializer, Serializer
+from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 
 try:
     import redis  # noqa: F401 - an availability probe
@@ -117,15 +117,10 @@ class RedisBackend(CacheBackend):
         if meta_bytes and data_bytes:
             try:
                 metadata = pickle.loads(meta_bytes)
-
-                # Deserialize data
-                serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-                serializer = serializer_cls()
-                value = serializer.deserialize(data_bytes)
-
+                value = restore_value(metadata, data_bytes)
                 metadata.setdefault("source", self.source_label)
                 return metadata, value
-            except (pickle.UnpicklingError, KeyError, TypeError, ValueError) as e:
+            except RESTORE_ERRORS as e:
                 logger.debug("Redis get() deserialization error: %s", e)
                 return None, None
         return None, None
@@ -156,7 +151,7 @@ class RedisBackend(CacheBackend):
 
         try:
             metadata = pickle.loads(meta_bytes)
-        except (pickle.UnpicklingError, KeyError, TypeError, ValueError) as e:
+        except RESTORE_ERRORS as e:
             logger.debug("Redis get_metadata() deserialization error: %s", e)
             return None
 
@@ -260,7 +255,7 @@ class RedisBackend(CacheBackend):
                     if res:
                         try:
                             entries.append(pickle.loads(res))
-                        except (pickle.UnpicklingError, KeyError, TypeError) as e:
+                        except RESTORE_ERRORS as e:
                             logger.debug("Failed to deserialize Redis cache entry: %s", e)
             if cursor == 0:
                 break

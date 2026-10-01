@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import pickle
 from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
@@ -17,7 +16,7 @@ from .entry_format import (
     pack_entry,
     unpack_entry,
 )
-from .serialization import PickleSerializer, Serializer
+from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 
 try:
     import boto3  # noqa: F401 - an availability probe
@@ -105,7 +104,7 @@ class S3Backend(CacheBackend):
             if error_code in ("404", "NoSuchKey"):
                 return None, None
             raise CacheBackendError(f"S3 get() failed for key {key!r}: {e}") from e
-        except (CorruptEntry, pickle.UnpicklingError, KeyError, TypeError, OSError) as e:
+        except (CorruptEntry, OSError, *RESTORE_ERRORS) as e:
             logger.debug("S3 get() deserialization error for key %s: %s", key, e)
             return None, None
 
@@ -115,9 +114,8 @@ class S3Backend(CacheBackend):
             return None, None
 
         try:
-            serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-            value = serializer_cls().deserialize(payload)
-        except (pickle.UnpicklingError, AttributeError, ImportError, EOFError, TypeError, ValueError) as e:
+            value = restore_value(metadata, payload)
+        except RESTORE_ERRORS as e:
             logger.debug("S3 get() could not restore the value for %s: %s", key, e)
             return None, None
 
@@ -153,7 +151,7 @@ class S3Backend(CacheBackend):
             if error_code in ("404", "NoSuchKey"):
                 return None
             raise CacheBackendError(f"S3 get_metadata() failed for key {key!r}: {e}") from e
-        except (CorruptEntry, pickle.UnpicklingError, KeyError, TypeError, OSError) as e:
+        except (CorruptEntry, OSError, *RESTORE_ERRORS) as e:
             logger.debug("S3 get_metadata() error for key %s: %s", key, e)
             return None
 
@@ -279,12 +277,7 @@ class S3Backend(CacheBackend):
                             head = self._ranged_get(key, self.METADATA_PREFETCH_BYTES)
                             metadata, _ = unpack_entry(head, with_payload=False)
                             entries.append(metadata)
-                        except (
-                            CorruptEntry,
-                            pickle.UnpicklingError,
-                            self.botocore_exceptions.ClientError,
-                            KeyError,
-                        ) as e:
+                        except (CorruptEntry, self.botocore_exceptions.ClientError, *RESTORE_ERRORS) as e:
                             logger.debug("Skipping unreadable S3 entry %s: %s", key, e)
         except self.botocore_exceptions.ClientError as e:
             raise CacheBackendError(f"S3 list_entries failed for prefix '{self.prefix}': {e}") from e

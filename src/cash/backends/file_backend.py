@@ -42,7 +42,7 @@ from .entry_format import (
     update_metadata_in_place,
 )
 from .file_eviction import FileEvictor
-from .serialization import PickleSerializer, Serializer
+from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 from .touched_entries import TouchedEntries, stat_signature
 from .versions import VersionIndex, superseded_to_drop
 
@@ -491,16 +491,11 @@ class FileBackend(CacheBackend):
                 # Written only for a PickleSerializer value (`set`).
                 value = PickleSerializer().deserialize_split(payload.stream, payload.buffers)
             else:
-                serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-                value = serializer_cls().deserialize(payload)
+                value = restore_value(metadata, payload)
 
             metadata.setdefault("source", self.source_label)
             return metadata, value
-        except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError, EOFError) as exc:
-            # Unrestorable here, so absent: AttributeError/ImportError for a
-            # value naming a binding this process lacks (a __main__ class from
-            # an earlier kernel), EOFError for a file truncated by a killed
-            # process or a full disk.
+        except (OSError, *RESTORE_ERRORS) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 

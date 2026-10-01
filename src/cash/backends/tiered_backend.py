@@ -291,7 +291,14 @@ class TieredBackend(CacheBackend):
         self._drop_ram_if_cleared()
         tier_default = self.default_ttl
         for i, backend in enumerate(self.backends):
-            metadata, value = backend.get(key)
+            try:
+                metadata, value = backend.get(key)
+            except Exception as e:  # noqa: BLE001 - a tier that cannot read is a miss there
+                # As with a write: one tier down (a server unreachable, a
+                # broken entry) must not fail the caller's program while the
+                # value can still come from another tier or be recomputed.
+                logger.warning("Failed to read key '%s' from tier %d (%s): %s", key, i, type(backend).__name__, e)
+                continue
             # Key-presence test: metadata is None when the child backend
             # reports "key absent" (per its API contract). A non-None
             # metadata dict with a None value means the user genuinely
