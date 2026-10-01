@@ -11,7 +11,7 @@ import dataclasses
 from types import SimpleNamespace
 
 from cash import __main__ as cli
-from cash.config import TierConfig, get_config, human_bytes
+from cash.config import TierConfig, get_config
 
 
 def _info(monkeypatch, capsys, **changes) -> str:
@@ -34,6 +34,6 @@ def test_each_tier_shows_its_own_size(tmp_path, monkeypatch, capsys):
         TierConfig(type="file", cache_dir=str(tmp_path), max_size_bytes=5_000_000),
     ]
     line = _info(monkeypatch, capsys, tiers=tiers)
-    assert f"RAM {human_bytes(1_000_000)}" in line
-    assert f"disk {human_bytes(5_000_000)}" in line
+    assert "RAM 1 MB (1,000,000 bytes)" in line
+    assert "disk 5 MB (5,000,000 bytes)" in line
     assert "auto" not in line

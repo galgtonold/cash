@@ -215,7 +215,7 @@ _TIER_NAMES = {"memory": "RAM", "file": "disk", "sqlite": "sqlite", "redis": "re
 def _caps_text(config) -> str:
     """Each tier's byte cap, as the backend *config* describes builds it.
 
-    ``RAM 3.1 GiB (auto), disk 8.0 GiB (auto)``: one entry per tier, in
+    ``RAM 3.1 GiB (auto), disk 2 GB (2,000,000,000 bytes)``: one entry per tier, in
     order, from the same `tier_cap` the factory builds with. A disk tier's
     automatic cap counts what it already holds as room, as the running tier
     does.
@@ -231,8 +231,11 @@ def _caps_text(config) -> str:
         name = _TIER_NAMES.get(kind, kind)
         if cap is None:
             parts.append(f"{name} no cap")
+        elif resolved.get("max_size_bytes") is None:
+            parts.append(f"{name} {human_bytes(cap)} (auto)")
         else:
-            parts.append(f"{name} {human_bytes(cap)}{' (auto)' if resolved.get('max_size_bytes') is None else ''}")
+            # Set by the user: shown as they wrote it, and exactly.
+            parts.append(f"{name} {format_size(cap)} ({cap:,} bytes)")
     return ", ".join(parts)
 
 
