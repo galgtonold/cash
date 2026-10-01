@@ -261,6 +261,29 @@ ENTRY_NAME_LENGTH = 64 + len(ENTRY_SUFFIX)
 _WINDOWS_MAX_PATH = 260
 
 
+def warn_unusable(path: str, exc: BaseException) -> None:
+    """Say once that a disk tier cannot use *path* and is off for this run.
+
+    A cache that cannot open its storage turns itself off instead of failing
+    the caller's program: caching is best effort, and in a tiered stack the
+    RAM tier still works.
+    """
+    try:
+        warn_diagnostic(
+            CashCacheStoreFailedWarning,
+            "CACHE-DIR-UNWRITABLE",
+            f"cash cannot use its cache directory {path} "
+            f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
+            f"this run, so every call recomputes -- but the run itself "
+            f"continues normally.",
+            "point cash somewhere it can write -- cash.configure(cache_dir=...), "
+            "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
+            "user write permission on that path.",
+        )
+    except Exception:  # noqa: BLE001 - a diagnostic must not become the failure
+        logger.warning("Cash disabled its cache at %s: %s", path, exc)
+
+
 def warn_if_unwritable(cache_dir: str, *, windows: bool = os.name == "nt") -> None:
     """Say at once, naming the path, if *cache_dir* cannot be written.
 

@@ -21,13 +21,11 @@ from typing import Any, NamedTuple
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
-from ..diagnostics import warn_diagnostic
-from ..exceptions import CashCacheStoreFailedWarning
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
-from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, write_all
+from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, warn_unusable, write_all
 from .entry_format import (
     ENTRY_SUFFIX,
     CorruptEntry,
@@ -266,21 +264,7 @@ class FileBackend(CacheBackend):
         """Turn this tier off for the rest of the process, and say why once."""
         self._unusable = True
         self._initialized = True  # never retried; the answer will not change
-
-        try:
-            warn_diagnostic(
-                CashCacheStoreFailedWarning,
-                "CACHE-DIR-UNWRITABLE",
-                f"cash cannot use its cache directory {self.cache_dir} "
-                f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
-                f"this run, so every call recomputes -- but the run itself "
-                f"continues normally.",
-                "point cash somewhere it can write -- cash.configure(cache_dir=...), "
-                "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
-                "user write permission on that path.",
-            )
-        except Exception:  # noqa: BLE001 - a diagnostic must not become the failure
-            logger.warning("Cash disabled its file tier at %s: %s", self.cache_dir, exc)
+        warn_unusable(self.cache_dir, exc)
 
     def generation_token(self) -> tuple | None:
         """The format stamp's identity: it moves when the directory is cleared

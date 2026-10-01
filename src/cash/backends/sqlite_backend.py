@@ -13,6 +13,7 @@ from typing import Any
 
 from ._base import CacheBackend, MetadataDict, ttl_expired
 from ._writes import PendingWrites
+from .cache_dir import warn_unusable
 from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,13 @@ class SQLiteBackend(CacheBackend):
     """All entries in one SQLite database file; suits many small entries.
 
     Entries are pickled, as with `FileBackend`. As a tier, it does not take
-    values over 100 MiB.
+    values over 100 MiB. The database is opened on first use; one that cannot
+    be opened turns the backend off for the run, with a warning.
+
+    The simpler of the two disk backends: it evicts the least recently used
+    entries rather than ranking them by value per byte, gives no notice when
+    its cap evicts something, and a running process does not notice the
+    database being cleared under it.
 
     Args:
         db_path: The database file; its directory is created if missing.
@@ -57,18 +64,43 @@ class SQLiteBackend(CacheBackend):
         # thread, the actual INSERT runs in this executor.
         self._writes = PendingWrites()
 
-        # Ensure parent directory exists
-        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        self._wal_mode = wal_mode
+        #: Opened on first use (`_open`), so building the backend does no I/O.
+        self._connection: sqlite3.Connection | None = None
+        #: Set when the database turned out unusable. Every operation then
+        #: answers as an empty cache would: a miss, a no-op write.
+        self._unusable = False
 
-        # Initialize database
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+    def _open(self) -> sqlite3.Connection | None:
+        """The connection, opened on first use, or None when the database
+        cannot be opened.
 
-        if wal_mode:
-            self._conn.execute("PRAGMA journal_mode=WAL")
+        A database that cannot be created (a read-only volume, a cache_dir
+        under a regular file) turns this tier off, with one warning, instead
+        of failing the caller's program, as the file tier does.
+        """
+        conn = self._connection
+        if conn is not None or self._unusable:
+            return conn
+        with self._lock:
+            if self._connection is None and not self._unusable:
+                try:
+                    os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+                    conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                    conn.row_factory = sqlite3.Row
+                    if self._wal_mode:
+                        conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    self._create_tables(conn)
+                    self._connection = conn
+                except (OSError, sqlite3.Error) as exc:
+                    self._unusable = True
+                    warn_unusable(self.db_path, exc)
+            return self._connection
 
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._create_tables()
+    @property
+    def _conn(self) -> sqlite3.Connection | None:
+        return self._open()
 
     #: Column order is load-bearing: SQLite lays a row out in declaration
     #: order and spills what does not fit onto a chain of overflow pages, so
@@ -97,26 +129,29 @@ class SQLiteBackend(CacheBackend):
     #: large values forward would cost more than recomputing them.
     SCHEMA_VERSION = 2
 
-    def _create_tables(self) -> None:
+    def _create_tables(self, conn: sqlite3.Connection) -> None:
         """Create the cache table, dropping one written in another schema."""
-        (stored,) = self._conn.execute("PRAGMA user_version").fetchone()
+        (stored,) = conn.execute("PRAGMA user_version").fetchone()
         if stored != self.SCHEMA_VERSION:
-            self._conn.execute("DROP TABLE IF EXISTS cache_entries")
-            self._conn.execute(f"PRAGMA user_version = {int(self.SCHEMA_VERSION)}")
-        self._conn.execute(self._SCHEMA)
-        self._conn.execute("""
+            conn.execute("DROP TABLE IF EXISTS cache_entries")
+            conn.execute(f"PRAGMA user_version = {int(self.SCHEMA_VERSION)}")
+        conn.execute(self._SCHEMA)
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_last_access ON cache_entries(last_access)
         """)
-        self._conn.execute("""
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_created_at ON cache_entries(created_at)
         """)
-        self._conn.commit()
+        conn.commit()
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key so we never miss it.
         self._writes.wait(key)
+        conn = self._open()
+        if conn is None:
+            return None, None
         with self._lock:
-            cursor = self._conn.execute(
+            cursor = conn.execute(
                 "SELECT data, metadata, created_at, ttl, access_count FROM cache_entries WHERE key = ?", (key,)
             )
             row = cursor.fetchone()
@@ -134,16 +169,16 @@ class SQLiteBackend(CacheBackend):
             effective_ttl = ttl if ttl is not None else self._default_ttl
             if ttl_expired(created_at, effective_ttl):
                 # Expired - delete and return None
-                self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
-                self._conn.commit()
+                conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
+                conn.commit()
                 return None, None
 
             # Update access stats
             now = time.time()
-            self._conn.execute(
+            conn.execute(
                 "UPDATE cache_entries SET last_access = ?, access_count = access_count + 1 WHERE key = ?", (now, key)
             )
-            self._conn.commit()
+            conn.commit()
 
             try:
                 metadata = pickle.loads(meta_bytes)
@@ -154,8 +189,8 @@ class SQLiteBackend(CacheBackend):
                 # Unrestorable, so absent; dropped, so the recomputed value
                 # replaces it instead of failing every later read the same way.
                 logger.debug("Unrestorable cache entry %s, dropped: %s", key, e)
-                self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
-                self._conn.commit()
+                conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
+                conn.commit()
                 return None, None
 
             metadata.setdefault("source", self.source_label)
@@ -176,8 +211,11 @@ class SQLiteBackend(CacheBackend):
         restoring.
         """
         self._writes.wait(key)
+        conn = self._open()
+        if conn is None:
+            return None
         with self._lock:
-            cursor = self._conn.execute("SELECT metadata, created_at, ttl FROM cache_entries WHERE key = ?", (key,))
+            cursor = conn.execute("SELECT metadata, created_at, ttl FROM cache_entries WHERE key = ?", (key,))
             row = cursor.fetchone()
 
         if row is None:
@@ -200,10 +238,11 @@ class SQLiteBackend(CacheBackend):
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
     ) -> None:
         """Serialize on the calling thread, INSERT in the background."""
-        if metadata is None:
-            metadata = {}
-
-        metadata["key"] = key
+        if self._open() is None:
+            return
+        # The entry keeps the ``created_at`` it was first written with: a copy
+        # promoted from another tier must not restart its ttl.
+        metadata = self._init_metadata(metadata, key)
 
         if serializer is None:
             serializer = PickleSerializer()
@@ -213,10 +252,7 @@ class SQLiteBackend(CacheBackend):
         data_size = len(serialized_value)
         metadata["size"] = data_size
 
-        now = time.time()
-        metadata["created_at"] = now
-        metadata["last_access"] = now
-        metadata["access_count"] = 0
+        created_at = metadata["created_at"]
 
         # Set TTL
         ttl = metadata.get("ttl", self._default_ttl)
@@ -236,24 +272,27 @@ class SQLiteBackend(CacheBackend):
             serialized_value,
             meta_bytes,
             data_size,
-            now,
+            created_at,
             ttl,
         )
 
     def _do_set_sync(
-        self, key: str, serialized_value: bytes, meta_bytes: bytes, data_size: int, now: float, ttl: int | None
+        self, key: str, serialized_value: bytes, meta_bytes: bytes, data_size: int, created_at: float, ttl: int | None
     ) -> None:
         """The actual INSERT — runs in the PendingWrites worker thread."""
+        conn = self._open()
+        if conn is None:
+            return
         with self._lock:
-            self._conn.execute(
+            conn.execute(
                 """
                 INSERT OR REPLACE INTO cache_entries
                 (key, data, metadata, size_bytes, created_at, last_access, access_count, ttl)
                 VALUES (?, ?, ?, ?, ?, ?, 0, ?)
             """,
-                (key, serialized_value, meta_bytes, data_size, now, now, ttl),
+                (key, serialized_value, meta_bytes, data_size, created_at, time.time(), ttl),
             )
-            self._conn.commit()
+            conn.commit()
 
             # Check size limit
             if self._max_size_bytes is not None:
@@ -262,26 +301,35 @@ class SQLiteBackend(CacheBackend):
     def delete(self, key: str) -> None:
         # Drain any pending write so the delete actually deletes.
         self._writes.drain(key)
+        conn = self._open()
+        if conn is None:
+            return
         with self._lock:
-            self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
-            self._conn.commit()
+            conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
+            conn.commit()
 
     def clear(self) -> None:
         self._writes.wait_all()
+        conn = self._open()
+        if conn is None:
+            return
         with self._lock:
-            self._conn.execute("DELETE FROM cache_entries")
-            self._conn.commit()
+            conn.execute("DELETE FROM cache_entries")
+            conn.commit()
             # VACUUM must run outside a transaction
             try:
-                self._conn.execute("VACUUM")
+                conn.execute("VACUUM")
             except sqlite3.OperationalError:
                 logger.debug("VACUUM failed after clearing SQLite cache")
 
     def list_entries(self) -> list[dict]:
         self._writes.wait_all()
         entries = []
+        conn = self._open()
+        if conn is None:
+            return entries
         with self._lock:
-            cursor = self._conn.execute("SELECT metadata FROM cache_entries")
+            cursor = conn.execute("SELECT metadata FROM cache_entries")
             for row in cursor:
                 try:
                     entries.append(pickle.loads(row["metadata"]))
@@ -292,17 +340,20 @@ class SQLiteBackend(CacheBackend):
     def cleanup_expired(self, is_expired: Callable[[dict], bool]) -> int:
         """Clean up expired entries using TTL and custom predicate."""
         count = 0
+        conn = self._open()
+        if conn is None:
+            return count
         with self._lock:
             # First, clean up TTL-expired entries
             now = time.time()
             if self._default_ttl is not None:
-                cursor = self._conn.execute(
+                cursor = conn.execute(
                     "DELETE FROM cache_entries WHERE ttl IS NOT NULL AND (? - created_at) > ttl", (now,)
                 )
                 count += cursor.rowcount
 
             # Then check custom predicate
-            cursor = self._conn.execute("SELECT key, metadata FROM cache_entries")
+            cursor = conn.execute("SELECT key, metadata FROM cache_entries")
             keys_to_delete = []
             for row in cursor:
                 try:
@@ -313,11 +364,11 @@ class SQLiteBackend(CacheBackend):
                     logger.debug("Failed to deserialize metadata during cleanup for key %s", row["key"])
 
             for key in keys_to_delete:
-                self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
+                conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
                 count += 1
 
             if count > 0:
-                self._conn.commit()
+                conn.commit()
 
         return count
 
@@ -326,7 +377,7 @@ class SQLiteBackend(CacheBackend):
         if self._max_size_bytes is None:
             return
 
-        cursor = self._conn.execute("SELECT SUM(size_bytes) FROM cache_entries")
+        cursor = self._connection.execute("SELECT SUM(size_bytes) FROM cache_entries")
         row = cursor.fetchone()
         total_size = row[0] or 0
 
@@ -335,18 +386,18 @@ class SQLiteBackend(CacheBackend):
 
         # Evict oldest-accessed entries until under 90% of limit
         target = self._max_size_bytes * 0.9
-        cursor = self._conn.execute("SELECT key, size_bytes FROM cache_entries ORDER BY last_access ASC")
+        cursor = self._connection.execute("SELECT key, size_bytes FROM cache_entries ORDER BY last_access ASC")
 
         evicted = 0
         for row in cursor:
             if total_size <= target:
                 break
-            self._conn.execute("DELETE FROM cache_entries WHERE key = ?", (row["key"],))
+            self._connection.execute("DELETE FROM cache_entries WHERE key = ?", (row["key"],))
             total_size -= row["size_bytes"]
             evicted += 1
 
         if evicted > 0:
-            self._conn.commit()
+            self._connection.commit()
 
     def entry_count(self) -> int:
         """Get the number of cache entries."""
@@ -354,8 +405,11 @@ class SQLiteBackend(CacheBackend):
         # every set() that has already returned (same barrier as
         # list_entries / clear / cleanup_expired).
         self._writes.wait_all()
+        conn = self._open()
+        if conn is None:
+            return 0
         with self._lock:
-            cursor = self._conn.execute("SELECT COUNT(*) FROM cache_entries")
+            cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
             return cursor.fetchone()[0]
 
     def promotion_size_cap(self) -> int | None:
@@ -370,8 +424,10 @@ class SQLiteBackend(CacheBackend):
     def shutdown(self) -> None:
         """Wait for pending writes, then close the database connection."""
         self._writes.shutdown(wait=True)
+        if self._connection is None:
+            return
         try:
-            self._conn.close()
+            self._connection.close()
         except sqlite3.Error:
             logger.debug("Error closing SQLite connection")
 
