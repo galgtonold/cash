@@ -343,7 +343,7 @@ class InMemoryBackend(CacheBackend):
             return False
 
         if "storage" not in metadata:
-            metadata["storage"] = ["RAM"]
+            metadata["storage"] = [self.source_label]
 
         frame_cells: dict[int, bool] = {}
         if dict_rows_size is not None:
