@@ -27,7 +27,7 @@ from .._trace import trace_event
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ..restored_var import hashed_by_lineage
 from ..tracking_state import TrackingState
-from .virtual_lineage import VirtualLineage
+from .unsaved_edits import UnsavedEdits
 
 __all__ = ["StaleValueGuard"]
 
@@ -41,12 +41,12 @@ class StaleValueGuard:
         self,
         shell: ShellProtocol,
         tracking_state: TrackingState,
-        virtual_lineage: VirtualLineage,
+        unsaved_edits: UnsavedEdits,
         compute_hash_fn: Callable[[Any], str] | None,
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
-        self.virtual_lineage = virtual_lineage
+        self.unsaved_edits = unsaved_edits
         self.compute_hash_fn = compute_hash_fn
 
     def mark_stale_value_inputs_broken(
@@ -259,7 +259,7 @@ class StaleValueGuard:
                 if (
                     prod_code is not None
                     and not produced_by_current_cell
-                    and self.virtual_lineage.unsaved_edits.is_valid_extension(
+                    and self.unsaved_edits.is_valid_extension(
                         prod_code, recorded, virtual_lineage, required_dependency=var_name
                     )
                 ):

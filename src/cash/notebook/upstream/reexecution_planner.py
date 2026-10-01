@@ -25,8 +25,14 @@ from .file_writers import FileWriterScheduler
 from .mismatch_classifier import import_only
 
 if TYPE_CHECKING:
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
+    from .cache_probe import CacheProbe
+    from .cache_restore import CacheRestorer
+    from .loop_rules import LoopRules
     from .mismatch_classifier import MismatchClassifier
-    from .virtual_lineage import VirtualLineage
+    from .simulated_callables import SimulatedCallables
+    from .unsaved_edits import UnsavedEdits
 
 logger = logging.getLogger(__name__)
 
@@ -185,16 +191,25 @@ class ReexecutionPlanner:
 
     def __init__(
         self,
-        virtual_lineage: "VirtualLineage",
-        classifier: "MismatchClassifier",
+        shell: ShellProtocol,
+        tracking_state: TrackingState,
+        *,
+        classifier: MismatchClassifier,
+        restorer: CacheRestorer,
+        loop_rules: LoopRules,
+        unsaved_edits: UnsavedEdits,
+        callables: SimulatedCallables,
+        probe: CacheProbe,
     ) -> None:
-        self.virtual_lineage = virtual_lineage
+        self.shell = shell
+        self.tracking_state = tracking_state
         self.classifier = classifier
-        self.tracking_state = virtual_lineage.tracking_state
+        self.restorer = restorer
+        self.loop_rules = loop_rules
+        self.unsaved_edits = unsaved_edits
+        self.callables = callables
         #: The file-writer pass, with the memos it keeps.
-        self.file_writers = FileWriterScheduler(
-            virtual_lineage.shell, virtual_lineage.tracking_state, virtual_lineage.probe
-        )
+        self.file_writers = FileWriterScheduler(shell, tracking_state, probe)
 
     @staticmethod
     def _drop_scheduled_from_restored(simulation_trace, stmts_to_run_indices, restored):
@@ -319,7 +334,7 @@ class ReexecutionPlanner:
             stmts_to_run_indices,
             restored_statements_info,
         )
-        skipped_metrics = self.virtual_lineage.restorer.collect_skipped_statement_metrics(
+        skipped_metrics = self.restorer.collect_skipped_statement_metrics(
             simulation_trace,
             stmts_to_run_indices,
             restored_statements_info,
@@ -332,7 +347,7 @@ class ReexecutionPlanner:
         )
 
         stmts_to_run_indices = self._schedule_loop_var_contexts(stmts_to_run_indices, simulation_trace)
-        stmts_to_run_indices = self.virtual_lineage.loop_rules.filter_accumulator_reinits(
+        stmts_to_run_indices = self.loop_rules.filter_accumulator_reinits(
             stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
@@ -359,7 +374,7 @@ class ReexecutionPlanner:
             except (SyntaxError, ValueError):
                 logger.debug("Failed to analyze statement for variable outputs: %.40s", stmt_code)
 
-        self.virtual_lineage.unsaved_edits.reapply_unsaved_extensions(
+        self.unsaved_edits.reapply_unsaved_extensions(
             broken_vars,
             vars_updated_by_trace,
             simulation_trace,
@@ -602,17 +617,15 @@ class ReexecutionPlanner:
         With *virtual_lineage*, the globals the statement's callees read count
         as inputs too (``absent_callee_globals``).
         """
-        user_ns = self.virtual_lineage.shell.user_ns
-        live_lineage = self.virtual_lineage.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+        live_lineage = self.tracking_state.variable_lineage
         scheduled = set(stmts_to_run_indices)
         pending = sorted(scheduled)
         while pending:
             i = pending.pop(0)
             inputs = set(simulation_trace[i].inputs or ())
             if virtual_lineage is not None:
-                inputs |= self.virtual_lineage.callables.absent_callee_globals(
-                    inputs, virtual_lineage, virtual_modules or set()
-                )
+                inputs |= self.callables.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
             for v in sorted(inputs):
                 if v not in user_ns and hasattr(builtins, v):
                     continue
@@ -904,7 +917,7 @@ class ReexecutionPlanner:
         append is silent and permanent.
         """
         user_ns = self._user_ns()
-        recorded = self.virtual_lineage.tracking_state.variable_lineage
+        recorded = self.tracking_state.variable_lineage
 
         extra: set[int] = set()
         frontier = list(pending)
@@ -1156,7 +1169,7 @@ class ReexecutionPlanner:
         )
 
     def _user_ns(self) -> dict:
-        return self.virtual_lineage.shell.user_ns
+        return self.shell.user_ns
 
     def _dedup_sorted_indices(self, stmts_to_run_indices: list[int]) -> list[int]:
         """Return *stmts_to_run_indices* sorted and deduplicated while preserving order."""

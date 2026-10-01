@@ -22,6 +22,7 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.namespace_effects import is_estimator
 from ...lineage_tag import own_tag
 from ...value_types import BUILTIN_NAMES
+from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
@@ -32,6 +33,10 @@ from ._types import (
     SimulationResult,
     normalize_stmt,
 )
+from .cache_restore import CacheRestorer
+from .loop_rules import LoopRules
+from .simulated_callables import SimulatedCallables
+from .unsaved_edits import UnsavedEdits
 from .virtual_lineage import VirtualLineage
 
 __all__ = ["MismatchClassifier"]
@@ -74,24 +79,29 @@ class _BackwardScan:
 class MismatchClassifier:
     """Phase 2 of NotebookSimulator: classify broken / tainted variables.
 
-    Restores through, and asks trace questions of, the :class:`VirtualLineage`
-    it is given. A lineage reset goes to ``TrackingState`` at once, so the
-    names classified after it see it.
+    Re-simulates a cell through the :class:`VirtualLineage` it is given and
+    restores through the :class:`CacheRestorer`. A lineage reset goes to
+    ``TrackingState`` at once, so the names classified after it see it.
     """
 
     def __init__(
         self,
-        virtual_lineage: VirtualLineage,
+        shell: ShellProtocol,
         tracking_state: TrackingState,
+        *,
+        simulation: VirtualLineage,
+        restorer: CacheRestorer,
+        loop_rules: LoopRules,
+        unsaved_edits: UnsavedEdits,
+        callables: SimulatedCallables,
     ) -> None:
-        self.virtual_lineage = virtual_lineage
+        self.shell = shell
         self.tracking_state = tracking_state
-
-    # --- shell/cash convenience accessors (read-through to VirtualLineage) ---
-
-    @property
-    def shell(self):
-        return self.virtual_lineage.shell
+        self.simulation = simulation
+        self.restorer = restorer
+        self.loop_rules = loop_rules
+        self.unsaved_edits = unsaved_edits
+        self.callables = callables
 
     def _check_loop_var_inputs_changed(
         self,
@@ -252,14 +262,12 @@ class MismatchClassifier:
         if var_name not in self.tracking_state.executed_cell_codes:
             return False
         mem_code = self.tracking_state.executed_cell_codes[var_name]
-        if not self.virtual_lineage.unsaved_edits.is_valid_extension(
+        if not self.unsaved_edits.is_valid_extension(
             mem_code, actual_lineage, sim.virtual_lineage, required_dependency=var_name
         ):
             return False
         if sim.upstream_has_modifications:
-            code_still_in_notebook = self.virtual_lineage.unsaved_edits.code_exists_in_notebook(
-                mem_code, notebook_cells
-            )
+            code_still_in_notebook = self.unsaved_edits.code_exists_in_notebook(mem_code, notebook_cells)
             if code_still_in_notebook:
                 logger.debug("[UPSTREAM_DEBUG]   -> Valid extension (code still exists in notebook), keeping")
                 return True
@@ -619,7 +627,7 @@ class MismatchClassifier:
             return True
         scratch = SimulationResult(virtual_lineage=dict(sim.virtual_lineage), virtual_modules=set(sim.virtual_modules))
         try:
-            self.virtual_lineage.simulate_one_cell(scratch, -1, code)
+            self.simulation.simulate_one_cell(scratch, -1, code)
         except Exception:  # noqa: BLE001 - cannot tell: treat as not reproduced
             logger.debug("[UPSTREAM] could not re-simulate the current cell for '%s'", var_name)
             return False
@@ -760,10 +768,10 @@ class MismatchClassifier:
         required_inputs = check.required_inputs
         vars_to_check = {name for name in required_inputs or () if name in self.tracking_state.variable_lineage}
 
-        trace_codes = self.virtual_lineage.build_simulation_trace_codes(sim.trace)
+        trace_codes = self.simulation.build_simulation_trace_codes(sim.trace)
         tainted: set[str] = set()
         if not sim.upstream_has_modifications:
-            tainted = self.virtual_lineage.unsaved_edits.compute_tainted_vars_from_unsaved_edits(
+            tainted = self.unsaved_edits.compute_tainted_vars_from_unsaved_edits(
                 virtual_lineage,
                 sim.trace,
                 trace_codes,
@@ -774,13 +782,13 @@ class MismatchClassifier:
             broken_vars=set(),
             tainted_vars=tainted,
             trace_codes=trace_codes,
-            loop_derived_trust_overridden=self.virtual_lineage.loop_rules.check_loop_derived_trust_override(
+            loop_derived_trust_overridden=self.loop_rules.check_loop_derived_trust_override(
                 sim.upstream_has_modifications,
                 sim.vars_mutated_by_loops,
                 trace_codes,
             ),
         )
-        loop_var_input_lineages = self.virtual_lineage.loop_rules.build_loop_var_input_lineages(
+        loop_var_input_lineages = self.loop_rules.build_loop_var_input_lineages(
             sim.trace,
             sim.vars_derived_from_loops,
             virtual_lineage,
@@ -976,9 +984,7 @@ class MismatchClassifier:
         stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         # A callee's globals are inputs too, once the statement runs; the ones
         # missing from the kernel must be rebuilt first (absent_callee_globals).
-        callee_names = self.virtual_lineage.callables.absent_callee_globals(
-            set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules
-        )
+        callee_names = self.callables.absent_callee_globals(set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules)
         for inp in [*stmt_inputs, *sorted(callee_names - set(stmt_inputs))]:
             if inp in scan.resolved or inp in scan.needed:
                 continue
@@ -1028,7 +1034,7 @@ class MismatchClassifier:
                 if self._resolve_tainted_stmt(i, stmt_code, outputs, needed_outputs_pre, sim, result, scan):
                     continue
             elif not import_only(stmt_code):  # an import is re-run, never restored: see `import_only`
-                restored_vars, restore_time, saved_time = self.virtual_lineage.restorer.try_virtual_restore(
+                restored_vars, restore_time, saved_time = self.restorer.try_virtual_restore(
                     stmt_code,
                     outputs,
                     entry.inputs,

@@ -1,10 +1,10 @@
-"""Phase 1 of the notebook simulator: forward simulation + cache probing.
+"""Phase 1 of the notebook simulator: forward simulation of the cells above.
 
 :meth:`VirtualLineage.simulate` replays the cells above the checked one into a
 :class:`SimulationResult`, starting from the first cell changed since the
-previous simulation (:class:`SimulationCache`). It also restores a statement
-from the cache for the later phases through ``CacheRestorer.try_virtual_restore``
-(``cache_restore.py``).
+previous simulation (:class:`SimulationCache`). One statement's key and
+lineages come from ``statement_lineage.py``, a control structure's from
+``control_simulation.py``.
 """
 
 from __future__ import annotations
@@ -14,8 +14,7 @@ import logging
 import os
 import re
 import types
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from cash.control_markers import strip_markers
 
@@ -24,7 +23,7 @@ from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...source_norm import exact_source_digest
-from .._protocols import CashInstanceProtocol, ShellProtocol
+from .._protocols import ShellProtocol
 from ..control_structures import is_control_structure
 from ..lineage_formula import (
     key_hidden_reads,
@@ -40,16 +39,12 @@ from ._types import (
     SimulationResult,
     TraceEntry,
 )
-from .cache_probe import CacheProbe
-from .cache_restore import CacheRestorer
 from .control_simulation import ControlSimulation
-from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
 from .statement_lineage import StatementLineage
-from .unsaved_edits import UnsavedEdits
 
 if TYPE_CHECKING:
-    from ...tracking.function_tracker import FunctionTracker
+    pass
 
 __all__ = ["VirtualLineage"]
 
@@ -104,58 +99,37 @@ def reset_magic_deletes(line: str) -> re.Pattern[str] | None:
 
 
 class VirtualLineage:
-    """Phase 1 of NotebookSimulator: forward simulation + cache probing.
+    """Phase 1 of NotebookSimulator: forward simulation of the cells above.
 
-    What it restores or propagates (an import's lineage, a restored name's
-    lineage and producer) it writes to ``TrackingState`` at once, because
-    the next statement's cache key reads it.
+    Walks each cell's statements into a :class:`SimulationResult`, handing a
+    simple statement to :class:`StatementLineage` and a control structure to
+    :class:`ControlSimulation`, and keeps the per-cell snapshots
+    (:class:`SimulationCache`) the next simulation starts from.
     """
 
     def __init__(
         self,
         shell: ShellProtocol,
-        cash_instance: CashInstanceProtocol | None,
         tracking_state: TrackingState,
-        compute_hash_fn: Callable[[Any], str] | None = None,
-        function_tracker: FunctionTracker | None = None,
-        cache: SimulationCache | None = None,
+        *,
+        statements: StatementLineage,
+        controls: ControlSimulation,
+        callables: SimulatedCallables,
+        cache: SimulationCache,
     ) -> None:
         self.shell = shell
-        self.cash_instance = cash_instance
-        self.compute_hash_fn = compute_hash_fn
-        #: The runtime's tracker, so the simulation hashes called functions
-        #: and modules exactly as the statement processor does.
-        self.function_tracker = function_tracker
-
-        #: The checker's. ``mutation_verdicts`` and
-        #: ``observed_rng_statement_draws`` are read from it because the
-        #: simulation must reproduce the runtime's key inputs exactly.
+        #: The checker's, shared with the statement processor.
         self.tracking_state = tracking_state
-
-        #: Metadata and file-freshness reads from the backend.
-        self.probe = CacheProbe(cash_instance)
-        self.cache = cache if cache is not None else SimulationCache()
-        #: Defs and imported callables the kernel does not hold yet.
-        self.callables = SimulatedCallables(shell, tracking_state, self.probe, function_tracker)
         #: The key and output lineages of one statement.
-        self.statements = StatementLineage(
-            shell, tracking_state, self.probe, self.callables, compute_hash_fn, function_tracker
-        )
+        self.statements = statements
         #: Control structures, each simulated as one unit.
-        self.controls = ControlSimulation(tracking_state, self.probe, self.statements)
+        self.controls = controls
+        #: Defs and imported callables the kernel does not hold yet.
+        self.callables = callables
+        #: The previous simulation's per-cell snapshots, where the next one starts.
+        self.cache = cache
         #: ``TrackingState.module_generation`` the last pass 1 saw.
         self._simulated_module_generation = 0
-        #: Restores from the cache, keyed as simulated here.
-        self.restorer = CacheRestorer(self)
-        #: Loop and accumulator rules.
-        self.loop_rules = LoopRules(self)
-        #: Unsaved edits: which are kept, which taint a name.
-        self.unsaved_edits = UnsavedEdits(self)
-
-    def reset_caches(self) -> None:
-        """Forget every cell snapshot of the previous simulation."""
-        self.cache.reset()
-        self.probe.reset()
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         """Add the files behind the *rerecorded* variables to the snapshots of

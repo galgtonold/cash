@@ -5,7 +5,7 @@ The upstream check restores what it can instead of re-running it:
 and records their producer, probes the checked cell's own statements for cache
 hits that make an upstream re-run unnecessary, and reports the statements the
 plan leaves alone. It keys each statement exactly as the forward simulation
-(:class:`VirtualLineage`) does, through it.
+does, through the :class:`StatementLineage` it is given.
 """
 
 from __future__ import annotations
@@ -31,7 +31,9 @@ from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
 if TYPE_CHECKING:
-    from .virtual_lineage import VirtualLineage
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
+    from .statement_lineage import StatementLineage
 
 
 __all__ = ["CacheRestorer", "lineage_confirmed_vars", "lineage_conflict"]
@@ -83,8 +85,14 @@ def lineage_confirmed_vars(
 class CacheRestorer:
     """Restores upstream statements from the cache, keyed as simulated."""
 
-    def __init__(self, virtual_lineage: VirtualLineage) -> None:
-        self.virtual_lineage = virtual_lineage
+    def __init__(
+        self, shell: ShellProtocol, tracking_state: TrackingState, probe: CacheProbe, statements: StatementLineage
+    ) -> None:
+        self.shell = shell
+        self.tracking_state = tracking_state
+        self.probe = probe
+        #: Keys each statement as the forward simulation does.
+        self.statements = statements
         #: Names the forward probe bound to ``_FORWARD_PROBE_PLACEHOLDER``.
         self._probe_placeholders: set[str] = set()
 
@@ -106,7 +114,7 @@ class CacheRestorer:
         """
         start_time = _perf_counter()
 
-        if not self.virtual_lineage.cash_instance:
+        if not self.probe.cash_instance:
             return set(), 0.0, 0.0
 
         if virtual_modules is None:
@@ -119,17 +127,17 @@ class CacheRestorer:
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
                 key_inputs(inputs, input_hashes),
-                ctx=self.virtual_lineage.statements.key_context(key_lineages(input_hashes), virtual_modules),
+                ctx=self.statements.key_context(key_lineages(input_hashes), virtual_modules),
                 outputs=outputs,
             )
 
             logger.debug("[UPSTREAM] Attempting virtual restore Key: %s", cache_key)
 
             # 2. Query Memory Backend first (fastest) - Or just generic backend
-            metadata, cached_data = self.virtual_lineage.cash_instance.backend.get(cache_key)
+            metadata, cached_data = self.probe.backend().get(cache_key)
             if cached_data is not None:
                 # Call results the entry refers to rather than copies (call_refs).
-                cached_data = resolve_call_refs(cached_data, self.virtual_lineage.cash_instance.backend)
+                cached_data = resolve_call_refs(cached_data, self.probe.backend())
 
             # Extract saved execution time
             saved_time = metadata.get("execution_time", 0.0) if metadata else 0.0
@@ -177,7 +185,7 @@ class CacheRestorer:
         """
         restored_vars: set[str] = set()
         for var, val in variables_to_restore.items():
-            if var in self.virtual_lineage.shell.user_ns and var not in lineage_confirmed:
+            if var in self.shell.user_ns and var not in lineage_confirmed:
                 # Refuse to let an empty cached value clobber live data UNLESS
                 # its lineage was confirmed above. Without that confirmation an
                 # empty value is indistinguishable from a corrupt entry, and
@@ -185,7 +193,7 @@ class CacheRestorer:
                 # With it, blocking the restore is what costs correctness: the
                 # statement re-executes forever and a legitimately-empty result
                 # can never be served from cache.
-                existing = self.virtual_lineage.shell.user_ns[var]
+                existing = self.shell.user_ns[var]
                 try:
                     if len(existing) > 0 and len(val) == 0:
                         logger.debug(
@@ -198,14 +206,14 @@ class CacheRestorer:
                         continue
                 except (TypeError, AttributeError):
                     pass
-            self.virtual_lineage.shell.user_ns[var] = val
+            self.shell.user_ns[var] = val
             restored_vars.add(var)
             if "output_lineages" in metadata:
                 new_lineage = metadata["output_lineages"].get(var)
-                if var in self.virtual_lineage.tracking_state.lineage and new_lineage is not None:
+                if var in self.tracking_state.lineage and new_lineage is not None:
                     # Recorded with the value, so the live object carries
                     # _cash_lineage_hash too.
-                    self.virtual_lineage.tracking_state.lineage.record(var, new_lineage, value=val)
+                    self.tracking_state.lineage.record(var, new_lineage, value=val)
                 else:
                     # Variable wasn't tracked in the lineage store before, but
                     # we still want the attribute attached so future cache-key
@@ -230,7 +238,7 @@ class CacheRestorer:
         """Record what produced each of *restored_vars*, as running the
         statement would have: its lineage, code, code hash, input lineages
         and file dependencies."""
-        state = self.virtual_lineage.tracking_state
+        state = self.tracking_state
         output_lineages = metadata.get("output_lineages", {}) if "output_lineages" in metadata else {}
         stored_code = metadata.get("code")
         stored_hash = metadata.get("source_hash")
@@ -278,7 +286,7 @@ class CacheRestorer:
         This avoids expensive upstream re-execution for scenarios like
         kernel restarts where heavy current-cell statements are on disk.
         """
-        if not self.virtual_lineage.cash_instance or not broken_vars:
+        if not self.probe.cash_instance or not broken_vars:
             return
 
         try:
@@ -321,9 +329,7 @@ class CacheRestorer:
             occurrence_index = occurrences.get(stmt_code, 0)
             occurrences[stmt_code] = occurrence_index + 1
 
-            effects, inputs, outputs = self.virtual_lineage.statements.reads_writes(
-                stmt_code, parse_cached(stmt_code), virtual_modules
-            )
+            effects, inputs, outputs = self.statements.reads_writes(stmt_code, parse_cached(stmt_code), virtual_modules)
             outputs |= effects.callee_globals
             unresolved = inputs & (broken_vars - resolved_by_cache - needed_first)
             if not unresolved:
@@ -333,12 +339,12 @@ class CacheRestorer:
             try:
                 cache_key, _, _, _, _ = compute_cache_key(
                     stmt_code,
-                    inputs | key_hidden_reads(stmt_code, self.virtual_lineage.tracking_state),
-                    ctx=self.virtual_lineage.statements.key_context(virtual_lineage, virtual_modules),
+                    inputs | key_hidden_reads(stmt_code, self.tracking_state),
+                    ctx=self.statements.key_context(virtual_lineage, virtual_modules),
                     outputs=outputs,
                     occurrence_index=occurrence_index,
                 )
-                metadata = self.virtual_lineage.probe.metadata(cache_key)
+                metadata = self.probe.metadata(cache_key)
             except (KeyError, TypeError, ValueError, OSError):
                 metadata = None
             # A metadata-only record (the value stayed in RAM, or was too large
@@ -365,9 +371,9 @@ class CacheRestorer:
                 if var in virtual_lineage:
                     # Recorded now, so later statements probing the cache key
                     # with it.
-                    self.virtual_lineage.tracking_state.lineage.record(var, virtual_lineage[var])
-                if var not in self.virtual_lineage.shell.user_ns:
-                    self.virtual_lineage.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
+                    self.tracking_state.lineage.record(var, virtual_lineage[var])
+                if var not in self.shell.user_ns:
+                    self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
                     self._probe_placeholders.add(var)
             logger.debug(
                 "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
@@ -393,9 +399,9 @@ class CacheRestorer:
         next check and to the user. It goes, with the lineage recorded for it.
         """
         for var in self._probe_placeholders:
-            if self.virtual_lineage.shell.user_ns.get(var) is _FORWARD_PROBE_PLACEHOLDER:
-                del self.virtual_lineage.shell.user_ns[var]
-                self.virtual_lineage.tracking_state.lineage.discard(var)
+            if self.shell.user_ns.get(var) is _FORWARD_PROBE_PLACEHOLDER:
+                del self.shell.user_ns[var]
+                self.tracking_state.lineage.discard(var)
         self._probe_placeholders.clear()
 
     def collect_skipped_statement_metrics(
@@ -456,10 +462,10 @@ class CacheRestorer:
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
                 key_inputs(inputs, input_hashes),
-                ctx=self.virtual_lineage.statements.key_context(key_lineages(input_hashes), virtual_modules),
+                ctx=self.statements.key_context(key_lineages(input_hashes), virtual_modules),
                 outputs=outputs,
             )
-            metadata = self.virtual_lineage.probe.metadata(cache_key)
+            metadata = self.probe.metadata(cache_key)
             if metadata:
                 saved_time = metadata.get("execution_time", 0.0)
                 is_metadata_only = metadata.get("metadata_only", False)

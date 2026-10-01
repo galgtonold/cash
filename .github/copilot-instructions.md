@@ -60,8 +60,11 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
   them and the notebook refuses to cache them.
 - **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
   `ipython/` (`CashMagics`, the cell executor), `statement/` (`StatementProcessor`
-  and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator`,
-  virtual lineage), `control_structures/` (per-iteration loop and branch caching)
+  and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator` and
+  the parts it wires together: `VirtualLineage` for the forward simulation,
+  `StatementLineage` for one statement's key and lineages, `CacheProbe` for
+  backend reads, `SimulatedCallables`, `ControlSimulation`, `CacheRestorer`),
+  `control_structures/` (per-iteration loop and branch caching)
   and `badge_renderer/`. `cache_key.py` and `lineage_store.py` hold the rules below.
 - **Layering:** `notebook/` imports `core` and the shared layer, never the reverse.
   Outside `notebook/`, only the magics loaders (`Cash.register_magic`,

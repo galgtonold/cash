@@ -19,7 +19,8 @@ from ...source_norm import exact_source_digest
 from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
-    from .virtual_lineage import VirtualLineage
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
 
 
 __all__ = ["LoopRules"]
@@ -48,8 +49,9 @@ class LoopRules:
         "finally:",
     )
 
-    def __init__(self, virtual_lineage: VirtualLineage) -> None:
-        self.virtual_lineage = virtual_lineage
+    def __init__(self, shell: ShellProtocol, tracking_state: TrackingState) -> None:
+        self.shell = shell
+        self.tracking_state = tracking_state
 
     def loop_accumulators_with_external_init(
         self,
@@ -86,11 +88,9 @@ class LoopRules:
                 if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                     continue  # loop/control wrapper; iterable feeds via the loop
                 for inp in inputs:
-                    if inp in loop_target_vars or unbound_builtin(
-                        inp, self.virtual_lineage.tracking_state.variable_lineage
-                    ):
+                    if inp in loop_target_vars or unbound_builtin(inp, self.tracking_state.variable_lineage):
                         continue
-                    val = self.virtual_lineage.shell.user_ns.get(inp)
+                    val = self.shell.user_ns.get(inp)
                     if val is not None and isinstance(val, types.ModuleType):
                         continue
                     tainted.add(acc)
@@ -124,7 +124,7 @@ class LoopRules:
         their lineages disagree by construction.
         """
         changed: set[str] = set()
-        outcomes = self.virtual_lineage.tracking_state.control_outcomes
+        outcomes = self.tracking_state.control_outcomes
         for entry in simulation_trace:
             stmt_code, outputs, inputs, input_hashes = (
                 entry.stmt_code,
@@ -143,10 +143,10 @@ class LoopRules:
                     inp in outputs
                     or inp in loop_target_vars
                     or inp in vars_derived_from_loops
-                    or unbound_builtin(inp, self.virtual_lineage.tracking_state.variable_lineage, input_hashes)
+                    or unbound_builtin(inp, self.tracking_state.variable_lineage, input_hashes)
                 ):
                     continue
-                if isinstance(self.virtual_lineage.shell.user_ns.get(inp), types.ModuleType):
+                if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
                     continue
                 now, then = input_hashes.get(inp), recorded[0].get(inp)
                 if now is not None and then is not None and now != then:
@@ -241,9 +241,9 @@ class LoopRules:
         )
         if not empty_init_pattern.match(stripped):
             return False
-        if out_var not in self.virtual_lineage.shell.user_ns:
+        if out_var not in self.shell.user_ns:
             return False
-        existing_val = self.virtual_lineage.shell.user_ns[out_var]
+        existing_val = self.shell.user_ns[out_var]
         try:
             is_non_empty = bool(existing_val)
         except (ValueError, TypeError):
@@ -334,9 +334,9 @@ class LoopRules:
         if upstream_has_modifications or not vars_mutated_by_loops:
             return False
         for mv in vars_mutated_by_loops:
-            if mv not in self.virtual_lineage.tracking_state.executed_cell_codes:
+            if mv not in self.tracking_state.executed_cell_codes:
                 continue
-            exec_code = strip_markers(self.virtual_lineage.tracking_state.executed_cell_codes[mv]).strip()
+            exec_code = strip_markers(self.tracking_state.executed_cell_codes[mv]).strip()
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]

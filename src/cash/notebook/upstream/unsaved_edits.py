@@ -22,7 +22,8 @@ from ._types import normalize_stmt
 from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
-    from .virtual_lineage import VirtualLineage
+    from ..tracking_state import TrackingState
+    from .statement_lineage import StatementLineage
 
 
 __all__ = ["UnsavedEdits"]
@@ -33,8 +34,10 @@ logger = logging.getLogger(__name__)
 class UnsavedEdits:
     """The upstream check's handling of unsaved edits."""
 
-    def __init__(self, virtual_lineage: VirtualLineage) -> None:
-        self.virtual_lineage = virtual_lineage
+    def __init__(self, tracking_state: TrackingState, statements: StatementLineage) -> None:
+        self.tracking_state = tracking_state
+        #: Projects what an unsaved edit would have bound, as the simulation would.
+        self.statements = statements
 
     def compute_tainted_vars_from_unsaved_edits(
         self,
@@ -100,11 +103,11 @@ class UnsavedEdits:
         """
         directly_mismatched: set[str] = set()
         for vname in virtual_lineage:
-            if vname not in self.virtual_lineage.tracking_state.variable_lineage:
+            if vname not in self.tracking_state.variable_lineage:
                 continue
-            if virtual_lineage[vname] == self.virtual_lineage.tracking_state.variable_lineage[vname]:
+            if virtual_lineage[vname] == self.tracking_state.variable_lineage[vname]:
                 continue
-            producing_code = self.virtual_lineage.tracking_state.executed_cell_codes.get(vname)
+            producing_code = self.tracking_state.executed_cell_codes.get(vname)
             if producing_code is None:
                 continue
             normalized_prod = strip_markers(producing_code).strip()
@@ -145,14 +148,14 @@ class UnsavedEdits:
             # However, the lineage hash construction below sorts them anyway.
             sorted_inputs = sorted(inputs)
             for inp in sorted_inputs:
-                if unbound_builtin(inp, self.virtual_lineage.tracking_state.variable_lineage, virtual_lineage):
+                if unbound_builtin(inp, self.tracking_state.variable_lineage, virtual_lineage):
                     continue
 
                 if inp in virtual_lineage:
                     input_lineages.append(virtual_lineage[inp])
-                elif inp in self.virtual_lineage.tracking_state.variable_lineage:
+                elif inp in self.tracking_state.variable_lineage:
                     # Fallback to memory if virtual missing (external var not in notebook)
-                    input_lineages.append(self.virtual_lineage.tracking_state.variable_lineage[inp])
+                    input_lineages.append(self.tracking_state.variable_lineage[inp])
                 else:
                     # Input missing entirely. Cannot verify.
                     return False
@@ -164,9 +167,7 @@ class UnsavedEdits:
             # function-source component. A hand-rolled sha256(code)+input_lineages
             # omitted it, so any function-routed edit always projected != recorded
             # and was wrongly discarded. [layer 1]
-            projected = self.virtual_lineage.statements.output_lineages(
-                source_hash, input_lineages, "", inputs, outputs, code
-            )
+            projected = self.statements.output_lineages(source_hash, input_lineages, "", inputs, outputs, code)
 
             return actual_lineage in projected.values()
 
@@ -223,8 +224,8 @@ class UnsavedEdits:
             if var_name in vars_updated_by_trace:
                 continue
 
-            if var_name in self.virtual_lineage.tracking_state.executed_cell_codes:
-                mem_code = self.virtual_lineage.tracking_state.executed_cell_codes[var_name]
+            if var_name in self.tracking_state.executed_cell_codes:
+                mem_code = self.tracking_state.executed_cell_codes[var_name]
 
                 is_in_trace = False
                 for entry in simulation_trace:

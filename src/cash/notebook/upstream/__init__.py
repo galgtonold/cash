@@ -11,10 +11,12 @@ Public surface (tests):
 
 Everything else is internal to this package: the simulation's phases
 (:class:`VirtualLineage`, :class:`MismatchClassifier`,
-:class:`ReexecutionPlanner`), the parts they and the checker delegate to
-(``cache_restore``, ``loop_rules``, ``unsaved_edits``, ``stale_values``,
-``read_scope``, ``file_writers``, ``notebook_vetting``, ``rng_rewind``,
-``replay``), and the value types in ``_types``.
+:class:`ReexecutionPlanner`), the parts ``NotebookSimulator`` builds and
+hands to them (``cache_probe``, ``simulated_callables``,
+``statement_lineage``, ``control_simulation``, ``cache_restore``,
+``loop_rules``, ``unsaved_edits``, ``stale_values``, ``read_scope``,
+``file_writers``), the checker's own parts (``notebook_vetting``,
+``rng_rewind``, ``replay``), and the value types in ``_types``.
 """
 
 from __future__ import annotations
