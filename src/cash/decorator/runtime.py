@@ -34,9 +34,9 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
-from .code_identity import func_key
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
+from .function_identity import func_key
 from .globals_fold import CLASSES_FOLDED, READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from .code_identity import CodeIdentity
     from .explain import MissHistory
     from .file_deps import FileDeps
+    from .function_identity import OwnSourcePins
     from .globals_fold import GlobalsFold
     from .purity_checks import PurityChecks
     from .registry import FunctionRegistry
@@ -93,6 +94,7 @@ class KeyBuilder:
         registry: FunctionRegistry,
         args: ArgHasher,
         code: CodeIdentity,
+        pins: OwnSourcePins,
         files: FileDeps,
         closures: ClosureFold,
         globals_fold: GlobalsFold,
@@ -105,6 +107,7 @@ class KeyBuilder:
         self._registry = registry
         self._args = args
         self._code = code
+        self._pins = pins
         self._files = files
         self._closures = closures
         self._globals = globals_fold
@@ -170,7 +173,7 @@ class KeyBuilder:
         """
         state_hash = self._state_hasher.compute(
             func_name,
-            own_source_override=self._code.pin_own_source(func),
+            own_source_override=self._pins.pin_own_source(func),
             own_report=self._registry.report_for(func, func_name),
             note=note,
         )

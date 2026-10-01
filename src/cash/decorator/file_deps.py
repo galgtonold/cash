@@ -30,7 +30,7 @@ from ..tracking.file_dep_snapshot import (
 from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
 from .cache_metadata import CacheMetadata
-from .code_identity import CODE_KEYED_STATS
+from .function_identity import CODE_KEYED_STATS
 
 if TYPE_CHECKING:
     from .registry import FunctionRegistry

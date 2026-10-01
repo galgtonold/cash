@@ -37,7 +37,7 @@ from ..value_types import CODELESS_PRIMS
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import iter_code_scopes, unsafe_uses_of, waived_use_filter
-from .code_identity import hash_callable_source
+from .function_identity import hash_callable_source
 from .key_values import (
     SYNC_TYPES,
     carried_payload,

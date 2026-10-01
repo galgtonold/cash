@@ -39,7 +39,7 @@ from ..install_paths import is_user_module
 from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import iter_code_scopes, unsafe_uses_of
-from .code_identity import func_key
+from .function_identity import func_key
 from .key_values import is_immutable_capture, plain_data_kind
 from .user_code import own_package
 

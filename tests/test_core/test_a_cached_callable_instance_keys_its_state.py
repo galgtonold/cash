@@ -17,7 +17,7 @@ import textwrap
 import pytest
 
 import cash
-from cash.decorator.code_identity import func_key
+from cash.decorator.function_identity import func_key
 
 pytestmark = pytest.mark.core
 

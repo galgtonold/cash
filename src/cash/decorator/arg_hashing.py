@@ -971,7 +971,7 @@ class ArgHasher:
         name goes in, so two classes returning the same id key apart, and so
         does the method's code, so editing it invalidates what it keyed.
         """
-        from .code_identity import hash_callable_source
+        from .function_identity import hash_callable_source
 
         name = type_name(value)
         depth = getattr(_CASH_KEY_DEPTH, "n", 0)

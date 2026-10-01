@@ -24,7 +24,7 @@ from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
-from .code_identity import code_fingerprint, hash_callable_source
+from .function_identity import code_fingerprint, hash_callable_source
 from .key_values import SYNC_TYPES, is_immutable_capture
 from .user_code import is_cash_wrapper, is_user_code_object
 

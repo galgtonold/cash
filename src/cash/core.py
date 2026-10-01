@@ -48,11 +48,7 @@ from .decorator.call_state import (
 from .decorator.cash_key import KeyCheck
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
 from .decorator.code_args import CodeArgs
-from .decorator.code_identity import (
-    CodeIdentity,
-    func_key,
-    hash_callable_source,
-)
+from .decorator.code_identity import CodeIdentity
 from .decorator.explain import (
     CacheExplanation,
     Explainer,
@@ -61,6 +57,7 @@ from .decorator.explain import (
 )
 from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
+from .decorator.function_identity import OwnSourcePins, func_key, hash_callable_source
 from .decorator.globals_fold import GlobalsFold
 from .decorator.purity_checks import LearnedMutations, PurityChecks
 from .decorator.registry import FunctionRegistry, checked_depends_on, warn_inert_dependency
@@ -263,7 +260,7 @@ class Cash:
     def get_func_key(func: Callable) -> str:
         """Return a module-qualified key for a function (``module.qualname``).
 
-        See `cash.decorator.code_identity.func_key`.
+        See `cash.decorator.function_identity.func_key`.
         """
         return func_key(func)
 
@@ -353,6 +350,7 @@ class Cash:
             KeyCheck(self._backend_slot.local_dir, lambda: self.config.check_cash_keys),
         )
         self._code = CodeIdentity(self._args)
+        self._pins = OwnSourcePins()
         self._captures = CaptureAnalysis()
         self._helpers = HelperIdentity(self._args, self._captures)
         self._mutations = LearnedMutations()
@@ -393,6 +391,7 @@ class Cash:
             self._registry,
             self._args,
             self._code,
+            self._pins,
             self._files,
             self._closures,
             self._globals,
@@ -615,7 +614,7 @@ class Cash:
         func_name = cf.name
         for dep in self._registry.register(cf, depends_on):
             warn_inert_dependency(self._notices, func_name, dep)
-        self._code.pin_own_source(func, self.source_hashes[func_name])
+        self._pins.pin_own_source(func, self.source_hashes[func_name])
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):

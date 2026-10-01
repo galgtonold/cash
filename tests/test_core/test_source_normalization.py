@@ -13,7 +13,7 @@ import warnings
 
 import pytest
 
-from cash.decorator.code_identity import hash_callable_source
+from cash.decorator.function_identity import hash_callable_source
 from cash.source_norm import normalize_source_for_hash
 
 

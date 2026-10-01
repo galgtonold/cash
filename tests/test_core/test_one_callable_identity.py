@@ -17,7 +17,7 @@ import textwrap
 import pytest
 
 from cash import Cash
-from cash.decorator.code_identity import hash_callable_source
+from cash.decorator.function_identity import hash_callable_source
 from cash.source_norm import callable_identity
 from cash.tracking.function_tracker import FunctionTracker
 

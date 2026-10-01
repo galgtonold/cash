@@ -1072,13 +1072,13 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
 <!-- claim: cash/source_norm.py:_pyc_proves_unchanged @5d0686e2 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
 
-<!-- claim: cash/decorator/code_identity.py:CodeIdentity.pin_own_source @fb1cadae -->
+<!-- claim: cash/decorator/function_identity.py:OwnSourcePins.pin_own_source @fb1cadae -->
 **Why it matters.** cash keys that code by what is actually running, so
 results in this process are correct, and they are not reused after a restart
 on the new code.

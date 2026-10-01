@@ -27,7 +27,7 @@ import pytest
 
 import cash
 from cash import _annotation_refs, object_hashing
-from cash.decorator import arg_hashing, cache_metadata, code_identity
+from cash.decorator import arg_hashing, cache_metadata, function_identity
 from cash.decorator.arg_hashing import ArgHasher
 from cash.decorator.globals_fold import GlobalsFold
 from tests.test_core import _hit_work_fixture as fx
@@ -228,15 +228,15 @@ def test_a_generated_method_s_identity_is_read_once(monkeypatch):
 
     init = Point.__init__
     reads = []
-    real = code_identity.source_digest
+    real = function_identity.source_digest
 
     def spy(fn):
         reads.append(fn)
         return real(fn)
 
-    monkeypatch.setattr(code_identity, "source_digest", spy)
-    first = code_identity.hash_callable_source(init)
-    assert code_identity.hash_callable_source(init) == first
+    monkeypatch.setattr(function_identity, "source_digest", spy)
+    first = function_identity.hash_callable_source(init)
+    assert function_identity.hash_callable_source(init) == first
     assert len(reads) == 1
 
 
