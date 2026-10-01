@@ -976,7 +976,7 @@ class MismatchClassifier:
         stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         # A callee's globals are inputs too, once the statement runs; the ones
         # missing from the kernel must be rebuilt first (absent_callee_globals).
-        callee_names = self.virtual_lineage.absent_callee_globals(
+        callee_names = self.virtual_lineage.callables.absent_callee_globals(
             set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules
         )
         for inp in [*stmt_inputs, *sorted(callee_names - set(stmt_inputs))]:

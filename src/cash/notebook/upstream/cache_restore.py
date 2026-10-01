@@ -129,7 +129,7 @@ class CacheRestorer:
                     virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.virtual_lineage.compute_hash_fn,
-                    virtual_callables=self.virtual_lineage._virtual_callables,
+                    virtual_callables=self.virtual_lineage.callables.by_lineage,
                 ),
                 outputs=outputs,
             )
@@ -352,7 +352,7 @@ class CacheRestorer:
                         virtual_lineage=virtual_lineage,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.virtual_lineage.compute_hash_fn,
-                        virtual_callables=self.virtual_lineage._virtual_callables,
+                        virtual_callables=self.virtual_lineage.callables.by_lineage,
                     ),
                     outputs=outputs,
                     occurrence_index=occurrence_index,
@@ -482,7 +482,7 @@ class CacheRestorer:
                     virtual_lineage=key_lineages(input_hashes),
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.virtual_lineage.compute_hash_fn,
-                    virtual_callables=self.virtual_lineage._virtual_callables,
+                    virtual_callables=self.virtual_lineage.callables.by_lineage,
                 ),
                 outputs=outputs,
             )

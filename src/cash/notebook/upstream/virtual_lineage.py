@@ -10,13 +10,10 @@ from the cache for the later phases through ``CacheRestorer.try_virtual_restore`
 from __future__ import annotations
 
 import ast
-import base64
 import builtins
 import logging
-import marshal
 import os
 import re
-import sys
 import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -36,7 +33,7 @@ from ...analysis.mutation_effects import (
     statement_effects,
 )
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
-from ...source_norm import exact_source_digest, source_identity_digest
+from ...source_norm import exact_source_digest
 from ...tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
@@ -45,13 +42,8 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from ..cache_key import (
     CacheKeyContext,
-    VirtualCallable,
-    called_function_dependencies,
-    called_function_globals,
     compute_cache_key,
     statement_source_hash,
-    virtual_callable_key,
-    virtual_namespace,
 )
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
 from ..lineage_formula import (
@@ -81,6 +73,7 @@ from ._types import (
 from .cache_probe import CacheProbe
 from .cache_restore import CacheRestorer
 from .loop_rules import LoopRules
+from .simulated_callables import SimulatedCallables
 from .unsaved_edits import UnsavedEdits
 
 if TYPE_CHECKING:
@@ -170,13 +163,8 @@ class VirtualLineage:
         #: Metadata and file-freshness reads from the backend.
         self.probe = CacheProbe(cash_instance)
         self.cache = cache if cache is not None else SimulationCache()
-        #: Simulated ``def``s by lineage (``VirtualCallable``). Content-
-        #: addressed, so an entry never goes stale; the cap bounds memory.
-        self._virtual_callables: dict[str, VirtualCallable] = {}
-        #: Classes a simulated ``from X import C`` bound, by lineage -> the
-        #: source digest the runtime folds into a lineage (see
-        #: ``_register_imported_callables``). Not in the key: it skips classes.
-        self._imported_classes: dict[str, str] = {}
+        #: Defs and imported callables the kernel does not hold yet.
+        self.callables = SimulatedCallables(shell, tracking_state, self.probe, function_tracker)
         #: The lineage ``_propagate_import_lineage`` last gave each name, so a
         #: later import of that name can replace it -- but not one the runtime set.
         self.propagated_imports: dict[str, str] = {}
@@ -617,7 +605,7 @@ class VirtualLineage:
                 input_hashes[inp] = virtual_lineage[inp]
             elif inp in self.tracking_state.variable_lineage:
                 input_hashes[inp] = self.tracking_state.variable_lineage[inp]
-        callee_lineages = self._virtual_callee_lineages(inputs, virtual_lineage, virtual_modules)
+        callee_lineages = self.callables.callee_lineages(inputs, virtual_lineage, virtual_modules)
         hidden_lineages = {
             var: virtual_lineage.get(var, self.tracking_state.variable_lineage.get(var))
             for var in key_hidden_reads(stmt_code, self.tracking_state)
@@ -1275,164 +1263,6 @@ class VirtualLineage:
                 stmt_file_deps[file_path] = stat.st_mtime
         return compute_file_hash_component(present) if present else ""
 
-    #: See ``_virtual_callables``.
-    _VIRTUAL_CALLABLES_MAX = 4096
-
-    def _register_virtual_callable(
-        self,
-        stmt_code: str,
-        tree: ast.Module | None,
-        virtual_lineage: dict[str, str],
-    ) -> None:
-        """Remember a simulated ``def`` under its lineage (see ``VirtualCallable``).
-
-        *stmt_code* is ``ast.unparse`` of the def, which is also the text the
-        runtime compiles it from and ``inspect.getsource`` returns for it, so
-        its digest and code are the live function's. A decorated def is left
-        out: the name is bound to whatever the decorator returns, whose source
-        and code are not the def's.
-        """
-        if tree is None or len(tree.body) != 1:
-            return
-        node = tree.body[0]
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.decorator_list:
-            return
-        lineage = virtual_lineage.get(node.name)
-        if not lineage or virtual_callable_key(lineage, node.name) in self._virtual_callables:
-            return
-        try:
-            module = compile(stmt_code, "<cash-simulated>", "exec", dont_inherit=True)
-        except (SyntaxError, ValueError):
-            return
-        code = next((c for c in module.co_consts if isinstance(c, types.CodeType) and c.co_name == node.name), None)
-        if code is None:
-            return
-        if len(self._virtual_callables) >= self._VIRTUAL_CALLABLES_MAX:
-            self._virtual_callables.clear()
-        self._virtual_callables[virtual_callable_key(lineage, node.name)] = VirtualCallable(
-            source_identity_digest(stmt_code), code
-        )
-
-    def _register_imported_callables(
-        self,
-        tree: ast.Module | None,
-        virtual_lineage: dict[str, str],
-        stmt_code: str = "",
-    ) -> None:
-        """Remember what a simulated ``from X import Y`` binds, as the live object would count.
-
-        The runtime folds a source digest into the lineage of every statement
-        that reads a callable -- a class included -- and into the key for a
-        function. After a restart ``EXPORTS = Path(...)`` was simulated before
-        the import had run again: no ``Path`` in ``user_ns``, no digest, and a
-        lineage the runtime never gave ``EXPORTS`` -- so nothing built from it
-        restored. The digest comes from the module object
-        when it is already imported (``pathlib`` always is), else from what the
-        statement bound when it last ran (``CacheProbe.import_bindings``): the simulation
-        never imports anything itself.
-        """
-        if tree is None:
-            return
-        tracker = self.function_tracker
-        for node in tree.body:
-            if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
-                continue
-            module = sys.modules.get(node.module)
-            for alias in node.names:
-                name = alias.asname or alias.name
-                lineage = virtual_lineage.get(name)
-                if not lineage or name in self.shell.user_ns:
-                    continue
-                obj = getattr(module, alias.name, None) if module is not None else None
-                if obj is not None and tracker is not None:
-                    if not callable(obj):
-                        continue
-                    try:
-                        digest = tracker.get_function_source_hash(obj)
-                    except Exception:  # noqa: BLE001 - a digest we cannot take is one we do not claim
-                        continue
-                    code = getattr(obj, "__code__", None)
-                    is_class = isinstance(obj, type)
-                else:
-                    entry = self.probe.import_bindings(stmt_code).get(name) if stmt_code else None
-                    if not entry or entry.get("module"):
-                        continue
-                    digest, is_class, code = entry.get("digest"), bool(entry.get("is_class")), None
-                    if entry.get("code"):
-                        try:
-                            code = marshal.loads(base64.b64decode(entry["code"]))
-                        except (ValueError, EOFError, TypeError):
-                            code = None
-                if digest is None:
-                    continue
-                if is_class:
-                    self._imported_classes[virtual_callable_key(lineage, name)] = digest
-                elif isinstance(code, types.CodeType):
-                    self._virtual_callables.setdefault(
-                        virtual_callable_key(lineage, name), VirtualCallable(digest, code)
-                    )
-
-    def _virtual_callee_lineages(
-        self,
-        inputs: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-    ) -> dict[str, str] | None:
-        """Lineages, here, of the globals read by callees that exist only as simulated defs."""
-        user_ns = self.shell.user_ns
-        if not self._virtual_callables or all(name in user_ns for name in inputs):
-            return None
-        virtual = virtual_namespace(
-            self._virtual_callables, virtual_lineage, self.tracking_state.variable_lineage, virtual_modules
-        )
-        deps = called_function_dependencies(sorted(inputs), user_ns, self.tracking_state.variable_lineage, virtual)
-        found = dict(dep.split(":", 1) for dep in deps)
-        return {name: lin for name, lin in found.items() if lin != "ABSENT"} or None
-
-    def absent_callee_globals(
-        self,
-        inputs: set[str],
-        virtual_lineage: dict[str, str],
-        virtual_modules: set[str],
-    ) -> set[str]:
-        """Names the callees in *inputs* read that the kernel does not hold.
-
-        A statement re-run to rebuild a value needs them bound, and its own
-        inputs do not name them: after a restart ``summary = score(raw)`` was
-        re-run with ``score``'s ``OFFSET`` never rebuilt -- a NameError, where
-        the cell had run fine. Modules included: the def's cell imported them.
-        """
-
-        user_ns = self.shell.user_ns
-        virtual = (
-            virtual_namespace(
-                self._virtual_callables, virtual_lineage, self.tracking_state.variable_lineage, virtual_modules
-            )
-            if self._virtual_callables
-            else None
-        )
-        names = called_function_globals(inputs, user_ns, virtual, keep_modules=True)
-        return {name for name in names if name not in user_ns}
-
-    def _virtual_callable_hashes(self, inputs: set[str], virtual_lineage: dict[str, str]) -> dict[str, str]:
-        """``name -> source digest`` for callable inputs the kernel does not hold yet:
-        simulated defs, and what a simulated ``from X import Y`` bound."""
-        if not self._virtual_callables and not self._imported_classes:
-            return {}
-        user_ns = self.shell.user_ns
-        found: dict[str, str] = {}
-        for name in inputs:
-            if name in user_ns:
-                continue
-            lineage = virtual_lineage.get(name) or self.tracking_state.variable_lineage.get(name) or ""
-            key = virtual_callable_key(lineage, name)
-            virtual = self._virtual_callables.get(key)
-            if virtual is not None:
-                found[name] = virtual.source_hash
-            elif key in self._imported_classes:
-                found[name] = self._imported_classes[key]
-        return found
-
     def _compute_virtual_output_lineages(
         self,
         source_hash: str,
@@ -1459,13 +1289,13 @@ class VirtualLineage:
         did everything computed from it.
 
         A callee that is only a simulated def contributes its digest as the
-        live function would (``_virtual_callable_hashes``).
+        live function would (``SimulatedCallables.source_hashes``).
         """
         function_tracker = self.function_tracker
         user_ns = self.shell.user_ns
         try:
             func_component = callable_source_component(function_tracker, inputs, user_ns)
-            virtual = self._virtual_callable_hashes(inputs, virtual_lineage or {})
+            virtual = self.callables.source_hashes(inputs, virtual_lineage or {})
             if virtual and function_tracker is not None:
                 hashes = function_tracker.get_callable_source_hashes(inputs, user_ns)
                 hashes.update(virtual)
@@ -1655,7 +1485,7 @@ class VirtualLineage:
                         virtual_lineage=virtual_lineage,
                         virtual_modules=virtual_modules,
                         compute_hash_fn=self.compute_hash_fn,
-                        virtual_callables=self._virtual_callables,
+                        virtual_callables=self.callables.by_lineage,
                     ),
                     outputs=outputs,
                     occurrence_index=occurrence_index,
@@ -1691,7 +1521,7 @@ class VirtualLineage:
                     virtual_lineage=virtual_lineage,
                     virtual_modules=virtual_modules,
                     compute_hash_fn=self.compute_hash_fn,
-                    virtual_callables=self._virtual_callables,
+                    virtual_callables=self.callables.by_lineage,
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
@@ -1715,9 +1545,9 @@ class VirtualLineage:
                 # Union derivation-bumped vars so this cached mutation statement
                 # is still recorded as a producer of the aliased base.
                 outputs = outputs | hit_bumped
-                self._register_virtual_callable(stmt_code, mutation_tree, virtual_lineage)
+                self.callables.register_def(stmt_code, mutation_tree, virtual_lineage)
                 if is_import:
-                    self._register_imported_callables(mutation_tree, virtual_lineage, stmt_code)
+                    self.callables.register_imports(mutation_tree, virtual_lineage, stmt_code)
                 return outputs, cache_lookup_time, False, stmt_file_deps
 
             _, cache_lookup_time, files_stale, stmt_file_deps, extra_file_deps = cache_result
@@ -1761,9 +1591,9 @@ class VirtualLineage:
 
             # Update virtual state
             virtual_lineage.update(lineage_by_out)
-            self._register_virtual_callable(stmt_code, mutation_tree, virtual_lineage)
+            self.callables.register_def(stmt_code, mutation_tree, virtual_lineage)
             if is_import:
-                self._register_imported_callables(mutation_tree, virtual_lineage, stmt_code)
+                self.callables.register_imports(mutation_tree, virtual_lineage, stmt_code)
 
             # Mirror the runtime derivation-alias bump: when
             # a base/frame is mutated in place, bump its live-alias derivatives.

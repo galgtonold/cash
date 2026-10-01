@@ -610,7 +610,9 @@ class ReexecutionPlanner:
             i = pending.pop(0)
             inputs = set(simulation_trace[i].inputs or ())
             if virtual_lineage is not None:
-                inputs |= self.virtual_lineage.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
+                inputs |= self.virtual_lineage.callables.absent_callee_globals(
+                    inputs, virtual_lineage, virtual_modules or set()
+                )
             for v in sorted(inputs):
                 if v not in user_ns and hasattr(builtins, v):
                     continue
