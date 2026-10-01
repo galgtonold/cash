@@ -39,7 +39,7 @@ from typing import Any
 from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
-from cash.analysis.cacheability_decision import decide_cacheability, identity_coupled_reason
+from cash.analysis.cacheability_decision import decide_cacheability
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -62,7 +62,6 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
-from cash.notebook.consumables import is_consumable_unrestorable
 from cash.object_hashing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
@@ -859,37 +858,6 @@ class CallUnit:
         return events
 
 
-def _is_storable(result) -> bool:
-    """``cache_if`` predicate: may this call's result be written to the cache?
-
-    Refuses objects that are identity-coupled to a library global — today, a
-    matplotlib Figure/Axes. The RAM tier deep-copies on store and
-    ``Figure.__setstate__`` re-registers the COPY as pyplot's *current figure*,
-    so a later bare ``plt.savefig()`` writes the cache's snapshot instead of the
-    figure the user drew on, on the FIRST run and silently.
-
-    ``statement/processor.py`` already refuses exactly this shape. Routing calls
-    through the decorator skipped that guard, because the decorator never sees a
-    statement — adversarial probing produced two different PNGs from one figure
-    and ``plt.gcf() is fig`` returning False. Applied as ``cache_if`` rather than
-    a post-check so the refusal lands *before* the write, which is what stops
-    the deep copy from being made at all.
-
-    Nor a consumable the store cannot copy (an open file, a generator): the RAM
-    tier keeps it by reference, so a hit would hand back the object a reader
-    already drained. Everything else the decorator would cache is still cached.
-
-    A check that raises answers "not stored": the call then runs again next
-    time, where storing a value nothing could judge might hand back the very
-    object these checks exist to keep out of the cache.
-    """
-    try:
-        return identity_coupled_reason("<intercepted call>", result) is None and not is_consumable_unrestorable(result)
-    except Exception:
-        logger.debug("storability check raised; the result is not stored", exc_info=True)
-        return False
-
-
 class CallCache:
     """Resolves a callee to the thing that should actually be called.
 
@@ -915,11 +883,12 @@ class CallCache:
     def __init__(
         self,
         cash_instance,
-        ctx_provider: Callable[[], CacheKeyContext] | None = None,
-        loop_vars_provider: Callable[[], dict[str, Any]] | None = None,
-        loop_var_digests_provider: Callable[[], dict[str, str]] | None = None,
-        ttl_provider: Callable[[], int | None] | None = None,
-        persist_provider: Callable[[], bool] | None = None,
+        *,
+        ctx_provider: Callable[[], CacheKeyContext],
+        loop_vars_provider: Callable[[], dict[str, Any]],
+        loop_var_digests_provider: Callable[[], dict[str, str]],
+        ttl_provider: Callable[[], int | None],
+        persist_provider: Callable[[], bool],
     ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
@@ -952,7 +921,7 @@ class CallCache:
         # exactly what fixes the underlying key collision -- a shared wrapper
         # closes over one `site`, and a wrapper reused across statements would
         # still build the collapsed key `stmt_identity` exists to prevent.
-        self._wrappers: dict[tuple[int, CallSite | None], tuple[types.FunctionType, object]] = {}
+        self._wrappers: dict[tuple[int, CallSite], tuple[types.FunctionType, object]] = {}
         # NOTE: there is deliberately no name-reconciliation here any more.
         # This class used to rebuild ``module.qualname`` via
         # ``Cash.get_func_key`` so the badge could tell an intercepted call
@@ -965,52 +934,12 @@ class CallCache:
         self._sites: list[CallSite] = []
         self._call_unit = CallUnit(
             cash_instance,
-            ctx_provider or self._default_ctx,
-            loop_vars_provider or self._default_loop_vars,
-            loop_var_digests_provider or self._default_loop_var_digests,
-            # No fallback: absent a live processor there is no annotation in
-            # force, and `None` is precisely "no TTL".
+            ctx_provider,
+            loop_vars_provider,
+            loop_var_digests_provider,
             ttl_provider,
-            # Same reasoning for `persist`: no processor means no annotation,
-            # and `None` degrades to "don't force it".
             persist_provider,
         )
-
-    def _default_ctx(self) -> CacheKeyContext:
-        """Fallback used only when no live processor state was wired in.
-
-        The production call site (``statement/processor.py``) always supplies a
-        real ``ctx_provider`` bound to the executing cell's ``user_ns`` and
-        ``variable_lineage``. This empty context is exercised only by
-        ``resolve()`` calls that never registered a site (see below) -- direct,
-        non-production use of ``CallCache`` -- where it is harmless: lineage
-        resolution degrades to id-based hashing rather than a dict lookup, and
-        nothing is served incorrectly.
-        """
-        return CacheKeyContext(variable_lineage={}, user_ns={})
-
-    @staticmethod
-    def _default_loop_vars() -> dict[str, Any]:
-        """Fallback used only when no live processor state was wired in.
-
-        Same reasoning as :meth:`_default_ctx`: the production call site
-        always supplies a real ``loop_vars_provider`` bound to the executing
-        statement processor's loop-var stack. ``{}`` here is what
-        ``call_cache_key`` already treats as "outside a loop" -- correct,
-        merely undiscriminated.
-        """
-        return {}
-
-    @staticmethod
-    def _default_loop_var_digests() -> dict[str, str]:
-        """Fallback used only when no live processor state was wired in.
-
-        Same reasoning as :meth:`_default_loop_vars`. ``{}`` here is what
-        ``call_cache_key``'s ``_loop_var_digest`` already treats as "no
-        precomputed digest" -- it falls through to a fresh
-        ``compute_hash_full`` of the value, correct, merely undiscounted.
-        """
-        return {}
 
     def begin_cell(self) -> None:
         self._call_unit.begin_cell()
@@ -1053,7 +982,10 @@ class CallCache:
         try:
             site = self._sites[site_index]
         except (IndexError, TypeError):
-            site = None
+            # No site registered for this index: the rewrite never routes a
+            # call here without one, and a call with no site has nothing to
+            # be keyed on.
+            return fn
 
         # Keyed on the SITE, not the index -- see the long comment on
         # `_wrappers` in `__init__` for why the index alone is unsafe.
@@ -1063,23 +995,7 @@ class CallCache:
             return entry[1]
 
         try:
-            if site is not None:
-                # The real path: key and store through the
-                # statement backend via the call's own CallSite.
-                wrapper = self._call_unit.wrap(fn, site)
-            else:
-                # No site registered for this index -- CallCache is being used
-                # outside the ``CallRouting.code_and_tree_for_execution`` rewrite pipeline
-                # (e.g. called directly, as a unit test may do).
-                # In production ``set_sites`` is always called with a non-empty
-                # list before ``__cash_call__`` is ever bound into ``user_ns``
-                # (``CallRouting.code_and_tree_for_execution`` returns early when
-                # ``wrap_eligible_calls`` finds nothing), so this branch is not
-                # reachable from real notebook execution. Keep the previously-
-                # shipped decorator-based wrapping here rather than passing the
-                # callee through unwrapped: an unrecognised shape must degrade
-                # to a slower-but-correct cache, not to silently losing caching.
-                wrapper = self._cash.cache(fn, cache_if=_is_storable)
+            wrapper = self._call_unit.wrap(fn, site)
         except Exception:  # noqa: BLE001 - a caching wrapper is never worth an error
             return fn
         self._wrappers[cache_key] = (fn, wrapper)

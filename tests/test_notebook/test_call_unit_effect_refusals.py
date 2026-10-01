@@ -15,7 +15,7 @@ import time
 import pytest
 
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallCache
+from tests._call_cache import make_call_cache
 
 
 def _site(source="f(d)", names=("f", "d"), computed_arg_positions=()):
@@ -38,7 +38,7 @@ def _site(source="f(d)", names=("f", "d"), computed_arg_positions=()):
 def _computed_site(source="f(d)", names=("f", "d")):
     """Matches the convention `test_call_interception_respects_refusals.py`
     uses for its production-dispatch `_site` helper (`computed_arg_positions
-    =(0,)`): needed there because `CallCache`'s default context has no live
+    =(0,)`): needed there because `make_call_cache`'s context has no live
     variable lineage to resolve a bare Name against.
     """
     return CallSite(
@@ -221,7 +221,7 @@ def test_a_refused_call_is_never_stored_through_the_production_dispatch_path(tmp
     """
     import cash
 
-    call_cache = CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    call_cache = make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
     calls = []
 
     def clean(d):

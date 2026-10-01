@@ -29,13 +29,13 @@ import pytest
 
 import cash
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallCache
 from cash.tracking.file_tracker import FileAccessTracker
+from tests._call_cache import make_call_cache
 
 
 @pytest.fixture
 def call_cache(tmp_path):
-    return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    return make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
 def _site_for(fn) -> CallSite:

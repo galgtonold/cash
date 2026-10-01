@@ -22,16 +22,9 @@ hand (confirmed by the same probe). That is now closed
 still guards the path that applies caching *without the user asking*, which is
 the one that owes a higher duty of care.
 
-**Migrated to real sites.** This file used to be the one
-deliberate holdout exercising only the no-site decorator-fallback branch of
-``resolve()`` — ``CallEntries.storable`` was a stub returning ``True`` before
-Task 6, so a call routed through a REAL ``CallSite`` had no guard at all (see
-``tests/test_notebook_integration/calls/test_cache_calls_figure_guard.py``'s
-history for the matching, now-removed ``xfail``). Task 6 implemented the
-guard in ``CallEntries.storable`` itself, so this file now registers sites via
-``set_sites`` like its siblings (``test_call_interception_runtime.py``) and
-exercises the production path end to end: ``CallCache.resolve`` ->
-``CallUnit.wrap`` -> ``CallEntries.storable``.
+The tests register sites via ``set_sites`` like their siblings
+(``test_call_interception_runtime.py``) and exercise the production path end
+to end: ``CallCache.resolve`` -> ``CallUnit.wrap`` -> ``CallEntries.storable``.
 
 **Every test sleeps above ``CallUnit``'s ``_COST_FLOOR_S`` (0.01s) and, where
 there is a second call, asserts on ``call_cache.drain_call_log()``'s
@@ -51,7 +44,7 @@ import pytest
 
 import cash
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallCache
+from tests._call_cache import make_call_cache
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 matplotlib = pytest.importorskip("matplotlib")
@@ -61,7 +54,7 @@ import matplotlib.pyplot as plt
 
 @pytest.fixture
 def call_cache(tmp_path):
-    return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    return make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
 @pytest.fixture(autouse=True)

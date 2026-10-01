@@ -15,11 +15,8 @@ Both are the same shape as the Figure bug: the call path bypasses a guard the
 statement path enforces.
 
 **Sites are registered before every ``resolve()`` call**, matching production
-(see ``test_call_interception_runtime.py``'s module docstring for why a
-no-site ``resolve()`` call is not representative of real notebook execution).
-For the refusal tests this also strengthens the claim being made: with a real
-site registered, these prove the refusal wins over the CallUnit real-site
-path too, not merely over the decorator-fallback path a no-site call takes.
+(see ``test_call_interception_runtime.py``'s module docstring), so these prove
+the refusal wins on the path a notebook call takes.
 """
 
 from __future__ import annotations
@@ -30,12 +27,12 @@ import pytest
 
 import cash
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallCache
+from tests._call_cache import make_call_cache
 
 
 @pytest.fixture
 def call_cache(tmp_path):
-    return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    return make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
 def _site(source="compute(x)", names=("compute", "x"), computed_arg_positions=(0,)):

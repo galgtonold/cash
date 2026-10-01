@@ -13,14 +13,9 @@ The resolver must never be the reason user code breaks: anything it does not
 understand is handed back unchanged.
 
 **Sites are registered** (``call_cache.set_sites([...])``) before every
-``resolve()`` call below, matching how production actually reaches
-``resolve()`` — ``_code_and_tree_for_execution`` never binds ``__cash_call__``
-into ``user_ns`` without a non-empty site table. A review found this file
-previously tested ONLY the no-site fallback
-branch (the old decorator path), which is unreachable in real notebook
-execution — that gap is exactly why a wrapper-cache staleness bug shipped
-with a green suite. See ``test_call_interception_no_site_fallback.py`` for the
-one file that deliberately keeps testing the fallback branch on its own terms.
+``resolve()`` call below, matching how production reaches ``resolve()``:
+the rewrite never binds ``__cash_call__`` into ``user_ns`` without a
+non-empty site table. A callee with no site is handed back unwrapped.
 """
 
 import time
@@ -29,13 +24,13 @@ import pytest
 
 import cash
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallCache
+from tests._call_cache import make_call_cache
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
 @pytest.fixture
 def call_cache(tmp_path):
-    return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    return make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
 def _site(source="compute(x)", names=("compute", "x"), computed_arg_positions=(0,)):

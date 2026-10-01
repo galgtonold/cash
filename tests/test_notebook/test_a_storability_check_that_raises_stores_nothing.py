@@ -1,16 +1,16 @@
 """A result whose storability check raises is not stored.
 
-Both notebook call paths asked whether a result may be stored, and on any
-exception from that check answered "yes": the one value the check could not
-judge -- a closure that keeps state, a figure pyplot points at -- was stored
-and handed back on a hit. Refusing to store only means the call runs again.
+A call asks whether its result may be stored. Answering "yes" when that check
+raises would store the one value it could not judge -- a closure that keeps
+state, a figure pyplot points at -- and hand it back on a hit. Refusing to
+store only means the call runs again.
 """
 
 from __future__ import annotations
 
 import time
 
-from cash.notebook import call_entries, call_unit
+from cash.notebook import call_entries
 from cash.notebook.call_interception import CallSite
 
 
@@ -34,8 +34,3 @@ def test_the_call_is_run_again_not_served(call_unit_harness, monkeypatch):
     unit.wrap(slow_list, site)()
 
     assert [e["cache_hit"] for e in unit.drain()] == [False, False], "a result the check could not judge was stored"
-
-
-def test_the_decorator_route_does_not_store_it_either(monkeypatch):
-    monkeypatch.setattr(call_unit, "identity_coupled_reason", _raises)
-    assert call_unit._is_storable([1, 2, 3]) is False

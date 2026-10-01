@@ -25,7 +25,7 @@ import cash
 from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallCache
+from tests._call_cache import make_call_cache
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 # ---------------------------------------------------------------- CallCache
@@ -33,7 +33,7 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 @pytest.fixture
 def call_cache(tmp_path):
-    return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    return make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
 def _site(source="compute(x)", names=("compute", "x")):

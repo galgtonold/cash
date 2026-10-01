@@ -173,9 +173,7 @@ class CallEntries:
         that raises is caught -- and answers "not storable". Refusing to store
         is free (the call just runs uncached next time); wrongly storing is
         not: it is exactly the silent wrong answer this method exists to
-        prevent, handed back on every hit. ``call_unit._is_storable`` fails the
-        same way, so a call's storability does not depend on which of the two
-        dispatch paths routed it.
+        prevent, handed back on every hit.
         """
         if type(result) not in _IDENTITY_FREE:
             for arg in args:
