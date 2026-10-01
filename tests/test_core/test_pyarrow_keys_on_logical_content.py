@@ -13,7 +13,7 @@ import pickle
 import pytest
 
 from cash import Cash, FileBackend
-from cash.object_hashing import hash_pyarrow
+from cash.content_hashers import hash_pyarrow
 
 pa = pytest.importorskip("pyarrow")
 

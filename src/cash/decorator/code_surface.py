@@ -13,12 +13,9 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..code_digest import source_digest, unwrap_partials
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import (
-    code_consts_without_docstring,
-    source_digest,
-    unwrap_partials,
-)
+from ..source_norm import code_consts_without_docstring
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
 from .code_refs import CodeRefs

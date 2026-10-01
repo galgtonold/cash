@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ..analysis.purity_analyzer import resolve_local_import
+from ..analysis.helper_bindings import resolve_local_import
 from ..install_paths import is_user_module
 from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes

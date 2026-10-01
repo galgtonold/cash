@@ -18,7 +18,7 @@ from .script_pickling import expose_script_function, refuse_pickling_by_value
 
 if TYPE_CHECKING:
     from ..backends import CacheBackend
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from .backend_slot import BackendSlot
     from .cached_function import CachedFunction
     from .explain import CacheExplanation, Explainer

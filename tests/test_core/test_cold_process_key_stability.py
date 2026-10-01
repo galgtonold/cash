@@ -68,20 +68,20 @@ def test_a_captured_cached_function_is_keyed_without_reading_cash_itself(tmp_pat
     changed the backend's dicts -- about one run in twelve under load, the key
     build raised "dictionary changed size during iteration", ``explain()``
     said ``key_uncomputable`` and a call would have run uncached."""
-    from cash import object_hashing
+    from cash import canonical_form
     from cash.backends import CacheBackend
     from cash.decorator.cached_function import CachedFunction
 
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path / "c")))
     top = _build_chain(c)
     walked = []
-    real = object_hashing.object_state
+    real = canonical_form.object_state
 
     def spy(value):
         walked.append(type(value))
         return real(value)
 
-    monkeypatch.setattr(object_hashing, "object_state", spy)
+    monkeypatch.setattr(canonical_form, "object_state", spy)
     top.explain(5)
     top(5)
 

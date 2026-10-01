@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from cash import Cash, _plain_data, object_hashing
+from cash import Cash, _plain_data, canonical_form
 from cash.decorator import arg_hashing
 
 pytestmark = [pytest.mark.core]
@@ -113,9 +113,9 @@ def test_a_warm_hit_on_many_rows_does_not_walk_them(tmp_path, monkeypatch):
     total(rows)
     calls = {"contains_set": 0, "stable_key_repr": 0, "carriers": 0}
     for name in ("contains_set", "stable_key_repr"):
-        real = getattr(object_hashing, name)
+        real = getattr(canonical_form, name)
         monkeypatch.setattr(
-            object_hashing, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
+            canonical_form, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
         )
     real_iter = c._code_args.iter_code_carriers
     monkeypatch.setattr(
@@ -198,9 +198,9 @@ def test_a_small_dict_beside_a_big_list_leaves_the_list_on_the_fast_path(tmp_pat
     c = Cash(cache_dir=str(tmp_path / "cache"))
     rows = [(i, str(i)) for i in range(50_000)]
     unshared, walked = [], []
-    real_pickle, real_canon = _plain_data.pickle_unshared, object_hashing.stable_key_repr
+    real_pickle, real_canon = _plain_data.pickle_unshared, canonical_form.stable_key_repr
     monkeypatch.setattr(_plain_data, "pickle_unshared", lambda v: unshared.append(v) or real_pickle(v))
-    monkeypatch.setattr(object_hashing, "stable_key_repr", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
+    monkeypatch.setattr(canonical_form, "stable_key_repr", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
     c._args.hash_payload((rows,), {"opts": {"b": 1, "a": 2}})
     assert any(v is rows for v in unshared), "the list was not keyed on its own"
     assert len(walked) < 100, f"the general path walked the rows ({len(walked)} calls)"

@@ -1,7 +1,7 @@
 """No module under src/cash imports another cash module's private name.
 
 ruff's PLC2701 is on for src/, but it skips imports from the same top-level
-package, so it cannot see ``from cash.config import _x`` inside cash. This
+package, so it cannot see ``from cash.config.schema import _x`` inside cash. This
 walks the source instead. A name another module needs is part of its owner's
 API and goes without the underscore.
 

@@ -97,7 +97,7 @@ def test_hidden_state_call_hits_cache_on_rerun(nb_runner, tmp_path):
 # --------------------------------------------------------- sampled-equal loop vars
 #
 # `call_cache_key` hashes `loop_vars` VALUES with `compute_hash_full`, not the
-# sampling `compute_hash`. `object_hashing._hash_collection` reduces any
+# sampling `compute_hash`. `value_hash._hash_collection` reduces any
 # list/tuple over 200 elements to its first 5 + last 5 elements; two 300-
 # element tuples that agree on both ends but differ in the middle are
 # `compute_hash`-equal while being genuinely different values. `for_handler.py`
@@ -109,7 +109,7 @@ def test_hidden_state_call_hits_cache_on_rerun(nb_runner, tmp_path):
 # (rather than merely present) the moment `loop_vars` stopped being `{}` in
 # production.
 
-# Above `_hash_collection`'s 200-element sampling threshold (object_hashing.py).
+# Above `_hash_collection`'s 200-element sampling threshold (value_hash.py).
 _SAMPLED_TAIL = (10, 11, 12, 13, 14)
 _SAMPLED_HEAD = (1, 2, 3, 4, 5)
 

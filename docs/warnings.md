@@ -470,7 +470,7 @@ decorated function, `f.cache_info()` shows whether you get any hits.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/config.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
+<!-- claim: cash/config/schema.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
 **What happened.** At exit, cash waited for its background writes (60 s by
 default) and some were still running, so the process exited without them. The
 message says how many. With `shutdown_write_timeout=0`, which asks not to
@@ -504,7 +504,7 @@ A setting cash found but could not act on. Every code here starts `CONFIG-`.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
+<!-- claim: cash/config/resolve.py:_resolve_config @75ccfd52, cash/config/resolve.py:_warn_named_file_missing @fa72ccc3 -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. cash used the other configuration layers.
 
@@ -529,7 +529,7 @@ before passing it.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @31e81d57, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @f94a029d, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @02c67b7c -->
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/sources.py:_warn_toml_malformed @7aa948bd, cash/config/sources.py:load_toml_layer @b8dfea05, cash/config/resolve.py:_build_tiers @d17e1cb5, cash/config/schema.py:TierConfig.__post_init__ @099eecbf -->
 **What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -556,7 +556,7 @@ the line.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @31e81d57, cash/config.py:_unknown_key @87165926 -->
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/resolve.py:_unknown_key @6098acf3 -->
 **What happened.** A `[tool.cash]` table, a `[cash]` table or a
 `CASH_TIER_<N>_*` variable sets a key that is not a cash setting. The message
 names the closest real setting:
@@ -743,8 +743,8 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @3b13759e -->
-<!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @2d93af7a, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock or a fresh UUID
 (`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`,
@@ -755,8 +755,8 @@ these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
 
 <!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
-<!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @936a32c3 -->
+<!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @39516f3a -->
+<!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @300df3f0 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
@@ -1001,8 +1001,8 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
-<!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
+<!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
 ...")`, `pd.read_sql`). A query over a SQLite file the function opens itself
@@ -1072,8 +1072,8 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @5d0686e2 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @f140e8b2, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
@@ -1099,7 +1099,7 @@ did not expect the file to change.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/decorator/cash_key.py:content_digest @8f2ced8a -->
+<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/decorator/cash_key.py:content_digest @85326417 -->
 **What happened.** A class's
 [`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key)
 returned the same key for two objects holding different data. cash reads an
@@ -1126,7 +1126,7 @@ class Dataset:
 Then clear the results stored under the old key with `f.cache_clear()` on the
 cached functions that took the object.
 
-<!-- claim: cash/decorator/cash_key.py:content_digest @8f2ced8a -->
+<!-- claim: cash/decorator/cash_key.py:content_digest @85326417 -->
 **When it is safe to ignore.** When the difference is state that never
 changes a result: a lazily filled memo, a load timestamp, a handle. cash
 compares every attribute it can pickle, so such an attribute set before the
@@ -1424,7 +1424,7 @@ generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
 
-<!-- claim: cash/decorator/rng.py:unseeded_library_calls @56f56fa1 -->
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @96f66467 -->
 A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or

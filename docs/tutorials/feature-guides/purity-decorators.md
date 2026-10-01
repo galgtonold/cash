@@ -15,7 +15,7 @@ that reading where you know better:
 | `@cash.stateful` | a helper whose side effect matters | Warns about every call to it; `strict=True` raises |
 | `cash.opaque` | a class passed as an argument | Its code is left out of the key |
 
-<!-- claim: cash/analysis/purity_analyzer.py:PurityAnalyzer._analyze_uncached @3ccf98e7 -->
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._queue_helper @348c0c48 -->
 `@cash.pure` and `@cash.stateful` change what cash reports, not what it keys. A
 marked helper's code is part of the key of every cached function that calls it,
 as an unmarked helper's is, so editing it recomputes them.
@@ -29,7 +29,7 @@ it is never cached); see the [Notebook guide](../../notebook_caching_api.md#what
 
 ## `@cash.pure`: trust this helper
 
-<!-- claim: cash/purity.py:pure @26a3db86, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @f3cafbdb -->
+<!-- claim: cash/purity.py:pure @26a3db86, cash/analysis/purity_analyzer.py:PurityAnalyzer.analyze @e708e99e -->
 Mark a helper `@cash.pure` when its result depends only on its arguments and it
 has no effect you care about: no writes, no network, no in-place change to its
 arguments. cash then stops reporting it:

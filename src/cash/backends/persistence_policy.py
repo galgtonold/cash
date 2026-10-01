@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 from cash import cost_model
-from cash.config import CashConfig
+from cash.config.schema import CashConfig
 
 from ._base import store_seconds
 from .value_policy import worth_its_bytes

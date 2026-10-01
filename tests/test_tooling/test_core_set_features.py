@@ -36,6 +36,8 @@ def test_every_feature_prefix_names_a_module_that_exists(prefix):
         ("decorator/cached_function", "decorator"),
         ("analysis/purity_analyzer", "decorator_purity"),
         ("analysis/purity_flow", "decorator_purity"),
+        ("analysis/purity_visitor", "decorator_purity"),
+        ("analysis/helper_walk", "decorator_purity"),
         ("effect_observer", "effects"),
         ("effects", "effects"),
     ],

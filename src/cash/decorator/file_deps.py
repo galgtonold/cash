@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
+from ..code_digest import own_source_digest
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..remote_source import (
     measured_validation,
@@ -20,7 +21,6 @@ from ..remote_source import (
     validation_is_expensive,
     warn_validation_cost_once,
 )
-from ..source_norm import own_source_digest
 from ..tracking.file_dep_snapshot import (
     attach_code_relative,
     dep_path_for_this_process,

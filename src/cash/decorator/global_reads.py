@@ -14,9 +14,11 @@ from collections.abc import Callable
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.purity_analyzer import REPORTED_METHODS, local_import_map, own_code_is_user
+from ..analysis.helper_bindings import local_import_map
+from ..analysis.helper_code import own_code_is_user
+from ..analysis.purity_policy import REPORTED_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import getsource, own_source
+from ..source_reading import getsource, own_source
 from .closure_fold import iter_code_scopes, unsafe_uses_of, waived_use_filter
 
 #: Dunder globals that are machine or import machinery, never user data.

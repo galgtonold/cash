@@ -9,7 +9,7 @@ import threading
 import types
 from typing import Any
 
-from ..analysis.purity_analyzer import is_mock
+from ..analysis.helper_code import is_mock
 from ..value_types import IMMUTABLE_LEAF_TYPES
 from .user_code import is_user_class, own_package
 

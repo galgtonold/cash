@@ -77,7 +77,7 @@ RAM for this process, and
 
 ### Cache folder
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @edf1f957 -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
 The cache folder (the cache directory) is `.cash` at your project root. So
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
 started it, from any directory. cash finds the folder from the running script:
@@ -106,7 +106,7 @@ absolute path leaves no doubt about where entries go.
 
 ### Cache size limit
 
-<!-- claim: cash/config.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
+<!-- claim: cash/config/schema.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
 The disk cap is automatic. By default the disk tier may use a quarter of
 the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
 memory. `cash info` prints both numbers:
@@ -449,7 +449,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |

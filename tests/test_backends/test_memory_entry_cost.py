@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from cash import object_hashing
+from cash import sizing
 from cash.backends import memory_backend
 from cash.backends.memory_backend import InMemoryBackend
 
@@ -65,9 +65,9 @@ def test_reading_metadata_counts_as_an_access_like_get():
 def test_an_rng_state_is_sized_without_a_call_per_int(monkeypatch):
     b = InMemoryBackend()
     calls = []
-    real = object_hashing.memory_footprint
+    real = sizing.memory_footprint
     counting = lambda obj, _seen=None: calls.append(1) or real(obj, _seen)
-    monkeypatch.setattr(object_hashing, "memory_footprint", counting)
+    monkeypatch.setattr(sizing, "memory_footprint", counting)
     monkeypatch.setattr(memory_backend, "memory_footprint", counting)
     b.set("k", _entry())
     assert len(calls) < 50, f"{len(calls)} sizing calls for one entry"

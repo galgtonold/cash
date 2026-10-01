@@ -25,7 +25,8 @@ from cash import CashCacheIneffectiveWarning
 
 PROGRAM = textwrap.dedent("""
     import hashlib
-    from cash.object_hashing import canonical_bytes
+    from cash.canonical_form import canonical_bytes
+    from cash.content_hashers import BUILTIN_CONTENT
 
     class Tagged(dict):
         pass
@@ -41,7 +42,7 @@ PROGRAM = textwrap.dedent("""
     in_state.meta = wrapped(S, 6)
     values = {"in a subclass's state": in_state, "sixty lists down": wrapped(S, 60)}
     for name, value in values.items():
-        print(name, "=", hashlib.sha256(canonical_bytes(value)).hexdigest())
+        print(name, "=", hashlib.sha256(canonical_bytes(value, BUILTIN_CONTENT)).hexdigest())
 """)
 
 

@@ -220,7 +220,7 @@ class TestSameAsTheConstructor:
     def test_tier_tables_are_built_into_tiers(self, tmp_path):
         from cash import Cash
         from cash.backends.memory_backend import InMemoryBackend
-        from cash.config import TierConfig
+        from cash.config.schema import TierConfig
 
         c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
         c.backend  # built
@@ -289,7 +289,7 @@ class TestSameAsTheConstructor:
         import ntpath
         import os
 
-        from cash import config as cash_config
+        from cash.config import resolve as cash_config
 
         monkeypatch.setenv("USERPROFILE", r"C:\Users\me")
         for name in ("expanduser", "normpath", "isabs"):

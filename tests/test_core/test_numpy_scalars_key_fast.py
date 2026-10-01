@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cash import Cash, object_hashing
+from cash import Cash, canonical_form
 from cash.decorator import arg_hashing
 
 np = pytest.importorskip("numpy")
@@ -26,16 +26,16 @@ def test_a_list_of_numpy_numbers_takes_the_fast_path(key, monkeypatch):
     values = [np.float64(i) for i in range(1000)]
     assert arg_hashing.plain_census(values)[0] == "plain_numpy"
     walked = []
-    real = object_hashing.contains_set
-    monkeypatch.setattr(object_hashing, "contains_set", lambda *a, **k: walked.append(1) or real(*a, **k))
+    real = canonical_form.contains_set
+    monkeypatch.setattr(canonical_form, "contains_set", lambda *a, **k: walked.append(1) or real(*a, **k))
     key(values)
     assert walked == []
 
 
 def test_numpy_numbers_in_a_dict_are_not_walked(key, monkeypatch):
     calls = []
-    real = object_hashing.object_state
-    monkeypatch.setattr(object_hashing, "object_state", lambda v: calls.append(1) or real(v))
+    real = canonical_form.object_state
+    monkeypatch.setattr(canonical_form, "object_state", lambda v: calls.append(1) or real(v))
     key({i: np.float64(i) for i in range(100)})
     assert calls == []
 

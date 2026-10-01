@@ -11,11 +11,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from ..analysis.purity_analyzer import (
-    PurityReport,
-    get_analyzer,
-    resolve_binding,
-)
+from ..analysis.helper_bindings import resolve_binding
+from ..analysis.purity_analyzer import get_analyzer
+from ..analysis.purity_report import PurityReport
 from ..dependency_state import ledger_note
 from ..exceptions import CashImpurityWarning
 from .call_state import CAPTURE_WATCH, KeyBuildFailed

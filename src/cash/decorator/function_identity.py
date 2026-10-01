@@ -17,20 +17,13 @@ from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from ..canonical_form import stable_key_repr
+from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
+from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
-from ..object_hashing import stable_key_repr
-from ..source_norm import (
-    bytecode_identity,
-    callable_identity,
-    code_consts_without_docstring,
-    compiled_identity,
-    loaded_class_identity,
-    loaded_code_matches_disk,
-    own_source_digest,
-    source_digest,
-    unwrap_partials,
-)
+from ..loaded_code import loaded_class_identity, loaded_code_matches_disk
+from ..source_norm import bytecode_identity, code_consts_without_docstring
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +124,7 @@ def func_key(func: Callable) -> str:
         inner = func_key(func.func)
         try:
             bound = hashlib.sha256(
-                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items()))), protocol=4),
+                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items())), BUILTIN_CONTENT), protocol=4),
             ).hexdigest()[:12]
         except Exception:  # noqa: BLE001 - an unpicklable argument keys on its type
             shape = [type(v).__qualname__ for v in (*func.args, *func.keywords.values())]
@@ -167,7 +160,7 @@ def hash_callable_source(fn: Callable) -> str:
     HELPER -- so what this returns decides whether editing a helper
     recomputes its callers.
 
-    This is `cash.source_norm.callable_identity`, plus a memo per code
+    This is `cash.code_digest.callable_identity`, plus a memo per code
     object and a check that the file still holds the code that runs.
 
     Resolution order:

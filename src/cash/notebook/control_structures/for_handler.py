@@ -29,8 +29,8 @@ from cash.control_markers import iteration_digest, mark_iteration
 
 from ...analysis.mutations import accumulator_loop_body_shape, cacheable_accumulator_loop
 from ...lineage_tag import own_tag
-from ...object_hashing import compute_hash
 from ...tracking.file_tracker import FileAccessTracker
+from ...value_hash import compute_hash
 from ..cache_status import CacheStatus
 from ..loop_split import split_nodes
 from . import helpers as _helpers

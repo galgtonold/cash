@@ -19,8 +19,8 @@ import time
 
 import pytest
 
-from cash import source_norm
-from cash.analysis import purity_analyzer
+from cash import source_reading
+from cash.analysis import mutable_globals
 
 pytestmark = [pytest.mark.core]
 
@@ -105,9 +105,9 @@ def test_the_memo_answers_what_inspect_answers(tmp_path, monkeypatch):
     module, _ = _load(tmp_path, monkeypatch)
     for obj in _objects(module):
         expected = inspect.getsourcelines(obj)
-        assert source_norm.getsourcelines(obj) == expected, obj
-        assert source_norm.getsourcelines(obj) == expected, obj  # and from the memo
-        assert source_norm.getsource(obj) == inspect.getsource(obj), obj
+        assert source_reading.getsourcelines(obj) == expected, obj
+        assert source_reading.getsourcelines(obj) == expected, obj  # and from the memo
+        assert source_reading.getsource(obj) == inspect.getsource(obj), obj
 
 
 def test_a_settled_file_is_read_once(tmp_path, monkeypatch):
@@ -116,14 +116,14 @@ def test_a_settled_file_is_read_once(tmp_path, monkeypatch):
     real = inspect.getsourcelines
     monkeypatch.setattr(inspect, "getsourcelines", lambda obj: calls.append(obj) or real(obj))
     parses = []
-    real_starts = source_norm._class_starts
-    monkeypatch.setattr(source_norm, "_class_starts", lambda tree: parses.append(1) or real_starts(tree))
+    real_starts = source_reading._class_starts
+    monkeypatch.setattr(source_reading, "_class_starts", lambda tree: parses.append(1) or real_starts(tree))
 
     for _ in range(3):
-        source_norm.getsource(module.plain)
-        source_norm.getsource(module.Decorated)
-        source_norm.getsource(module.Outer)
-        source_norm.getsource(module.Outer.Inner)
+        source_reading.getsource(module.plain)
+        source_reading.getsource(module.Decorated)
+        source_reading.getsource(module.Outer)
+        source_reading.getsource(module.Outer.Inner)
 
     assert calls == [module.plain] or (sys.version_info >= (3, 13) and len(calls) == 4)
     if sys.version_info < (3, 13):
@@ -132,16 +132,16 @@ def test_a_settled_file_is_read_once(tmp_path, monkeypatch):
 
 def test_an_edit_is_read(tmp_path, monkeypatch):
     module, path = _load(tmp_path, monkeypatch, step=1)
-    assert "x + 1" in source_norm.getsource(module.plain)
-    assert "value = 1" in source_norm.getsource(module.factory())
+    assert "x + 1" in source_reading.getsource(module.plain)
+    assert "value = 1" in source_reading.getsource(module.factory())
 
     path.write_text(MODULE.format(step=2), encoding="utf-8")  # same size
     edited = time.time() - 30
     os.utime(path, (edited, edited))
 
-    assert "x + 2" in source_norm.getsource(module.plain)
-    assert "value = 2" in source_norm.getsource(module.factory())
-    assert source_norm.getsource(module.plain) == inspect.getsource(module.plain)
+    assert "x + 2" in source_reading.getsource(module.plain)
+    assert "value = 2" in source_reading.getsource(module.factory())
+    assert source_reading.getsource(module.plain) == inspect.getsource(module.plain)
 
 
 def test_a_file_saved_just_now_is_not_memoised(tmp_path, monkeypatch):
@@ -151,8 +151,8 @@ def test_a_file_saved_just_now_is_not_memoised(tmp_path, monkeypatch):
     calls = []
     real = inspect.getsourcelines
     monkeypatch.setattr(inspect, "getsourcelines", lambda obj: calls.append(obj) or real(obj))
-    source_norm.getsource(module.plain)
-    source_norm.getsource(module.plain)
+    source_reading.getsource(module.plain)
+    source_reading.getsource(module.plain)
     assert calls == [module.plain, module.plain]
 
 
@@ -162,10 +162,10 @@ def test_source_linecache_holds_by_hand_is_not_memoised(tmp_path, monkeypatch):
     module, path = _load(tmp_path, monkeypatch)
     fake = MODULE.format(step=7)
     monkeypatch.setitem(linecache.cache, str(path), (len(fake), None, fake.splitlines(True), str(path)))
-    assert "x + 7" in source_norm.getsource(module.plain)
+    assert "x + 7" in source_reading.getsource(module.plain)
     fake = MODULE.format(step=8)
     monkeypatch.setitem(linecache.cache, str(path), (len(fake), None, fake.splitlines(True), str(path)))
-    assert "x + 8" in source_norm.getsource(module.plain)
+    assert "x + 8" in source_reading.getsource(module.plain)
 
 
 def test_the_module_mutation_scan_is_memoised_per_file_version(tmp_path, monkeypatch):
@@ -174,11 +174,11 @@ def test_the_module_mutation_scan_is_memoised_per_file_version(tmp_path, monkeyp
     real = inspect.getsource
     monkeypatch.setattr(inspect, "getsource", lambda obj: reads.append(obj) or real(obj))
 
-    assert "COUNTER" in purity_analyzer._module_modified_globals(module)
-    assert "COUNTER" in purity_analyzer._module_modified_globals(module)
+    assert "COUNTER" in mutable_globals.module_modified_globals(module)
+    assert "COUNTER" in mutable_globals.module_modified_globals(module)
     assert reads == [module], "the module was read again for the same file version"
 
     path.write_text(MODULE.format(step=1).replace("COUNTER.append(1)", "return 1"), encoding="utf-8")
     edited = time.time() - 30
     os.utime(path, (edited, edited))
-    assert "COUNTER" not in purity_analyzer._module_modified_globals(module)
+    assert "COUNTER" not in mutable_globals.module_modified_globals(module)

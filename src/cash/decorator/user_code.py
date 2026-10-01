@@ -9,9 +9,9 @@ import sys
 import types
 from typing import Any
 
-from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
+from ..analysis.helper_code import UnwalkableLayers, callable_layers
+from ..code_digest import unwrap_partials
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, top_package
-from ..source_norm import unwrap_partials
 from .call_state import KeyBuildFailed
 
 

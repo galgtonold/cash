@@ -11,7 +11,9 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.purity_analyzer import REPORTED_METHODS, callable_layers, get_analyzer, is_mock, own_code_is_user
+from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user
+from ..analysis.purity_analyzer import get_analyzer
+from ..analysis.purity_policy import REPORTED_METHODS
 from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
 from .function_identity import hash_callable_source

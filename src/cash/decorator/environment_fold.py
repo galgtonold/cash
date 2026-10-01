@@ -11,7 +11,7 @@ from ..dependency_state import ledger_note
 from ..effects import environment_component
 
 if TYPE_CHECKING:
-    from ..analysis.purity_analyzer import PurityReport
+    from ..analysis.purity_report import PurityReport
     from .registry import FunctionRegistry
 
 

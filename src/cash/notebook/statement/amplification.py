@@ -29,10 +29,10 @@ from __future__ import annotations
 from typing import Any
 
 from cash._memo import STATEMENTS, LruMemo
-from cash.config import human_bytes
 from cash.control_markers import has_marker, strip_markers
 from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning
+from cash.units import human_bytes
 
 __all__ = ["AMPLIFICATION_SKIP_REASON", "AmplificationGuard"]
 

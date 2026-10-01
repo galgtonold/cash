@@ -41,7 +41,7 @@ writes what the second reads. Two fixes, and CI wants both:
 
 ## Turning caching off
 
-<!-- claim: cash/config.py:CashConfig.disable == False, cash/decorator/wrappers.py:Wrappers._with_stats @d31b01c8 -->
+<!-- claim: cash/config/schema.py:CashConfig.disable == False, cash/decorator/wrappers.py:Wrappers._with_stats @d31b01c8 -->
 ```bash
 CASH_DISABLE=1 pytest
 ```
@@ -152,7 +152,7 @@ Patch the name where it is **used** (`primes._sieve`), as with any mocking.
 Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
 runs.
 
-<!-- claim: cash/analysis/purity_analyzer.py:is_mock @173f99ff -->
+<!-- claim: cash/analysis/helper_code.py:is_mock @173f99ff -->
 **A call that reaches a `unittest.mock` object runs uncached**, and nothing it
 returns is stored. That covers `mock.patch(...)`, `MagicMock`, `pytest-mock`'s
 `mocker` and `autospec=True` patches, whether the mock replaces your helper, a

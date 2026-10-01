@@ -23,7 +23,7 @@ from .user_code import cash_wrapped, is_user_code_object, user_layers
 #: building a function per lookup), where the walk would never end. Past it
 #: the key would leave code out, so the call runs uncached instead
 #: (KEY-HELPERS-UNWALKABLE), as the helper walk does
-#: (``PurityAnalyzer._WALK_LIMIT``).
+#: (``HelperWalk.WALK_LIMIT``).
 MAX_CODE_REF_TARGETS = 5_000
 
 

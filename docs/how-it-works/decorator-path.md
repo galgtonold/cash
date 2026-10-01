@@ -67,7 +67,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @99cd3791, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7af4e89b, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -87,7 +87,7 @@ Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
 everything else is pickled.
 
-<!-- claim: cash/object_hashing.py:holds_content_data @7d325c04, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @29c96359 -->
+<!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @7adf4b09 -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
 dict attribute, is keyed part by part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. That happens when it holds

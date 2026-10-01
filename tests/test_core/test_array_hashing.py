@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from cash import Cash, FileBackend
-from cash.object_hashing import hash_numpy
+from cash.content_hashers import hash_numpy
 
 
 def _counter_fn(c):

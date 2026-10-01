@@ -12,7 +12,7 @@ from ..exceptions import CacheBackendError
 
 if TYPE_CHECKING:
     from ..backends import CacheBackend
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
 
 logger = logging.getLogger(__name__)
 

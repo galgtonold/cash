@@ -123,7 +123,7 @@ def test_config_fields_used_by_fixtures_are_real(field):
     because unknown ``CASH_*`` vars are ignored by design — a deliberate
     tolerance that also swallows typos.
     """
-    from cash.config import CashConfig
+    from cash.config.schema import CashConfig
 
     names = {f.name for f in dataclasses.fields(CashConfig)}
     assert field in names, (

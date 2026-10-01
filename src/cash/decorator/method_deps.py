@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import getsource
+from ..source_reading import getsource
 from .function_identity import hash_callable_source
 
 if TYPE_CHECKING:

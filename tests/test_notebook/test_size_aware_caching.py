@@ -14,20 +14,20 @@ class TestSizeAwareCaching:
 
     def test_estimate_object_size_int(self):
         """Integer size estimation."""
-        from cash.object_hashing import estimate_object_size
+        from cash.sizing import estimate_object_size
 
         assert estimate_object_size(42) > 0
 
     def test_estimate_object_size_str(self):
         """String size estimation."""
-        from cash.object_hashing import estimate_object_size
+        from cash.sizing import estimate_object_size
 
         size = estimate_object_size("hello" * 1000)
         assert size > 5000  # At least 5KB for a 5000-char string
 
     def test_estimate_object_size_list(self):
         """List size estimation."""
-        from cash.object_hashing import estimate_object_size
+        from cash.sizing import estimate_object_size
 
         size = estimate_object_size(list(range(10000)))
         assert size > 0
@@ -150,14 +150,14 @@ class TestSizeAwareConfig:
 
     def test_default_config_has_size_settings(self):
         """Default config includes size-aware caching settings."""
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         config = CashConfig()
         assert config.min_cache_savings_pct == 0.20
 
     def test_config_to_dict_has_size_settings(self):
         """to_dict() includes size-aware settings."""
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         config = CashConfig()
         d = config.to_dict()
@@ -169,7 +169,7 @@ class TestTheGateIsThePersistencePolicy:
 
     def test_the_policy_defaults_are_the_config_defaults(self):
         from cash.backends.persistence_policy import PersistencePolicy
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         assert PersistencePolicy.from_config(CashConfig()) == PersistencePolicy()
 

@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from cash import Cash, object_hashing
+from cash import Cash, canonical_form
 from cash.decorator import arg_hashing
 
 pytestmark = [pytest.mark.core]
@@ -40,9 +40,9 @@ def test_a_warm_hit_on_many_records_does_not_walk_them(tmp_path, monkeypatch):
     count(rows)
     calls = {"contains_set": 0, "stable_key_repr": 0, "carriers": 0}
     for name in ("contains_set", "stable_key_repr"):
-        real = getattr(object_hashing, name)
+        real = getattr(canonical_form, name)
         monkeypatch.setattr(
-            object_hashing, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
+            canonical_form, name, lambda *a, _r=real, _n=name, **k: calls.__setitem__(_n, calls[_n] + 1) or _r(*a, **k)
         )
     real_iter = c._code_args.iter_code_carriers
     monkeypatch.setattr(

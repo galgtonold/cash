@@ -23,11 +23,11 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
+from ..code_digest import module_identity
 from ..effects import environment_component, environment_input
-from ..object_hashing import compute_hash, is_identity_fallback_hash
-from ..source_norm import module_identity
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
+from ..value_hash import compute_hash, is_identity_fallback_hash
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def is_module_like(var_name: str, val: object, virtual_modules: Iterable[str]) -
 def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
     """Combined identity hash of a module file and its dependency files.
 
-    See `cash.source_norm.module_identity` for what "identity" covers and why
+    See `cash.code_digest.module_identity` for what "identity" covers and why
     it is not the file's bytes.
     """
     own = module_identity(mod_file)

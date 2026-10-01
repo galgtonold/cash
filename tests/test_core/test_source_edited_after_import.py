@@ -318,7 +318,7 @@ def test_a_closure_in_an_edited_file_is_compared_without_raising(tmp_path, monke
     failed its key build (KEY-BUILD-FAILED) instead of being compared."""
     import importlib
 
-    from cash.source_norm import loaded_code_matches_disk
+    from cash.loaded_code import loaded_code_matches_disk
 
     src = "def make(k):\n    def inner(x):\n        return x * k\n    return inner\n"
     (tmp_path / "closmod_r18.py").write_text(src, encoding="utf-8")

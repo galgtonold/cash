@@ -19,7 +19,7 @@ from ..backends.budget_notices import DiskBudget, cap_text
 from .explain import MissKind
 
 if TYPE_CHECKING:
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from .backend_slot import BackendSlot
     from .registry import FunctionRegistry
 

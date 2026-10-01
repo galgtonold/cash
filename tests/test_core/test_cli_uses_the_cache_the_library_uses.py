@@ -208,7 +208,7 @@ def test_info_inspect_and_clear_follow_a_file_tier_s_cache_dir(a_cache_in_a_file
 
 def test_a_sqlite_tier_s_db_path_names_the_directory():
     from cash.__main__ import local_cache_dir
-    from cash.config import CashConfig, TierConfig
+    from cash.config.schema import CashConfig, TierConfig
 
     config = CashConfig(cache_dir="/top", tiers=[TierConfig(type="sqlite", db_path="/data/c/cache.db")])
     assert local_cache_dir(config) == "/data/c"

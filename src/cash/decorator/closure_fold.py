@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.annotations import assume_safe_block_lines
-from ..analysis.purity_analyzer import REPORTED_METHODS
+from ..analysis.purity_policy import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
-from ..source_norm import getsource, getsourcelines
+from ..source_reading import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
