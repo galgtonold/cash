@@ -304,9 +304,7 @@ def _rng_states_equal(before: object, after: object) -> bool:
     hot path -- the observer runs on every statement -- and digesting dominated
     it: the stdlib state is MT19937's 624 state words plus a position, carried as
     a 625-element tuple of Python ints, and feeding those ints one at a time into
-    sha256 cost ~155us per comparison versus ~3.5us for numpy's ndarray (one
-    ``tobytes``). Direct comparison does the same job ~100x faster (measured
-    484us -> 4.6us for a two-module snapshot pair).
+    a hash is far slower than one tuple comparison.
 
     Arrays are still compared by BYTES, never ``repr``, so display truncation can
     never mask a difference -- and torch tensors now go by bytes too (via

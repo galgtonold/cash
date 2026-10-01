@@ -397,9 +397,8 @@ class FunctionTracker:
         and second (`loaded_module_matches_disk`), so the module runs code that
         is not in its file. Tracking takes the file as the baseline, so no edit
         is ever seen and the stale code keeps running, while every key built
-        from the module describes the file: after a quick same-size edit and
-        Restart & Run All, a cell below printed -- and persisted -- the
-        pre-edit helper's value under the edited helper's key.
+        from the module describes the file: a result of the old code would be
+        stored under the new code's key.
 
         The modules in the set that import a reloaded one are reloaded after it,
         so their ``from x import f`` bindings pick up the new code, as a

@@ -207,10 +207,9 @@ def _patch_aliases_in(module: types.ModuleType) -> None:
     """Point the names in *module* that hold a wrapped reader at its wrapper.
 
     ``from pyarrow.parquet import read_table`` at the top of a module binds the
-    ORIGINAL function, before any tracker opened; wrapping the module
-    attribute does nothing for that name, so the read went unseen and edits
-    were served stale -- while ``pq.read_table(...)`` beside it recomputed.
-    A plain alias (``reader = pl.read_csv``) is the same case. The wrapper
+    ORIGINAL function, before any tracker opened, and wrapping the module
+    attribute does nothing for that name: it must be rebound to be seen as
+    ``pq.read_table(...)`` is. A plain alias (``reader = pl.read_csv``) is the same case. The wrapper
     stands for the library's function in a cache key, as the patched module
     attribute always has. Remembered per namespace while its size holds, so a
     module with no such name (most) costs one lookup.
@@ -340,9 +339,8 @@ def _patch_thread_pool_submit() -> None:
     """Run work submitted to a ``ThreadPoolExecutor`` under the submitter's context.
 
     The tracker is found through a ContextVar, and a pool's worker threads
-    start with an empty context -- so ``ex.map(np.load, shards)`` inside a
-    cached function read files no tracker saw, and editing a shard served the
-    pre-edit result while the serial loop beside it invalidated.
+    start with an empty context, so without this ``ex.map(np.load, shards)``
+    inside a cached function would read files no tracker sees.
 
     With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
     call in ``copy_context().run``; with none, it is the original. Threads started directly with
@@ -493,12 +491,9 @@ def track_dataset(tracker: Any, target: Any) -> None:
 
     A dataset reader (``pd.read_parquet("dd")``, ``pl.read_parquet("dd/*.parquet")``,
     ``ds.dataset("dd")``) reads every file under the directory or matching
-    the pattern. Recorded as the directory alone, a rewrite of one of its files
-    left the directory's mtime -- the only thing checked -- where it was, and
-    the old total was served; a glob recorded as a path that does not exist
-    was dropped altogether, so even a new file went unseen. Each file is a
-    dependency now, and each directory listed on the way is too, so a new
-    file counts.
+    the pattern. Each file is a dependency, since rewriting one leaves the
+    directory's mtime where it was, and each directory listed on the way is
+    too, so a new file counts. A glob is never recorded as a path itself.
     """
     text = os.fsdecode(target) if isinstance(target, bytes) else os.fspath(target)
     if not isinstance(text, str) or is_remote_url(text):
@@ -555,8 +550,8 @@ def _track_sqlite_wal(tracker: Any, database: Any) -> None:
     """Make ``<db>-wal`` part of a WAL-mode database's dependency.
 
     In WAL mode a commit goes to the ``-wal`` file and the main file stays as
-    it was until a checkpoint, so a query cached on the main file alone was
-    served stale while any writer kept its connection open. The header says
+    it was until a checkpoint, so the main file alone does not show a commit
+    while any writer keeps its connection open. The header says
     the mode (bytes 18 and 19 are 2 for WAL); the ``-wal`` file is tracked by
     content when it is there and as absent when it is not. A rollback-journal
     database has no ``-wal``, and switching one to WAL rewrites its header.
@@ -727,10 +722,9 @@ def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
 def _patch_process_pool_submit() -> None:
     """Bring the files a ``ProcessPoolExecutor`` task read back to the submitter.
 
-    A cached orchestrator that fans work out to a process pool read its data in
-    the workers, where no tracker of the parent's can see: after a data fix in
-    one input it served the pre-fix report, while the thread-pool version beside
-    it invalidated. ``submit`` is what ``Executor.map`` calls, chunked or not.
+    A cached orchestrator that fans work out to a process pool reads its data
+    in the workers, where no tracker of the parent's can see, so the workers
+    report what they read and it is credited to the submitter. ``submit`` is what ``Executor.map`` calls, chunked or not.
     joblib's default backend (loky, behind ``Parallel(n_jobs=...)`` and every
     scikit-learn ``n_jobs=``) runs on an executor of the same shape and is
     wrapped the same way, as is ``multiprocessing.Pool``
@@ -953,14 +947,10 @@ class FileDependencyRegistry:
         self.register("sqlite3.dbapi2", "connect", self._create_sqlite_connect_handler)
 
         # Existence probes: "is there a config here?" The ABSENCE of a file is
-        # an input -- it selects the defaults branch -- and it was the only
-        # input cash could not see, because a file that is never opened
-        # produces no read to track. An entry written by a run that found
-        # nothing recorded no dependencies at all, so it looked valid
-        # everywhere: directory B's answer came back in directory A,
-        # silently. A probe that says YES is an input too: a flag file or an
-        # output folder that is checked and never read was served as present
-        # after it was deleted. `os.stat` raises no audit event.
+        # an input -- it selects the defaults branch -- and a file that is
+        # never opened produces no read to track. A probe that says YES is an
+        # input too: a flag file or an output folder that is checked and never
+        # read. `os.stat` raises no audit event.
         for module in ("os.path", "genericpath"):
             self.register(module, "exists", self._create_exists_handler)
             self.register(module, "lexists", self._create_exists_handler)
@@ -971,8 +961,7 @@ class FileDependencyRegistry:
         # What a file's metadata says is the file's: ``max(files,
         # key=os.path.getmtime)`` picks the newest export and
         # ``os.path.getsize(p)`` reports it, and an in-place rewrite moves
-        # neither the directory's listing nor anything else recorded, so the
-        # old answer was served. ``Path.stat`` was watched; these were not.
+        # nothing else that is recorded.
         for module in ("os.path", "genericpath"):
             for name in ("getsize", "getmtime", "getctime"):
                 self.register(module, name, self._create_metadata_handler)
@@ -1019,11 +1008,10 @@ class FileDependencyRegistry:
         serves any number of concurrent trackers.
         """
 
-        # Positional OR keyword. The wrapper used to demand the path as its
-        # first positional parameter, so while it was installed
-        # `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)` or
-        # `pq.read_table(source=p)` raised TypeError EVERYWHERE in the process,
-        # inside cached code or not. Measured while adding the pyarrow readers.
+        # Positional OR keyword: readers take the path either way
+        # (`pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`,
+        # `pq.read_table(source=p)`), and the wrapper is installed process-wide,
+        # so it must accept every call the original accepts.
         @functools.wraps(original_func)
         def tracked_func(*args, **kwargs):
             target = args[0] if args else next((kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
@@ -1069,9 +1057,9 @@ class FileDependencyRegistry:
         """``sqlite3.connect``: the database file, also when named by a URI.
 
         With ``uri=True`` the database is a ``file:`` URI --
-        ``file:d.db?mode=ro`` for a read-only connection -- and recorded as it
-        was written it named no file, so the query was served stale after an
-        INSERT. The URI's path is the file; an in-memory database has none.
+        ``file:d.db?mode=ro`` for a read-only connection -- which as written
+        names no file. The URI's path is the file; an in-memory database has
+        none.
         """
         path_handler = FileDependencyRegistry._create_path_arg_handler(original_func, track_callback)
 

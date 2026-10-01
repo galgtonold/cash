@@ -153,8 +153,8 @@ def _resource_is_user_data(path_nc: str) -> bool:
     """Is a read through a resource API (`_RESOURCE_MODULES`) the user's data?
 
     A data file of the user's own package is: ``pkgutil.get_data(__package__,
-    "cfg.txt")`` read an edited ``cfg.txt`` and served the old value, because
-    every read through these modules counted as metadata. A file of an
+    "cfg.txt")`` reads the user's ``cfg.txt``, and an edit to it is a change.
+    A file of an
     installed package never reaches here (`_installed_data_file` ran first).
     What stays dropped is a distribution's metadata and the directory
     listings these modules make while they scan ``sys.path``.
@@ -316,13 +316,10 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
 #: exists on a run where the inner call hit and not on a run where it missed,
 #: so the statement's output lineage differs between those runs. In a loop that
 #: makes each iteration's key depend on whether the previous one was already
-#: cached, and the loop converges one iteration per run -- measured 7, 6, 5, 4,
-#: 3 real calls across five restarts of an 8-iteration loop, i.e. O(N) runs to
-#: warm up.
+#: cached, and the loop warms up one iteration per run.
 #:
 #: Same class as the ``/proc`` guard above: cash's own I/O must never become a
-#: user-visible dependency. That one was found through a stale value, this one
-#: through a cache that would not settle.
+#: user-visible dependency.
 _CASH_INTERNAL_SEGMENTS: tuple[str, ...] = ("/.cash/", "/_global_cash/")
 
 #: Cache directories that actually exist in this process, registered by the

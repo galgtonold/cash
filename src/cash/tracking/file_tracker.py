@@ -202,9 +202,8 @@ class FileAccessTracker:
         """Stop tracking until :meth:`resume`, restoring the enclosing tracker.
 
         For a streaming cached generator: production is tracked, the caller's
-        loop body is not. `__enter__` cannot be used per item -- it took 5.1us
-        against 0.15us for the ContextVar swap alone, which on a 200k-item
-        iterator is over a second of pure bookkeeping.
+        loop body is not. `__enter__` is too costly to run per item; this is
+        one ContextVar swap.
         """
         parent = self._parent_stack[-1] if self._parent_stack else None
         return active_tracker.set(parent)
@@ -334,9 +333,7 @@ class FileAccessTracker:
             return
         if SCRATCH_MEMMAP in abs_path:
             # joblib's memmaps of a parallel call's arrays: deleted when the
-            # call returns, so recorded, every entry that read them was stale
-            # for ever -- a ``cross_val_predict(n_jobs=4)`` loop re-ran on
-            # every run of the report cell.
+            # call returns, so an entry depending on one could never be fresh.
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
             return
         if RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(RUNTIME_CACHE_SUFFIXES):
@@ -493,8 +490,8 @@ class FileAccessTracker:
     def _probed_before(self, path, kind: str | None) -> bool:
         """Was this probe, with this answer, recorded in this block already?
 
-        A loop that checks the same file on every iteration asked once:
-        recording it again cost 20-40 us a probe, for nothing. The recorded
+        A loop that checks the same file on every iteration asked once, and
+        recording it again would cost time for nothing. The recorded
         form does not depend on the working directory (see `_probed_path`),
         so the path as given is the key.
         """
@@ -578,9 +575,8 @@ def tracking_seconds() -> float:
     """Seconds cash has spent recording file reads in this process.
 
     Read before and after a statement, the difference is cash's own time inside
-    it, which is not the statement's cost: a folder read recorded 16.5 s for a
-    load that takes 1.8 s without cash, and a later hit credited all of it as
-    saved.
+    it, which is not the statement's cost and must not be credited as time a
+    later hit saves.
     """
     return _tracking_seconds
 

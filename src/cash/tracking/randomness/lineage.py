@@ -73,10 +73,10 @@ def seed_epochs() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Seeds outside a notebook.
 #
-# Without a statement engine nobody published a ledger, so a seed set by the
+# Without a statement engine nobody publishes a ledger, yet a seed set by the
 # caller -- ``np.random.seed(0)`` at module level, or in an outer function
-# before it calls a cached function that draws -- never reached that function's
-# key: every seed was served the first seed's draw. ``watch_seeds`` wraps the
+# before it calls a cached function that draws -- decides what that function
+# draws, so it must reach the function's key. ``watch_seeds`` wraps the
 # global ``seed`` functions so the process knows which streams were seeded, and
 # a drawing function is then keyed on where the seeded stream stands when it is
 # called. That position is a pure function of the seed and the draws since, so
@@ -200,9 +200,7 @@ def observed_rng_reads(tracking_state, code: str) -> set[str]:
 
     Deliberately shared by all three seams -- the runtime cache key, the runtime
     output lineage, and the simulation. They must agree byte-for-byte (the
-    cache-key unification rule); when only the first one had it, the simulation
-    computed different keys and 65 integration tests failed. One function, so
-    they cannot drift apart again.
+    cache-key unification rule), so they share this one function.
     """
     ledger = getattr(tracking_state, "observed_rng_statement_draws", None)
     if not ledger or not code:
