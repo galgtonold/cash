@@ -104,8 +104,7 @@ def notebook_cache_dir(notebook_path: str) -> str:
 
 def _target_dir(args: argparse.Namespace) -> str:
     """The directory a subcommand acts on when no path was given."""
-    tool = getattr(args, "tool", None)
-    return tool_cache_dir(tool) if tool else resolved_cache_dir()
+    return tool_cache_dir(args.tool) if args.tool else resolved_cache_dir()
 
 
 def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
@@ -148,7 +147,7 @@ def cmd_version(args: argparse.Namespace) -> None:
 def cmd_info(args: argparse.Namespace) -> None:
     """Show cash configuration."""
 
-    config = get_config(config_path=getattr(args, "config", None))
+    config = get_config(config_path=args.config)
 
     source, origins, files = config_provenance(config)
 
@@ -460,10 +459,8 @@ def _resolve_function(entries: list[_Entry], wanted: str) -> str | None:
 def cmd_inspect(args: argparse.Namespace) -> None:
     """Inspect cache for a notebook or cache directory."""
     target = args.path
-    # getattr, not attribute access: a flag added here must not break a
-    # caller that builds its own Namespace without it.
-    only_function = getattr(args, "function", None)
-    if target and getattr(args, "tool", None):
+    only_function = args.function
+    if target and args.tool:
         print("cash inspect: --tool and a path are mutually exclusive.")
         sys.exit(2)
 
@@ -815,7 +812,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
         print(f"  To clear the cache in use: cash clear --all   ({os.path.abspath(resolved_cache_dir())})")
         sys.exit(2)
 
-    tool = getattr(args, "tool", None)
+    tool = args.tool
     if tool is not None and not tool.strip():
         # Same as --entry below: an empty name selects no tool, and falling
         # through would clear the path instead.
@@ -825,8 +822,8 @@ def cmd_clear(args: argparse.Namespace) -> None:
         print("cash clear: --tool and a path are mutually exclusive.")
         sys.exit(2)
 
-    only_entry = getattr(args, "entry", None)
-    only_function = getattr(args, "function", None)
+    only_entry = args.entry
+    only_function = args.function
     for flag, value in (("--entry", only_entry), ("--function", only_function)):
         # `--entry "$ID"` with $ID unset arrives as "": falsy, so it fell
         # through to clearing the whole path. A selector that selects nothing
@@ -834,7 +831,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
         if value is not None and not value.strip():
             print(f"cash clear: {flag} needs a non-empty value; nothing was cleared.")
             sys.exit(2)
-    if getattr(args, "expired", False):
+    if args.expired:
         if only_entry or only_function:
             # --function would otherwise win and delete the live entries too.
             print(
@@ -858,7 +855,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
         _clear_function(target, only_function)
         return
 
-    force = bool(getattr(args, "force", False))
+    force = args.force
     if args.all or tool:
         cache_dir = _target_dir(args)
         if os.path.isdir(cache_dir):
@@ -881,13 +878,8 @@ def cmd_clear(args: argparse.Namespace) -> None:
 
     target = args.path
     if not target:
-        # The one-liner this replaces named two of the three options and
-        # left the user to guess the rest; the help text is the list.
-        parser = getattr(args, "clear_parser", None)
-        if parser is not None:
-            parser.print_help()
-        else:
-            print("Specify a path, --function NAME, or --all.")
+        # The help text lists every way to say what to clear.
+        args.clear_parser.print_help()
         sys.exit(2)
 
     if os.path.isdir(target):
@@ -1006,11 +998,8 @@ def cmd_autoload(args: argparse.Namespace) -> None:
         raise AssertionError(f"unexpected state {args.state!r}")
 
 
-def main() -> None:
-    # A function or folder name outside the console's code page (cp1252 on a
-    # Windows pipe) raised UnicodeEncodeError from print -- after `clear` had
-    # already deleted, so it reported failure for work it had done.
-    survive_narrow_streams()
+def build_parser() -> argparse.ArgumentParser:
+    """The ``cash`` command line: every subcommand and its options."""
     parser = argparse.ArgumentParser(
         prog="cash",
         description="A Python cache that re-runs only what changed.",
@@ -1136,7 +1125,15 @@ def main() -> None:
         help="(on) overwrite a different file at this path. (off) remove a file lacking the cash marker.",
     )
     sub_autoload.set_defaults(func=cmd_autoload)
+    return parser
 
+
+def main() -> None:
+    # A function or folder name outside the console's code page (cp1252 on a
+    # Windows pipe) raised UnicodeEncodeError from print -- after `clear` had
+    # already deleted, so it reported failure for work it had done.
+    survive_narrow_streams()
+    parser = build_parser()
     args = parser.parse_args()
 
     if not args.command:

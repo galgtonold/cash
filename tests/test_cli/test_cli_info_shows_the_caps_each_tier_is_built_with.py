@@ -8,16 +8,16 @@ lone file backend was shown a RAM cap it does not have, and a tier's own
 from __future__ import annotations
 
 import dataclasses
-from types import SimpleNamespace
 
 from cash import __main__ as cli
 from cash.config import TierConfig, get_config
+from tests._cli_args import cli_args
 
 
 def _info(monkeypatch, capsys, **changes) -> str:
     config = dataclasses.replace(get_config(), **changes)
     monkeypatch.setattr("cash.__main__.get_config", lambda **_: config)
-    cli.cmd_info(SimpleNamespace())
+    cli.cmd_info(cli_args("info"))
     out = capsys.readouterr().out
     return next(line for line in out.splitlines() if line.strip().startswith("Max size:"))
 

@@ -41,6 +41,7 @@ import cash.backends.adaptive_caps as caps
 from cash.backends import FileBackend
 from cash.backends.adaptive_caps import adaptive_disk_cap, adaptive_disk_cap_for
 from cash.backends.file_eviction import FileEvictor
+from tests._cli_args import cli_args
 
 GIB = 1024**3
 
@@ -172,7 +173,6 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     old answer was 12.0 GiB (f(free)) and looked like a cap already blown by
     77%; the enforced one is 17.3 GiB (f(free + own)) and is not blown at all.
     """
-    from types import SimpleNamespace
 
     from cash import __main__ as cli
     from cash.config import get_config, human_bytes
@@ -189,7 +189,7 @@ def test_cash_info_prints_the_cap_the_backend_would_enforce(volume, capsys, monk
     monkeypatch.setattr(config, "cache_dir", str(cache))
     monkeypatch.setattr(config, "max_cache_size", None)
     monkeypatch.setattr("cash.__main__.get_config", lambda **_: config)
-    cli.cmd_info(SimpleNamespace())
+    cli.cmd_info(cli_args("info"))
 
     printed = capsys.readouterr().out
     line = next(l for l in printed.splitlines() if l.strip().startswith("Max size:"))

@@ -14,12 +14,12 @@ from __future__ import annotations
 import os
 import time
 import warnings
-from types import SimpleNamespace
 
 import pytest
 
 from cash import config as cash_config
 from cash.config import get_config
+from tests._cli_args import cli_args
 
 pytestmark = [pytest.mark.core]
 
@@ -68,7 +68,7 @@ def test_cash_info_shows_what_a_tools_config_file_resolves_to(tmp_path, capsys, 
         monkeypatch.delenv(key)
     shipped = tmp_path / "cash.toml"
     shipped.write_text("[tool.cash]\ncompress = true\n", encoding="utf-8")
-    cmd_info(SimpleNamespace(config=str(shipped)))
+    cmd_info(cli_args("info", config=str(shipped)))
     out = capsys.readouterr().out
     assert str(shipped) in out and "compress = True" in out.replace("true", "True"), out
 
@@ -102,8 +102,8 @@ def test_clear_expired_with_a_function_is_refused_not_widened(tmp_path):
     # --function used to win, deleting that function's live entries as well.
     from cash.__main__ import cmd_clear
 
-    args = SimpleNamespace(
-        path=str(tmp_path), all=False, tool=None, entry=None, function="f", expired=True, force=False
+    args = cli_args(
+        "clear", path=str(tmp_path), all=False, tool=None, entry=None, function="f", expired=True, force=False
     )
     with pytest.raises(SystemExit) as exit_:
         cmd_clear(args)

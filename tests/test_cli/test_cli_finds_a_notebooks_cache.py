@@ -14,6 +14,7 @@ import pytest
 
 from cash.__main__ import cmd_clear, cmd_inspect, notebook_cache_dir
 from cash.backends.file_backend import FileBackend
+from tests._cli_args import cli_args
 
 
 @pytest.fixture
@@ -51,7 +52,7 @@ def test_without_a_setting_it_is_beside_the_notebook(tmp_path, monkeypatch):
 
 
 def test_clear_removes_the_configured_cache_only(project, capsys):
-    cmd_clear(SimpleNamespace(path=str(project.nb), all=False, force=False, tool=None))
+    cmd_clear(cli_args("clear", path=str(project.nb), all=False, force=False, tool=None))
     out = capsys.readouterr().out
     assert not project.cache.exists(), out
     assert project.stray.exists(), "a .cash that is not the notebook's cache was removed"
@@ -59,7 +60,7 @@ def test_clear_removes_the_configured_cache_only(project, capsys):
 
 def test_inspect_reports_the_configured_cache(project, capsys):
     pytest.importorskip("nbformat")
-    cmd_inspect(SimpleNamespace(path=str(project.nb), function=None, tool=None))
+    cmd_inspect(cli_args("inspect", path=str(project.nb), function=None, tool=None))
     out = capsys.readouterr().out
     assert f"Cache directory: {project.cache}" in out, out
     assert "Entries: 1" in out, out
@@ -80,7 +81,9 @@ def test_entry_flags_on_a_sqlite_cache_are_refused(tmp_path, monkeypatch, capsys
     db.set("f:1", 1)
     db.shutdown()
     monkeypatch.chdir(tmp_path)
-    args = SimpleNamespace(path=str(cache), all=False, force=False, tool=None, entry=None, function=None, expired=False)
+    args = cli_args(
+        "clear", path=str(cache), all=False, force=False, tool=None, entry=None, function=None, expired=False
+    )
     for key, value in flags.items():
         setattr(args, key, value)
     with pytest.raises(SystemExit) as exit_info:
