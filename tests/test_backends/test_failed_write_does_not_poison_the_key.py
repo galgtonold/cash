@@ -31,6 +31,7 @@ import pytest
 
 from cash.backends._writes import PendingWrites
 from cash.exceptions import CashCacheStoreFailedWarning
+from tests._discarded_writes import reset_discarded_writes
 
 pytestmark = pytest.mark.expects_failed_writes
 
@@ -121,7 +122,7 @@ def test_the_failure_is_still_recorded_for_reporting():
     """
     from cash.backends import _writes
 
-    _writes.reset_discarded_writes()
+    reset_discarded_writes()
     pw = PendingWrites()
     try:
         _failing(pw)
@@ -133,4 +134,4 @@ def test_the_failure_is_still_recorded_for_reporting():
         assert [k for k, _ in recorded] == ["k"], recorded
     finally:
         pw.shutdown(wait=True)
-        _writes.reset_discarded_writes()
+        reset_discarded_writes()

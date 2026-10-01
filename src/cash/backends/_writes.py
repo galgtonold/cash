@@ -31,7 +31,6 @@ __all__ = [
     "all_pending_writes",
     "discarded_writes",
     "in_multiprocessing_child",
-    "reset_discarded_writes",
 ]
 
 # Marks any thread currently running a PendingWrites task, for ANY instance.
@@ -91,17 +90,6 @@ def discarded_writes() -> list[tuple[str, str]]:
     """
     with _DISCARDED_LOCK:
         return list(_DISCARDED_WRITES)
-
-
-def reset_discarded_writes(keep: int = 0) -> None:
-    """Drop recorded failures past *keep* (test isolation; not for library use).
-
-    ``keep`` rather than a bare clear so a test that induces failures on
-    purpose can absorb exactly its own: the writes are asynchronous, so its
-    failures often land after it has finished.
-    """
-    with _DISCARDED_LOCK:
-        del _DISCARDED_WRITES[keep:]
 
 
 #: Fallback for `_shutdown_write_timeout` when no config can be read: the

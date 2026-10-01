@@ -783,7 +783,7 @@ def _no_silently_discarded_cache_writes(request):
     # test each once caught the previous test's tail.
     _drain_pending_writes()
     if request.node.get_closest_marker("expects_failed_writes"):
-        from cash.backends._writes import reset_discarded_writes
+        from tests._discarded_writes import reset_discarded_writes
 
         reset_discarded_writes(keep=before)
         return
