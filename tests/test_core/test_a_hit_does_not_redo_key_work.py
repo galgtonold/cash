@@ -242,7 +242,10 @@ def test_a_generated_method_s_identity_is_read_once(monkeypatch):
 
 def test_what_is_worth_keying_on_its_own_is_decided_by_size():
     sparse = pytest.importorskip("scipy.sparse")
-    worth = object_hashing._worth_opening
+
+    def worth(value):
+        return object_hashing._worth_opening(value, object_hashing.BUILTIN_CONTENT)
+
     assert not worth(np.zeros(8))
     assert worth(np.zeros(object_hashing.OPEN_UP_BYTES // 8))
     assert not worth(sparse.eye(10, format="csr"))

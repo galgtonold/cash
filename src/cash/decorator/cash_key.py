@@ -28,7 +28,7 @@ from typing import Any
 from ..backends.cache_dir import CASH_KEYS_FILENAME, create_temp_file
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
-from ..object_hashing import canonical_bytes, object_state
+from ..object_hashing import BUILTIN_CONTENT, canonical_bytes, object_state
 from ..tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def content_digest(value: Any) -> str | None:
         return None
     for name in sorted(state):
         try:
-            payload = canonical_bytes(state[name])
+            payload = canonical_bytes(state[name], BUILTIN_CONTENT)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError, RecursionError):
             continue
         parts.append(f"{name}:{hashlib.sha256(payload).hexdigest()}")

@@ -27,7 +27,7 @@ from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package
-from ..object_hashing import stable_key_repr
+from ..object_hashing import BUILTIN_CONTENT, stable_key_repr
 from ..source_norm import (
     bytecode_identity,
     callable_identity,
@@ -158,7 +158,7 @@ def func_key(func: Callable) -> str:
         inner = func_key(func.func)
         try:
             bound = hashlib.sha256(
-                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items()))), protocol=4),
+                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items())), BUILTIN_CONTENT), protocol=4),
             ).hexdigest()[:12]
         except Exception:  # noqa: BLE001 - an unpicklable argument keys on its type
             shape = [type(v).__qualname__ for v in (*func.args, *func.keywords.values())]

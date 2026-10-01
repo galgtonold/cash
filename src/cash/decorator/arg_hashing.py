@@ -20,8 +20,10 @@ from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
 from ..object_hashing import (
-    CONTENT_DIGEST,
+    BUILTIN_CONTENT,
     NOT_HOOKED,
+    ContentHashing,
+    builtin_family_of,
     builtin_hash,
     canonical_bytes,
     canonical_call_bytes,
@@ -292,7 +294,7 @@ def frame_signature(obj: Any) -> tuple:
     """
     mgr = obj._mgr
     blocks = tuple((id(block.values), id(getattr(block.values, "_pa_array", None))) for block in mgr.blocks)
-    attrs = pickle.dumps(stable_key_repr(obj.attrs), protocol=4) if obj.attrs else None
+    attrs = pickle.dumps(stable_key_repr(obj.attrs, BUILTIN_CONTENT), protocol=4) if obj.attrs else None
     index = (id(obj.index), _axis_arrays_signature(obj.index), tuple(obj.index.names))
     index += (repr(getattr(obj.index, "freq", None)), attrs)
     if hasattr(obj, "columns"):
@@ -720,6 +722,9 @@ class ArgHasher:
         #: BEFORE cash's own content hashers. Separate so the hot path skips
         #: the question with one empty check.
         self.override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
+        #: How a key walk reads a frame, array or table inside an argument:
+        #: through the copy-on-write memo (`_memo_content_digest`).
+        self._content = ContentHashing(builtin_family_of, self._memo_content_digest, frame_memoable)
 
     def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str], src_hash: str, *, override: bool) -> None:
         """Make *hasher_fn* the identity of *type_* values, replacing any earlier one."""
@@ -1016,7 +1021,7 @@ class ArgHasher:
         """`builtin_hash` for a frame, array or table inside an argument,
         through the copy-on-write memo when it is a pandas frame: an
         unchanged frame inside an object or a list is checked, not read
-        again (`CONTENT_DIGEST`)."""
+        again (``ContentHashing.digest`` of the key walk)."""
         cow = is_cow_pandas(value)
         if cow:
             digest = self._frame_memo_lookup(value)
@@ -1215,15 +1220,7 @@ class ArgHasher:
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
             )
             walked: dict = {}
-            previous = getattr(CONTENT_DIGEST, "fn", None)
-            previous_memoable = getattr(CONTENT_DIGEST, "memoable", None)
-            CONTENT_DIGEST.fn = self._memo_content_digest
-            CONTENT_DIGEST.memoable = frame_memoable
-            try:
-                args_bytes = canonical_bytes(form, hook=self._nested_hasher, seen=walked)
-            finally:
-                CONTENT_DIGEST.fn = previous
-                CONTENT_DIGEST.memoable = previous_memoable
+            args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)

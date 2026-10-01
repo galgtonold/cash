@@ -31,11 +31,10 @@ import hashlib
 import logging
 import pickle
 import sys
-import threading
 import types
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import _plain_data
 from .sizing import pandas_nbytes
@@ -56,6 +55,23 @@ _HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, Rec
 
 class CyclicValueError(TypeError):
     """A value whose object graph loops back on itself and holds a set."""
+
+
+class ContentHashing(NamedTuple):
+    """How a key walk reads the frames, arrays and tables it meets.
+
+    *family* names the content hasher that claims a type, or None;
+    *digest* is a claimed value's content hash, or None when it has none.
+    *memoable*, when given, says the caller can check a value instead of
+    reading it again: the decorator's copy-on-write memo for an unchanged
+    pandas frame. Such a value is always keyed on its own inside an object
+    (`holds_content_data`), however small. The caller passes this in, so a
+    walk's result depends on its arguments alone.
+    """
+
+    family: Callable[[type], str | None]
+    digest: Callable[[Any], str | None]
+    memoable: Callable[[Any], bool] | None = None
 
 
 def object_state(value: Any) -> dict:
@@ -88,14 +104,7 @@ def object_state(value: Any) -> dict:
 _BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
 
 
-def _typed(
-    value: Any,
-    canon: Any,
-    stack: set | None = None,
-    seen: dict | None = None,
-    hook: Callable[[Any], Any] | None = None,
-    left: list | None = None,
-) -> tuple:
+def _typed(value: Any, canon: Any, walk: _Walk) -> tuple:
     """*canon*, a container's canonical items, tagged with the container's type.
 
     Every container carries its type, so containers holding equal items key
@@ -108,8 +117,8 @@ def _typed(
     entry, and a ``dict`` subclass holding ``self.source`` served the first
     caller's answer for every source. The state is read from ``__dict__``
     and ``__slots__`` both (`object_state`): a subclass declaring slots kept
-    its values out of the key. The state is walked as part of the same walk
-    (*stack*, *seen*), so a list it shares with the items is marked as
+    its values out of the key. The state is walked as part of the same
+    *walk*, so a list it shares with the items is marked as
     shared and a loop back to the container is caught. Nothing is caught
     here: a part that cannot be read is not left out of the key, it makes
     the call unkeyable (run uncached, with a warning).
@@ -124,13 +133,14 @@ def _typed(
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
-        state += tuple(sorted((k, _walk(v, stack, seen, hook, left)) for k, v in own.items()))
+        state += tuple(sorted((k, _walk(v, walk)) for k, v in own.items()))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
 
 def stable_key_repr(
     value: Any,
+    content: ContentHashing,
     *,
     seen: dict | None = None,
     hook: Callable[[Any], Any] | None = None,
@@ -153,9 +163,9 @@ def stable_key_repr(
       that set is sorted too. Any other object is left to pickle, which stores it as it asks to
       be stored (its ``__reduce__``) and keeps the loops in its graph.
 
-    * A value a built-in content hasher claims (a frame, an array, a table)
-      becomes that hash (`builtin_hash`), wherever it sits, as it does as an
-      argument of its own. *hook*, when given, is asked first about every
+    * A value a content hasher claims (a frame, an array, a table) becomes
+      that hash (*content*, `ContentHashing`), wherever it sits, as it does
+      as an argument of its own. *hook*, when given, is asked first about every
       value that is not a primitive: it returns the value's stand-in, or
       `NOT_HOOKED` -- how ``cash.register_hasher`` reaches a value inside a
       list or dict.
@@ -180,7 +190,7 @@ def stable_key_repr(
     pickled twice, whose identity only pickle's memo records.
     """
     try:
-        return _walk(value, set(), {} if seen is None else seen, hook, left)
+        return _walk(value, _Walk(content, {} if seen is None else seen, hook, left))
     except RecursionError:
         raise TooDeepValueError(_too_deep(value)) from None
 
@@ -196,51 +206,67 @@ def _too_deep(value: Any) -> str:
     return f"a {type(value).__qualname__} nested too deeply to key (deeper than the recursion limit)"
 
 
-def _walk(value: Any, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None, left: list | None) -> Any:
-    """`stable_key_repr` of one value, with the path walked so far (*_stack*)
-    and the containers met so far (*_seen*)."""
+class _Walk:
+    """One `stable_key_repr` walk: the path walked so far (*stack*), the
+    containers met so far (*seen*), and the caller's *content*, *hook* and
+    *left* (see `stable_key_repr`)."""
+
+    __slots__ = ("content", "hook", "left", "seen", "stack")
+
+    def __init__(
+        self, content: ContentHashing, seen: dict, hook: Callable[[Any], Any] | None, left: list | None
+    ) -> None:
+        self.content = content
+        self.seen = seen
+        self.hook = hook
+        self.left = left
+        self.stack: set[int] = set()
+
+
+def _walk(value: Any, walk: _Walk) -> Any:
+    """`stable_key_repr` of one value, as part of *walk*."""
+    seen = walk.seen
     if type(value) in CODELESS_PRIMS:
         if type(value) is bytearray:
             # Written into, one bytearray held twice changes in two places.
-            first = _seen.get(id(value))
+            first = seen.get(id(value))
             if first is not None:
                 return ("__cash_alias__", first[0])
-            _seen[id(value)] = (len(_seen), value)
+            seen[id(value)] = (len(seen), value)
         return value
-    if hook is not None:
-        stand_in = hook(value)
+    if walk.hook is not None:
+        stand_in = walk.hook(value)
         if stand_in is not NOT_HOOKED:
             return stand_in
     if type(value) in _plain_data.numpy_scalar_set():
         # A number: pickled by value, nothing inside to order.
         return ("__cash_np__", value.dtype.char, value.tobytes())
-    family = _builtin_family_of(type(value))
+    family = walk.content.family(type(value))
     if family is not None:
         if family in _WRITABLE_FAMILIES:
             # One array held twice changes in two places when written.
-            first = _seen.get(id(value))
+            first = seen.get(id(value))
             if first is not None:
                 return ("__cash_alias__", first[0])
-        content = getattr(CONTENT_DIGEST, "fn", None)
-        digest = content(value) if content is not None else builtin_hash(value)
+        digest = walk.content.digest(value)
         if digest is not None:
             if family in _WRITABLE_FAMILIES:
-                _seen[id(value)] = (len(_seen), value)
+                seen[id(value)] = (len(seen), value)
             return ("__cash_content__", family, digest)
-    if id(value) in _stack:
+    if id(value) in walk.stack:
         raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
     if isinstance(value, _MUTABLE_CONTAINERS):
-        first = _seen.get(id(value))
+        first = seen.get(id(value))
         if first is not None:
             return ("__cash_alias__", first[0])
         # The value is held, so its id cannot be reused by another
         # container while the walk lasts.
-        _seen[id(value)] = (len(_seen), value)
-    _stack.add(id(value))
+        seen[id(value)] = (len(seen), value)
+    walk.stack.add(id(value))
     try:
-        return _walk_object(value, _stack, _seen, hook, left)
+        return _walk_object(value, walk)
     finally:
-        _stack.discard(id(value))
+        walk.stack.discard(id(value))
 
 
 #: Containers whose identity code can observe by writing through one
@@ -257,7 +283,9 @@ _VALUE_LEAVES = (*PARSED_VALUE_TYPES, fractions.Fraction, uuid.UUID)
 _BY_NAME = (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleType)
 
 
-def canonical_bytes(value: Any, hook: Callable[[Any], Any] | None = None, seen: dict | None = None) -> bytes:
+def canonical_bytes(
+    value: Any, content: ContentHashing, hook: Callable[[Any], Any] | None = None, seen: dict | None = None
+) -> bytes:
     """*value*'s canonical form (`stable_key_repr`), pickled: equal values give
     equal bytes, in any process, however they were built.
 
@@ -268,10 +296,10 @@ def canonical_bytes(value: Any, hook: Callable[[Any], Any] | None = None, seen: 
     that matters -- a list, dict, set or array held twice -- is spelled out
     in the form. Only when an object is left to pickle whole, which may
     share state inside, is the memo kept. *seen*, when given, is filled with
-    the writable containers the walk met (`stable_key_repr`'s ``_seen``).
+    the writable containers the walk met (`stable_key_repr`'s *seen*).
     """
     left: list = []
-    form = stable_key_repr(value, seen=seen, hook=hook, left=left)
+    form = stable_key_repr(value, content, seen=seen, hook=hook, left=left)
     try:
         if left:
             return b"m" + _plain_data.key_dumps(form)
@@ -329,11 +357,6 @@ def _call_bytes(arg_forms: tuple, kwarg_forms: tuple) -> bytes:
 #: What a `stable_key_repr` hook returns for a value it has no stand-in for.
 NOT_HOOKED = object()
 
-#: ``fn`` on this thread, when set, replaces `builtin_hash` for the frames,
-#: arrays and tables a key walk meets: the decorator sets it to its
-#: copy-on-write memo while it builds a key.
-CONTENT_DIGEST = threading.local()
-
 #: Items looked at per container attribute by `holds_content_data`.
 _HOLDS_SCAN_ITEMS = 256
 
@@ -346,10 +369,10 @@ _HOLDS_SCAN_ITEMS = 256
 OPEN_UP_BYTES = 1 << 20
 
 
-def holds_content_data(value: Any) -> bool:
+def holds_content_data(value: Any, content: ContentHashing) -> bool:
     """Does the object *value* hold a frame, array or table worth keying on
     its own (`_worth_opening`), in an attribute or in a list, tuple or dict
-    an attribute holds?
+    an attribute holds? *content* says what counts as one.
 
     ``__dict__`` alone, not `object_state`: this is asked of every object a
     key walk leaves to pickle, and the slots walk up the MRO made keying a
@@ -359,10 +382,11 @@ def holds_content_data(value: Any) -> bool:
     state = getattr(value, "__dict__", None)
     if type(state) is not dict:
         return False
+    family = content.family
     for v in state.values():
         t = type(v)
-        if _builtin_family_of(t) is not None:
-            if _worth_opening(v):
+        if family(t) is not None:
+            if _worth_opening(v, content):
                 return True
             continue
         if t is list or t is tuple:
@@ -371,20 +395,19 @@ def holds_content_data(value: Any) -> bool:
             items = [x for _, x in zip(range(_HOLDS_SCAN_ITEMS), v.values())]
         else:
             continue
-        if any(_builtin_family_of(type(x)) is not None and _worth_opening(x) for x in items):
+        if any(family(type(x)) is not None and _worth_opening(x, content) for x in items):
             return True
     return False
 
 
-def _worth_opening(value: Any) -> bool:
+def _worth_opening(value: Any, content: ContentHashing) -> bool:
     """Is *value*, a frame, array or table inside an object, cheaper keyed on
     its own than pickled with the object? When the key's caller can check it
-    instead of reading it (``CONTENT_DIGEST.memoable``: an unchanged
-    copy-on-write pandas frame), or when it is big (`OPEN_UP_BYTES`)."""
-    memoable = getattr(CONTENT_DIGEST, "memoable", None)
-    if memoable is not None and memoable(value):
+    instead of reading it (``content.memoable``: an unchanged copy-on-write
+    pandas frame), or when it is big (`OPEN_UP_BYTES`)."""
+    if content.memoable is not None and content.memoable(value):
         return True
-    family = _builtin_family_of(type(value))
+    family = content.family(type(value))
     try:
         if family == "pandas":
             size = pandas_nbytes(value)
@@ -403,7 +426,7 @@ def _worth_opening(value: Any) -> bool:
     return isinstance(size, int) and size >= OPEN_UP_BYTES
 
 
-def _builtin_family_of(type_: type) -> str | None:
+def builtin_family_of(type_: type) -> str | None:
     """`builtin_hash_family`, remembered per type: asked of every value a
     key walks."""
     try:
@@ -418,33 +441,34 @@ def _builtin_family_of(type_: type) -> str | None:
 _FAMILIES: dict[type, str | None] = {}
 
 
-def _walk_object(value: Any, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None, left: list | None) -> Any:
-    """`_walk` of a container or object, once it is on *_stack*."""
+def _walk_object(value: Any, walk: _Walk) -> Any:
+    """`_walk` of a container or object, once it is on ``walk.stack``."""
 
     def sub(v: Any) -> Any:
-        return _walk(v, _stack, _seen, hook, left)
+        return _walk(v, walk)
 
     if isinstance(value, (set, frozenset)):
         items = [sub(v) for v in value]
         items.sort(key=_plain_data.content_dumps)
-        return _typed(value, tuple(items), _stack, _seen, hook, left)
+        return _typed(value, tuple(items), walk)
     if isinstance(value, dict):
-        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), _stack, _seen, hook, left)
+        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), walk)
     if isinstance(value, (list, tuple)):
-        return _typed(value, tuple(sub(v) for v in value), _stack, _seen, hook, left)
+        return _typed(value, tuple(sub(v) for v in value), walk)
     t = type(value)
     if contains_set(value):
         return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
-    if holds_content_data(value):
+    if holds_content_data(value, walk.content):
         # Pickled whole, every frame inside was serialised and hashed on each
-        # call. Opened up, each goes through its content hasher, and through
-        # the caller's memo (`CONTENT_DIGEST`), so an unchanged frame is
+        # call. Opened up, each goes through the caller's content hasher
+        # (``walk.content``, the decorator's memo), so an unchanged frame is
         # checked rather than read again. An object that reaches itself is
         # left to pickle, which keeps the loop.
         try:
             return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
         except CyclicValueError:
             pass
+    left = walk.left
     if left is not None and not (
         type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
     ):
@@ -646,6 +670,11 @@ def builtin_hash(value: Any) -> str | None:
     return None
 
 
+#: How a key walk reads a frame, array or table with no memo in front:
+#: every byte, through `builtin_hash`.
+BUILTIN_CONTENT = ContentHashing(builtin_family_of, builtin_hash)
+
+
 def hash_pandas(value: Any) -> str | None:
     """Hash a pandas DataFrame or Series over values AND schema.
 
@@ -682,7 +711,7 @@ def hash_pandas(value: Any) -> str | None:
             schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
         h = hashlib.sha256(schema.encode("utf-8"))
         if value.attrs:
-            h.update(canonical_bytes(value.attrs))
+            h.update(canonical_bytes(value.attrs, BUILTIN_CONTENT))
         _fold_pandas_values(h, value, pd)
         return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, pickle.PicklingError):
@@ -776,7 +805,7 @@ def _object_items_bytes(items: list) -> bytes:
     tree = _plain_data.sharing(items, tree=True, held_twice_at=0)
     if tree is not None:
         return b"T" + _plain_data.pickle_unshared((items, tree[0]))
-    return b"S" + canonical_bytes(items)
+    return b"S" + canonical_bytes(items, BUILTIN_CONTENT)
 
 
 def _pandas_dtype_key(dtype: Any) -> str:
@@ -958,7 +987,7 @@ def held_objects(value: Any) -> list | None:
     key unless the code search is handed them here. Strings, numbers and
     dates, which fill most object columns, are left out at C speed.
     """
-    family = _builtin_family_of(type(value))
+    family = builtin_family_of(type(value))
     columns: list = []
     try:
         if family == "numpy":
