@@ -12,7 +12,7 @@ The `cash` command shows the settings in effect, lists what a cache holds,
 and clears it. `cash` and `python -m cash` are the same command. With no
 subcommand it prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @63d84ebf broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @2378b217 broad="the quick-reference table is a claim about the whole subcommand set" -->
 | Command | What it does | Deletes? |
 |---|---|---|
 | [`cash version`](#cash-version) | Print the installed version. | No |
@@ -84,7 +84,7 @@ Cash v<!-- docnum:version -->0.12.0<!-- /docnum -->
   tier stack. `Tool caches` appears when installed command-line tools have
   per-user caches; `--tool NAME` reaches one.
 
-<!-- claim: cash/__main__.py:cmd_inspect @0975006f, cash/__main__.py:_inspect_cache_dir @de27caf5, cash/__main__.py:_inspect_notebook @d58d3a2b -->
+<!-- claim: cash/__main__.py:cmd_inspect @d8d8579c, cash/__main__.py:_inspect_cache_dir @de27caf5, cash/__main__.py:_inspect_notebook @d58d3a2b -->
 ## `cash inspect` { #cash-inspect-path }
 
 **Usage:** `cash inspect [--function NAME] [--tool NAME] [path]`
@@ -144,7 +144,7 @@ unless a `pyproject.toml` above it sets `[tool.cash] cache_dir` or
 Unreadable entries are skipped. Inspecting a notebook needs `nbformat`; without
 it, cash says how to install it and exits 0.
 
-<!-- claim: cash/__main__.py:cmd_clear @3e1c3aca -->
+<!-- claim: cash/__main__.py:cmd_clear @fd92c8a3 -->
 ## `cash clear` { #cash-clear-path-all }
 
 **Usage:** `cash clear [--all] [--function NAME] [--entry ID] [--expired] [--tool NAME] [--force] [path]`
@@ -247,7 +247,7 @@ Running `on` again with the same mode does nothing. To switch modes, run
 `cash autoload off` first, or pass `--force`: `on` refuses to overwrite an
 existing hook with a different body.
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @7254734a -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @148bc6bb -->
 ## Exit codes
 
 | Code | When |

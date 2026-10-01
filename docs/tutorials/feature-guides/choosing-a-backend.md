@@ -136,7 +136,7 @@ from cash import Cash, InMemoryBackend
 app = Cash(backend=InMemoryBackend(max_size_bytes=512 * 1024**2))
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict @2bbbead9, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict @e183f287, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e -->
 A dictionary in this process: everything is gone when the process ends. It
 evicts on three triggers: `max_entries` (least recently used first),
 `max_size_bytes`, and system memory above `max_memory_percent` (default 90%).

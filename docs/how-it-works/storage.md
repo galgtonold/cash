@@ -75,7 +75,7 @@ a cap you set reads `(set by max_cache_size)`.
     <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_disk_budget @e5d4f9bb -->
     `%cash_on` prints it, capitalised, under `Cash enabled.`.
 
-<!-- claim: cash/__main__.py:cmd_info @7254734a, cash/__main__.py:cmd_clear @3e1c3aca -->
+<!-- claim: cash/__main__.py:cmd_info @148bc6bb, cash/__main__.py:cmd_clear @fd92c8a3 -->
 `cash info` prints the folder in use, where that setting came from, and each
 tier's cap. `cash clear` deletes a cache folder: `cash clear analysis.ipynb` clears
 that notebook's whole cache folder, shared with its neighbours, and

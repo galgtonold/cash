@@ -122,7 +122,7 @@ same numbers as JSON and `%cash_stats reset` starts over.
 
 ## From a terminal
 
-<!-- claim: cash/__main__.py:main @63d84ebf -->
+<!-- claim: cash/__main__.py:main @2378b217 -->
 The `cash` command works on the cache folder itself: `cash info` shows the
 settings in force and what the cache holds, `cash inspect` lists entries by
 function and size, and `cash clear` deletes them. See

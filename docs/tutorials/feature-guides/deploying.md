@@ -116,7 +116,7 @@ call with the same arguments at once, use a bare `RedisBackend`.
   `with cash.assume_safe():` on lines you have checked, so it works as a
   standing gate that fails only on new findings. See
   [Side effects](../../decorator.md#side-effects).
-- <!-- claim: cash/__main__.py:cmd_clear @3e1c3aca -->
+- <!-- claim: cash/__main__.py:cmd_clear @fd92c8a3 -->
   **Decide whether the cache survives between runs.** A fresh runner starts
   cold, which is correct but slow. To keep it warm, point `CASH_CACHE_DIR` at a
   folder your CI caches between runs, or share a Redis or S3 backend. To start
