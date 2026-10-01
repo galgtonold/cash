@@ -14,7 +14,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from cash.backends.memory_backend import InMemoryBackend
-from cash.object_hashing import estimate_object_size, memory_footprint
+from cash.sizing import estimate_object_size, memory_footprint
 
 
 def _stored_size(value) -> int:

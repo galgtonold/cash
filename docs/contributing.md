@@ -75,7 +75,8 @@ src/cash/
 ├── purity.py           # @pure, @stateful and the known-pure registry
 ├── dependency_state.py # the state hash: own source, dependencies,
 │                       #   helpers
-├── object_hashing.py   # content hashes and sizes of values
+├── object_hashing.py   # content hashes of values
+├── sizing.py           # how big a frame, array or container is
 ├── source_norm.py      # normalises source before hashing (comments,
 │                       #   blank lines)
 ├── cost_model.py       # predicted serialise and restore time per
