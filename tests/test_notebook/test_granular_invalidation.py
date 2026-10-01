@@ -11,11 +11,10 @@ preserved — their cache stays valid.
 Test matrix:
 1. Per-symbol hashing of module files
 2. Changed-symbol detection (added, removed, modified symbols)
-3. Module attribute access extraction from code AST
-4. Per-symbol hash computation for specific attributes
-5. Granular invalidation in _invalidate_module_lineages
-6. End-to-end: change function → only users of that function invalidated
-7. Edge cases: getattr, bare module reference, comment-only changes, etc.
+3. Module attributes a statement is recorded as reading
+4. Granular invalidation in _invalidate_module_lineages
+5. End-to-end: change function → only users of that function invalidated
+6. Edge cases: getattr, bare module reference, comment-only changes, etc.
 """
 
 import hashlib
@@ -313,7 +312,7 @@ class TestGetChangedSymbols:
 
 
 # ============================================================================
-# 3. Module attribute access extraction
+# 3. Module attributes a statement is recorded as reading
 # ============================================================================
 
 
@@ -380,104 +379,7 @@ class TestRecordedModuleAttributeDeps:
 
 
 # ============================================================================
-# 4. Per-symbol hash computation
-# ============================================================================
-
-
-class TestComputeModuleSymbolHash:
-    """Tests for FunctionTracker.compute_module_symbol_hash."""
-
-    def test_different_attrs_different_hash(self, temp_module):
-        """Hashing different attributes produces different results."""
-        module_name, module_file, _ = temp_module
-        ft = FunctionTracker()
-        importlib.import_module(module_name)
-        ft.track_module(module_name)
-
-        h1 = ft.compute_module_symbol_hash(module_name, {"compute"})
-        h2 = ft.compute_module_symbol_hash(module_name, {"format_result"})
-        assert h1 != h2
-
-    def test_same_attrs_same_hash(self, temp_module):
-        """Same attributes produce same hash."""
-        module_name, module_file, _ = temp_module
-        ft = FunctionTracker()
-        importlib.import_module(module_name)
-        ft.track_module(module_name)
-
-        h1 = ft.compute_module_symbol_hash(module_name, {"compute"})
-        h2 = ft.compute_module_symbol_hash(module_name, {"compute"})
-        assert h1 == h2
-
-    def test_no_attrs_falls_back_to_full_hash(self, temp_module):
-        """Empty/None attrs falls back to the whole module's identity."""
-        from cash.source_norm import module_identity
-
-        module_name, module_file, _ = temp_module
-        ft = FunctionTracker()
-        importlib.import_module(module_name)
-        ft.track_module(module_name)
-
-        h_none = ft.compute_module_symbol_hash(module_name, None)
-        h_empty = ft.compute_module_symbol_hash(module_name, set())
-
-        # Both should be the whole module's identity, as its lineage uses
-        expected_full = module_identity(str(module_file))
-        assert expected_full is not None
-        assert h_none == expected_full
-        assert h_empty == expected_full
-
-    def test_unchanged_symbol_same_hash_after_other_changes(self, temp_module):
-        """After changing compute(), hash for VERSION should stay the same."""
-        module_name, module_file, _ = temp_module
-        ft = FunctionTracker()
-        importlib.import_module(module_name)
-        ft.track_module(module_name)
-
-        h_version_before = ft.compute_module_symbol_hash(module_name, {"VERSION"})
-
-        # Change compute() — leave VERSION unchanged
-        time.sleep(0.05)
-        with open(module_file, "w", encoding="utf-8") as f:
-            f.write(
-                "VERSION = '1.0'\n\n"
-                "def compute(x):\n    return x * 100\n\n"
-                "def format_result(x):\n    return f'Result: {x}'\n\n"
-                "class Config:\n    debug = False\n"
-            )
-
-        # Re-snapshot to update symbol hashes
-        ft.snapshot_module_symbols(module_name)
-
-        h_version_after = ft.compute_module_symbol_hash(module_name, {"VERSION"})
-        assert h_version_before == h_version_after
-
-    def test_changed_symbol_different_hash(self, temp_module):
-        """After changing compute(), hash for compute should change."""
-        module_name, module_file, _ = temp_module
-        ft = FunctionTracker()
-        importlib.import_module(module_name)
-        ft.track_module(module_name)
-
-        h_compute_before = ft.compute_module_symbol_hash(module_name, {"compute"})
-
-        # Change compute()
-        time.sleep(0.05)
-        with open(module_file, "w", encoding="utf-8") as f:
-            f.write(
-                "VERSION = '1.0'\n\n"
-                "def compute(x):\n    return x * 100\n\n"
-                "def format_result(x):\n    return f'Result: {x}'\n\n"
-                "class Config:\n    debug = False\n"
-            )
-
-        ft.snapshot_module_symbols(module_name)
-        h_compute_after = ft.compute_module_symbol_hash(module_name, {"compute"})
-        assert h_compute_before != h_compute_after
-
-
-# ============================================================================
-# 5. Granular invalidation in _invalidate_module_lineages
+# 4. Granular invalidation in _invalidate_module_lineages
 # ============================================================================
 
 
@@ -691,7 +593,7 @@ class TestGranularInvalidation:
 
 
 # ============================================================================
-# 6. End-to-end flow
+# 5. End-to-end flow
 # ============================================================================
 
 
@@ -850,7 +752,7 @@ class TestGranularEndToEnd:
 
 
 # ============================================================================
-# 7. Edge cases
+# 6. Edge cases
 # ============================================================================
 
 
