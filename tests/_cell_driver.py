@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-from cash.notebook.ipython.cell_executor import EarlyReturn, PipelineSyntaxError
+from cash.notebook.ipython.cell_executor import PipelineSyntaxError, RunInstead
 
 __all__ = ["run_cash_cell"]
 
@@ -44,6 +44,10 @@ def run_cash_cell(magics: Any, code: str, *, ttl: int | None = None, cells: list
 
 def _run(magics: Any, code: str, ttl: int | None) -> None:
     result = magics._cell_executor.execute_cell(code, ttl=ttl, cell_id=magics.resolve_cell_id())
-    if isinstance(result, (EarlyReturn, PipelineSyntaxError)):
+    # No IPython run_cell here to run the stand-in through: raise what the
+    # upstream check raised, so the test sees it.
+    if isinstance(result, RunInstead) and not isinstance(result.error, SyntaxError):
+        raise result.error
+    if isinstance(result, (RunInstead, PipelineSyntaxError)):
         return
     magics._finalize_cell_body(code, result)

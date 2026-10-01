@@ -91,3 +91,34 @@ def test_a_healthy_cell_says_nothing_about_bailing_out(nb_runner):
     out = r.get_raw_output(2)
     assert "answer 42" in out
     assert "NOTEBOOK-BAILOUT" not in out, f"a healthy cell reported a bail-out: {out!r}"
+
+
+BREAK_THE_UPSTREAM_CHECK = (
+    "from cash.notebook.upstream import checker as _ck\n"
+    "def _boom(*a, **k):\n"
+    "    raise ValueError('probe: forced upstream failure')\n"
+    "_ck.UpstreamChecker.check_and_reexecute = _boom\n"
+)
+
+
+@pytest.mark.fresh_kernel
+@pytest.mark.parametrize(
+    "cell",
+    ["ran = 'sync'\nprint('ran', ran)", "import asyncio\nawait asyncio.sleep(0)\nran = 'async'\nprint('ran', ran)"],
+    ids=["sync", "top-level-await"],
+)
+def test_a_cell_with_top_level_await_steps_aside_like_any_other(nb_runner, cell):
+    """A cell with a top-level ``await`` goes through ``run_cell_async``. When
+    the upstream check fails there, the cell still runs, uncached, with the
+    same warning -- cash's error is not raised as the user's."""
+    r = nb_runner.create_notebook([SETUP, BREAK_THE_UPSTREAM_CHECK, cell])
+    r.start_kernel()
+    r.run_cell(1)
+    r.run_cell(2)
+    r.run_cell(3)
+
+    out = r.get_raw_output(3)
+    expected = "sync" if "asyncio" not in cell else "async"
+    assert f"ran {expected}" in out, f"the cell did not run after cash stepped aside: {out!r}"
+    assert "NOTEBOOK-BAILOUT" in out, out
+    assert r.peek("ran") == repr(expected)

@@ -26,15 +26,15 @@ one cell-execution code path.
   ``restorer.restore_variable(var_name)`` during upstream resolution; it
   never reaches into the backend itself.
 
-**`original_run_cell` parameter**:
+**Stepping aside**:
 
-The hook supplies its captured ``_original_run_cell`` so error paths
-that arise mid-pipeline (SyntaxError from upstream simulation,
-``RuntimeError`` / :class:`AmbiguousCellError`, generic exception
-fallback) can be surfaced through IPython's normal execution machinery
-and the kernel reply status stays as "error".  The async hook passes
-``None``: those exceptions propagate to it, and it re-raises them through
-the original ``run_cell_async`` itself.
+When the upstream check fails (a SyntaxError in a cell above,
+``RuntimeError`` / :class:`AmbiguousCellError`, an internal error), the
+executor returns :class:`RunInstead` rather than running anything itself.
+The sync and the async hook each hand its source to their own original
+``run_cell`` / ``run_cell_async``, so a cell with a top-level ``await``
+falls back exactly as any other cell does, and the kernel reply status
+stays "error" where the cell failed.
 """
 
 from __future__ import annotations
@@ -85,14 +85,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class EarlyReturn:
-    """Sentinel wrapper for early-exit values that flow back up to the
-    hook proxy unchanged.  Carries an IPython ``run_cell`` result."""
+class RunInstead:
+    """The executor stepped aside: the hook runs *source* through IPython's
+    original ``run_cell`` (or ``run_cell_async``) and returns its result.
 
-    __slots__ = ("value",)
+    *source* is the cell itself, run uncached, or a one-line ``raise`` that
+    surfaces an error cash found in the notebook as the cell's own. *error*
+    is what the upstream check raised.
+    """
 
-    def __init__(self, value: Any) -> None:
-        self.value = value
+    __slots__ = ("source", "error")
+
+    def __init__(self, source: str, error: Exception) -> None:
+        self.source = source
+        self.error = error
 
 
 class PipelineSyntaxError:
@@ -729,22 +735,19 @@ class CellExecutor:
     def execute_cell(
         self,
         raw_cell: str,
-        args: tuple = (),
-        kwargs: dict | None = None,
-        original_run_cell: Callable[..., Any] | None = None,
         *,
         ttl: int | None = None,
         cell_id: str | None = None,
-    ) -> PipelineCompleted | PipelineSyntaxError | EarlyReturn:
+    ) -> PipelineCompleted | PipelineSyntaxError | RunInstead:
         """Run *raw_cell* through the 7-phase cached-execution pipeline.
 
         Returns one of:
         - :class:`PipelineCompleted` — caller invokes the finaliser
         - :class:`PipelineSyntaxError` — the cell's own AST failed to parse
-        - :class:`EarlyReturn` — propagate the wrapped value (hook only)
+        - :class:`RunInstead` — the caller runs its source through IPython
         """
         with self._cell_scope():
-            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell, ttl, cell_id)
+            cell = self._prepare_cell(raw_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
                 return cell
             with self._statements_scope(cell):
@@ -754,13 +757,10 @@ class CellExecutor:
     async def execute_cell_async(
         self,
         raw_cell: str,
-        args: tuple = (),
-        kwargs: dict | None = None,
-        original_run_cell: Callable[..., Any] | None = None,
         *,
         ttl: int | None = None,
         cell_id: str | None = None,
-    ) -> PipelineCompleted | PipelineSyntaxError | EarlyReturn:
+    ) -> PipelineCompleted | PipelineSyntaxError | RunInstead:
         """:meth:`execute_cell` for a cell with a top-level ``await``.
 
         Every phase is the sync pipeline's own; only the statements are run
@@ -768,7 +768,7 @@ class CellExecutor:
         ``await`` runs on IPython's live loop.
         """
         with self._cell_scope():
-            cell = self._prepare_cell(raw_cell, args, kwargs or {}, original_run_cell, ttl, cell_id)
+            cell = self._prepare_cell(raw_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
                 return cell
             with self._statements_scope(cell):
@@ -804,12 +804,9 @@ class CellExecutor:
     def _prepare_cell(
         self,
         raw_cell: str,
-        args: tuple,
-        kwargs: dict,
-        original_run_cell: Callable[..., Any] | None,
         ttl: int | None,
         cell_id: str | None,
-    ) -> _CellRun | PipelineSyntaxError | EarlyReturn:
+    ) -> _CellRun | PipelineSyntaxError | RunInstead:
         """Phases 2-6: everything before the cell's statements run.
 
         Phase 1, the cell id and the notebook path, is the caller's: *cell_id*
@@ -831,13 +828,10 @@ class CellExecutor:
             pre_upstream_metrics,
             badge_display_id,
             timing_breakdown,
-            args,
-            kwargs,
-            original_run_cell,
             ttl=ttl,
             cell_id=cell_id,
         )
-        if isinstance(upstream_result, EarlyReturn):
+        if isinstance(upstream_result, RunInstead):
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
@@ -878,11 +872,9 @@ class CellExecutor:
     def _complete_cell(
         self,
         cell: _CellRun,
-        result: EarlyReturn | tuple[list[ProcessResult], list, float],
-    ) -> PipelineCompleted | EarlyReturn:
+        result: tuple[list[ProcessResult], list, float],
+    ) -> PipelineCompleted:
         """What the finaliser needs, once the cell's statements have run."""
-        if isinstance(result, EarlyReturn):
-            return result
         all_metrics, buffered_result_outputs, badge_render_time = result
         cell.timing_breakdown["badge_progress"] = badge_render_time
         self._record_executed_cell_hash(cell.raw_cell)
@@ -1149,19 +1141,13 @@ class CellExecutor:
         pre_upstream_metrics: list[ProcessResult],
         badge_display_id: str,
         timing_breakdown: "TimingBreakdown",
-        args: tuple,
-        kwargs: dict,
-        original_run_cell: Callable[..., Any] | None,
         *,
         ttl: int | None = None,
         cell_id: str | None = None,
-    ) -> tuple[list[ProcessResult], float, float] | EarlyReturn:
+    ) -> tuple[list[ProcessResult], float, float] | RunInstead:
         """Run upstream dependency checking and state restoration.
 
-        On error: if *original_run_cell* is provided (hook path), fall back
-        through IPython so the user sees the error in the cell.  When None
-        (the async hook), re-raise so the caller sees a normal Python
-        exception.
+        On error, step aside (:meth:`_handle_upstream_resolution_failure`).
         """
         t_ensure = _perf_counter()
 
@@ -1203,14 +1189,7 @@ class CellExecutor:
             caught = e
 
         if caught is not None:
-            return self._handle_upstream_resolution_failure(
-                caught,
-                raw_cell,
-                badge_display_id,
-                args,
-                kwargs,
-                original_run_cell,
-            )
+            return self._handle_upstream_resolution_failure(caught, raw_cell, badge_display_id)
 
         timing_breakdown["upstream_check_raw"] = _perf_counter() - t_ensure
         timing_breakdown["total_restore_time"] = total_restore_time
@@ -1234,49 +1213,26 @@ class CellExecutor:
         caught: Exception,
         raw_cell: str,
         badge_display_id: str,
-        args: tuple,
-        kwargs: dict,
-        original_run_cell: Callable[..., Any] | None,
-    ) -> EarlyReturn:
-        """Surface an upstream-resolution failure to the user with a clean traceback.
+    ) -> RunInstead:
+        """What the hook runs instead of the cell when the upstream check failed.
 
-        Deliberately called AFTER :meth:`_resolve_upstream_state`'s try/except
-        has fully exited, so ``sys.exc_info()`` is already clear.  That timing is
-        load-bearing: dispatching ``original_run_cell`` from *inside*
-        the live ``except`` block made Python implicitly chain the fresh (or
-        IPython-raised) exception onto cash's internal one via ``__context__``,
-        and IPython's ultratb then rendered cash's own frames
-        (``code_analyzer.py``/``virtual_lineage.py``/``cell_executor.py``/
-        ``checker.py``) plus a spurious "During handling of the above exception,
-        another exception occurred" banner — making a plain user typo look like
-        cash crashed.  Running the dispatch here keeps the traceback as short and
-        clean as cash-off.
+        Called AFTER :meth:`_resolve_upstream_state`'s try/except has exited,
+        and the hook runs the returned source after the executor returned, so
+        ``sys.exc_info()`` is clear by then. Running it inside the live
+        ``except`` block would chain whatever IPython raises onto cash's
+        internal exception via ``__context__``, and the user's traceback would
+        show cash's own frames and a "During handling of the above exception"
+        banner.
 
-        Behaviour is otherwise identical to the old in-``except`` dispatch:
-
-        - ``original_run_cell is None`` (the async hook): a SyntaxError
-          becomes a quiet "log + return"; anything else re-raises so the
-          caller sees the real error.
-        - SyntaxError (hook path): re-run the raw cell through IPython so the
-          user sees the parse error attributed to their cell.
+        - SyntaxError (a cell above does not parse): run the cell as written.
         - RuntimeError / AmbiguousCellError / UpstreamStateError /
-          ForwardReferenceError: synthesise a
-          fresh raise inside the user's cell (the "fail the cell
-          loudly" path) so IPython attributes the traceback to the cell.
-        - anything else: log and fall back to normal execution.
+          ForwardReferenceError: a fresh raise of the same error, run as the
+          cell, so the cell fails loudly and IPython attributes it there.
+        - anything else: an internal failure; warn and run the cell uncached.
         """
-        if original_run_cell is None:
-            # No run_cell to fall back on: a SyntaxError from upstream sim is
-            # surfaced as a normal "log + return" (matches the executor's own
-            # AST-parse SyntaxError path).  Any other exception propagates so
-            # the caller sees the real error.
-            if isinstance(caught, SyntaxError):
-                self._badges.close(badge_display_id)
-                return EarlyReturn(None)
-            raise caught
         if isinstance(caught, SyntaxError):
             self._badges.close(badge_display_id)
-            return EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
+            return RunInstead(raw_cell, caught)
         if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError, ForwardReferenceError)):
             # Re-raise inside the user's cell so IPython renders the traceback
             # as if the cell itself raised.  Import the exception class
@@ -1293,7 +1249,7 @@ class CellExecutor:
             # also handles the newlines this message routinely carries.
             error_code = f"from {cls.__module__} import {cls.__name__}; raise {cls.__name__}({str(caught)!r}) from None"
             self._badges.close(badge_display_id)
-            return EarlyReturn(original_run_cell(error_code, *args, **kwargs))
+            return RunInstead(error_code, caught)
         # An internal failure, and the cell is about to run UNCACHED. This used
         # to be logger.error only -- invisible in a notebook, where nobody is
         # watching the kernel log -- so the sole trace was an empty badge, which
@@ -1321,7 +1277,7 @@ class CellExecutor:
         except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
             pass
         self._badges.close(badge_display_id, status="BYPASSED")
-        return EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
+        return RunInstead(raw_cell, caught)
 
     # ------------------------------------------------------------------
     # Phase 6: pre-execution notifications

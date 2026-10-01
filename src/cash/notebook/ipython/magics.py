@@ -50,9 +50,9 @@ from ._types import CellMetrics
 from .badges import BadgePresenter
 from .cell_executor import (
     CellExecutor,
-    EarlyReturn,
     PipelineCompleted,
     PipelineSyntaxError,
+    RunInstead,
     discarded_writes_notification,
 )
 from .inspection import InspectionMagicsMixin
@@ -808,9 +808,6 @@ class CashMagics(InspectionMagicsMixin, Magics):
         try:
             result = self._cell_executor.execute_cell(
                 raw_cell,
-                args,
-                kwargs,
-                original_run_cell=self._original_run_cell,
                 ttl=self.global_ttl,
                 cell_id=self.resolve_cell_id(),
             )
@@ -819,8 +816,8 @@ class CashMagics(InspectionMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 - intentionally broad: surfaces user code exceptions to IPython
             return self._synthesize_run_cell_raise(e, args, kwargs)
 
-        if isinstance(result, EarlyReturn):
-            return result.value
+        if isinstance(result, RunInstead):
+            return self._original_run_cell(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
@@ -875,9 +872,6 @@ class CashMagics(InspectionMagicsMixin, Magics):
         try:
             result = await self._cell_executor.execute_cell_async(
                 raw_cell,
-                args,
-                kwargs,
-                original_run_cell=None,
                 ttl=self.global_ttl,
                 cell_id=self.resolve_cell_id(),
             )
@@ -886,8 +880,12 @@ class CashMagics(InspectionMagicsMixin, Magics):
         except Exception as e:  # noqa: BLE001 - surfaces user code exceptions to IPython
             return await self._synthesize_run_cell_raise_async(e, args, kwargs)
 
-        if isinstance(result, EarlyReturn):
-            return result.value
+        if isinstance(result, RunInstead):
+            # The cell itself keeps the caller's transform; a stand-in raise
+            # needs its own.
+            if result.source != raw_cell:
+                kwargs = self._substitute_cell_kwargs(result.source, kwargs)
+            return await self._original_run_cell_async(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.

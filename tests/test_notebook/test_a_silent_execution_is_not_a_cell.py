@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from cash.notebook.ipython.cell_executor import EarlyReturn
 from cash.notebook.ipython.magics import CashMagics
 
 
@@ -29,8 +28,9 @@ def magics(mock_shell, cash_instance):
     magics = CashMagics(mock_shell, cash_instance)
     magics.cash_on("")
     magics._cell_executor = MagicMock()
-    magics._cell_executor.execute_cell.return_value = EarlyReturn("cash")
-    magics._cell_executor.execute_cell_async = AsyncMock(return_value=EarlyReturn("cash-async"))
+    magics._cell_executor.execute_cell_async = AsyncMock()
+    magics._finalize_cell_execution = MagicMock(return_value="cash")
+    magics._finalize_cell_execution_async = AsyncMock(return_value="cash-async")
     return magics
 
 
