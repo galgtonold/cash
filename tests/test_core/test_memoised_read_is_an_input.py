@@ -15,6 +15,7 @@ import os
 import pytest
 
 from cash import Cash
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
 
@@ -146,27 +147,21 @@ def test_settings_a_memo_read_before_the_first_cached_call_are_an_input(tmp_path
     call ever read the file, so every later edit of it was ignored. Fresh
     processes, because that is where the memo starts empty."""
     import json
-    import subprocess
-    import sys
 
     app = tmp_path / "app.py"
     app.write_text(_SETTINGS_APP, encoding="utf-8")
     settings = tmp_path / "settings.json"
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / "cache"), PYTHONWARNINGS="ignore")
-    env.pop("CASH_DISABLE", None)
+    env = {"PYTHONWARNINGS": "ignore"}
     got = []
     for rate in (1.1, 1.3, 1.4):
         settings.write_text(json.dumps({"rate": rate}), encoding="utf-8")
         st = os.stat(settings)
         os.utime(settings, ns=(st.st_atime_ns, st.st_mtime_ns + int(rate * 10) * 2_000_000_000))
-        run = subprocess.run(
-            [sys.executable, str(app)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
-        )
-        assert run.returncode == 0, run.stderr[-2000:]
+        run = run_python(app, cwd=tmp_path, cache_dir=tmp_path / "cache", env=env)
         got.append((float(run.stdout.strip().splitlines()[-1]), "RAN" in run.stderr))
     assert got == [(110.0, True), (130.0, True), (140.0, True)], "a settings edit was ignored"
     # Control: nothing changed, so the fourth run is served from disk.
-    run = subprocess.run([sys.executable, str(app)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    run = run_python(app, cwd=tmp_path, cache_dir=tmp_path / "cache", env=env)
     assert "RAN" not in run.stderr, "the entry never reached disk: this test proves nothing"
 
 
@@ -203,23 +198,16 @@ def test_a_memo_filled_at_import_before_any_decoration_is_an_input(tmp_path):
     decoration, so the read was nobody's and a config edit was served stale.
     It starts when cash is imported."""
     import json
-    import subprocess
-    import sys
 
     (tmp_path / "config.py").write_text(_IMPORT_TIME_CONFIG, encoding="utf-8")
     (tmp_path / "main.py").write_text(_IMPORT_TIME_MAIN, encoding="utf-8")
     cfg = tmp_path / "cfg.json"
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / "cache"), PYTHONWARNINGS="ignore")
-    env.pop("CASH_DISABLE", None)
     got = []
     for step, k in enumerate((10, 10, 11)):
         cfg.write_text(json.dumps({"name": "demo", "k": k}), encoding="utf-8")
         st = os.stat(cfg)
         os.utime(cfg, ns=(st.st_atime_ns, st.st_mtime_ns + (step + 1) * 2_000_000_000))
-        run = subprocess.run(
-            [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
-        )
-        assert run.returncode == 0, run.stderr[-2000:]
+        run = run_python("main.py", cwd=tmp_path, cache_dir=tmp_path / "cache", env={"PYTHONWARNINGS": "ignore"})
         got.append((run.stdout.strip().splitlines()[-1], "RAN" in run.stderr))
     assert got[2] == ("22", True), f"a config edit was served the old result: {got}"
 

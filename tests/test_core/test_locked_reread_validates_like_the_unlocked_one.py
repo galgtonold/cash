@@ -25,15 +25,13 @@ agree.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 import time
 
 import pytest
 
 from cash import Cash
+from tests._scripts import run_python
 
 _CHILD = """
 import json, os, sys, time
@@ -71,11 +69,9 @@ def project(tmp_path):
 
 
 def _run(script, mode, tmp_path, config):
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / f"cache_{mode}"), PROBE_CONFIG=str(config))
-    proc = subprocess.run(
-        [sys.executable, str(script), mode], env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=300
+    proc = run_python(
+        script, mode, cwd=tmp_path, cache_dir=tmp_path / f"cache_{mode}", env={"PROBE_CONFIG": str(config)}, timeout=300
     )
-    assert proc.returncode == 0, proc.stderr[-2000:]
     return proc.stdout.strip(), proc.stderr.count("RAN")
 
 

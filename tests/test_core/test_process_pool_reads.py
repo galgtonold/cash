@@ -10,11 +10,9 @@ script would: cold, warm (must hit), and after the edit.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -68,10 +66,7 @@ FORMS = {"map", "chunked-map", "submit"}
 
 
 def _run(proj):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, "job.py"], cwd=str(proj), env=env, capture_output=True, text=True, timeout=200)
-    assert p.returncode == 0, p.stderr[-2000:]
+    p = run_python("job.py", cwd=proj, timeout=200)
     ran = {line.split(maxsplit=1)[1] for line in p.stderr.splitlines() if line.startswith("[RUN] ")}
     return p.stdout.strip(), ran
 

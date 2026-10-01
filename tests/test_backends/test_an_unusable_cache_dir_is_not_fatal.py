@@ -25,8 +25,6 @@ in-process repeat still hits — which is the control at the bottom of this file
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 import textwrap
 import warnings
@@ -35,6 +33,7 @@ import pytest
 
 from cash import Cash
 from cash.backends.file_backend import FileBackend
+from tests._scripts import run_python
 
 
 def _unusable_dirs(tmp_path):
@@ -119,12 +118,8 @@ def test_the_process_still_produces_its_answer(tmp_path):
     a_file = tmp_path / "notadir.txt"
     a_file.write_text("x", encoding="utf-8")
 
-    env = dict(os.environ, CASH_CACHE_DIR=str(a_file))
-    proc = subprocess.run(
-        [sys.executable, str(script)], env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=300
-    )
+    proc = run_python(script, cwd=tmp_path, cache_dir=a_file, timeout=300)
 
-    assert proc.returncode == 0, f"the job died:\n{proc.stderr[-2000:]}"
     assert "RESULT 42" in proc.stdout, proc.stdout
     assert "RAN" in proc.stderr, "the body never ran"
 

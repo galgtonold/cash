@@ -15,19 +15,17 @@ end. That call runs uncached, with a warning, instead of leaving code out.
 from __future__ import annotations
 
 import importlib
-import os
-import subprocess
 import sys
 import warnings
 from pathlib import Path
 
 import pytest
 
-import cash
 from cash import Cash
 from cash.analysis.helper_walk import HelperWalk
 from cash.analysis.purity_analyzer import get_analyzer
 from cash.exceptions import CashWarning
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
 
@@ -73,22 +71,7 @@ def _write(project: Path, step: int) -> None:
 
 
 def _run(project: Path, seed: str = "0") -> str:
-    src = str(Path(cash.__file__).resolve().parents[1])  # the cash under test
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(project / ".cash")
-    env["PYTHONPATH"] = os.pathsep.join([src, env.get("PYTHONPATH", "")])
-    env["PYTHONWARNINGS"] = "ignore"
-    env["PYTHONHASHSEED"] = seed
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    done = subprocess.run(
-        [sys.executable, "job.py", str(project / "runs")],
-        cwd=str(project),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert done.returncode == 0, done.stderr[-2000:]
+    done = run_python("job.py", project / "runs", cwd=project, env={"PYTHONWARNINGS": "ignore", "PYTHONHASHSEED": seed})
     return done.stdout.split("ANSWER")[-1].strip()
 
 

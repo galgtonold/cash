@@ -22,11 +22,11 @@ a fraction of the time a real venv takes. Each run is a fresh process.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import CASH_SRC, run_python
 
 pytestmark = pytest.mark.core
 
@@ -83,12 +83,8 @@ def _install(site, factor):
 def _run(tmp_path, site):
     import json
 
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    env["PYTHONPATH"] = str(site)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    out = subprocess.run([sys.executable, "-c", RUN], cwd=str(tmp_path), capture_output=True, text=True, env=env)
-    assert out.returncode == 0, out.stderr
+    env = {"PYTHONPATH": os.pathsep.join([CASH_SRC, str(site)])}
+    out = run_python("-c", RUN, cwd=tmp_path, cache_dir=tmp_path / "cache", env=env)
     ran = {line.split()[1] for line in out.stderr.splitlines() if line.startswith("RAN ")}
     return json.loads(out.stdout.strip().splitlines()[-1]), ran
 

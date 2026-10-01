@@ -23,12 +23,13 @@ see what a real second run does, and that is what the reporter measured.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+from tests._scripts import CASH_SRC, run_python
 
 # A tiny project: a script that caches one call and prints whether it ran.
 #
@@ -69,18 +70,7 @@ def project(tmp_path):
 
 
 def _run(script, cwd, env_extra=None):
-    env = dict(os.environ)
-    env.pop("CASH_CACHE_DIR", None)
-    env.update(env_extra or {})
-    proc = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    proc = run_python(script, cwd=cwd, cache_dir=None, env=env_extra, timeout=300)
     lines = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line)
     return {
         "ran": "RAN" in proc.stderr,
@@ -194,15 +184,9 @@ def test_an_interactive_session_still_uses_the_cwd(tmp_path):
     exactly as before. If this regressed, every notebook user's cache would
     move on upgrade.
     """
-    proc = subprocess.run(
-        [sys.executable, "-c", "import cash; print(cash.get_config().cache_dir)"],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        timeout=300,
-        env={k: v for k, v in os.environ.items() if k != "CASH_CACHE_DIR"},
+    proc = run_python(
+        "-c", "import cash; print(cash.get_config().cache_dir)", cwd=tmp_path, cache_dir=None, timeout=300
     )
-    assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(tmp_path / ".cash")
 
 
@@ -327,13 +311,8 @@ def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    env = dict(os.environ, PYTHONPATH=str(project))
-    env.pop("CASH_CACHE_DIR", None)
-
-    proc = subprocess.run(
-        [sys.executable, "-m", "pkg"], cwd=str(elsewhere), env=env, capture_output=True, text=True, timeout=300
-    )
-    assert proc.returncode == 0, proc.stderr[-2000:]
+    env = {"PYTHONPATH": os.pathsep.join([CASH_SRC, str(project)])}
+    proc = run_python("-m", "pkg", cwd=elsewhere, cache_dir=None, env=env, timeout=300)
 
     lines = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line)
     assert lines["PARENT"] == lines["WORKER"], f"one run resolved two cache directories: {lines}"
@@ -354,9 +333,7 @@ def test_a_lint_only_pyproject_below_the_project_is_not_a_project(tmp_path):
     )
     (tests / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
     (tests / "job.py").write_text(_SCRIPT, encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    p = subprocess.run([sys.executable, "job.py"], cwd=str(tests), env=env, capture_output=True, text=True, timeout=120)
-    assert p.returncode == 0, p.stderr[-2000:]
+    p = run_python("job.py", cwd=tests, cache_dir=None)
     cache_dir = next(line.split(" ", 1)[1] for line in p.stdout.splitlines() if line.startswith("CACHE_DIR"))
     assert os.path.normcase(os.path.realpath(cache_dir)) == os.path.normcase(os.path.realpath(root / "shared_cache")), (
         cache_dir

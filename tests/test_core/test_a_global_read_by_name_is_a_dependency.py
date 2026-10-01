@@ -9,13 +9,12 @@ impl.Fast}` with `TABLE["fast"]().run(x)`.
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 MOD = textwrap.dedent("""
     import time
@@ -63,15 +62,7 @@ def _write(project, mult):
 
 def _run(project):
     shutil.rmtree(project / "__pycache__", ignore_errors=True)
-    done = subprocess.run(
-        [sys.executable, "run.py"],
-        cwd=str(project),
-        capture_output=True,
-        text=True,
-        timeout=180,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    assert done.returncode == 0, done.stderr[-2000:]
+    done = run_python("run.py", cwd=project, timeout=180)
     return done.stdout.strip()
 
 

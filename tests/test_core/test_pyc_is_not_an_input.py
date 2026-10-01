@@ -13,12 +13,11 @@ Fresh processes, with bytecode written, and the cache filled in a run where the
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
-import sys
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -56,10 +55,8 @@ MAIN = "import mod\nprint(mod.f(200_000), mod.g(200_000))\n"
 
 
 def _run(proj):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_") and k != "PYTHONDONTWRITEBYTECODE"}
-    env.update(CASH_CACHE_DIR=str(proj / ".cash"), CASH_DEBUG="1")
-    p = subprocess.run([sys.executable, "main.py"], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120)
-    assert p.returncode == 0, p.stderr[-2000:]
+    # This test is about the .pyc, so the child writes one.
+    p = run_python("main.py", cwd=proj, env={"CASH_DEBUG": "1", "PYTHONDONTWRITEBYTECODE": None})
     ran = {line.split()[1] for line in p.stderr.splitlines() if line.startswith("[RUN] ")}
     return p, ran
 

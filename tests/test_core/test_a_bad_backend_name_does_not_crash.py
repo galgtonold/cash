@@ -11,11 +11,11 @@ rest of the configuration still applies."
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 PROGRAM = textwrap.dedent("""
     import cash
@@ -33,12 +33,7 @@ def _project(tmp_path, pyproject: str):
 
 
 def _run(project, *args, env_extra=None):
-    import os
-
-    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env_extra or {})}
-    return subprocess.run(
-        [sys.executable, *args], cwd=str(project), env=env, capture_output=True, text=True, timeout=120
-    )
+    return run_python(*args, cwd=project, env=env_extra, check=False)
 
 
 @pytest.mark.parametrize(

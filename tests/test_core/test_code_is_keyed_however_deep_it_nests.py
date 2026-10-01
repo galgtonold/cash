@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import functools
 import os
-import subprocess
 import sys
 import textwrap
 import time
@@ -22,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-import cash
 from cash import Cash
 from cash.code_digest import opaque_identity
 from cash.decorator.key_values import stabilize_for_global_hash
+from tests._scripts import CASH_SRC, run_python
 
 pytestmark = [pytest.mark.core]
 
@@ -41,17 +40,7 @@ def _write(path: Path, text: str) -> None:
 
 def _run(project: Path) -> tuple[str, int]:
     """Run ``job.py``: its answer, and how many times the body ran."""
-    src = str(Path(cash.__file__).resolve().parents[1])  # the cash under test
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(
-        PYTHONDONTWRITEBYTECODE="1",
-        CASH_CACHE_DIR=str(project / ".cash"),
-        PYTHONPATH=os.pathsep.join([src, str(project)]),
-    )
-    p = subprocess.run(
-        [sys.executable, "job.py"], cwd=str(project), env=env, capture_output=True, text=True, timeout=120
-    )
-    assert p.returncode == 0, p.stderr[-3000:]
+    p = run_python("job.py", cwd=project, env={"PYTHONPATH": os.pathsep.join([CASH_SRC, str(project)])})
     return p.stdout.strip().splitlines()[-1], p.stderr.count("[RUN]")
 
 

@@ -9,13 +9,11 @@ a new process) while any import of ``cash.notebook`` fails.
 
 from __future__ import annotations
 
-import os
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
-import cash
+from tests._scripts import run_python
 
 _BLOCKER = """
 import sys
@@ -69,16 +67,7 @@ print("OK")
 
 
 def _run(tmp_path: Path, script: Path) -> subprocess.CompletedProcess:
-    src_dir = str(Path(cash.__file__).resolve().parents[1])
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([src_dir, os.environ.get("PYTHONPATH", "")]))
-    return subprocess.run(
-        [sys.executable, str(script), str(tmp_path / "cache"), str(tmp_path / "data.txt"), str(tmp_path / "runs")],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(tmp_path),
-        timeout=120,
-    )
+    return run_python(script, tmp_path / "cache", tmp_path / "data.txt", tmp_path / "runs", cwd=tmp_path, check=False)
 
 
 def test_a_cached_function_runs_without_the_notebook_package(tmp_path):

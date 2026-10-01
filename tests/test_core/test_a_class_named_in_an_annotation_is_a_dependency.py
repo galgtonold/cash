@@ -14,12 +14,11 @@ and a run without an edit must hit.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -93,11 +92,7 @@ def _run(tmp_path, models, main, factor):
         models.replace("{FACTOR}", str(factor)).replace("{{", "{").replace("}}", "}"), encoding="utf-8"
     )
     (tmp_path / "main.py").write_text(main, encoding="utf-8")
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="ignore")
-    proc = subprocess.run(
-        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
-    )
-    assert proc.returncode == 0, proc.stderr
+    proc = run_python("main.py", cwd=tmp_path, env={"PYTHONWARNINGS": "ignore"})
     return proc.stdout.strip(), proc.stderr
 
 

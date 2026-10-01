@@ -19,12 +19,11 @@ from __future__ import annotations
 
 import io
 import logging
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -61,17 +60,7 @@ def _write(proj, *, top_k=3, rounds=60, moved=False):
 
 
 def _run(proj, mode, args):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"), CASH_SUMMARY="1")
-    p = subprocess.run(
-        [sys.executable, "job.py", mode, *map(str, args)],
-        cwd=str(proj),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    assert p.returncode == 0, p.stderr[-2000:]
+    p = run_python("job.py", mode, *map(str, args), cwd=proj, timeout=180, env={"CASH_SUMMARY": "1"})
     return p.stderr
 
 

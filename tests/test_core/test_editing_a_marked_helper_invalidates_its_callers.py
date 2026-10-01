@@ -9,16 +9,14 @@ that sees the edit, and in the next process that runs the edited file.
 from __future__ import annotations
 
 import importlib
-import os
-import subprocess
 import sys
 import warnings
 from pathlib import Path
 
 import pytest
 
-import cash
 from cash import Cash
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
 
@@ -108,20 +106,7 @@ print("ANSWER", total(1))
 
 def _run(project: Path, marker: str, step: int) -> str:
     (project / "job.py").write_text(JOB.format(marker=marker, step=step), encoding="utf-8")
-    src = str(Path(cash.__file__).resolve().parents[1])  # the cash under test
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(project / ".cash")
-    env["PYTHONPATH"] = os.pathsep.join([src, env.get("PYTHONPATH", "")])
-    env["PYTHONWARNINGS"] = "ignore"
-    done = subprocess.run(
-        [sys.executable, "job.py", str(project / "runs")],
-        cwd=str(project),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert done.returncode == 0, done.stderr[-2000:]
+    done = run_python("job.py", project / "runs", cwd=project, env={"PYTHONWARNINGS": "ignore"})
     return done.stdout.split("ANSWER")[-1].strip()
 
 

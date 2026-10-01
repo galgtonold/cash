@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import inspect
 import os
-import subprocess
 import sys
 import textwrap
 import time
@@ -21,6 +20,7 @@ import pytest
 
 from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer
+from tests._scripts import run_python
 
 np = pytest.importorskip("numpy")
 
@@ -218,11 +218,7 @@ def test_key_opaque_callable_prints_once_in_a_plain_script(tmp_path):
     """),
         encoding="utf-8",
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    out = subprocess.run(
-        [sys.executable, str(script)], capture_output=True, text=True, env=env, encoding="utf-8", errors="replace"
-    )
+    out = run_python(script, cwd=tmp_path, check=False)
     assert out.stderr.count("[KEY-OPAQUE-CALLABLE]") == 1, out.stderr
 
 

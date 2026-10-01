@@ -10,9 +10,6 @@ list took "about 0ms to hash".
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 import time
 import warnings
@@ -23,6 +20,7 @@ from cash import Cash
 from cash.decorator.arg_hashing import ARG_COST
 from cash.decorator.reporting import describe_call
 from cash.effectiveness import EffectivenessLedger
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
 
@@ -90,14 +88,7 @@ def test_a_frozen_list_keys_the_same_in_the_next_process(tmp_path):
     """),
         encoding="utf-8",
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    runs = [
-        subprocess.run(
-            [sys.executable, str(job)], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
-        )
-        for _ in range(2)
-    ]
+    runs = [run_python(job, cwd=tmp_path, check=False) for _ in range(2)]
     assert [r.stdout.strip() for r in runs] == ["499500", "499500"], runs[0].stderr[-2000:]
     assert "[RUN] total" in runs[0].stderr
     assert "[RUN] total" not in runs[1].stderr, "the consumer missed in the next process"

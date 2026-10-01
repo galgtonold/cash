@@ -19,11 +19,11 @@ still apply: a value with nowhere to fit still has nowhere to fit.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 PROGRAM = textwrap.dedent("""
     import json
@@ -48,8 +48,7 @@ PROGRAM = textwrap.dedent("""
 def _run(tmp_path):
     script = tmp_path / "run.py"
     script.write_text(PROGRAM.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
-    assert done.returncode == 0, done.stderr[-1500:]
+    done = run_python(script, cwd=tmp_path, timeout=180)
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
@@ -96,8 +95,7 @@ def test_a_result_slower_to_restore_than_to_rebuild_is_still_stored(tmp_path):
     """
     script = tmp_path / "wide.py"
     script.write_text(RESTORE_IS_SLOWER.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
-    assert done.returncode == 0, done.stderr[-1500:]
+    run_python(script, cwd=tmp_path, timeout=180)
     assert list((tmp_path / ".cash").glob("*.entry")), "a decorated result was not stored"
 
 
@@ -131,8 +129,7 @@ QUICK = textwrap.dedent("""
 def _run_quick(tmp_path):
     script = tmp_path / "quick.py"
     script.write_text(QUICK.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
-    assert done.returncode == 0, done.stderr[-1500:]
+    done = run_python(script, cwd=tmp_path, timeout=180)
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 

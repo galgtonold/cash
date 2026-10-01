@@ -10,12 +10,11 @@ started them, and ``cash inspect`` listed one function twice.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -40,21 +39,10 @@ def test_the_parent_hits_what_a_spawned_worker_stored(tmp_path):
     """),
         encoding="utf-8",
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
-    run = subprocess.run(
-        [sys.executable, str(script)], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=240
-    )
-    assert run.returncode == 0, run.stderr
+    run = run_python(script, cwd=tmp_path, timeout=240)
     assert run.stdout.split() == ["[0,", "1,", "4,", "9]", "9"], run.stdout
     after_pool = run.stderr.split("PARENT", 1)[1]
     assert "RUN" not in after_pool, "the parent recomputed what a worker had stored"
 
-    listing = subprocess.run(
-        [sys.executable, "-m", "cash", "inspect", str(tmp_path / ".cash")],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    ).stdout
+    listing = run_python("-m", "cash", "inspect", tmp_path / ".cash", cwd=tmp_path, check=False).stdout
     assert "model.work" in listing and "__mp_main__" not in listing, listing

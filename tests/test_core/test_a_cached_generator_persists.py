@@ -11,11 +11,11 @@ entry incomplete and recomputed it, forever.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -47,8 +47,7 @@ PROGRAM = textwrap.dedent("""
 def _run(tmp_path):
     script = tmp_path / "run.py"
     script.write_text(PROGRAM.replace("CACHE", repr(str(tmp_path / ".cash"))), encoding="utf-8")
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
-    assert done.returncode == 0, done.stderr[-1500:]
+    done = run_python(script, cwd=tmp_path, timeout=180)
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 

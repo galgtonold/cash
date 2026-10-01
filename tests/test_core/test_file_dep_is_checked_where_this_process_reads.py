@@ -24,10 +24,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import CASH_SRC, run_python
 
 pytestmark = pytest.mark.core
 
@@ -46,15 +47,8 @@ _READER = textwrap.dedent("""
 
 
 def _run(script, *argv, cache, cwd, extra_path=None):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(cache)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    if extra_path:
-        env["PYTHONPATH"] = str(extra_path)
-    out = subprocess.run(
-        [sys.executable, str(script), *map(str, argv)], cwd=str(cwd), capture_output=True, text=True, env=env
-    )
-    return out
+    env = {"PYTHONPATH": os.pathsep.join([CASH_SRC, str(extra_path)])} if extra_path else {}
+    return run_python(script, *argv, cwd=cwd, cache_dir=cache, env=env, check=False)
 
 
 def _point(link, target):

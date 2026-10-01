@@ -12,13 +12,12 @@ In a multiprocessing child the write is now part of the task.
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 np = pytest.importorskip("numpy")
 
@@ -58,17 +57,7 @@ def _project(tmp_path):
 
 
 def _run(tmp_path):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    out = subprocess.run(
-        [sys.executable, "-W", "ignore", "job.py"],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=240,
-    )
-    assert out.returncode == 0, out.stderr
+    out = run_python("-W", "ignore", "job.py", cwd=tmp_path, timeout=240)
     return sorted(int(s) for s in re.findall(r"@@CALL (\d+)", out.stderr))
 
 

@@ -8,11 +8,11 @@ KEY-UNHASHABLE-GLOBAL warned that changes to it would not invalidate.
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -57,12 +57,7 @@ SOURCES = {
 @pytest.mark.parametrize("source", list(SOURCES))
 def test_no_unhashable_global_warning_for_an_attribute(tmp_path, source):
     (tmp_path / "main.py").write_text(textwrap.dedent(SOURCES[source]), encoding="utf-8")
-    import os
-
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    out = subprocess.run([sys.executable, "main.py"], cwd=str(tmp_path), capture_output=True, text=True, env=env)
-    assert out.returncode == 0, out.stderr
+    out = run_python("main.py", cwd=tmp_path, cache_dir=tmp_path / "cache")
     assert out.stdout.strip() in {"1", "True"}
     assert "KEY-UNHASHABLE-GLOBAL" not in out.stderr, out.stderr
 
@@ -87,10 +82,5 @@ def test_a_global_read_by_name_is_still_warned_about(tmp_path):
         """),
         encoding="utf-8",
     )
-    import os
-
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    out = subprocess.run([sys.executable, "main.py"], cwd=str(tmp_path), capture_output=True, text=True, env=env)
-    assert out.returncode == 0, out.stderr
+    out = run_python("main.py", cwd=tmp_path, cache_dir=tmp_path / "cache")
     assert "KEY-UNHASHABLE-GLOBAL" in out.stderr

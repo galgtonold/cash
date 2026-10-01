@@ -10,12 +10,11 @@ the warning hid it from the developer's own runs for good.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -42,18 +41,7 @@ except cash.CashImpurityWarning:
 def _run(tmp_path, action, n):
     script = tmp_path / "model.py"
     script.write_text(textwrap.dedent(_SCRIPT), encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    return subprocess.run(
-        [sys.executable, str(script), action, str(n)],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        env=env,
-        encoding="utf-8",
-        errors="replace",
-        timeout=100,
-    )
+    return run_python(script, action, n, cwd=tmp_path, timeout=100, check=False)
 
 
 def test_an_error_filter_fails_every_run_on_the_cache(tmp_path):

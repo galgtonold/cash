@@ -17,9 +17,6 @@ numpy array. `frozen=True` is the explicit way back to the fast path for those:
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 import threading
 import warnings
@@ -27,6 +24,7 @@ import warnings
 import pytest
 
 from cash import Cash, content_hashers
+from tests._scripts import run_python
 
 np = pytest.importorskip("numpy")
 
@@ -127,12 +125,7 @@ def test_a_frozen_result_hits_across_processes(tmp_path):
     """),
         encoding="utf-8",
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
-    runs = [
-        subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, timeout=120)
-        for _ in range(2)
-    ]
+    runs = [run_python(script, cwd=tmp_path, check=False) for _ in range(2)]
     assert [r.stdout.strip() for r in runs] == ["499500", "499500"]
     assert "[RUN]" in runs[0].stderr and "[RUN]" not in runs[1].stderr
 

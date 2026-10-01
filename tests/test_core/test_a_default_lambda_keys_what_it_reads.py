@@ -10,12 +10,11 @@ function's source does not show.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -46,11 +45,7 @@ def _run(tmp_path, k):
     proj.mkdir(exist_ok=True)
     (proj / "helper.py").write_text(HELPER.format(k=k), encoding="utf-8")
     (proj / "main.py").write_text(MAIN, encoding="utf-8")
-    env = {n: v for n, v in os.environ.items() if not n.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    out = subprocess.run([sys.executable, "main.py"], cwd=str(proj), capture_output=True, text=True, env=env)
-    assert out.returncode == 0, out.stderr
+    out = run_python("main.py", cwd=proj, cache_dir=tmp_path / "cache")
     return json.loads(out.stdout.strip().splitlines()[-1]), out.stderr.count("RAN")
 
 

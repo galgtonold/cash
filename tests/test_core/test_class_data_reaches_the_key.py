@@ -27,12 +27,11 @@ nothing over-invalidates.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -280,13 +279,8 @@ def _project(tmp_path, rate, fields="x y"):
 
 
 def _run(tmp_path, proj, argv, *, disable=False):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    if disable:
-        env["CASH_DISABLE"] = "1"
-    out = subprocess.run([sys.executable, "main.py", str(argv)], cwd=str(proj), capture_output=True, text=True, env=env)
-    assert out.returncode == 0, out.stderr
+    env = {"CASH_DISABLE": "1"} if disable else {}
+    out = run_python("main.py", argv, cwd=proj, cache_dir=tmp_path / "cache", env=env)
     return json.loads(out.stdout.strip().splitlines()[-1]), out.stderr.count("RAN")
 
 

@@ -11,10 +11,7 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
-import sys
 import textwrap
 import time
 
@@ -23,6 +20,7 @@ import pytest
 from cash import Cash, FileBackend
 from cash.backends.clear_watch import ClearWatcher
 from tests._cli_args import cli_args
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -47,19 +45,8 @@ def test_python_dash_m_and_an_import_share_one_entry(tmp_path):
     """),
         encoding="utf-8",
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
-    first = subprocess.run(
-        [sys.executable, "-m", "pkg.mod"], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
-    )
-    second = subprocess.run(
-        [sys.executable, "-c", "import pkg.mod as m; print(m.f(3))"],
-        cwd=str(tmp_path),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    first = run_python("-m", "pkg.mod", cwd=tmp_path, check=False)
+    second = run_python("-c", "import pkg.mod as m; print(m.f(3))", cwd=tmp_path, check=False)
     assert first.stdout.strip() == second.stdout.strip() == "6"
     assert "[RUN]" in first.stderr
     assert "[RUN]" not in second.stderr, "the import did not find the -m run's entry"

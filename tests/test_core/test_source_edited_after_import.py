@@ -32,6 +32,8 @@ import time
 
 import pytest
 
+from tests._scripts import child_env
+
 pytestmark = pytest.mark.core
 
 OLD = "def bump(x):\n    return x + 1\n"
@@ -68,10 +70,7 @@ def _project(tmp_path, helper_text):
 
 
 def _env(tmp_path):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    return env
+    return child_env(cache_dir=tmp_path / "cache")
 
 
 def _edit(path, text):

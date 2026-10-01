@@ -10,12 +10,11 @@ object, which is not callable, and tried to hash it as a data constant.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -62,14 +61,7 @@ def _run(tmp_path, factor=10, rate=0):
         MODELS.replace("{FACTOR}", str(factor)).replace("{RATE}", str(rate)), encoding="utf-8"
     )
     (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
-    # No .pyc: Python validates one by whole-second mtime and size, so the
-    # RATE 0 -> 1 edit (same size) landing in the second run's second loaded
-    # the old bytecode, and printed 400 with or without cash.
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONWARNINGS="always", PYTHONDONTWRITEBYTECODE="1")
-    proc = subprocess.run(
-        [sys.executable, "main.py"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120
-    )
-    assert proc.returncode == 0, proc.stderr
+    proc = run_python("main.py", cwd=tmp_path, env={"PYTHONWARNINGS": "always"})
     return proc.stdout.strip(), proc.stderr
 
 

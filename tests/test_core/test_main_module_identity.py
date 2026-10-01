@@ -18,14 +18,13 @@ is the arm that catches that specific half-fix.
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import textwrap
 
 import pytest
 
 import cash
 from cash._paths import resolve_main_module
+from tests._scripts import run_python
 
 
 def _script(tmp_path, name, body):
@@ -35,14 +34,7 @@ def _script(tmp_path, name, body):
 
 
 def _run(path, tmp_path):
-    return subprocess.run(
-        [sys.executable, str(path)],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        encoding="utf-8",
-        errors="replace",
-    )
+    return run_python(path, cwd=tmp_path, check=False)
 
 
 WORKER = """
@@ -111,20 +103,8 @@ def test_the_state_hash_agrees_too(tmp_path):
     )
     import json
 
-    direct = json.loads(
-        subprocess.run(
-            [sys.executable, str(dump), "direct"], capture_output=True, text=True, cwd=str(tmp_path), encoding="utf-8"
-        )
-        .stdout.strip()
-        .splitlines()[-1]
-    )
-    imported = json.loads(
-        subprocess.run(
-            [sys.executable, str(dump), "import"], capture_output=True, text=True, cwd=str(tmp_path), encoding="utf-8"
-        )
-        .stdout.strip()
-        .splitlines()[-1]
-    )
+    direct = json.loads(run_python(dump, "direct", cwd=tmp_path).stdout.strip().splitlines()[-1])
+    imported = json.loads(run_python(dump, "import", cwd=tmp_path).stdout.strip().splitlines()[-1])
 
     assert direct["name"] == imported["name"], "the function name still disagrees"
     assert direct["state"] == imported["state"], (

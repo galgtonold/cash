@@ -9,15 +9,12 @@ psutil is imported the first time a reading needs it.
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-import cash
 from cash import _location
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
 
@@ -40,14 +37,7 @@ print("LOADED", "IPython" in sys.modules, "psutil" in sys.modules)
 def test_a_script_calling_a_cached_function_imports_neither(tmp_path):
     pytest.importorskip("IPython")  # nothing to avoid importing without it
     (tmp_path / "job.py").write_text(JOB, encoding="utf-8")
-    src = str(Path(cash.__file__).resolve().parents[1])
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    env["PYTHONPATH"] = os.pathsep.join([src, env.get("PYTHONPATH", "")])
-    done = subprocess.run(
-        [sys.executable, "job.py"], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=120
-    )
-    assert done.returncode == 0, done.stderr[-2000:]
+    done = run_python("job.py", cwd=tmp_path)
     assert "ANSWER 2 2" in done.stdout
     if sys.platform.startswith(("linux", "win32")):
         assert "LOADED False False" in done.stdout, done.stdout

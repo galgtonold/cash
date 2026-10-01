@@ -6,28 +6,23 @@ pandas import -- measured at 731ms for a function whose body was
 ``return n``, essentially all of it module loading.
 """
 
-import subprocess
-import sys
 import textwrap
 
+from tests._scripts import run_python
 
-def _run(body: str) -> str:
+
+def _run(body: str, cwd) -> str:
     """Run *body* in a FRESH interpreter and return its stdout.
 
     A subprocess is the only honest instrument here: pytest has almost
     certainly imported pandas already, so an in-process check of
     ``sys.modules`` would pass no matter what the code does.
     """
-    proc = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(body)],
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0, f"probe failed:\n{proc.stdout}\n{proc.stderr}"
+    proc = run_python("-c", textwrap.dedent(body), cwd=cwd)
     return proc.stdout.strip()
 
 
-def test_a_cached_call_does_not_import_pandas():
+def test_a_cached_call_does_not_import_pandas(tmp_path):
     """End to end: the decorator's first store must not drag pandas in."""
     out = _run(
         """
@@ -42,6 +37,7 @@ def test_a_cached_call_does_not_import_pandas():
 
         f(1)
         print("pandas" in sys.modules)
-        """
+        """,
+        tmp_path,
     )
     assert out == "False", "a cached call imported pandas"

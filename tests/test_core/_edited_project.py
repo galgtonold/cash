@@ -8,22 +8,15 @@ result.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
+from tests._scripts import run_python
+
 
 def _run(project: Path, cache: Path, env: dict[str, str] | None, disable: bool = False) -> str:
-    run_env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    run_env.update(CASH_CACHE_DIR=str(cache), PYTHONDONTWRITEBYTECODE="1", **(env or {}))
-    if disable:
-        run_env["CASH_DISABLE"] = "1"
-    out = subprocess.run(
-        [sys.executable, "main.py"], cwd=str(project), capture_output=True, text=True, env=run_env, timeout=60
-    )
-    assert out.returncode == 0, out.stdout + out.stderr
+    run_env = {**(env or {}), **({"CASH_DISABLE": "1"} if disable else {})}
+    out = run_python("main.py", cwd=project, cache_dir=cache, env=run_env, timeout=60)
     return out.stdout.strip()
 
 

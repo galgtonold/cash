@@ -12,24 +12,19 @@ for is the NEGATIVE case: it must not be cached, because a later cell may
 import pandas and the detectors have to start seeing its types from then on.
 """
 
-import subprocess
-import sys
 import textwrap
 
 import pytest
 
+from tests._scripts import run_python
 
-def _run(body: str) -> str:
-    proc = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(body)],
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0, f"probe failed:\n{proc.stdout}\n{proc.stderr}"
+
+def _run(body: str, cwd) -> str:
+    proc = run_python("-c", textwrap.dedent(body), cwd=cwd)
     return proc.stdout.strip()
 
 
-def test_detectors_do_not_import_numpy_or_pandas():
+def test_detectors_do_not_import_numpy_or_pandas(tmp_path):
     """A subprocess is required: pytest has already imported both."""
     out = _run(
         """
@@ -42,12 +37,13 @@ def test_detectors_do_not_import_numpy_or_pandas():
         for value in (42, "text", [1, 2], {"a": 1}, None):
             de.detect_derivation_edges(edges, "out", value, {})
         print("numpy" in sys.modules, "pandas" in sys.modules)
-        """
+        """,
+        tmp_path,
     )
     assert out == "False False", f"a detector imported a heavy library: {out}"
 
 
-def test_pandas_types_resolve_after_a_later_import():
+def test_pandas_types_resolve_after_a_later_import(tmp_path):
     """The negative must NOT be cached -- a later cell may import pandas.
 
     Without this, the first statement in a session would permanently disable
@@ -63,7 +59,8 @@ def test_pandas_types_resolve_after_a_later_import():
         import pandas  # noqa: F401 - the import is the event under test
         after = de._pandas_refholder_types()
         print(len(before), len(after) > 0)
-        """
+        """,
+        tmp_path,
     )
     assert out == "0 True", (
         "ref-holder types did not resolve after pandas was imported later; the negative result was cached"

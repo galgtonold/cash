@@ -12,22 +12,15 @@ rebuilds the key and matches the persisted entry.
 
 from __future__ import annotations
 
-import subprocess
-import sys
-
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.slow
 
 
 def _run(tmp_path, script="main.py"):
-    cp = subprocess.run(
-        [sys.executable, script],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-    )
-    assert cp.returncode == 0, f"{script} failed:\n{cp.stdout}\n{cp.stderr}"
+    cp = run_python(script, cwd=tmp_path)
     return cp.stdout.strip()
 
 

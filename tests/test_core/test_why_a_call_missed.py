@@ -26,6 +26,7 @@ import time
 import pytest
 
 from cash import Cash
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -33,18 +34,7 @@ pytestmark = pytest.mark.core
 def _run(tmp_path, body, **env_extra):
     script = tmp_path / "job.py"
     script.write_text(body, encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
-    env.update(env_extra)
-    return subprocess.run(
-        [sys.executable, str(script)],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        env=env,
-        encoding="utf-8",
-        errors="replace",
-    )
+    return run_python(script, cwd=tmp_path, env=env_extra, check=False)
 
 
 _FAST_JOB = textwrap.dedent("""

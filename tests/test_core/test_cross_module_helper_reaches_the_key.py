@@ -19,12 +19,11 @@ module reproduces neither.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -53,12 +52,7 @@ def _project(tmp_path, bump_by):
 
 
 def _run(pkg, cache_dir):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(cache_dir)
-    out = subprocess.run(
-        [sys.executable, str(pkg / "main_x.py")], cwd=str(pkg), capture_output=True, text=True, env=env
-    )
-    assert out.returncode == 0, out.stdout + out.stderr
+    out = run_python(pkg / "main_x.py", cwd=pkg, cache_dir=cache_dir)
     ran = "RAN" in out.stdout
     result = [ln for ln in out.stdout.splitlines() if ln.startswith("RESULT")][0]
     return ran, result.split()[1]

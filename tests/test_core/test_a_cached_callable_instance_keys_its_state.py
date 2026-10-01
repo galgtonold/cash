@@ -9,15 +9,13 @@ The bound-method form (``cash.cache(sc.__call__)``) was keyed correctly.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
 
 import cash
 from cash.decorator.function_identity import func_key
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -68,12 +66,7 @@ MAIN = textwrap.dedent("""
 
 def _run(tmp_path, k):
     (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
-    env = {n: v for n, v in os.environ.items() if not n.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    out = subprocess.run(
-        [sys.executable, "main.py", str(k)], cwd=str(tmp_path), capture_output=True, text=True, env=env
-    )
-    assert out.returncode == 0, out.stderr
+    out = run_python("main.py", k, cwd=tmp_path, cache_dir=tmp_path / "cache")
     return int(out.stdout.strip().splitlines()[-1]), out.stderr.count("RAN")
 
 

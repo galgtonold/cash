@@ -22,12 +22,11 @@ Fresh process per run, bytecode caching off.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
@@ -73,11 +72,7 @@ def _project(tmp_path, alpha, factor=2.0):
 
 
 def _run(tmp_path, proj):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / "cache")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    out = subprocess.run([sys.executable, "main.py"], cwd=str(proj), capture_output=True, text=True, env=env)
-    assert out.returncode == 0, out.stderr
+    out = run_python("main.py", cwd=proj, cache_dir=tmp_path / "cache")
     return json.loads(out.stdout.strip().splitlines()[-1]), "RAN" in out.stderr
 
 

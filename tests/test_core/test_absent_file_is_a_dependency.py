@@ -29,13 +29,12 @@ would still have been wrong.
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
 
 from cash import Cash
+from tests._scripts import run_python
 
 
 @pytest.fixture
@@ -191,13 +190,9 @@ def test_the_reported_sequence_across_processes(tmp_path):
     dir_a.mkdir()
     dir_b.mkdir()
     (dir_a / "cfg.txt").write_text("7", encoding="utf-8")
-    env = dict(os.environ, CASH_CACHE_DIR=str(tmp_path / "cache"))
 
     def run(cwd):
-        proc = subprocess.run(
-            [sys.executable, str(script)], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=300
-        )
-        assert proc.returncode == 0, proc.stderr[-2000:]
+        proc = run_python(script, cwd=cwd, cache_dir=tmp_path / "cache", timeout=300)
         return proc.stdout.strip(), proc.stderr.count("RAN")
 
     assert run(dir_a) == ("RESULT 7000", 1)

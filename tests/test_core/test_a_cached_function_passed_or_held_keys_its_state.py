@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests._scripts import run_python
 from tests.test_core._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
@@ -74,27 +75,12 @@ def test_a_cached_function_passed_in_is_keyed_by_its_state(tmp_path, passed, edi
 
 
 def test_passing_a_cached_function_warns_about_nothing_of_cash_s(tmp_path):
-    import subprocess
-    import sys
-
     (tmp_path / "steps.py").write_text(STEPS, encoding="utf-8")
     (tmp_path / "app.py").write_text(APP, encoding="utf-8")
     (tmp_path / "main.py").write_text("import app\nimport steps\nprint(app.apply(steps.scale, 5))\n", encoding="utf-8")
-    out = subprocess.run(
-        [sys.executable, "main.py"],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        env={"CASH_CACHE_DIR": str(tmp_path / "cache"), **_plain_env()},
-    )
+    out = run_python("main.py", cwd=tmp_path, cache_dir=tmp_path / "cache", check=False)
     assert out.stdout.strip() == "11", out.stderr
     assert "KEY-UNHASHABLE-GLOBAL" not in out.stderr
-
-
-def _plain_env():
-    import os
-
-    return {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
 
 
 HOLDERS = {

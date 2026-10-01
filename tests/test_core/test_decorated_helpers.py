@@ -24,12 +24,11 @@ Every step is a fresh process.
 from __future__ import annotations
 
 import importlib.util
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 # Several fresh interpreters per case: past the suite-wide 30 s on a loaded runner.
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
@@ -391,14 +390,8 @@ CASES = [
 
 
 def _run(proj, *, disable=False):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    if disable:
-        env["CASH_DISABLE"] = "1"
-    p = subprocess.run(
-        [sys.executable, str(proj / "job.py")], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120
-    )
-    assert p.returncode == 0, p.stderr[-2000:]
+    env = {"CASH_DISABLE": "1"} if disable else {}
+    p = run_python(str(proj / "job.py"), cwd=proj, env=env)
     return p.stdout.strip(), "[RUN]" in p.stderr
 
 

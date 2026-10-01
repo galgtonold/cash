@@ -13,12 +13,11 @@ is never imported early on a function's behalf.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -44,10 +43,7 @@ print(total([1, 2, 3]))
 
 
 def _run(proj, script="job.py"):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(proj / ".cash"))
-    p = subprocess.run([sys.executable, script], cwd=str(proj), env=env, capture_output=True, text=True, timeout=120)
-    assert p.returncode == 0, p.stderr[-2000:]
+    p = run_python(script, cwd=proj)
     return p.stdout.strip(), "[RUN]" in p.stderr
 
 

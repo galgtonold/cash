@@ -12,18 +12,16 @@ pin that each of them comes back as it went in.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 import uuid
 
 import pytest
 
+from tests._scripts import run_python
+
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
-import cash
 from cash.backends.serialization import PickleSerializer
 
 FRAMES = {
@@ -120,15 +118,9 @@ def test_a_disk_hit_in_a_new_process_keeps_the_range_index(tmp_path):
         encoding="utf-8",
     )
     runs = tmp_path / "runs"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(CASH_CACHE_DIR=str(tmp_path / "cache"), RUNS=str(runs), PYTHONDONTWRITEBYTECODE="1")
-    # The cash under test, whichever checkout it is in.
-    src = os.path.dirname(os.path.dirname(cash.__file__))
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [src, env.get("PYTHONPATH")]))
     seen = []
     for _ in range(2):
-        p = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, timeout=120)
-        assert p.returncode == 0, p.stderr
+        p = run_python(script, cwd=tmp_path, cache_dir=tmp_path / "cache", env={"RUNS": str(runs)})
         seen.append(p.stdout.strip().splitlines()[-1])
     assert runs.read_bytes() == b"x", "the second process did not hit the disk entry"
     assert seen == ["RangeIndex", "RangeIndex"], seen

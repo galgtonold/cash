@@ -11,12 +11,11 @@ what to do instead of reporting a lock.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytest.importorskip("joblib")
 
@@ -37,11 +36,7 @@ def work(x):
 def _run(tmp_path, source):
     script = tmp_path / "model.py"
     script.write_text(textwrap.dedent(source), encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(CASH_CACHE_DIR=str(tmp_path / ".cash"), PYTHONDONTWRITEBYTECODE="1")
-    return subprocess.run(
-        [sys.executable, str(script)], cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=240
-    )
+    return run_python(script, cwd=tmp_path, timeout=240, check=False)
 
 
 def test_workers_run_a_script_function_and_share_entries_with_the_parent(tmp_path):

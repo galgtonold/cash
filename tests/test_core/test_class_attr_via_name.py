@@ -12,22 +12,15 @@ key); ``.cash`` is never cleared, or the test is vacuous.
 
 from __future__ import annotations
 
-import subprocess
-import sys
-
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.slow
 
 
 def _run(tmp_path):
-    cp = subprocess.run(
-        [sys.executable, "main.py"],
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-    )
-    assert cp.returncode == 0, f"failed:\n{cp.stdout}\n{cp.stderr}"
+    cp = run_python("main.py", cwd=tmp_path)
     return cp.stdout.strip().splitlines()[-1].split("R ", 1)[1].strip()
 
 

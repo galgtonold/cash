@@ -11,12 +11,11 @@ looks for entries in a directory, reported "nothing here" either way.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 PROGRAM = textwrap.dedent("""
     import time
@@ -38,16 +37,8 @@ def _project(tmp_path, pyproject):
 
 
 def _run(project, *args):
-    done = subprocess.run(
-        [sys.executable, *(args or ("run.py",))],
-        cwd=str(project),
-        capture_output=True,
-        text=True,
-        timeout=180,
-        # Without the caller's CASH_* settings: the project's pyproject.toml decides.
-        env={**{k: v for k, v in os.environ.items() if not k.startswith("CASH_")}, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    return done
+    # No CASH_CACHE_DIR: the project's pyproject.toml decides.
+    return run_python(*(args or ("run.py",)), cwd=project, cache_dir=None, timeout=180, check=False)
 
 
 @pytest.mark.parametrize(

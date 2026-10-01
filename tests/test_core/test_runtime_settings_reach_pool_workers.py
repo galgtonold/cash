@@ -23,11 +23,12 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -108,25 +109,8 @@ def _run(tmp_path, method, kind, scenario, **env_extra):
     script = tmp_path / "job.py"
     script.write_text(_SCRIPT, encoding="utf-8")
     (tmp_path / "runs").mkdir()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env.update(
-        CASH_CACHE_DIR=str(tmp_path / ".cash"),
-        COUNTER=str(tmp_path / "runs"),
-        OTHER_DIR=str(tmp_path / "other-cache"),
-        PYTHONDONTWRITEBYTECODE="1",
-    )
-    env.update(env_extra)
-    run = subprocess.run(
-        [sys.executable, str(script), method, kind, scenario],
-        cwd=str(tmp_path),
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=240,
-    )
-    assert run.returncode == 0, run.stdout + run.stderr
+    env = {"COUNTER": str(tmp_path / "runs"), "OTHER_DIR": str(tmp_path / "other-cache"), **env_extra}
+    run = run_python(script, method, kind, scenario, cwd=tmp_path, env=env, timeout=240)
     line = next((ln for ln in run.stdout.splitlines() if ln.startswith("RESULT ")), None)
     assert line is not None, run.stdout + run.stderr
     return json.loads(line[len("RESULT ") :])

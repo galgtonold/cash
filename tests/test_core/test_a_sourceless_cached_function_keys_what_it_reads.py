@@ -10,8 +10,6 @@ silently. Both now start from the bytecode when there is no source.
 from __future__ import annotations
 
 import inspect
-import os
-import subprocess
 import sys
 import textwrap
 import types
@@ -20,6 +18,7 @@ import warnings
 import pytest
 
 from cash import Cash
+from tests._scripts import run_python
 
 SCRIPT = """
 import sys
@@ -104,18 +103,7 @@ def test_a_cached_function_it_calls_is_an_edge(tmp_path, monkeypatch):
 
 
 def _stdin_run(tmp_path, rate, k):
-    env = {k_: v for k_, v in os.environ.items() if not k_.startswith("CASH_")}
-    env.update(PYTHONDONTWRITEBYTECODE="1", CASH_CACHE_DIR=str(tmp_path / ".cash"))
-    p = subprocess.run(
-        [sys.executable, "-"],
-        input=SCRIPT.format(rate=rate, k=k),
-        cwd=str(tmp_path),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert p.returncode == 0, p.stderr[-2000:]
+    p = run_python("-", input=SCRIPT.format(rate=rate, k=k), cwd=tmp_path)
     return p.stdout.strip(), "[RUN]" in p.stderr
 
 

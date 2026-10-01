@@ -14,6 +14,7 @@ import pytest
 
 from cash import Cash, FileBackend
 from cash.content_hashers import hash_numpy
+from tests._scripts import run_python
 
 
 def _counter_fn(c):
@@ -251,9 +252,6 @@ def test_forms_no_callee_can_tell_apart_still_share_a_key(pair):
 
 def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
     """Across three fresh processes: 1, 0, 0 executions."""
-    import os
-    import subprocess
-    import sys
     import textwrap
 
     (tmp_path / "job.py").write_text(
@@ -278,13 +276,8 @@ def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
     """),
         encoding="utf-8",
     )
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
     runs = []
     for _ in range(3):
-        out = subprocess.run(
-            [sys.executable, "-W", "ignore", str(tmp_path / "job.py")], capture_output=True, text=True, env=env
-        )
-        assert out.returncode == 0, out.stderr
+        out = run_python("-W", "ignore", tmp_path / "job.py", cwd=tmp_path)
         runs.append(out.stderr.count("RAN"))
     assert runs == [1, 0, 0], runs

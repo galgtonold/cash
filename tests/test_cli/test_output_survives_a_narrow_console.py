@@ -10,12 +10,12 @@ done. ``PYTHONIOENCODING=cp1252`` gives a Linux run the same stream.
 from __future__ import annotations
 
 import io
-import os
-import subprocess
 import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -31,11 +31,16 @@ def 数据(x):
 
 
 def _run(cwd, *argv, script=False):
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    env["PYTHONIOENCODING"] = "cp1252"
-    env["CASH_CACHE_DIR"] = str(cwd / ".cash-数据")
-    cmd = [sys.executable, *argv] if script else [sys.executable, "-m", "cash", *argv]
-    return subprocess.run(cmd, capture_output=True, cwd=str(cwd), env=env, timeout=100)
+    cmd = argv if script else ("-m", "cash", *argv)
+    return run_python(
+        *cmd,
+        cwd=cwd,
+        cache_dir=cwd / ".cash-数据",
+        env={"PYTHONIOENCODING": "cp1252"},
+        timeout=100,
+        check=False,
+        text=False,
+    )
 
 
 @pytest.fixture

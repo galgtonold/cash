@@ -18,11 +18,11 @@ cache's own entries look like a function's data. It stays a documented gap.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 PROGRAM = textwrap.dedent("""
     import json, linecache, os, time
@@ -63,8 +63,7 @@ def _run(tmp_path):
         PROGRAM.replace("CACHE", repr(str(tmp_path / ".cash"))).replace("DATA", repr(str(tmp_path / "data"))),
         encoding="utf-8",
     )
-    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=180, cwd=str(tmp_path))
-    assert done.returncode == 0, done.stderr[-1500:]
+    done = run_python(script, cwd=tmp_path, timeout=180)
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 

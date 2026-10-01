@@ -11,11 +11,11 @@ followed transitively".
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from tests._scripts import run_python
 
 MODULE = textwrap.dedent("""
     import time
@@ -70,19 +70,10 @@ def _write(project, mult):
 
 
 def _run(project):
-    import os
     import shutil
 
     shutil.rmtree(project / "__pycache__", ignore_errors=True)
-    done = subprocess.run(
-        [sys.executable, "run.py"],
-        cwd=str(project),
-        text=True,
-        capture_output=True,
-        timeout=180,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    assert done.returncode == 0, done.stderr
+    done = run_python("run.py", cwd=project, timeout=180)
     return done.stdout.strip()
 
 
