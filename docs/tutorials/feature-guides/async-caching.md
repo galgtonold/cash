@@ -28,7 +28,7 @@ async def main():
 asyncio.run(main())
 ```
 
-<!-- claim: cash/core.py:Cash._make_wrapper @c7e7c465 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers.caching_wrapper @c7e7c465 -->
 Everything else works as on a sync function, because the code around the body
 is shared: `ttl=`, `depends_on=`, `dynamic_depends_on=`, `file_depends_on=`,
 file reads inside the body, `cache_if=`, the side-effect checks with `strict=`

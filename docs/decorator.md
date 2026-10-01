@@ -131,7 +131,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @b7c16174 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @0e137c19, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @b7c16174 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -528,7 +528,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @9b54927a -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @9b54927a -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python

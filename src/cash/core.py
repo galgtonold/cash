@@ -8,9 +8,7 @@ per-call events through `Cash.drain_decorator_calls`.
 from __future__ import annotations
 
 import atexit
-import dataclasses
 import datetime
-import functools
 import inspect
 import logging
 import os
@@ -20,7 +18,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
-from ._active import ACTIVE_CONFIG
 from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
@@ -33,13 +30,7 @@ from .decorator.arg_hashing import (
     mark_opaque,
 )
 from .decorator.backend_slot import BackendSlot
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl, new_stats
-from .decorator.call_state import (
-    CACHE_MISS,
-    CALL_ENTRY,
-    enter_cached_call,
-    exit_cached_call,
-)
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl
 from .decorator.cash_key import KeyCheck
 from .decorator.class_data import ClassDataFold
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
@@ -66,9 +57,10 @@ from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngWatch
 from .decorator.run_summary import RunSummary
 from .decorator.runtime import CallRunner, KeyBuilder
-from .decorator.script_pickling import expose_script_function
+from .decorator.script_pickling import refuse_pickling_by_value
 from .decorator.store import ResultStore
 from .decorator.stored_keys import StoredKeyRecord
+from .decorator.wrappers import Wrappers
 from .dependency_state import (
     DependencyStateHasher,
     SysModulesHelperResolver,
@@ -121,12 +113,6 @@ T = TypeVar("T")
 
 
 __all__ = ["Cash", "CacheExplanation"]
-
-
-def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
-    """The directory *backend* keeps entries in -- its disk tier's, if tiered."""
-    directory = backend.local_dir if backend is not None else None
-    return os.path.abspath(directory) if directory else None
 
 
 def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str, str], ...]:
@@ -242,20 +228,8 @@ class Cash:
 
     def __reduce__(self):
         """A Cash cannot be pickled -- it holds locks, threads and a backend.
-
-        Reached when something sends a cached function BY VALUE to another
-        process, which is what joblib's workers do with a function defined in
-        the script being run. Say what works instead of letting the pickler
-        report a lock (see `expose_script_function`).
-        """
-        raise TypeError(
-            "a Cash instance cannot be pickled, and something tried to send a "
-            "@cash.cache function to another process by value. A cached "
-            "function defined in the script you run can be sent to worker "
-            "processes (joblib, multiprocessing) when the script's work is "
-            'behind `if __name__ == "__main__":`; or define the function in a '
-            "module you import."
-        )
+        See `refuse_pickling_by_value`."""
+        refuse_pickling_by_value()
 
     @staticmethod
     def get_func_key(func: Callable) -> str:
@@ -456,6 +430,19 @@ class Cash:
             self._backend_slot,
             self._misses,
             self._runner,
+        )
+
+        self._wrappers = Wrappers(
+            lambda: self.config,
+            lambda: self.use_locking,
+            self._registry,
+            self._backend_slot,
+            self._keys,
+            self._runner,
+            self._rng,
+            self._explainer,
+            self._maintenance,
+            self._notices,
         )
 
         atexit.register(self._exit_work.run)
@@ -673,216 +660,7 @@ class Cash:
             except Exception:  # the first miss installs them anyway
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
-        return self._wrap_with_stats(cf, self._make_wrapper(cf))
-
-    # -- why a call missed ---------------------------------------------------
-    #
-    # Why a call recomputed. The reasons below are decided where the lookup fails, from what that
-    # lookup saw plus what this process remembers about the key -- never by
-    # re-deriving the key, which would cost every call to explain a few.
-
-    def _make_wrapper(self, spec: CachedFunction) -> Callable:
-        """Build and return the caching wrapper for *func*, sync or async.
-
-        One wrapper for both: everything before and after the body is the
-        same sync code (`CallRunner.lookup`, `CallRunner.body_scope`,
-        `CallRunner.finish_miss`), and the two variants differ only in whether
-        they await the body, so they cannot drift apart.
-        """
-        func = spec.func
-        runner = self._runner
-
-        if inspect.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                call = runner.lookup(spec, args, kwargs, async_body=True)
-                if call.outcome is not CACHE_MISS:
-                    # A result the key path produced by calling `func` itself
-                    # (no key) is a coroutine here: await it before handing back.
-                    if inspect.iscoroutine(call.outcome):
-                        return await call.outcome
-                    return call.outcome
-
-                async def compute() -> Any:
-                    with runner.body_scope(spec, call) as run:
-                        run.res = await func(*args, **kwargs)
-                    return runner.finish_miss(spec, call, run)
-
-                if not self.use_locking:
-                    return await compute()
-                return await runner.single_flight(spec, call, compute)
-
-            return async_wrapper
-
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call = runner.lookup(spec, args, kwargs, async_body=False)
-            if call.outcome is not CACHE_MISS:
-                return call.outcome
-
-            def compute() -> Any:
-                with runner.body_scope(spec, call) as run:
-                    run.res = func(*args, **kwargs)
-                return runner.finish_miss(spec, call, run)
-
-            if self.use_locking:
-                return runner.compute_with_lock(spec, call, compute)
-            return compute()
-
-        return wrapper
-
-    def _wrap_with_stats(self, cf: CachedFunction, wrapper: Callable) -> Callable:
-        """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
-
-        Dispatches on whether *func* is a coroutine function so the stats
-        update (from the entry `CallLog.log` left in this call's
-        `CALL_ENTRY` slot) happens AFTER the await for async, and
-        synchronously otherwise.
-
-        Attaches the introspection API:
-
-        * ``cache_info()`` - hit/miss stats plus a rolling list of recent
-          warnings emitted for this function.
-        * ``cache_clear()`` - drop backend entries, reset stats, drop the
-          warning log + dedup marks so re-warnings can fire.
-        * ``explain(*args, **kwargs)`` - return a `CacheExplanation`
-          for that specific call (sync, even on async wrappers).
-        """
-        func, func_name, allow_random = cf.func, cf.name, cf.allow_random
-        # Read through `cf` by the end-of-run summary too.
-        _stats = cf.stats
-        warn_unseeded = self._rng.warn_unseeded_estimator_result
-
-        def _count(slot: list) -> None:
-            # The entry THIS call logged, if it logged one: a call that raised
-            # before its lookup, or went through uncounted, leaves it empty.
-            call = slot[0]
-            if call is None:
-                return
-            if call["cache_hit"]:
-                _stats["hits"] += 1
-                _stats["total_time_saved"] += call.get("time_saved", 0.0)
-                _stats["lookup_seconds"] += call.get("execution_time", 0.0)
-            else:
-                _stats["misses"] += 1
-                _stats["miss_overhead_seconds"] += call.get("cash_seconds") or 0.0
-                missed = call["miss_reason"]
-                _stats["miss_reasons"][missed.kind] += 1
-                if missed.changed:
-                    _stats["changed"][missed.changed] += 1
-                if call.get("not_stored"):
-                    _stats["not_stored"][call["not_stored"]] += 1
-                elif call.get("not_persisted"):
-                    _stats["not_persisted"][call["not_persisted"]] += 1
-
-        if inspect.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if self.config.disable:
-                    _stats["bypassed"] += 1
-                    return await func(*args, **kwargs)
-                token = ACTIVE_CONFIG.set(self.config)
-                slot: list = [None]
-                slot_token = CALL_ENTRY.set(slot)
-                enter_cached_call()
-                try:
-                    result = await wrapper(*args, **kwargs)
-                finally:
-                    exit_cached_call()
-                    CALL_ENTRY.reset(slot_token)
-                    ACTIVE_CONFIG.reset(token)
-                    _count(slot)
-                warn_unseeded(func_name, result, allow_random)
-                return result
-        else:
-
-            @functools.wraps(func)
-            def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
-                # Before anything else: disabled means the function, and
-                # nothing of cash's -- no key, no analysis, no lookup, no store.
-                if self.config.disable:
-                    _stats["bypassed"] += 1
-                    return func(*args, **kwargs)
-                # This instance's settings for the checks the call makes; see
-                # ACTIVE_CONFIG.
-                token = ACTIVE_CONFIG.set(self.config)
-                slot: list = [None]
-                slot_token = CALL_ENTRY.set(slot)
-                enter_cached_call()
-                try:
-                    result = wrapper(*args, **kwargs)
-                finally:
-                    exit_cached_call()
-                    CALL_ENTRY.reset(slot_token)
-                    ACTIVE_CONFIG.reset(token)
-                    _count(slot)
-                warn_unseeded(func_name, result, allow_random)
-                return result
-
-        def cache_info() -> dict[str, Any]:
-            """Return this function's hit and miss counts and recent warnings.
-
-            Returns:
-                A dict with ``hits``, ``misses``, ``hit_rate``,
-                ``total_time_saved`` (seconds), ``miss_reasons`` (count per
-                reason) and ``warnings`` (the last 20, each with
-                ``category``, ``code``, ``message`` and ``timestamp``).
-            """
-            total = _stats["hits"] + _stats["misses"]
-            hit_rate = _stats["hits"] / total if total > 0 else 0.0
-            warnings_log = self._notices.log_of(cf)
-            return {
-                "hits": _stats["hits"],
-                "misses": _stats["misses"],
-                "hit_rate": hit_rate,
-                "total_time_saved": _stats["total_time_saved"],
-                "miss_reasons": {str(kind): n for kind, n in _stats["miss_reasons"].items()},
-                "warnings": warnings_log,
-            }
-
-        def cache_clear() -> None:
-            """Delete this function's cache entries and reset its statistics
-            and warning log, so its warnings are shown again."""
-            _stats.update(new_stats())
-            self._maintenance.delete_function_entries(func_name)
-            self._notices.forget(cf)
-
-        def explain(*args: Any, **kwargs: Any) -> CacheExplanation:
-            """Return a `CacheExplanation` of whether a call with these
-            arguments would hit, and why. Runs nothing and changes nothing."""
-            token = ACTIVE_CONFIG.set(self.config)
-            try:
-                explanation = self._explainer.explain(cf, args, kwargs)
-            finally:
-                ACTIVE_CONFIG.reset(token)
-            return dataclasses.replace(explanation, cache_dir=_backend_cache_dir(self.backend))
-
-        stats_wrapper.cache_info = cache_info
-        stats_wrapper.cache_clear = cache_clear
-        stats_wrapper.explain = explain
-        stats_wrapper.__wrapped__ = func
-        # Marker so the purity analyzer treats a call to this wrapper as a
-        # dependency-graph edge rather than recursing into cash's own wrapper
-        # machinery. functools.wraps copies __module__, which would
-        # otherwise make the wrapper look like same-package user code.
-        stats_wrapper._cash_cached = True
-        # Declared TTL, exposed so the notebook statement cache can see it. A
-        # ``ttl=0`` function must recompute every call; without this the
-        # statement ``x = f()`` gets cached with no TTL under %cash_on and
-        # freezes the value the decorator promised to refresh.
-        stats_wrapper._cash_declared_ttl = cf.ttl
-        # What a call depends on besides its arguments, built by THIS instance
-        # for THIS function object, and the TTL it refreshes at: how a cached
-        # function reached without an edge in the caller's own registry (on
-        # another instance, passed in, held in a table, or still held after a
-        # reload) reaches the caller's key.
-        stats_wrapper._cash_state = lambda: self._keys.callee_state(func, func_name)
-        stats_wrapper._cash_effective_ttl = lambda: self._registry.effective_ttl(func_name, cf.ttl)
-        expose_script_function(func, stats_wrapper)
-        cf.wrapper = stats_wrapper
-        return stats_wrapper
+        return self._wrappers.wrap(cf)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.

@@ -135,7 +135,7 @@ Each process keeps some things to itself:
 - **Locking.** See the table above: only a bare `RedisBackend` locks across
   processes.
 
-<!-- claim: cash/decorator/script_pickling.py:expose_script_function @f20865df, cash/core.py:Cash.__reduce__ @98bbf40f -->
+<!-- claim: cash/decorator/script_pickling.py:expose_script_function @f20865df, cash/decorator/script_pickling.py:refuse_pickling_by_value @98bbf40f -->
 For **joblib**, keep the script's work behind `if __name__ == "__main__":`.
 cash sends a cached function from the running script to the workers by name,
 and each worker imports the script to find it. Without the guard, that import
