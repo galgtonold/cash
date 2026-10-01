@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import ast
 import dataclasses
-import functools
 import hashlib
 import inspect
 import logging
@@ -51,7 +50,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._annotation_refs import annotation_referents
-from .._memo import MODULE_ANALYSES, PURITY_REPORTS, LruMemo
+from .._memo import PURITY_REPORTS, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import (
     ENVIRON_KEYED_METHODS,
@@ -79,14 +78,11 @@ from ..source_norm import (
     getsource,
     getsourcelines,
     own_source,
-    settled_source_version,
-    source_version_unchanged,
 )
-from ..value_types import BUILTIN_NAMES
 from .ambient_reads import ambient_call, clock_helper_of, log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee
-from .callee_effects import module_function_global_changes, scope_locals
+from .callee_effects import scope_locals
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .helper_bindings import (
     binding_path,
@@ -102,6 +98,7 @@ from .helper_bindings import (
     resolve_local_import,
 )
 from .helper_code import UnwalkableLayers, callable_layers, is_mock, is_user_code, own_code_is_user, qualname_of
+from .mutable_globals import mutable_global_reads
 from .mutations import PANDAS_INPLACE_METHODS
 from .purity_flow import (
     fresh_name_nodes,
@@ -114,7 +111,6 @@ from .purity_report import (
     ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
     ISSUE_IMPURE_CALL,
-    ISSUE_MUTABLE_GLOBAL,
     ISSUE_NETWORK_READ,
     ISSUE_SCOPE_MUTATION,
     ISSUE_UNTRACKABLE_DEP,
@@ -1502,13 +1498,7 @@ class PurityAnalyzer:
             # in the module - a silent staleness footgun (the cached result won't
             # change when the global does). Constants (never written) are not
             # flagged, so this stays quiet on dispatch tables / lookup maps.
-            self._flag_mutable_global_reads(
-                func,
-                func_def,
-                qualname,
-                visitor.read_names,
-                all_issues,
-            )
+            all_issues.extend(mutable_global_reads(func, func_def, qualname, visitor.read_names))
 
             # Drop what THIS function's source says it has already audited.
             # Filtered per function, against that function's own source, so a
@@ -1708,48 +1698,6 @@ class PurityAnalyzer:
             unwalkable=unwalkable,
         )
 
-    def _flag_mutable_global_reads(
-        self,
-        func: Callable[..., Any],
-        func_def: ast.AST,
-        qualname: str,
-        read_names: dict[str, None],
-        all_issues: list[PurityIssue],
-    ) -> None:
-        """Append an issue for each module global *func* reads that is
-        reassigned/mutated elsewhere in its module - the result would go stale
-        when that global changes. Reads of never-written globals (constants,
-        dispatch tables) are not flagged."""
-        if not read_names:
-            return
-        module = inspect.getmodule(func)
-        if module is None:
-            return
-        modified = _module_modified_globals(module)
-        if not modified:
-            return
-        module_ns = getattr(func, "__globals__", None) or {}
-        locals_ = scope_locals(func_def)
-        freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
-        own_name = getattr(func, "__name__", None)
-        candidates = (read_names.keys() & modified) - locals_ - freevars - BUILTIN_NAMES
-        for name in sorted(candidates):
-            if name == own_name or name not in module_ns:
-                continue
-            all_issues.append(
-                PurityIssue(
-                    kind=ISSUE_MUTABLE_GLOBAL,
-                    description=(
-                        f"reads module global {name!r} that is reassigned or mutated "
-                        f"elsewhere - cached results won't reflect changes to it; pass "
-                        f"it as an argument or declare it via depends_on"
-                    ),
-                    where=qualname,
-                    line=0,
-                    subject=name,
-                )
-            )
-
 
 _global_analyzer: PurityAnalyzer | None = None
 _global_analyzer_lock = threading.Lock()
@@ -1828,67 +1776,6 @@ def _describe_subscript(node: ast.Subscript) -> str:
     if isinstance(base, ast.Attribute):
         return f"{base.attr}[...]"
     return "a subscript"
-
-
-def _imported_module_names(tree: ast.AST) -> frozenset[str]:
-    """Names bound by a plain ``import x`` / ``import x as y`` in *tree*.
-
-    ``import os.path`` binds ``os``, so the top-level segment is what counts.
-    """
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                names.add(alias.asname or alias.name.split(".")[0])
-    return frozenset(names)
-
-
-def _module_modified_globals(module: Any) -> frozenset[str]:
-    """Module-global names that are reassigned/mutated somewhere in *module*.
-
-    Empty when the source can't be read, so nothing is flagged on incomplete
-    information. The scan is memoised on the source text, so a module edited
-    under a running process is scanned again; and, once its file has settled,
-    on the file's version, so each helper the walk meets in a big module does
-    not read and hash the whole file again to find the scan it already did.
-    """
-    version = settled_source_version(module)
-    if version is not None:
-        hit = _MODULE_MUTATIONS.get(version)
-        if hit is not None:
-            return hit
-    try:
-        source = inspect.getsource(module)
-    except SOURCE_RETRIEVAL_ERRORS:
-        return frozenset()
-    modified = _modified_globals_in_source(source)
-    if version is not None and source_version_unchanged(version):
-        _MODULE_MUTATIONS[version] = modified
-    return modified
-
-
-#: `_module_modified_globals` per module file version: (path, mtime_ns, size).
-_MODULE_MUTATIONS: LruMemo[tuple[str, int, int], frozenset[str]] = LruMemo(MODULE_ANALYSES)
-
-
-@functools.lru_cache(maxsize=256)
-def _modified_globals_in_source(source: str) -> frozenset[str]:
-    try:
-        tree = ast.parse(textwrap.dedent(source))
-    except (SyntaxError, ValueError):
-        return frozenset()
-    # Changes made by code at module level run once, at import, before any
-    # cached function is called, so a registry filled at import reads as
-    # constant; only function bodies count. A function that only ever runs
-    # at import (a decorator body) still counts: a false flag is a warning, a
-    # missed one a stale cache. A method call on a plainly imported module
-    # (``requests.post``) calls a function and does not change the module;
-    # ``from config import SETTINGS`` binds an object, which still counts.
-    try:
-        return module_function_global_changes(tree, _imported_module_names(tree))
-    except RecursionError:
-        logger.debug("global-mutation scan gave up on a deeply nested module")
-        return frozenset()
 
 
 def _try_source_hash(func: Callable[..., Any]) -> str | None:

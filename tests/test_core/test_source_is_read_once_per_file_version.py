@@ -20,7 +20,7 @@ import time
 import pytest
 
 from cash import source_norm
-from cash.analysis import purity_analyzer
+from cash.analysis import mutable_globals
 
 pytestmark = [pytest.mark.core]
 
@@ -174,11 +174,11 @@ def test_the_module_mutation_scan_is_memoised_per_file_version(tmp_path, monkeyp
     real = inspect.getsource
     monkeypatch.setattr(inspect, "getsource", lambda obj: reads.append(obj) or real(obj))
 
-    assert "COUNTER" in purity_analyzer._module_modified_globals(module)
-    assert "COUNTER" in purity_analyzer._module_modified_globals(module)
+    assert "COUNTER" in mutable_globals.module_modified_globals(module)
+    assert "COUNTER" in mutable_globals.module_modified_globals(module)
     assert reads == [module], "the module was read again for the same file version"
 
     path.write_text(MODULE.format(step=1).replace("COUNTER.append(1)", "return 1"), encoding="utf-8")
     edited = time.time() - 30
     os.utime(path, (edited, edited))
-    assert "COUNTER" not in purity_analyzer._module_modified_globals(module)
+    assert "COUNTER" not in mutable_globals.module_modified_globals(module)
