@@ -285,17 +285,27 @@ def mock_register_magic(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_time_sleep(monkeypatch):
-    """Cap time.sleep at 1 ms so smart-persistence.md fences don't delay.
+    """Cap time.sleep at twice the statement store floor, so a fence's
+    ``time.sleep(5)`` stand-in for slow work does not delay the suite.
 
     Capped, not removed. A no-op sleep turns every polling loop in the process
     into a busy loop that holds the GIL -- the test suite's stall watchdog was
     one, and it slowed the docs tests running beside it until pytest-timeout
-    killed the worker. A 1 ms sleep still yields.
+    killed the worker. A short sleep still yields.
+
+    The cap stays above ``min_execution_time_to_cache_seconds``: a page's
+    slow stand-in must still be slow enough for cash to store its statement,
+    as it is when a reader runs the page. Below the floor, whether it is
+    stored would turn on how long the rest of the statement takes on a
+    loaded machine, and so would the badge the page asserts.
     """
     import time
 
+    from cash.backends.persistence_policy import STORE_FLOOR_S
+
+    cap = 2 * STORE_FLOOR_S
     real_sleep = time.sleep
-    monkeypatch.setattr(time, "sleep", lambda s: real_sleep(min(s, 0.001)) if s > 0 else real_sleep(0))
+    monkeypatch.setattr(time, "sleep", lambda s: real_sleep(min(s, cap)) if s > 0 else real_sleep(0))
     yield
 
 

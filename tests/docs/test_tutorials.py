@@ -445,7 +445,7 @@ _DOC_NAMESPACES: dict[str, dict] = {
     "smart-persistence": {
         # The Quick Start fence uses ``time.sleep(...)`` and ``heavy_thing(...)``
         # without importing/defining them, so we inject both as namespace names.
-        # ``time.sleep`` itself is no-op'd by the ``mock_time_sleep`` autouse
+        # ``time.sleep`` itself is capped by the ``mock_time_sleep`` autouse
         # fixture; the override here only provides the ``time`` *name*.
         "time": __import__("time"),
         "heavy_thing": lambda x: x,
