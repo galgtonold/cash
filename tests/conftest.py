@@ -394,7 +394,7 @@ def _process_seeds_put_back():
     """
     from cash.tracking.randomness import lineage
 
-    seeded = getattr(lineage, "_PROCESS_SEEDED", set())
+    seeded = lineage._PROCESS_SEEDED
     seeded.clear()
     yield
     seeded.clear()

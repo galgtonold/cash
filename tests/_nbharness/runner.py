@@ -791,35 +791,29 @@ from cash import Cash
 
     def reset_cash_state(self) -> "NotebookTestRunner":
         """
-        Reset cash's internal state to simulate a fresh session.
+        Reset cash's session state to simulate a fresh session.
 
-        Clears all lineage tracking, executed code records, and file tracking
-        state. Variables remain in user_ns but their provenance is lost.
+        Forgets every tracked lineage, executed-code record and file read, and
+        the previous upstream simulation. Variables remain in user_ns but their
+        provenance is lost.
+
+        No guard and no ``except``: if a name below is renamed, the reset
+        raises in the kernel and this method fails, rather than quietly
+        resetting less while the tests that rely on it keep passing.
         """
         reset_code = """
-try:
-    _cash_magics = get_ipython().magics_manager.registry.get('CashMagics')
-    if _cash_magics:
-        # Clear shared tracking dicts (underscore-prefixed private attributes)
-        _cash_magics.tracking_state.lineage.clear()
-        _cash_magics.tracking_state.executed_cell_codes.clear()
-        _cash_magics.tracking_state.executed_cell_hashes.clear()
-        _cash_magics.tracking_state.current_session_hashes.clear()
-        _cash_magics.tracking_state.executed_file_deps.clear()
-        # Clear statement processor's input lineages
-        if hasattr(_cash_magics, '_statement_processor'):
-            _cash_magics._statement_processor.tracking_state.executed_input_lineages.clear()
-        # Clear upstream checker's simulation cache
-        if hasattr(_cash_magics, '_upstream_checker'):
-            _cash_magics._upstream_checker.simulator.cache.reset()
-        # Clear file tracker state
-        if hasattr(_cash_magics, '_file_tracker') and _cash_magics._file_tracker:
-            _cash_magics._file_tracker.clear()
-except Exception:
-    pass
+_cash_magics = get_ipython().magics_manager.registry['CashMagics']
+_cash_magics.tracking_state.reset_session_state()
+_cash_magics._upstream_checker.simulator.cache.reset()
+del _cash_magics
 """
         # Run directly via kernel client to avoid overwriting notebook cells
-        self._run_async(self.client.kc._async_execute_interactive(reset_code, store_history=False))
+        reply = self._run_async(self.client.kc._async_execute_interactive(reset_code, store_history=False))
+        content = reply["content"]
+        if content["status"] != "ok":
+            raise RuntimeError(
+                f"reset_cash_state failed in the kernel: {content.get('ename')}: {content.get('evalue')}"
+            )
         return self
 
     def enable_debug(self) -> "NotebookTestRunner":

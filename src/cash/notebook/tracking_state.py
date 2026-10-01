@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
 from cash.notebook.lineage_store import LineageStore
@@ -204,6 +204,23 @@ class TrackingState:
     # observes the object graph; the simulation only replays this map.
     # W: StatementLineageBuilder (derivation_edges). R: VirtualLineage.
     derivation_edges: dict[str, set[str]] = field(default_factory=dict)
+
+    def reset_session_state(self) -> None:
+        """Forget everything this session recorded, as a fresh kernel would.
+
+        Every field goes back to its default. Containers are emptied in place
+        rather than replaced, because the components above hold this object
+        and may hold its containers too; a replaced dict would leave them
+        reading the old one.
+        """
+        for f in fields(self):
+            current = getattr(self, f.name)
+            if hasattr(current, "clear"):
+                current.clear()
+            elif f.default_factory is not MISSING:
+                setattr(self, f.name, f.default_factory())
+            else:
+                setattr(self, f.name, f.default)
 
     @property
     def variable_lineage(self) -> Mapping[str, str]:
