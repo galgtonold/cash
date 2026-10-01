@@ -659,7 +659,7 @@ class StatementStore:
         if referenced:
             wire[REFS_FIELD] = sorted(referenced)
             wire[REF_BYTES_FIELD] = sum(referenced.values())
-        # An intermediate of this cell (``cell_executor._written_later_in_cell``)
+        # An intermediate of this cell (``cell_runs.written_later_in_cell``)
         # stays in RAM; the cell's final version is persisted at its end.
         later = self.written_later_in_cell
         if not run.force_persist and run.outputs and later and set(run.outputs) <= later:

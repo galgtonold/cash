@@ -10,11 +10,11 @@ import ast
 
 import pytest
 
-from cash.notebook.ipython.cell_executor import _jumpable_runs
+from cash.analysis.cell_runs import jumpable_runs
 
 
 def _runs(src):
-    return _jumpable_runs(ast.parse(src).body, src, lambda code: False)
+    return jumpable_runs(ast.parse(src).body, src, lambda code: False)
 
 
 @pytest.mark.parametrize(

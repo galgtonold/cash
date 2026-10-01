@@ -470,7 +470,7 @@ class NotebookSimulator:
         """Which of a run of assignments in the cell being run need not run.
 
         A cell rebuilding ``sales`` through a dozen steps
-        writes only the last version to disk (``_written_later_in_cell``), and
+        writes only the last version to disk (``cell_runs.written_later_in_cell``), and
         after a restart Run All re-ran every step to get back to it. Here the
         run is simulated the way the upstream repair simulates a cell above,
         and the same backward scan finds the latest versions it can restore;
