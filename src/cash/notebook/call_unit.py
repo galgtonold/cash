@@ -305,6 +305,34 @@ class _Call:
     kwargs: dict
 
 
+def _decide_site(run: _SiteRun, site: CallSite) -> None:
+    """End *run*'s probe: from the timed plain samples and the cached calls
+    before them, decide whether the rest of the site's calls run plain."""
+    run.probing = False
+    cached = run.total_s / run.calls
+    # The median, not the mean: one sample stretched by a
+    # stall (the process descheduled, a garbage collection)
+    # lifted the mean of five over the bar, and the site
+    # stayed cached for the rest of the run. The cached side
+    # is averaged over _GUARD_AFTER_CALLS calls, where one
+    # stall weighs a tenth as much.
+    plain = statistics.median(run.plain_samples)
+    keyed = run.key_s / run.calls
+    # Too dear to cache, or a hit could not save a quarter of
+    # the call: a hit pays the key and lookup, then the restore.
+    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain
+    run.decided = True
+    trace_event(
+        "call_site_decided",
+        source=site.source,
+        calls=run.calls,
+        cached_ms=round(cached * 1000, 3),
+        keyed_ms=round(keyed * 1000, 3),
+        plain_ms=round(plain * 1000, 3),
+        plain=run.plain,
+    )
+
+
 class CallUnit:
     """Caches one intercepted call against the statement backend.
 
@@ -459,29 +487,7 @@ class CallUnit:
                 run.plain_samples.append(took)
                 _log_plain(took)
                 if len(run.plain_samples) >= _PLAIN_SAMPLES:
-                    run.probing = False
-                    cached = run.total_s / run.calls
-                    # The median, not the mean: one sample stretched by a
-                    # stall (the process descheduled, a garbage collection)
-                    # lifted the mean of five over the bar, and the site
-                    # stayed cached for the rest of the run. The cached side
-                    # is averaged over _GUARD_AFTER_CALLS calls, where one
-                    # stall weighs a tenth as much.
-                    plain = statistics.median(run.plain_samples)
-                    keyed = run.key_s / run.calls
-                    # Too dear to cache, or a hit could not save a quarter of
-                    # the call: a hit pays the key and lookup, then the restore.
-                    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain
-                    run.decided = True
-                    trace_event(
-                        "call_site_decided",
-                        source=site.source,
-                        calls=run.calls,
-                        cached_ms=round(cached * 1000, 3),
-                        keyed_ms=round(keyed * 1000, 3),
-                        plain_ms=round(plain * 1000, 3),
-                        plain=run.plain,
-                    )
+                    _decide_site(run, site)
                 self.last_returned = (None, id(result), site.source)
                 return result
             self._last_key_s = None
