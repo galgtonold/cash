@@ -200,7 +200,7 @@ DECORATOR_POLICY: dict[EffectKind, Action] = {
     # side effects: a hidden input is frozen, nothing is skipped.
     EffectKind.CLOCK: Action.WARN,
     # A read whose name is written out is folded into the key by value
-    # (`GlobalsFold.fold_environment`); one whose name is only known at run time
+    # (`EnvironmentFold.fold_environment`); one whose name is only known at run time
     # still warns, as an ambient read.
     EffectKind.ENVIRONMENT: Action.CACHE_AS_INPUT,
     # A hit drops what the first call printed. A log line (`is_log_line`) is

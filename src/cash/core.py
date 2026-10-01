@@ -50,6 +50,7 @@ from .decorator.class_data import ClassDataFold
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
 from .decorator.code_args import CodeArgs
 from .decorator.code_surface import CodeSurface
+from .decorator.environment_fold import EnvironmentFold
 from .decorator.explain import (
     CacheExplanation,
     Explainer,
@@ -421,6 +422,7 @@ class Cash:
             self._files,
             self._closures,
             self._globals,
+            EnvironmentFold(self._registry),
             self._rng,
             self._code_args,
             self._state_hasher,

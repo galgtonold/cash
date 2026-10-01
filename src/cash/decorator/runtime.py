@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from .backend_slot import BackendSlot
     from .closure_fold import ClosureFold
     from .code_args import CodeArgs
+    from .environment_fold import EnvironmentFold
     from .explain import MissHistory
     from .file_deps import FileDeps
     from .function_identity import OwnSourcePins
@@ -99,6 +100,7 @@ class KeyBuilder:
         files: FileDeps,
         closures: ClosureFold,
         globals_fold: GlobalsFold,
+        environment: EnvironmentFold,
         rng: RngWatch,
         code_args: CodeArgs,
         state_hasher: DependencyStateHasher,
@@ -112,6 +114,7 @@ class KeyBuilder:
         self._files = files
         self._closures = closures
         self._globals = globals_fold
+        self._environment = environment
         self._rng = rng
         self._code_args = code_args
         self._state_hasher = state_hasher
@@ -196,7 +199,7 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
-        state_hash = self._globals.fold_environment(func, func_name, state_hash)
+        state_hash = self._environment.fold_environment(func, func_name, state_hash)
         chain.append(state_hash)
         return state_hash
 

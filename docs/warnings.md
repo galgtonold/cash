@@ -754,7 +754,7 @@ run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
 
-<!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
+<!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
 <!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @936a32c3 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
