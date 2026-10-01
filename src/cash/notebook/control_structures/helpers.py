@@ -26,7 +26,7 @@ from ...analysis.annotations import (
     parse_annotations_in_range,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import control_structure_mutations
+from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
 from ..compiled_source import is_cash_filename
@@ -270,7 +270,12 @@ def update_lineage_after_execution(
         return
 
     lineage = statement_processor.tracking_state.variable_lineage
-    mutated_vars = control_structure_mutations(node, lambda name: name in BUILTIN_NAMES and name not in lineage)
+    user_ns = shell.user_ns
+    mutated_vars = control_structure_mutations(
+        node,
+        lambda name: name in BUILTIN_NAMES and name not in lineage,
+        lambda name: is_module_name(name, user_ns),
+    )
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)

@@ -15,7 +15,7 @@ import logging
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import control_structure_mutations
+from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...source_norm import exact_source_digest
 from ..cache_key import statement_source_hash
 from ..control_structures import extract_target_names, get_control_structure_type
@@ -45,6 +45,7 @@ class ControlSimulation:
         node: ast.AST,
         loop_target_vars: set[str],
         vars_mutated_by_loops: set[str],
+        virtual_modules: set[str],
     ) -> set[str]:
         """Collect control-body mutation info and return the mutated vars for this node.
 
@@ -61,7 +62,12 @@ class ControlSimulation:
             loop_target_vars.update(extract_target_names(node.target))
         if not isinstance(node, (ast.For, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)):
             return set()
-        mutated_vars = control_structure_mutations(node, self.statements.is_unbound_builtin)
+        user_ns = self.statements.shell.user_ns
+        mutated_vars = control_structure_mutations(
+            node,
+            self.statements.is_unbound_builtin,
+            lambda name: is_module_name(name, user_ns, virtual_modules),
+        )
         vars_mutated_by_loops.update(mutated_vars)
         return mutated_vars
 
@@ -174,7 +180,9 @@ class ControlSimulation:
 
         outputs, lookup_time, files_stale, _ = self.statements.apply(stmt_code, virtual_lineage, sim.virtual_modules)
 
-        mutated_vars = self.collect_mutations(node, sim.loop_target_vars, sim.vars_mutated_by_loops)
+        mutated_vars = self.collect_mutations(
+            node, sim.loop_target_vars, sim.vars_mutated_by_loops, sim.virtual_modules
+        )
 
         # CRITICAL FIX: Update virtual lineage for variables mutated inside loops.
         # CodeAnalyzer doesn't detect loop-mutated vars (like `groups` in

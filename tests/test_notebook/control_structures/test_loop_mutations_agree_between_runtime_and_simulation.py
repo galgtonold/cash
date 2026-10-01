@@ -43,6 +43,11 @@ SHAPES = {
         "for i in range(4):\n    if i % 2:\n        odds.append(i)\n    else:\n        evens[i] = i\n",
         {"evens", "odds"},
     ),
+    "a method no rule knows, beside a module call and a pure one": (
+        "import io\nimport os\nbuf = io.StringIO()\nrows = []",
+        "for i in range(3):\n    buf.write(str(i))\n    os.getcwd()\n    rows.copy()\n",
+        {"buf"},
+    ),
 }
 
 
@@ -58,8 +63,8 @@ def test_runtime_and_simulation_pick_the_same_mutated_vars(
     runtime: list[set[str]] = []
     collect = helpers.control_structure_mutations
 
-    def spy(n, is_builtin):
-        found = collect(n, is_builtin)
+    def spy(n, is_builtin, is_module):
+        found = collect(n, is_builtin, is_module)
         if ast.unparse(n) == ast.unparse(node):
             runtime.append(found)
         return found
@@ -69,6 +74,6 @@ def test_runtime_and_simulation_pick_the_same_mutated_vars(
     assert runtime, "the runtime never collected the loop's mutations"
 
     simulation = NotebookSimulator(mock_shell, cash_instance, cash_magics.tracking_state).virtual_lineage
-    simulated = simulation.controls.collect_mutations(node, set(), set())
+    simulated = simulation.controls.collect_mutations(node, set(), set(), set())
 
     assert runtime[-1] == simulated == expected
