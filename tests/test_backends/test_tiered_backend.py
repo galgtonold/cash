@@ -62,8 +62,9 @@ class TestTieredBackend:
         result at the same compute time restores near-instantly and IS promoted.
         """
         # Mock tiers, with the interface values a real tier has as values.
-        l1 = MagicMock(source_label="RAM", default_ttl=None, local_dir=None)
-        l2 = MagicMock(source_label="DISK", default_ttl=None, local_dir=None)
+        uncapped = {"promotion_size_cap.return_value": None}
+        l1 = MagicMock(source_label="RAM", cost_kind="ram", default_ttl=None, local_dir=None, **uncapped)
+        l2 = MagicMock(source_label="DISK", cost_kind="disk", default_ttl=None, local_dir=None, **uncapped)
 
         # When getting from L1, return empty (simulating set flow check or just to satisfy protocol)
         # But set() uses the passed metadata.

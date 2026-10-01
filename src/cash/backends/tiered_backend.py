@@ -355,10 +355,6 @@ class TieredBackend(CacheBackend):
         for i in range(1, len(self.backends)):
             backend = self.backends[i]
             cap = backend.promotion_size_cap()
-            # Guard against non-numeric caps (e.g. a MagicMock tier in
-            # tests) — treat anything that isn't a real number as no cap.
-            if isinstance(cap, bool) or not isinstance(cap, (int, float)):
-                cap = None
             if cap is not None and cap_size and cap_size > cap:
                 # About to refuse. `cap_size` is the value's IN-MEMORY
                 # footprint (the RAM tier measures it on the way past), and
