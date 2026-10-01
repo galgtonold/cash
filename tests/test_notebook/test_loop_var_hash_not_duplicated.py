@@ -25,7 +25,7 @@ from tests._cell_driver import run_cash_cell
 pytest.importorskip("IPython")
 np = pytest.importorskip("numpy")
 
-import cash.object_hashing as object_hashing
+import cash.value_hash as value_hash
 from cash import Cash
 from cash.notebook.ipython.magics import CashMagics
 
@@ -38,7 +38,7 @@ CELL = "seen = []\nfor arr in arrays:\n    seen.append(float(arr.sum()))\n"
 def counting_magics(monkeypatch, mock_shell, tmp_path):
     """Magics over a disk cache, whose full-content hashes are counted per object."""
     counts: dict[int, int] = {}
-    real = object_hashing.compute_hash
+    real = value_hash.compute_hash
 
     def counting_compute_hash(obj):
         counts[id(obj)] = counts.get(id(obj), 0) + 1

@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from cash.object_hashing import compute_hash
+from cash.value_hash import compute_hash
 
 
 def test_ndarray_out_of_sample_difference_distinct():

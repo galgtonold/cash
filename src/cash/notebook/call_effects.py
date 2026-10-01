@@ -26,9 +26,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from cash.notebook._tee import TeeWriter
-from cash.object_hashing import compute_hash, is_identity_fallback_hash
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.tracker_context import active_tracker
+from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ def hash_args(args: tuple, kwargs: dict) -> tuple:
     An argument whose content cannot be read at all fails closed:
 
     **Identity fallback.** `compute_hash`'s tier 3
-    (`object_hashing.identity_hash`) hashes `id(obj)`, not the object's
+    (`value_hash.identity_hash`) hashes `id(obj)`, not the object's
     data, once pickling itself has failed (a `threading.Lock`, a socket,
     an open file, anything with an unpicklable `__reduce__`). `id(obj)`
     is invariant across an in-place mutation of that SAME object, so

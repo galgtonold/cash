@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from cash.object_hashing import compute_hash, is_identity_fallback_hash, mutation_fingerprint
+from cash.mutation_fingerprint import mutation_fingerprint
+from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 
 class Node:

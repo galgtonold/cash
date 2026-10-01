@@ -147,7 +147,7 @@ def test_an_anndata_like_value_edited_in_place_fingerprints_differently():
     """A bare ``sc.pp.something(adata)`` is learned as reading only when the
     fingerprint around it does not move. A column rewritten in place, rows of
     ``X`` swapped (same sum) or an embedding rescaled must all move it."""
-    from cash.object_hashing import mutation_fingerprint
+    from cash.mutation_fingerprint import mutation_fingerprint
 
     adata = _AnnDataLike()
     before = mutation_fingerprint(adata)

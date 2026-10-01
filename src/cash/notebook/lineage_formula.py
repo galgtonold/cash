@@ -24,10 +24,10 @@ from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
 from ..effects import environment_component, environment_input
-from ..object_hashing import compute_hash, is_identity_fallback_hash
 from ..source_norm import module_identity
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
+from ..value_hash import compute_hash, is_identity_fallback_hash
 
 logger = logging.getLogger(__name__)
 

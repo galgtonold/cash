@@ -77,6 +77,8 @@ src/cash/
 │                       #   helpers
 ├── object_hashing.py   # content hashes of values
 ├── sizing.py           # how big a frame, array or container is
+├── value_hash.py       # the notebook's value hash (compute_hash)
+├── mutation_fingerprint.py # a digest that moves on an in-place edit
 ├── source_norm.py      # normalises source before hashing (comments,
 │                       #   blank lines)
 ├── cost_model.py       # predicted serialise and restore time per

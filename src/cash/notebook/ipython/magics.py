@@ -22,9 +22,9 @@ from ..._console import safe_text
 from ...backends._writes import all_pending_writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
-from ...object_hashing import compute_hash
 from ...tracking import io_watch
 from ...tracking.function_tracker import FunctionTracker
+from ...value_hash import compute_hash
 from .. import compute_baselines
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus

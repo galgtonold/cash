@@ -33,8 +33,8 @@ from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
-from cash.object_hashing import compute_hash
 from cash.sizing import pandas_nbytes
+from cash.value_hash import compute_hash
 
 if TYPE_CHECKING:
     from cash.notebook.call_interception import CallSite

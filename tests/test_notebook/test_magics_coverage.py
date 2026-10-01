@@ -2,10 +2,6 @@
 Tests for CashMagics methods that need additional coverage.
 
 Targets: cash_badge, cash_status, _capture_cell_id.
-
-Object-hashing helpers (`compute_hash`, `calculate_memory_size`,
-`_recursive_getsizeof`) moved to `cash.object_hashing`;
-their tests live in `test_object_hashing.py`.
 """
 
 from unittest.mock import MagicMock

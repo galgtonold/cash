@@ -20,8 +20,8 @@ from cash.analysis.cacheability_decision import receiver_is_identity_coupled
 from cash.analysis.mutation_effects import classify_receivers, drawn_on_arguments
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from cash.analysis.namespace_effects import bare_call_arguments, fits_its_receiver, is_estimator
+from cash.mutation_fingerprint import mutation_fingerprint
 from cash.notebook.restored_var import hashed_by_lineage
-from cash.object_hashing import mutation_fingerprint
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
