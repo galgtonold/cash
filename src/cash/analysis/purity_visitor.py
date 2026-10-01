@@ -481,277 +481,289 @@ class PurityVisitor(ast.NodeVisitor):
         return not (root.id in self._param_names or root.id in self._assign_kinds)
 
     def _record_call(self, node: ast.Call) -> None:
-        func_node = node.func
-        line = getattr(node, "lineno", 0)
+        """Judge one call by the first rule in `_CALL_RULES` that claims it; a
+        call no rule claims is recorded for the walk to resolve and follow.
 
-        # Explicit dynamism: eval / exec / compile by bare name.
-        if isinstance(func_node, ast.Name) and func_node.id in {"eval", "exec", "compile"}:
-            self.issues.append(
-                PurityIssue(
-                    kind=ISSUE_UNTRACKABLE_DEP,
-                    description=f"{func_node.id}(...) - explicit dynamic execution",
-                    where=self._qualname,
-                    line=line,
-                )
-            )
-            return
-
-        # getattr(obj, name)(...) where name is not a constant string.
-        if (
-            isinstance(func_node, ast.Call)
-            and isinstance(func_node.func, ast.Name)
-            and func_node.func.id == "getattr"
-            and len(func_node.args) >= 2
-            and not (isinstance(func_node.args[1], ast.Constant) and isinstance(func_node.args[1].value, str))
-        ):
-            self.issues.append(
-                PurityIssue(
-                    kind=ISSUE_UNTRACKABLE_DEP,
-                    description="getattr(obj, name)(...) with non-constant name - dynamic dispatch",
-                    where=self._qualname,
-                    line=line,
-                )
-            )
-            return
-
-        # Dynamic import: importlib.import_module(...) / __import__(...). The
-        # imported module's members are resolved from a runtime value, so an
-        # edit to that module is invisible to the cache key.
-        _is_import_module = isinstance(func_node, ast.Attribute) and func_node.attr == "import_module"
-        _is_dunder_import = isinstance(func_node, ast.Name) and func_node.id == "__import__"
-        if _is_import_module or _is_dunder_import:
-            self.issues.append(
-                PurityIssue(
-                    kind=ISSUE_UNTRACKABLE_DEP,
-                    description=(
-                        f"{'importlib.import_module' if _is_import_module else '__import__'}"
-                        "(...) - dynamic import; the imported module's code is not tracked"
-                    ),
-                    where=self._qualname,
-                    line=line,
-                )
-            )
-            return
-
-        # Calling a parameter -- `def f(cb): cb(x)` -- is NOT flagged.
-        #
-        # It used to be, and that warning outlived the mechanism that made it
-        # true. A callable reaching a cached call as an argument is now hashed
-        # by its SOURCE, so editing it invalidates: measured across a named
-        # function, a lambda, a bound method, and even a helper called by the
-        # passed function two levels down. Where cash genuinely cannot hash one
-        # (`functools.partial`) it already says so precisely, at the argument
-        # that failed, naming depends_on= / mark_opaque(). Warning here as well
-        # would fire on every callback-taking function in the codebase to
-        # report a hazard that no longer exists.
-
-        # getattr(x, "exec")(...) -- a CONSTANT name, so the dynamic-dispatch
-        # rule above does not fire, yet what it reaches is the very thing that
-        # rule exists to stop. Measured: `getattr(builtins, "exec")("z = 5")`
-        # executed arbitrary source in silence while a bare `exec(...)` raised.
-        if (
-            isinstance(func_node, ast.Call)
-            and isinstance(func_node.func, ast.Name)
-            and func_node.func.id == "getattr"
-            and len(func_node.args) >= 2
-            and isinstance(func_node.args[1], ast.Constant)
-            and func_node.args[1].value in _DYNAMIC_BUILTIN_NAMES
-        ):
-            self.issues.append(
-                PurityIssue(
-                    kind=ISSUE_UNTRACKABLE_DEP,
-                    description=(
-                        f"getattr(..., {func_node.args[1].value!r})(...) - reaches {func_node.args[1].value} indirectly"
-                    ),
-                    where=self._qualname,
-                    line=line,
-                )
-            )
-            return
-
-        # getattr(obj, "name")(...) with a constant identifier is obj.name(...)
-        # spelled differently. Analysed as written it reached nothing: an edit
-        # to the function it names was served stale, with no warning
-        # (`getattr(helpers, "fun1")()`). Judged, and followed as a helper, as
-        # the attribute call it is.
-        if (
-            isinstance(func_node, ast.Call)
-            and isinstance(func_node.func, ast.Name)
-            and func_node.func.id == "getattr"
-            and len(func_node.args) == 2
-            and not func_node.keywords
-            and isinstance(func_node.args[1], ast.Constant)
-            and isinstance(func_node.args[1].value, str)
-            and func_node.args[1].value.isidentifier()
-        ):
-            spelled = ast.copy_location(
-                ast.Call(
-                    func=ast.copy_location(
-                        ast.Attribute(value=func_node.args[0], attr=func_node.args[1].value, ctx=ast.Load()), func_node
-                    ),
-                    args=node.args,
-                    keywords=node.keywords,
-                ),
-                node,
-            )
-            self._record_call(spelled)
-            return
-
-        # Calling whatever a subscript yields -- but ONLY when the table
-        # itself cannot reach the cache key. Deferred to `finalize_taint`,
-        # because whether the base is a body-local depends on assignments
-        # that may appear after this call in source order.
-        if isinstance(func_node, ast.Subscript):
-            self._subscript_call_nodes.append(node)
-            return
-
-        # Calls with an effect (requests.post, os.system, df.to_csv, ...).
-        func_name = get_call_name(func_node)
-        module_name = get_call_module(func_node)
-        if func_name:
-            dotted = f"{module_name}.{func_name}" if module_name else func_name
-
-            # Ambient reads (datetime.now, os.getenv, uuid4, ...). Only ever
-            # matched DOTTED, or through what a name is bound to: every entry
-            # carries its module, so a method named `now` on the user's own
-            # object is not this.
-            if DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT:
-                env = environment_input(node, self._namespace, resolve_constants=True)
-                if env is not None:
-                    if id(node) not in self._log_only:
-                        self.environment_reads.add(env)
-                    if dotted in ("os.environ.setdefault", "os.environb.setdefault"):
-                        # Also a write: it sets the variable when it is unset,
-                        # which a cache hit skips.
-                        self.issues.append(
-                            PurityIssue(
-                                kind=ISSUE_IMPURE_CALL,
-                                description=f"{dotted}() - write method",
-                                where=self._qualname,
-                                line=line,
-                            )
-                        )
-                    return
-            ambient = ambient_call(node, self._ambient_namespace)
-            helper = clock_helper_of(node, self._ambient_namespace) if ambient is not None else None
-            if helper is not None:
-                # A clock helper is still the user's code: walked, so an edit
-                # to it reaches the key like any helper's.
-                self.judged_helpers.add(helper.__code__)
-                self.called_callable_nodes.append(node)
-            if ambient is not None and id(node) in self._log_only:
-                return  # only ever printed or logged: cannot reach a result
-            if ambient is not None:
-                shown = ambient if ambient.endswith(")") else f"{ambient}()"
-                self.issues.append(
-                    PurityIssue(
-                        kind=ISSUE_AMBIENT_READ,
-                        description=(
-                            f"{shown} - reads ambient state, which is not in the "
-                            f"cache key, so the first call's value is frozen into "
-                            f"every later result"
-                        ),
-                        where=self._qualname,
-                        line=line,
-                    )
-                )
+        Calling a parameter (``def f(cb): cb(x)``) is not a rule: a callable
+        that reaches a cached call as an argument is hashed by its source, so
+        an edit to it invalidates, and one cash cannot hash
+        (``functools.partial``) is reported at the argument.
+        """
+        for rule in self._CALL_RULES:
+            if rule(self, node):
                 return
-
-            if is_log_line(node):
-                return  # a diagnostic line: a hit skipping it is what caching means
-
-            if _opens_tracked_database(func_node, self._namespace):
-                self.opens_tracked_database = True
-            effect = classify_call(node, self._namespace)
-            if effect is not None and DECORATOR_POLICY[effect.kind] is Action.SUGGEST_TTL:
-                self.issues.append(
-                    PurityIssue(
-                        kind=ISSUE_NETWORK_READ,
-                        description=f"{dotted}() - what the {_SOURCE[effect.kind]} returns is not in the cache key",
-                        where=self._qualname,
-                        line=line,
-                        effect_kind=effect.kind,
-                    )
-                )
-                self.impure_call_nodes.append(node)
-                return
-            if (
-                effect is not None
-                and effect.kind not in AMBIENT_KINDS
-                and DECORATOR_POLICY[effect.kind] is Action.WARN
-                and not effect.method
-            ):
-                what = (
-                    "draws on pyplot's current figure, which a hit does not redraw"
-                    if effect.kind is EffectKind.DISPLAY
-                    else "known I/O / side-effecting"
-                )
-                self.issues.append(
-                    PurityIssue(
-                        kind=ISSUE_IMPURE_CALL,
-                        description=f"{dotted}() - {what}",
-                        where=self._qualname,
-                        line=line,
-                        effect_kind=effect.kind,
-                    )
-                )
-                self.impure_call_nodes.append(node)
-                return
-            # A method with an effect on any receiver (to_csv, write, post,
-            # execute, ...), or a container mutator. Skipped when the receiver
-            # is a fresh local (``lines.append`` where ``lines = []``):
-            # mutating a local accumulator is pure.
-            reported_method = (
-                effect is not None and effect.method and DECORATOR_POLICY[effect.kind] is Action.WARN
-            ) or func_name in MUTATOR_METHODS
-            if (
-                isinstance(func_node, ast.Attribute)
-                and reported_method
-                and not self._receiver_is_fresh(func_node.value)
-                and not self._is_module_function_named_like_a_mutator(func_node)
-            ):
-                base = get_base_name(func_node.value)
-                base_str = f"{base}." if base else ""
-                what = "write method"
-                if func_node.attr in MUTATOR_METHODS:
-                    # `rows.sort()` on a parameter changes the caller's list:
-                    # say so, rather than the label a local's `.sort()` gets.
-                    kind = self._mutation_kind(base, "method")
-                    if kind != "method mutation":
-                        what = kind
-                self.issues.append(
-                    PurityIssue(
-                        kind=ISSUE_IMPURE_CALL,
-                        description=f"{base_str}{func_node.attr}() - {what}",
-                        where=self._qualname,
-                        line=line,
-                        effect_kind=effect.kind if effect is not None else None,
-                    )
-                )
-                return
-
-            # Pandas inplace=True kwarg - mutates the receiver.
-            if (
-                isinstance(func_node, ast.Attribute)
-                and func_node.attr in PANDAS_INPLACE_METHODS
-                and not self._receiver_is_fresh(func_node.value)
-            ):
-                for kw in node.keywords:
-                    if kw.arg == "inplace" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
-                        base = get_base_name(func_node.value)
-                        base_str = f"{base}." if base else ""
-                        self.issues.append(
-                            PurityIssue(
-                                kind=ISSUE_IMPURE_CALL,
-                                description=f"{base_str}{func_node.attr}(inplace=True) - in-place mutation",
-                                where=self._qualname,
-                                line=line,
-                            )
-                        )
-                        return
-
-        # Not flagged as anything - record for recursion attempt.
         self.called_callable_nodes.append(node)
+
+    def _issue(self, kind: str, description: str, node: ast.AST, effect_kind: EffectKind | None = None) -> None:
+        self.issues.append(
+            PurityIssue(
+                kind=kind,
+                description=description,
+                where=self._qualname,
+                line=getattr(node, "lineno", 0),
+                effect_kind=effect_kind,
+            )
+        )
+
+    def _dynamic_execution(self, node: ast.Call) -> bool:
+        """``eval`` / ``exec`` / ``compile`` by bare name."""
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in {"eval", "exec", "compile"}:
+            self._issue(ISSUE_UNTRACKABLE_DEP, f"{func.id}(...) - explicit dynamic execution", node)
+            return True
+        return False
+
+    def _dynamic_getattr(self, node: ast.Call) -> bool:
+        """``getattr(obj, name)(...)`` where *name* is not a constant string."""
+        func = node.func
+        if (
+            isinstance(func, ast.Call)
+            and isinstance(func.func, ast.Name)
+            and func.func.id == "getattr"
+            and len(func.args) >= 2
+            and not (isinstance(func.args[1], ast.Constant) and isinstance(func.args[1].value, str))
+        ):
+            self._issue(
+                ISSUE_UNTRACKABLE_DEP, "getattr(obj, name)(...) with non-constant name - dynamic dispatch", node
+            )
+            return True
+        return False
+
+    def _dynamic_import(self, node: ast.Call) -> bool:
+        """``importlib.import_module(...)`` / ``__import__(...)``. The imported
+        module's members are resolved from a runtime value, so an edit to that
+        module is invisible to the cache key."""
+        func = node.func
+        is_import_module = isinstance(func, ast.Attribute) and func.attr == "import_module"
+        is_dunder_import = isinstance(func, ast.Name) and func.id == "__import__"
+        if not (is_import_module or is_dunder_import):
+            return False
+        self._issue(
+            ISSUE_UNTRACKABLE_DEP,
+            f"{'importlib.import_module' if is_import_module else '__import__'}"
+            "(...) - dynamic import; the imported module's code is not tracked",
+            node,
+        )
+        return True
+
+    def _getattr_of_a_dynamic_builtin(self, node: ast.Call) -> bool:
+        """``getattr(x, "exec")(...)``: a CONSTANT name, so `_dynamic_getattr`
+        does not fire, yet what it reaches is the very thing that rule exists
+        to stop (``getattr(builtins, "exec")("z = 5")`` runs arbitrary
+        source)."""
+        func = node.func
+        if (
+            isinstance(func, ast.Call)
+            and isinstance(func.func, ast.Name)
+            and func.func.id == "getattr"
+            and len(func.args) >= 2
+            and isinstance(func.args[1], ast.Constant)
+            and func.args[1].value in _DYNAMIC_BUILTIN_NAMES
+        ):
+            name = func.args[1].value
+            self._issue(ISSUE_UNTRACKABLE_DEP, f"getattr(..., {name!r})(...) - reaches {name} indirectly", node)
+            return True
+        return False
+
+    def _constant_getattr(self, node: ast.Call) -> bool:
+        """``getattr(obj, "name")(...)`` with a constant identifier is
+        ``obj.name(...)`` spelled differently: judged, and followed as a
+        helper, as the attribute call it is (``getattr(helpers, "fun1")()``
+        must reach ``fun1``'s code)."""
+        func = node.func
+        if not (
+            isinstance(func, ast.Call)
+            and isinstance(func.func, ast.Name)
+            and func.func.id == "getattr"
+            and len(func.args) == 2
+            and not func.keywords
+            and isinstance(func.args[1], ast.Constant)
+            and isinstance(func.args[1].value, str)
+            and func.args[1].value.isidentifier()
+        ):
+            return False
+        spelled = ast.copy_location(
+            ast.Call(
+                func=ast.copy_location(
+                    ast.Attribute(value=func.args[0], attr=func.args[1].value, ctx=ast.Load()), func
+                ),
+                args=node.args,
+                keywords=node.keywords,
+            ),
+            node,
+        )
+        self._record_call(spelled)
+        return True
+
+    def _subscript_call(self, node: ast.Call) -> bool:
+        """Calling whatever a subscript yields. Judged in `finalize_taint`:
+        only a table that cannot reach the cache key is reported, and whether
+        the base is a body-local depends on assignments that may appear after
+        this call in source order."""
+        if isinstance(node.func, ast.Subscript):
+            self._subscript_call_nodes.append(node)
+            return True
+        return False
+
+    def _named_call(self, node: ast.Call) -> bool:
+        """A call by a name or a dotted name, judged by what it does: an
+        ambient read, a log line, an effect (``requests.post``, ``os.system``,
+        ``df.to_csv``), a mutator or an ``inplace=True`` method."""
+        func_name = get_call_name(node.func)
+        if not func_name:
+            return False
+        module_name = get_call_module(node.func)
+        dotted = f"{module_name}.{func_name}" if module_name else func_name
+        if self._environment_read(node, dotted) or self._ambient_read(node):
+            return True
+        if is_log_line(node):
+            return True  # a diagnostic line: a hit skipping it is what caching means
+        if _opens_tracked_database(node.func, self._namespace):
+            self.opens_tracked_database = True
+        effect = classify_call(node, self._namespace)
+        return (
+            self._read_from_a_server(node, dotted, effect)
+            or self._known_effect(node, dotted, effect)
+            or self._reported_method(node, func_name, effect)
+            or self._inplace_true(node)
+        )
+
+    def _environment_read(self, node: ast.Call, dotted: str) -> bool:
+        """An environment read the key folds by value (`environment_input`).
+        ``os.environ.setdefault`` is also a write: it sets the variable when
+        it is unset, which a cache hit skips."""
+        if DECORATOR_POLICY[EffectKind.ENVIRONMENT] is not Action.CACHE_AS_INPUT:
+            return False
+        env = environment_input(node, self._namespace, resolve_constants=True)
+        if env is None:
+            return False
+        if id(node) not in self._log_only:
+            self.environment_reads.add(env)
+        if dotted in ("os.environ.setdefault", "os.environb.setdefault"):
+            self._issue(ISSUE_IMPURE_CALL, f"{dotted}() - write method", node)
+        return True
+
+    def _ambient_read(self, node: ast.Call) -> bool:
+        """An ambient read (``datetime.now``, ``os.getenv``, ``uuid4``, a clock
+        helper). Only ever matched DOTTED, or through what a name is bound to:
+        every entry carries its module, so a method named ``now`` on the
+        user's own object is not this."""
+        ambient = ambient_call(node, self._ambient_namespace)
+        if ambient is None:
+            return False
+        helper = clock_helper_of(node, self._ambient_namespace)
+        if helper is not None:
+            # A clock helper is still the user's code: walked, so an edit
+            # to it reaches the key like any helper's.
+            self.judged_helpers.add(helper.__code__)
+            self.called_callable_nodes.append(node)
+        if id(node) in self._log_only:
+            return True  # only ever printed or logged: cannot reach a result
+        shown = ambient if ambient.endswith(")") else f"{ambient}()"
+        self._issue(
+            ISSUE_AMBIENT_READ,
+            f"{shown} - reads ambient state, which is not in the "
+            f"cache key, so the first call's value is frozen into "
+            f"every later result",
+            node,
+        )
+        return True
+
+    def _read_from_a_server(self, node: ast.Call, dotted: str, effect: Any) -> bool:
+        """A network or database read: what it returns is an input the key
+        cannot see. Not walked, but its binding is noted."""
+        if effect is None or DECORATOR_POLICY[effect.kind] is not Action.SUGGEST_TTL:
+            return False
+        self._issue(
+            ISSUE_NETWORK_READ,
+            f"{dotted}() - what the {_SOURCE[effect.kind]} returns is not in the cache key",
+            node,
+            effect_kind=effect.kind,
+        )
+        self.impure_call_nodes.append(node)
+        return True
+
+    def _known_effect(self, node: ast.Call, dotted: str, effect: Any) -> bool:
+        """A function call with an effect the decorator warns about."""
+        if (
+            effect is None
+            or effect.kind in AMBIENT_KINDS
+            or DECORATOR_POLICY[effect.kind] is not Action.WARN
+            or effect.method
+        ):
+            return False
+        what = (
+            "draws on pyplot's current figure, which a hit does not redraw"
+            if effect.kind is EffectKind.DISPLAY
+            else "known I/O / side-effecting"
+        )
+        self._issue(ISSUE_IMPURE_CALL, f"{dotted}() - {what}", node, effect_kind=effect.kind)
+        self.impure_call_nodes.append(node)
+        return True
+
+    def _reported_method(self, node: ast.Call, func_name: str, effect: Any) -> bool:
+        """A method with an effect on any receiver (``to_csv``, ``write``,
+        ``post``, ``execute``, ...), or a container mutator. Skipped when the
+        receiver is a fresh local (``lines.append`` where ``lines = []``):
+        mutating a local accumulator is pure."""
+        func = node.func
+        reported = (
+            effect is not None and effect.method and DECORATOR_POLICY[effect.kind] is Action.WARN
+        ) or func_name in MUTATOR_METHODS
+        if (
+            not isinstance(func, ast.Attribute)
+            or not reported
+            or self._receiver_is_fresh(func.value)
+            or self._is_module_function_named_like_a_mutator(func)
+        ):
+            return False
+        base = get_base_name(func.value)
+        base_str = f"{base}." if base else ""
+        what = "write method"
+        if func.attr in MUTATOR_METHODS:
+            # `rows.sort()` on a parameter changes the caller's list:
+            # say so, rather than the label a local's `.sort()` gets.
+            kind = self._mutation_kind(base, "method")
+            if kind != "method mutation":
+                what = kind
+        self._issue(
+            ISSUE_IMPURE_CALL,
+            f"{base_str}{func.attr}() - {what}",
+            node,
+            effect_kind=effect.kind if effect is not None else None,
+        )
+        return True
+
+    def _inplace_true(self, node: ast.Call) -> bool:
+        """A pandas method called with ``inplace=True`` mutates its receiver."""
+        func = node.func
+        if (
+            not isinstance(func, ast.Attribute)
+            or func.attr not in PANDAS_INPLACE_METHODS
+            or self._receiver_is_fresh(func.value)
+        ):
+            return False
+        for kw in node.keywords:
+            if kw.arg == "inplace" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                base = get_base_name(func.value)
+                base_str = f"{base}." if base else ""
+                self._issue(ISSUE_IMPURE_CALL, f"{base_str}{func.attr}(inplace=True) - in-place mutation", node)
+                return True
+        return False
+
+    #: The call rules, tried in this order; the first that returns True has
+    #: judged the call. The order is part of the verdict: a dynamic
+    #: ``getattr`` is reported before its constant form is rewritten, and an
+    #: ambient read is named before the effect table is consulted.
+    _CALL_RULES = (
+        _dynamic_execution,
+        _dynamic_getattr,
+        _dynamic_import,
+        _getattr_of_a_dynamic_builtin,
+        _constant_getattr,
+        _subscript_call,
+        _named_call,
+    )
 
     #: Container mutators (`MUTATOR_METHODS`) called on a MODULE (`np.sort`,
     #: `np.append`, `np.insert`) return a new array and change nothing --
