@@ -3,7 +3,7 @@
 A user, after two days on one notebook::
 
     Holds:      908 entries, 21.19 GiB
-    Max size:   auto -- disk 12.0 GiB, RAM 4.0 GiB
+    Max size:   RAM 4.0 GiB (auto), disk 12.0 GiB (auto)
 
 and the next morning, same directory, same machine::
 

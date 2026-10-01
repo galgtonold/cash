@@ -18,10 +18,9 @@ from cash import __version__
 from cash._console import survive_narrow_streams
 from cash._location import per_user_cache_root
 from cash.backends._base import effective_ttl, written_at
-from cash.backends.adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
 from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
-from cash.backends.factory import tier_specs
+from cash.backends.factory import tier_cap, tier_specs
 from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.config import (
@@ -174,22 +173,9 @@ def cmd_info(args: argparse.Namespace) -> None:
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached ({origins.get('disable', 'disable = true')})")
     # Resolved, not just configured: a user asking what their cache may hold
-    # needs the two numbers "auto" resolves to, and the RAM one appears
-    # nowhere else (a growing RSS is easily read as a leak).
-    if config.max_cache_size is None:
-        # Sized the way the BACKEND sizes it: from free space plus what the
-        # cache already holds. Free space alone (`resolve_disk_cap`) excludes
-        # the cache's own bytes and would show a cap lower than the one
-        # enforced, next to a "Holds" that seems to exceed it.
-        own = held[1] if held is not None else 0
-        disk = human_bytes(adaptive_disk_cap_for(cache_dir, own))
-        print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
-    else:
-        print(
-            f"  Max size:   {format_size(config.max_cache_size)} "
-            f"({config.max_cache_size:,} bytes) on disk, "
-            f"RAM {human_bytes(resolve_ram_cap())}"
-        )
+    # needs the numbers "auto" resolves to, and the RAM one appears nowhere
+    # else (a growing RSS is easily read as a leak).
+    print(f"  Max size:   {_caps_text(config)}")
     print(f"  Persist:    {PersistencePolicy.from_config(config).describe()}")
     if config.tiers:
         print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
@@ -220,6 +206,34 @@ def cmd_info(args: argparse.Namespace) -> None:
         print("  Tool caches (reach one with --tool NAME):")
         for name, path, entries, size in tools:
             print(f"    {name:<20} {entries:>5} entries  {human_bytes(size):>10}  {path}")
+
+
+#: What ``cash info`` calls each kind of tier where it lists their caps.
+_TIER_NAMES = {"memory": "RAM", "file": "disk", "sqlite": "sqlite", "redis": "redis", "s3": "s3"}
+
+
+def _caps_text(config) -> str:
+    """Each tier's byte cap, as the backend *config* describes builds it.
+
+    ``RAM 3.1 GiB (auto), disk 8.0 GiB (auto)``: one entry per tier, in
+    order, from the same `tier_cap` the factory builds with. A disk tier's
+    automatic cap counts what it already holds as room, as the running tier
+    does.
+    """
+    parts = []
+    for kind, settings in tier_specs(config):
+        resolved = dict(settings)
+        held = 0
+        if kind == "file":
+            totals = entry_totals(str(resolved["cache_dir"]))
+            held = totals[1] if totals is not None else 0
+        cap = tier_cap(kind, resolved, held)
+        name = _TIER_NAMES.get(kind, kind)
+        if cap is None:
+            parts.append(f"{name} no cap")
+        else:
+            parts.append(f"{name} {human_bytes(cap)}{' (auto)' if resolved.get('max_size_bytes') is None else ''}")
+    return ", ".join(parts)
 
 
 def _tier_text(tier) -> str:
@@ -301,12 +315,14 @@ def _function_of(key: str, metadata: dict | None = None) -> str:
 
 
 def _tier_default_ttl() -> int | None:
-    """The ``default_ttl`` of the first configured tier that has one, now."""
+    """The ``default_ttl`` of the first tier that has one, as the backend the
+    library builds here would apply it."""
     try:
-        for tier in get_config().tiers or ():
-            if getattr(tier, "default_ttl", None) is not None:
-                return int(tier.default_ttl)
-    except Exception:  # a listing must not fail over config
+        for _kind, settings in tier_specs(get_config()):
+            ttl = dict(settings).get("default_ttl")
+            if ttl is not None:
+                return int(ttl)
+    except Exception:  # noqa: BLE001 - a listing must not fail over config
         logger.debug("Could not read the tiers' default_ttl", exc_info=True)
     return None
 
@@ -511,10 +527,12 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
 
     The default view is a per-function table sorted by SIZE, because the
     question that sends anyone here is "what is filling my disk, and what can
-    I afford to drop?".
+    I afford to drop?". The total is the entries' bytes, as ``cash info``
+    reports them and the disk cap counts them (`entry_totals`).
     """
     cache_path = Path(cache_dir)
-    total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
+    totals = entry_totals(cache_dir)
+    total_size = totals[1] if totals is not None else 0
     entries = _scan_entries(cache_path)
 
     print(f"Cache directory: {cache_path.resolve()}")

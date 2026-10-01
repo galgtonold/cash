@@ -112,7 +112,7 @@ the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
 memory. `cash info` prints both numbers:
 
 ```text title="Output"
-Max size:   auto -- disk 8.0 GiB, RAM 3.1 GiB
+Max size:   RAM 3.1 GiB (auto), disk 8.0 GiB (auto)
 ```
 
 When the disk tier is full, cash evicts the entries worth least per byte
