@@ -9,7 +9,7 @@ classify, so the carrier has to be recognised by the code that made it.
 
 from cash.notebook.stateful_carriers import carrier_kind_from_producer
 from cash.notebook.upstream._types import TraceEntry
-from cash.notebook.upstream.reexecution_planner import _fills_carrier, _passes_carrier_to_a_call
+from cash.notebook.upstream.carrier_fills import fills_carrier, passes_carrier_to_a_call
 
 SIBLINGS = {"fig", "axes"}
 
@@ -19,25 +19,25 @@ def _entry(code, outputs=()):
 
 
 def test_a_call_handed_the_axes_is_a_fill():
-    assert _passes_carrier_to_a_call("tot.plot(ax=axes[0], title='t')", SIBLINGS)
-    assert _passes_carrier_to_a_call("imp.plot.barh(x='f', y='w', ax=axes, legend=False)", SIBLINGS)
-    assert _passes_carrier_to_a_call("draw_panel(axes[1], data)", SIBLINGS)
+    assert passes_carrier_to_a_call("tot.plot(ax=axes[0], title='t')", SIBLINGS)
+    assert passes_carrier_to_a_call("imp.plot.barh(x='f', y='w', ax=axes, legend=False)", SIBLINGS)
+    assert passes_carrier_to_a_call("draw_panel(axes[1], data)", SIBLINGS)
 
 
 def test_a_call_on_a_part_of_the_figure_is_a_fill():
-    assert _passes_carrier_to_a_call("axes[1].set_xlabel('week')", SIBLINGS)
-    assert _passes_carrier_to_a_call("fig.axes[0].xaxis.set_visible(False)", SIBLINGS)
+    assert passes_carrier_to_a_call("axes[1].set_xlabel('week')", SIBLINGS)
+    assert passes_carrier_to_a_call("fig.axes[0].xaxis.set_visible(False)", SIBLINGS)
 
 
 def test_unrelated_statements_are_not_fills():
     """Control: the check must not pull in the rest of the cell."""
-    assert not _passes_carrier_to_a_call("tot = weekly.groupby('week').sum()", SIBLINGS)
-    assert not _passes_carrier_to_a_call("print(len(weekly))", SIBLINGS)
-    assert not _fills_carrier(_entry("series = weekly.pivot_table(index='sku')", {"series"}), SIBLINGS)
+    assert not passes_carrier_to_a_call("tot = weekly.groupby('week').sum()", SIBLINGS)
+    assert not passes_carrier_to_a_call("print(len(weekly))", SIBLINGS)
+    assert not fills_carrier(_entry("series = weekly.pivot_table(index='sku')", {"series"}), SIBLINGS)
 
 
 def test_outputs_still_count():
-    assert _fills_carrier(_entry("axes.bar(names, totals)", {"axes"}), SIBLINGS)
+    assert fills_carrier(_entry("axes.bar(names, totals)", {"axes"}), SIBLINGS)
 
 
 def test_the_carrier_is_recognised_by_its_producer_after_a_restart():

@@ -504,7 +504,7 @@ class VirtualLineage:
             #
             # Same for a bare CALL (``tot.plot(ax=axes[0])``): it may draw on an
             # object it was handed, which only the carrier-history pass can see
-            # (``_fills_carrier``). The runtime's recorded mutation verdict
+            # (``carrier_fills.fills_carrier``). The runtime's recorded mutation verdict
             # usually gives it an output, but that record dies with the
             # kernel, so after a restart the call vanished from the trace and
             # a figure was rebuilt without it.

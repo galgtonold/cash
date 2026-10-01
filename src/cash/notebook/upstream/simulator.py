@@ -30,7 +30,7 @@ from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
 from ..tracking_state import TrackingState
-from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult
+from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
 from .cache_restore import CacheRestorer
 from .control_simulation import ControlSimulation
@@ -561,7 +561,7 @@ class NotebookSimulator:
                             p
                             for i in run
                             for v in (trace[i].inputs or ())
-                            if (p := planner.latest_producer(trace, v, before=i)) is not None
+                            if (p := latest_producer(trace, v, before=i)) is not None
                         }
                     )
                     run = planner.complete_later_producers(run, trace)
