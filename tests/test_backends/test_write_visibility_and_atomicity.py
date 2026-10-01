@@ -23,6 +23,7 @@ import time
 
 import pytest
 
+from cash.backends import file_backend
 from cash.backends._writes import PendingWrites
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 from cash.backends.file_backend import FileBackend
@@ -345,7 +346,7 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         def denied(tmp, dest):
             raise OSError("disk full")
 
-        monkeypatch.setattr(FileBackend, "_replace_with_retry", staticmethod(denied))
+        monkeypatch.setattr(file_backend, "replace_with_retry", denied)
 
         backend.set("k", "v2")
         backend._writes.wait_all()  # this write fails
@@ -440,44 +441,38 @@ class TestNewEntriesSkipTheRename:
     every cell.
     """
 
-    def test_a_new_key_is_written_without_a_temp_file(self, tmp_path):
+    def test_a_new_key_is_written_without_a_temp_file(self, tmp_path, monkeypatch):
         backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
         renames = []
-        monkey = FileBackend._replace_with_retry
+        real = file_backend.replace_with_retry
 
         def counted(tmp, dest):
             renames.append(dest)
-            return monkey(tmp, dest)
+            return real(tmp, dest)
 
-        FileBackend._replace_with_retry = staticmethod(counted)
-        try:
-            backend.set("fresh", "v1")
-            backend._writes.wait_all()
-        finally:
-            FileBackend._replace_with_retry = staticmethod(monkey)
+        monkeypatch.setattr(file_backend, "replace_with_retry", counted)
+        backend.set("fresh", "v1")
+        backend._writes.wait_all()
 
         assert backend.get("fresh")[1] == "v1"
         assert renames == [], "a brand-new entry went through a rename"
 
-    def test_an_existing_key_still_goes_through_the_rename(self, tmp_path):
+    def test_an_existing_key_still_goes_through_the_rename(self, tmp_path, monkeypatch):
         """The safety half. Overwriting is where the guarantee has teeth."""
         backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
         backend.set("k", "v1")
         backend._writes.wait_all()
 
         renames = []
-        monkey = FileBackend._replace_with_retry
+        real = file_backend.replace_with_retry
 
         def counted(tmp, dest):
             renames.append(dest)
-            return monkey(tmp, dest)
+            return real(tmp, dest)
 
-        FileBackend._replace_with_retry = staticmethod(counted)
-        try:
-            backend.set("k", "v2")
-            backend._writes.wait_all()
-        finally:
-            FileBackend._replace_with_retry = staticmethod(monkey)
+        monkeypatch.setattr(file_backend, "replace_with_retry", counted)
+        backend.set("k", "v2")
+        backend._writes.wait_all()
 
         assert backend.get("k")[1] == "v2"
         assert len(renames) == 1, (

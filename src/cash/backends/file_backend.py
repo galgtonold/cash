@@ -509,11 +509,6 @@ class FileBackend(CacheBackend):
             except Exception:
                 logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
-    @staticmethod
-    def _replace_with_retry(tmp_path: str, path: str) -> None:
-        """`cash._paths.replace_with_retry`, as a method so tests can stub it."""
-        replace_with_retry(tmp_path, path)
-
     def _atomic_write(self, path: str, payload: bytes | list) -> None:
         """Write *payload* (bytes, or a list of pieces to write in order) to
         *path* so no reader can observe a partial file.
@@ -537,7 +532,7 @@ class FileBackend(CacheBackend):
                     write_all(fd, chunk)
             finally:
                 os.close(fd)
-            self._replace_with_retry(tmp_path, path)
+            replace_with_retry(tmp_path, path)
         except BaseException:
             try:
                 os.remove(tmp_path)
