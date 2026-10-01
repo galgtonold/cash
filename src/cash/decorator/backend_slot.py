@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
 from ..backends._base import stored_ttl
 from ..backends.factory import build_backend_from_config
+from ..exceptions import CacheBackendError
 
 if TYPE_CHECKING:
     from ..backends import CacheBackend
     from ..config import CashConfig
+
+logger = logging.getLogger(__name__)
 
 
 class BackendSlot:
@@ -41,6 +45,16 @@ class BackendSlot:
     @backend.setter
     def backend(self, value: CacheBackend) -> None:
         self._backend = value
+
+    def read(self, key: str) -> tuple[Any, Any]:
+        """``backend.get(key)``, with a backend that cannot read (a server
+        down, a disk gone) answering as a miss: like a failed store, a failed
+        lookup must not fail the call, which can still compute its result."""
+        try:
+            return self.backend.get(key)
+        except CacheBackendError as exc:
+            logger.warning("cash: could not read %r from the cache, computing it instead: %s", key, exc)
+            return None, None
 
     @property
     def built(self) -> CacheBackend | None:

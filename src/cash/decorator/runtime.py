@@ -560,7 +560,7 @@ class CallRunner:
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
 
-        raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
+        raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
         hit = self._try_get_cached(
             call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
@@ -585,7 +585,7 @@ class CallRunner:
         (``CallRunner._chunks_are_intact``, ``FileDeps.auto_file_deps_fresh``) as they are added.
         One function decides whether an entry may be served.
         """
-        raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
+        raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         if raw_metadata is None:
             return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)
