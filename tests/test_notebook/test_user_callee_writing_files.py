@@ -120,3 +120,38 @@ def test_a_call_cycle_does_not_hide_a_writer():
     namespace_effects._body_cache.clear()
     assert user_callee_writing_files(ring_a) == "deep_writer"
     assert user_callee_writing_files(ring_b) == "deep_writer"
+
+
+def test_the_same_code_in_an_installed_package_is_not_read(tmp_path, monkeypatch):
+    """Code objects compare equal across files, so the verdict for a user
+    function must not answer for the same function in an installed package,
+    which cash does not look into."""
+    import importlib
+    import sys
+    import textwrap
+
+    from cash.install_paths import normcase_path
+
+    text = textwrap.dedent(
+        """
+        def dump(path):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("x")
+        """
+    )
+    names = []
+    for folder in ("project", "site"):
+        (tmp_path / folder).mkdir()
+        name = f"same_code_{folder}_{id(tmp_path)}"
+        (tmp_path / folder / f"{name}.py").write_text(text, encoding="utf-8")
+        monkeypatch.syspath_prepend(str(tmp_path / folder))
+        names.append(name)
+    user, installed = (importlib.import_module(n) for n in names)
+    for n in names:
+        monkeypatch.setitem(sys.modules, n, sys.modules[n])
+    assert user.dump.__code__ == installed.dump.__code__
+    monkeypatch.setattr(namespace_effects, "installed_roots", lambda: (normcase_path(str(tmp_path / "site")),))
+    namespace_effects._body_cache.clear()
+
+    assert user_callee_writing_files(user.dump) == "dump"
+    assert user_callee_writing_files(installed.dump) is None

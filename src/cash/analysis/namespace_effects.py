@@ -122,14 +122,17 @@ _CALLEE_LIMIT = 5_000
 #: What a statement's writer is called when cash could not follow all of it.
 _TOO_MANY_CALLEES = f"<more than {_CALLEE_LIMIT} functions to follow>"
 
-#: A function's code object -> whether its body itself replaces a file, and the
-#: callee expressions of its calls; None when cash does not look into it (an
-#: installed package's code, no source, a body that does not parse). Keyed by
-#: the code that RUNS, so a redefined function is read again. Only what the
+#: A function's file and code object -> whether its body itself replaces a
+#: file, and the callee expressions of its calls; None when cash does not look
+#: into it (an installed package's code, no source, a body that does not
+#: parse). Keyed by the code that RUNS, so a redefined function is read again,
+#: and by its file, because code objects compare equal across files: the same
+#: function in an installed package and in the user's project must not share
+#: a verdict. Only what the
 #: body says: the callees are resolved again on every question, because a
 #: name the body calls can be rebound, and a verdict memoised with the
 #: callee it had then answered for one that was no longer there.
-_body_cache: LruMemo[types.CodeType, "tuple[bool, tuple[ast.expr, ...]] | None"] = LruMemo(USER_CALLEES)
+_body_cache: LruMemo[tuple[str, types.CodeType], "tuple[bool, tuple[ast.expr, ...]] | None"] = LruMemo(USER_CALLEES)
 #: A miss in `_body_cache`, whose entries may be None.
 _NOT_SEEN = object()
 
@@ -180,10 +183,11 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, tuple[ast.expr
     if is_pure(func):
         return None
     code_obj = func.__code__
-    known = _body_cache.get(code_obj, _NOT_SEEN)
+    memo_key = (code_obj.co_filename, code_obj)
+    known = _body_cache.get(memo_key, _NOT_SEEN)
     if known is _NOT_SEEN:
         known = _read_body(func)
-        _body_cache[code_obj] = known
+        _body_cache[memo_key] = known
     if known is None:
         return None
     return func, known[0], known[1]
