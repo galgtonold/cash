@@ -17,18 +17,6 @@ from cash.notebook.control_structures.try_handler import TryHandler
 
 
 @pytest.fixture
-def mock_shell():
-    shell = MagicMock()
-    shell.user_ns = {
-        "ValueError": ValueError,
-        "KeyError": KeyError,
-        "Exception": Exception,
-        "RuntimeError": RuntimeError,
-    }
-    return shell
-
-
-@pytest.fixture
 def mock_statement_processor():
     processor = MagicMock()
     processor.process_statement = MagicMock(

@@ -25,12 +25,6 @@ class TestControlStructureProcessor:
     """Test the ControlStructureProcessor class."""
 
     @pytest.fixture
-    def mock_shell(self):
-        shell = MagicMock()
-        shell.user_ns = {}
-        return shell
-
-    @pytest.fixture
     def mock_statement_processor(self):
         return fake_statement_processor()
 
@@ -345,12 +339,6 @@ class TestOutputFlushing:
     """Test that output is flushed immediately during control structure processing."""
 
     @pytest.fixture
-    def mock_shell(self):
-        shell = MagicMock()
-        shell.user_ns = {}
-        return shell
-
-    @pytest.fixture
     def mock_statement_processor(self):
         return fake_statement_processor()
 
@@ -643,12 +631,6 @@ class TestTeeWriter:
 
 class TestSingleUnitStreamOutput:
     """Tests for stream_output in execute_as_single_unit via statement_processor.process_statement()."""
-
-    @pytest.fixture
-    def mock_shell(self):
-        shell = MagicMock()
-        shell.user_ns = {}
-        return shell
 
     @pytest.fixture
     def mock_statement_processor(self):

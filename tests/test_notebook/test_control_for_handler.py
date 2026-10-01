@@ -25,13 +25,6 @@ from tests.test_notebook._control_fakes import fake_statement_processor
 
 
 @pytest.fixture
-def mock_shell():
-    shell = MagicMock()
-    shell.user_ns = {}
-    return shell
-
-
-@pytest.fixture
 def mock_statement_processor():
     return fake_statement_processor()
 
