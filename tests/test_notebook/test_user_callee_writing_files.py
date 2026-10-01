@@ -127,6 +127,7 @@ def test_the_same_code_in_an_installed_package_is_not_read(tmp_path, monkeypatch
     function must not answer for the same function in an installed package,
     which cash does not look into."""
     import importlib
+    import os
     import sys
     import textwrap
 
@@ -150,7 +151,10 @@ def test_the_same_code_in_an_installed_package_is_not_read(tmp_path, monkeypatch
     for n in names:
         monkeypatch.setitem(sys.modules, n, sys.modules[n])
     assert user.dump.__code__ == installed.dump.__code__
-    monkeypatch.setattr(namespace_effects, "installed_roots", lambda: (normcase_path(str(tmp_path / "site")),))
+    site = normcase_path(str(tmp_path / "site"))
+    monkeypatch.setattr(
+        namespace_effects, "is_user_code_file", lambda f: not normcase_path(os.path.abspath(f)).startswith(site)
+    )
     namespace_effects._body_cache.clear()
 
     assert user_callee_writing_files(user.dump) == "dump"
