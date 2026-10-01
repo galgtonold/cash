@@ -11,8 +11,10 @@ import inspect
 import logging
 import os
 import pickle
+import re
 import sys
 import textwrap
+import threading
 import types
 import weakref
 from collections.abc import Callable
@@ -414,6 +416,46 @@ FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
 
 #: ``__spec__.origin`` of a module compiled into the interpreter or frozen
 #: into it: never the user's code, whatever its ``__name__`` says.
+def is_immutable_capture(v: Any) -> bool:
+    """True for values that are immutable and so define a closure's
+    behaviour without drifting between calls. Mutable captures (dict/list/
+    set/objects) are excluded: they are typically side-effect accumulators
+    (e.g. a hit counter) whose value changes every call - folding those into
+    the key would make every call miss. Tuples are looked through however deep
+    they nest: one cannot hold itself."""
+    if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
+        return True
+    if isinstance(v, (tuple, frozenset)):
+        return all(is_immutable_capture(x) for x in v)
+    return False
+
+
+def _defaults_pin(functions: list[Any]) -> tuple | None:
+    """The defaults of *functions*, when every one is immutable; else None."""
+    pin = []
+    for fn in functions:
+        pos = getattr(fn, "__defaults__", None) or ()
+        kwd = getattr(fn, "__kwdefaults__", None) or {}
+        if not (all(is_immutable_capture(v) for v in pos) and all(is_immutable_capture(v) for v in kwd.values())):
+            return None
+        pin.append((pos, dict(kwd)))
+    return tuple(pin)
+
+
+#: Synchronization objects (``threading.Lock()``): no result is computed
+#: from one, so a lock held as a class attribute, captured by a closure or
+#: given as a default is left out of the key.
+SYNC_TYPES: tuple[type, ...] = (
+    type(threading.Lock()),
+    type(threading.RLock()),
+    threading.Condition,
+    threading.Event,
+    threading.Semaphore,
+)
+
+#: A memory address in a repr (``<object object at 0x7f...>``).
+_ADDRESS_REPR = re.compile(r"\bat 0x[0-9a-fA-F]+")
+
 _INTERPRETER_ORIGINS = frozenset({"built-in", "frozen"})
 
 
@@ -584,7 +626,7 @@ class CodeIdentity:
         # user class or function -> code-surface digest (bytecode-based, class-
         # aware); see `code_surface_hash`. Keyed on the object itself, not
         # id(), so a redefinition (a new object) is a distinct memo entry.
-        self._code_surface_cache: LruMemo[Any, str] = LruMemo(CODE_OBJECTS)
+        self._code_surface_cache: LruMemo[Any, tuple[tuple | None, list, str]] = LruMemo(CODE_OBJECTS)
         # object -> tuple of (code object, globals dict) it carries. Static for
         # as long as that object exists (a redefinition makes a new one), so it
         # is safe to memo; the NAMES those code objects reference are resolved
@@ -964,14 +1006,11 @@ class CodeIdentity:
         is stable across processes and moves with an edit of the lambda's
         body; an address does neither.
 
-        Everything else keeps its ``repr()`` UNLESS that repr carries a memory
-        address. Only an address-bearing repr is the thing this method exists
-        to remove; a value-based ``__repr__`` -- ``Config(n=1)`` -- is
-        deterministic across processes and carries real information, and
-        discarding it was measured to serve a stale result when the value
-        changed. Collapsing to a type name is the last resort, for the case
-        where the only thing distinguishing two objects was an address that
-        changed every process: noise, never signal.
+        Everything else keeps its ``repr()`` when that repr is value-based
+        (``Config(n=1)``): deterministic across processes, and it moves with
+        the value. A repr that is only an address carries neither, so the
+        value cannot be keyed: `KeyBuildFailed`, and the call runs uncached,
+        as for an unhashable default of the cached function itself.
         """
         # However deep the containers nest: a lambda five lists down was
         # "<deep>", and editing it kept the key. *_path* (the containers
@@ -1011,22 +1050,24 @@ class CodeIdentity:
         except Exception as e:  # noqa: BLE001 - a __repr__ may raise
             logger.debug("[CORE] repr() failed while identifying %s: %s", type(v), e)
             text = ""
-        # ``0x`` is how CPython renders the address in every default repr
-        # (``<object object at 0x...>``, ``<function <lambda> at 0x...>``,
-        # ``functools.partial(<function f at 0x...>, 3)``), so its presence is
-        # the test for "this repr is not reproducible".
-        #
-        # KNOWN RESIDUAL, and it is the UNSAFE direction -- do not read the
-        # collapse below as conservative. A value-based repr that happens to
-        # carry a hex literal (``Config(mask=0xff)``) is collapsed too, so
-        # editing that value does NOT invalidate: measured, such a default
-        # serves a STALE result. Accepted because the shape is narrow, not
-        # because it is safe. Widening the test (e.g. ``0x`` only when preceded
-        # by ``at ``) would shrink it further.
-        if text and "0x" not in text:
+        # A repr with an address (``<object object at 0x...>``) is different
+        # in every process and does not move when the object's content
+        # does: nothing about the value can be keyed. A value-based repr
+        # stands for the value, a hex literal in it included.
+        if text and not _ADDRESS_REPR.search(text):
             return text
         cls = type(v)
-        return f"<{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}>"
+        if isinstance(v, SYNC_TYPES):
+            return f"<{cls.__module__}.{cls.__qualname__}>"
+        name = f"{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}"
+        raise KeyBuildFailed(
+            "KEY-UNHASHABLE-DEFAULT",
+            f"cash cannot key a {name} that code reaching the call holds as a default or constant: "
+            f"it cannot be hashed and has no value-based repr, so a change to it could not be "
+            f"seen and the call ran uncached.",
+            f"get the value out of the signature -- build it in the body or pass it as an argument -- "
+            f"or register a hasher with cash.register_hasher({cls.__qualname__}, ...).",
+        )
 
     def _code_surface_own(self, obj: Any) -> str | None:
         """A digest of the user code *obj* itself carries, or ``None``.
@@ -1071,8 +1112,9 @@ class CodeIdentity:
             cached = self._code_surface_cache.get(obj)
         except TypeError:
             cached = None
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] == _defaults_pin(cached[1]):
+            return cached[2]
+        layers: list[Any] = []
         if is_type:
             parts = self.class_surface_parts(obj)
         else:
@@ -1085,15 +1127,21 @@ class CodeIdentity:
             # function passed as an argument was keyed by its wrapper's code
             # alone, which every function that decorator wraps shares, so an
             # edit to the function itself served the old result.
-            for layer in self.user_layers(obj):
+            layers = [obj, *self.user_layers(obj)]
+            for layer in layers[1:]:
                 parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
         if not parts:
             return None
         digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
-        try:
-            self._code_surface_cache[obj] = digest
-        except TypeError:
-            pass  # unhashable object - skip the memo, keep the answer
+        # A function's defaults are rebound (`f.__defaults__ = ...`) or
+        # mutated in place on the same object: the memo holds only while
+        # every default is immutable and the containers are unchanged.
+        pin = _defaults_pin(layers)
+        if pin is not None:
+            try:
+                self._code_surface_cache[obj] = (pin, layers, digest)
+            except TypeError:
+                pass  # unhashable object - skip the memo, keep the answer
         return digest
 
     def _iter_code_and_globals(self, obj: Any):

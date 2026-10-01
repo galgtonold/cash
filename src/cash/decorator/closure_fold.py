@@ -10,7 +10,6 @@ import hashlib
 import inspect
 import pickle
 import textwrap
-import threading
 import types
 import weakref
 from collections.abc import Callable, Iterator
@@ -25,27 +24,19 @@ from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
-from .code_identity import code_fingerprint, hash_callable_source, is_user_code_object
+from .code_identity import (
+    SYNC_TYPES,
+    code_fingerprint,
+    hash_callable_source,
+    is_immutable_capture,
+    is_user_code_object,
+)
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
     from .globals_fold import GlobalsFold
     from .purity_checks import LearnedMutations
     from .reporting import Notices
-
-
-def is_immutable_capture(v: Any) -> bool:
-    """True for values that are immutable and so define a closure's
-    behaviour without drifting between calls. Mutable captures (dict/list/
-    set/objects) are excluded: they are typically side-effect accumulators
-    (e.g. a hit counter) whose value changes every call - folding those into
-    the key would make every call miss. Tuples are looked through however deep
-    they nest: one cannot hold itself."""
-    if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
-        return True
-    if isinstance(v, (tuple, frozenset)):
-        return all(is_immutable_capture(x) for x in v)
-    return False
 
 
 #: Callables that are code, not an object holding data: followed as helpers.
@@ -374,17 +365,6 @@ class CaptureAnalysis:
 
 _UNHASHABLE_CAPTURE_ERRORS = (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError)
 
-#: Captured values that hold no data a result could depend on: a closure
-#: that serialises its work with ``with guard:`` is keyed without the lock.
-#: The same types `GlobalsFold` leaves out of a class's data.
-_SYNC_TYPES: tuple[type, ...] = (
-    type(threading.Lock()),
-    type(threading.RLock()),
-    threading.Condition,
-    threading.Event,
-    threading.Semaphore,
-)
-
 
 def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyBuildFailed:
     """KEY-UNHASHABLE-CAPTURE for *fn*'s captured *name*, whose *value* the
@@ -464,7 +444,7 @@ class HelperIdentity:
                 except _UNHASHABLE_CAPTURE_ERRORS as e:
                     raise unhashable_capture(fn, name, value, e) from e
                 continue
-            if isinstance(value, _SYNC_TYPES):
+            if isinstance(value, SYNC_TYPES):
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
@@ -721,7 +701,7 @@ class ClosureFold:
 
             if is_immutable_capture(v):
                 captures.append((name, v))
-            elif isinstance(v, _SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
+            elif isinstance(v, SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
                 # A lock holds no data. A class, an ``lru_cache`` wrapper or
                 # another callable is code, followed by the helper walk.
                 continue

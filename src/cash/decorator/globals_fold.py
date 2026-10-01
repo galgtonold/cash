@@ -12,7 +12,6 @@ import inspect
 import pickle
 import sys
 import textwrap
-import threading
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -38,6 +37,7 @@ from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
 from .code_identity import (
+    SYNC_TYPES,
     hash_callable_source,
     is_user_class,
     is_user_code_object,
@@ -345,17 +345,6 @@ CLASSES_FOLDED: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar
 #: were hashed once more, as duplicates -- 200us of a hit on a function that
 #: builds two small classes. None outside a key build.
 READS_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_reads_folded", default=None)
-
-#: Synchronization objects kept on a class (`_lock = threading.Lock()`): no
-#: result is computed from them, so one that cannot be hashed is left out of
-#: the class's data without a warning.
-_SYNC_TYPES: tuple[type, ...] = (
-    type(threading.Lock()),
-    type(threading.RLock()),
-    threading.Condition,
-    threading.Event,
-    threading.Semaphore,
-)
 
 
 def is_user_data_class(cls: Any, own_pkg: str | None = None) -> bool:
@@ -1553,7 +1542,7 @@ class GlobalsFold:
                         (stabilize_for_global_hash(value, self.data_callable_identity),), {}
                     )
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                    if not isinstance(value, _SYNC_TYPES):
+                    if not isinstance(value, SYNC_TYPES):
                         unhashable.append(label)
             if not kept:
                 return None, unhashable
