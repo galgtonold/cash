@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextvars
 import enum
-import functools
 import hashlib
 import inspect
 import pickle
@@ -15,16 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import (
-    REPORTED_METHODS,
     PurityReport,
-    callable_layers,
     get_analyzer,
-    is_mock,
-    own_code_is_user,
     resolve_binding,
     resolve_local_import,
 )
-from ..dependency_state import SysModulesHelperResolver, ledger_note
+from ..dependency_state import ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_module
@@ -32,57 +27,27 @@ from ..value_types import CODELESS_PRIMS
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import iter_code_scopes
-from .function_identity import hash_callable_source
 from .global_reads import DOCSTRING_READS, MACHINERY_DUNDERS, bytecode_written_attrs
+from .global_values import UNHASHABLE_GLOBAL_FIX
 from .key_values import (
     SYNC_TYPES,
     carried_payload,
-    held_partials,
     is_immutable_capture,
     iter_contained,
     plain_data_kind,
-    reduced_state,
     stabilize_for_global_hash,
 )
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
-    from ..dependency_state import DependencyStateHasher
     from .arg_hashing import ArgHasher
-    from .closure_fold import HelperIdentity
     from .code_args import CodeArgs
     from .code_surface import CodeSurface
     from .global_reads import GlobalReads
+    from .global_values import GlobalValues
     from .purity_checks import LearnedMutations
     from .registry import FunctionRegistry
     from .reporting import Notices
-
-# Two fix lines are shared by more than one emit site, because more than one
-# site tells the same story: a global whose value cannot be hashed is one
-# problem reached through two channels (a function's own globals and a
-# helper's), and a refused write is one problem whether the value went whole or
-# as a chunked manifest. Sharing the text is what keeps the two halves of each
-# pair from drifting into two different pieces of advice for one doc section.
-UNHASHABLE_GLOBAL_FIX = (
-    "register a hasher for its type with cash.register_hasher, or read the "
-    "part the result actually depends on -- a URL, a connection string -- "
-    "instead of the live object."
-)
-
-
-LOG_METHOD_NAMES = frozenset(
-    {
-        "debug",
-        "info",
-        "warning",
-        "warn",
-        "error",
-        "exception",
-        "critical",
-        "log",
-    }
-)
-
 
 #: The classes `GlobalsFold.class_parts` has folded during one key build, by
 #: id. A class's methods can read a global instance of that same class, and
@@ -228,25 +193,19 @@ class GlobalsFold:
         self,
         args: ArgHasher,
         reads: GlobalReads,
+        values: GlobalValues,
         code: CodeSurface,
-        helpers: HelperIdentity,
         registry: FunctionRegistry,
-        state_hasher: DependencyStateHasher,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
         self._args = args
         self._reads = reads
+        self._values = values
         self._code = code
-        self._helpers = helpers
         self._registry = registry
-        self._state_hasher = state_hasher
         self._mutations = mutations
         self._notices = notices
-        # The same live re-resolution the state hasher does, for functions
-        # found inside data globals (`data_callable_identity`).
-        self._data_helper_resolver = SysModulesHelperResolver(helpers.identity)
-        self._carrier_verdicts: LruMemo[int, tuple[Any, bool | str]] = LruMemo(CODE_OBJECTS)
         # class -> (its surface functions, the names their code reads); see
         # `class_parts`. A redefined class is a new key.
         self._class_code_cache: LruMemo[type, tuple[tuple, frozenset]] = LruMemo(CODE_OBJECTS)
@@ -255,9 +214,6 @@ class GlobalsFold:
         self._class_data_memo: LruMemo[type, tuple[tuple, str]] = LruMemo(CODE_OBJECTS)
         # class -> its user bases and their data names; see `_class_layout`.
         self._class_layout_cache: LruMemo[type, tuple] = LruMemo(CODE_OBJECTS)
-        # id(value) -> (value, digest) for immutable plain data globals; see
-        # `global_value_digest`. The value is held, so its id is not reused.
-        self._immutable_digests: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
@@ -296,42 +252,6 @@ class GlobalsFold:
         for dep in self._registry.graph.get_dependencies(func_name):
             found |= self._environment_reads(dep, visited)
         return found
-
-    def data_callable_identity(self, fn: Any) -> str:
-        """A callable found INSIDE a data global, identified by what calling it runs.
-
-        A registry -- ``STEPS = {"load": load_step}`` read by a cached
-        ``run(name)`` that calls ``STEPS[name](x)`` -- runs each step's helpers
-        too, so each function's own source is not enough, and a cached
-        function stored there is not cash's wrapper code. A
-        cached function counts as its dependency state, the same
-        as a call to it would; a plain function of the user's as its source
-        plus its helpers, re-resolved live like any helper's.
-        """
-        if is_cash_wrapper(fn) and not is_mock(fn):
-            state = getattr(fn, "_cash_state", None)
-            if state is not None:
-                # Its whole state, globals and environment included, built by
-                # the instance that owns it: the dependency state alone left
-                # out the globals it reads, and one on another instance was
-                # not in this registry at all.
-                return "cached:" + state()
-            fn = getattr(fn, "__wrapped__", fn)
-        if not isinstance(fn, types.FunctionType):
-            return hash_callable_source(fn)
-        own = self._helpers.identity(fn)
-
-        if not own_code_is_user(fn, getattr(fn, "__module__", None)):
-            return own
-        try:
-            report = get_analyzer().analyze(fn)
-        except (OSError, TypeError, SyntaxError, RecursionError):
-            return own
-        if not report.helper_source_hashes:
-            return own
-        live = self._data_helper_resolver.current_hashes(report)
-        helpers = ",".join(f"{q}={live.get(q, h)}" for q, h in sorted(report.helper_source_hashes.items()))
-        return hashlib.sha256(f"{own}|{helpers}".encode("utf-8")).hexdigest()
 
     def fold_read_globals(
         self,
@@ -452,7 +372,7 @@ class GlobalsFold:
             if isinstance(v, types.ModuleType):
                 continue
             if callable(v) and not isinstance(v, (dict, list, tuple, set)):
-                carried = self.carried_global_hash(v, root_module)
+                carried = self._values.carried_global_hash(v, root_module)
                 if carried is not None:
                     parts.append((f"{name}#carried", carried))
                     watch[name] = (carried, "carrier", (g, name), None)
@@ -466,7 +386,7 @@ class GlobalsFold:
                     continue
             plain = plain_data_kind(v)
             try:
-                h = self.global_value_digest(v, plain)
+                h = self._values.global_value_digest(v, plain)
                 parts.append((name, h))
                 # Free: this is the hash the key already needed. Keeping it is
                 # what makes the post-call check cost one hash instead of two.
@@ -565,31 +485,6 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
-
-    def global_value_digest(self, value: Any, plain: str | None = None) -> str:
-        """The digest a data global's *value* is keyed by, and checked against
-        after the call (`PurityChecks`). *plain* is `plain_data_kind` of it.
-
-        Plain data is hashed as it is: it holds no callable for
-        `stabilize_for_global_hash` to replace. Immutable plain data -- a
-        number, a string, a tuple of them -- cannot change, so its digest is
-        kept while the global holds that same object: a module constant read
-        on every hit cost a full hash each time.
-        """
-        if plain is None:
-            return self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {})
-        args = self._args
-        memo = plain == "immutable" and not (args.override_hashers or args.type_hashers)
-        if memo:
-            entry = self._immutable_digests.get(id(value))
-            if entry is not None and entry[0] is value:
-                return entry[1]
-        digest = args.plain_value_digest(value)
-        if digest is None:
-            digest = args.hash_payload((value,), {})
-        if memo:
-            self._immutable_digests[id(value)] = (value, digest)
-        return digest
 
     def _docstring_parts(self, code: Any, g: dict, own_pkg: str | None) -> list[tuple[str, str]]:
         """Key parts for the docstrings code that reads docstrings can reach.
@@ -769,7 +664,7 @@ class GlobalsFold:
             live = resolve_binding(module_name, chain)
             if live is func:
                 continue
-            digest = self.carried_state_digest(live)
+            digest = self._values.carried_state_digest(live)
             if digest is not None:
                 carried.append(f"{label}={digest}")
                 watch[label] = (digest, "binding", (module_name, chain), None)
@@ -1001,7 +896,7 @@ class GlobalsFold:
         unhashable: list[str] = []
         try:
             stabilized = {
-                label: stabilize_for_global_hash(value, self.data_callable_identity) for label, value in items
+                label: stabilize_for_global_hash(value, self._values.data_callable_identity) for label, value in items
             }
             digest = self._args.hash_payload((stabilized,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
@@ -1009,7 +904,7 @@ class GlobalsFold:
             for label, value in items:
                 try:
                     kept[label] = self._args.hash_payload(
-                        (stabilize_for_global_hash(value, self.data_callable_identity),), {}
+                        (stabilize_for_global_hash(value, self._values.data_callable_identity),), {}
                     )
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                     if not isinstance(value, SYNC_TYPES):
@@ -1052,111 +947,6 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:classes:{payload}".encode("utf-8")).hexdigest()
-
-    def carried_state_digest(self, value: Any) -> str | None:
-        """Digest of the data a callable carries besides its code, or None.
-
-        See `carried_payload`. Silent on failure: the code is still keyed,
-        and a warning here would fire on every class-based decorator whose
-        state is just the function it wraps.
-        """
-        payload = carried_payload(value)
-        if payload is None:
-            return None
-        try:
-            stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
-            return self._args.hash_payload((stabilized,), {})
-        except Exception:  # noqa: BLE001 - never break a call over this
-            return None
-
-    def carried_global_hash(self, value: Any, root_module: str | None) -> str | None:
-        """Hash of the data a LIBRARY-made callable carries, or None.
-
-        ``SMOOTH = partial(ndimage.gaussian_filter, sigma=SIGMA)``, ``POLY =
-        np.poly1d(COEFFS)``, ``CAL = interp1d(X, Y)``, ``LOOKUP = RATES.get``:
-        the code is a library's, so the helper walk does not follow it, and
-        what it was built with reached no channel -- editing SIGMA served the
-        old result. The same partial passed as an argument was
-        keyed all along.
-
-        None for what another channel keys or what carries no data: a
-        function, a class, a module, a mock, a cached function, a method of a
-        class or module, a C object without a ``__dict__`` (``np.add``), and
-        any callable that runs USER code, whose binding the helper walk notes
-        and `carried_state_digest` keys.
-
-        Some of these change when called -- a bound ``rng.normal`` advances
-        its generator, ``np.vectorize`` fills a cache -- so every one is
-        watched by `PurityChecks.learn_mutating_captures`, which stops folding it after
-        the first call that moved it (one extra miss, no warning: the user
-        did not write the mutation).
-        """
-        if isinstance(value, (type, types.ModuleType, types.FunctionType)) or is_mock(value):
-            return None
-        # Whether it runs user code, and whether it could be hashed at all,
-        # are decided once per object: the user-code test resolves file paths,
-        # which cost more than the hash (a logger's `.info` hit went 45 -> 250
-        # microseconds without this).
-        verdict = self._carrier_verdicts.get(id(value))
-        if verdict is not None and verdict[0] is value and not verdict[1]:
-            return None
-        try:
-            if is_cash_wrapper(value):
-                return None
-            if isinstance(value, functools.partial):
-                payload: Any = ("partial", value.func, value.args, dict(value.keywords))
-            elif isinstance(value, (types.MethodType, types.BuiltinMethodType)):
-                owner = getattr(value, "__self__", None)
-                if owner is None or isinstance(owner, (type, types.ModuleType)):
-                    return None
-                method = getattr(value, "__name__", "")
-
-                if method in REPORTED_METHODS or method in LOG_METHOD_NAMES:
-                    # `record = RESULTS.append`, `log = logger.info`: what the
-                    # owner holds is the call's OUTPUT, not an input.
-                    return None
-                payload = ("method", method, owner)
-            else:
-                state = getattr(value, "__dict__", None)
-                cls = type(value)
-                if isinstance(state, dict) and state:
-                    payload = ("instance", cls.__module__, cls.__qualname__, state)
-                else:
-                    # A C callable keeps what it was built with where only
-                    # `__reduce__` reaches it: `operator.itemgetter("n")`,
-                    # `attrgetter`, `methodcaller` -- changing the sort key
-                    # served the mis-sorted report. A reduce that
-                    # is just a global name (`np.add`, `len`) carries no data.
-                    reduced = reduced_state(value)
-                    if reduced is None:
-                        return None
-                    payload = ("reduce", cls.__module__, cls.__qualname__, reduced)
-            if verdict is None:
-                runs_user_code = any(own_code_is_user(layer, root_module) for layer in callable_layers(value))
-                if runs_user_code:
-                    # Its code is the helper walk's. What a LIBRARY wrapper
-                    # around that code holds besides is still data the user
-                    # built it with: `np.vectorize(partial(scale, k=K))` ran
-                    # with the old K. Only the partials: the
-                    # wrapper's own caches move when it is called.
-                    held = held_partials(value)
-                    self._note_carrier_verdict(value, "partials" if held else False)
-                    if not held:
-                        return None
-                    payload = ("wrapped partials", held)
-                else:
-                    self._note_carrier_verdict(value, True)
-            elif verdict[1] == "partials":
-                payload = ("wrapped partials", held_partials(value))
-            stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
-            return self._args.hash_payload((stabilized,), {})
-        except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
-            self._note_carrier_verdict(value, False)
-            return None
-
-    def _note_carrier_verdict(self, value: Any, keyable: bool | str) -> None:
-        # Holds the object, so its id cannot be reused while the entry stands.
-        self._carrier_verdicts[id(value)] = (value, keyable)
 
     def fold_dependency_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold the globals the CACHED functions this one calls read.
@@ -1277,7 +1067,7 @@ class GlobalsFold:
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 return  # code: the helper walk follows it
             try:
-                stabilized = stabilize_for_global_hash(value, self.data_callable_identity)
+                stabilized = stabilize_for_global_hash(value, self._values.data_callable_identity)
                 parts.append((label, self._args.hash_payload((stabilized,), {})))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 pass
@@ -1323,7 +1113,7 @@ class GlobalsFold:
         handled by the helper channel, the others carry no editable value) --
         except what a library-made callable was built with (``conf.SMOOTH =
         partial(gaussian_filter, sigma=...)``), which is folded when *watch*
-        is given, so the drift guard can see it too (`GlobalsFold.carried_global_hash`).
+        is given, so the drift guard can see it too (`GlobalValues.carried_global_hash`).
         *learned* is the drift guard's verdict: labels not to fold. A user
         class read as ``module.Class`` (and an instance's class) is folded by
         `GlobalsFold.class_parts`, *owner_code* and *seen* as there.
@@ -1379,7 +1169,7 @@ class GlobalsFold:
                 if not is_mod:
                     continue
                 if watch is not None and label not in learned:
-                    carried = self.carried_global_hash(value, getattr(func, "__module__", None))
+                    carried = self._values.carried_global_hash(value, getattr(func, "__module__", None))
                     if carried is not None:
                         parts.append((f"{label}#carried", carried))
                         watch[label] = (carried, "carrier", (vars(obj), attr), None)
@@ -1401,11 +1191,11 @@ class GlobalsFold:
                         continue
                     if callable(iv) and not isinstance(iv, (dict, list, tuple, set)):
                         continue
-                    h = self.safe_global_hash(iv, func_name, f"{label}.{inner}")
+                    h = self._values.safe_global_hash(iv, func_name, f"{label}.{inner}")
                     if h is not None:
                         parts.append((f"{label}.{inner}", h))
                 continue
-            h = self.safe_global_hash(value, func_name, label)
+            h = self._values.safe_global_hash(value, func_name, label)
             if h is not None:
                 parts.append((label, h))
         return parts
@@ -1420,22 +1210,5 @@ class GlobalsFold:
             callable(value) and not isinstance(value, (dict, list, tuple, set))
         ):
             return []
-        h = self.safe_global_hash(value, func_name, f"{name}.{attr}")
+        h = self._values.safe_global_hash(value, func_name, f"{name}.{attr}")
         return [(f"{name}.{attr}", h)] if h is not None else []
-
-    def safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
-        """Hash *value* for the key, warning once and skipping if it cannot be."""
-        try:
-            stabilized = stabilize_for_global_hash(value, self.data_callable_identity)
-            return self._args.hash_payload((stabilized,), {})
-        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-            self._notices.warn_once(
-                CashImpurityWarning,
-                func_name,
-                label,
-                f"@cash.cache on {func_name}: reads '{label}' whose value could not "
-                f"be hashed, so changes to it will NOT invalidate the cache.",
-                code="KEY-UNHASHABLE-GLOBAL",
-                fix=UNHASHABLE_GLOBAL_FIX,
-            )
-            return None

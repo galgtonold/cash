@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
     from .frozen import FrozenResults
     from .global_reads import GlobalReads
+    from .global_values import GlobalValues
     from .globals_fold import GlobalsFold
     from .registry import FunctionRegistry
     from .reporting import Notices
@@ -253,6 +254,7 @@ class PurityChecks:
         frozen: FrozenResults,
         globals_fold: GlobalsFold,
         reads: GlobalReads,
+        values: GlobalValues,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
@@ -262,6 +264,7 @@ class PurityChecks:
         self._frozen = frozen
         self._globals = globals_fold
         self._reads = reads
+        self._values = values
         self._mutations = mutations
         self._notices = notices
         # Functions the STATIC pass already reported on. The runtime effect
@@ -401,9 +404,9 @@ class PurityChecks:
                     mapping, key = owner
                     if key not in mapping:
                         continue
-                    after = self._globals.carried_global_hash(mapping[key], getattr(func, "__module__", None))
+                    after = self._values.carried_global_hash(mapping[key], getattr(func, "__module__", None))
                 elif scope == "binding":
-                    after = self._globals.carried_state_digest(resolve_binding(*owner))
+                    after = self._values.carried_state_digest(resolve_binding(*owner))
                 elif scope == "classdata":
                     after = self._globals.class_data_digest(*owner)[0]
                 else:
@@ -413,7 +416,7 @@ class PurityChecks:
                     if not isinstance(g, dict) or name not in g:
                         continue
                     value = g[name]
-                    after = self._globals.global_value_digest(value, plain_data_kind(value))
+                    after = self._values.global_value_digest(value, plain_data_kind(value))
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
             if after == before:

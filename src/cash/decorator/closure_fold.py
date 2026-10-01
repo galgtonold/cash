@@ -30,6 +30,7 @@ from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
+    from .global_values import GlobalValues
     from .globals_fold import GlobalsFold
     from .purity_checks import LearnedMutations
     from .reporting import Notices
@@ -560,6 +561,7 @@ class ClosureFold:
         captures: CaptureAnalysis,
         helpers: HelperIdentity,
         globals_fold: GlobalsFold,
+        values: GlobalValues,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
@@ -567,6 +569,7 @@ class ClosureFold:
         self._captures = captures
         self._helpers = helpers
         self._globals = globals_fold
+        self._values = values
         self._mutations = mutations
         self._notices = notices
         # function object -> digest of its parameter defaults, for defaults that
@@ -632,12 +635,12 @@ class ClosureFold:
             if is_cash_wrapper(v):
                 # A captured CACHED function is what it computes: its
                 # dependency state, as a registry holding one counts it
-                # (`GlobalsFold.data_callable_identity`). Not cash's wrapper
+                # (`GlobalValues.data_callable_identity`). Not cash's wrapper
                 # around it, whose closure holds this Cash instance and the
                 # function's spec, backend and all: none of that is an
                 # input, and the backend's dicts change under the write
                 # thread while a key is built.
-                captures.append((name, self._globals.data_callable_identity(v)))
+                captures.append((name, self._values.data_callable_identity(v)))
                 continue
             # A captured FUNCTION is its code, so fold its source. Reaching
             # this before the `unsafe` check is the point: a capture the body

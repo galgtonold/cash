@@ -59,6 +59,7 @@ from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
 from .decorator.function_identity import OwnSourcePins, func_key, hash_callable_source
 from .decorator.global_reads import GlobalReads
+from .decorator.global_values import GlobalValues
 from .decorator.globals_fold import GlobalsFold
 from .decorator.method_deps import MethodClassDeps
 from .decorator.purity_checks import LearnedMutations, PurityChecks
@@ -378,20 +379,14 @@ class Cash:
             reached_callee=self._registry.reached_callee,
         )
         self._reads = GlobalReads()
+        self._values = GlobalValues(self._args, self._helpers, self._notices)
         self._globals = GlobalsFold(
-            self._args,
-            self._reads,
-            self._code,
-            self._helpers,
-            self._registry,
-            self._state_hasher,
-            self._mutations,
-            self._notices,
+            self._args, self._reads, self._values, self._code, self._registry, self._mutations, self._notices
         )
         self._closures = ClosureFold(
-            self._args, self._captures, self._helpers, self._globals, self._mutations, self._notices
+            self._args, self._captures, self._helpers, self._globals, self._values, self._mutations, self._notices
         )
-        self._code_args = CodeArgs(self._code, self._globals, self._frozen, self._args)
+        self._code_args = CodeArgs(self._code, self._globals, self._values, self._frozen, self._args)
         self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
         self._files = FileDeps(self._registry, self._notices)
         self._purity = PurityChecks(
@@ -401,6 +396,7 @@ class Cash:
             self._frozen,
             self._globals,
             self._reads,
+            self._values,
             self._mutations,
             self._notices,
         )

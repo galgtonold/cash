@@ -35,7 +35,7 @@ def cash_wrapped(value: Any) -> Any:
 
     A wrapper's code is cash's, never part of a key: a code channel that
     meets one keys the function it wraps, and a data channel keys its state
-    (`GlobalsFold.data_callable_identity`).
+    (`GlobalValues.data_callable_identity`).
     """
     return getattr(value, "__wrapped__", value) if is_cash_wrapper(value) else value
 

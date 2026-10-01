@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
     from .code_surface import CodeSurface
     from .frozen import FrozenResults
+    from .global_values import GlobalValues
     from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,14 @@ class CodeArgs:
     """The user code an argument carries -- a class, a function, an instance
     of the user's own class -- folded into the state segment."""
 
-    def __init__(self, code: CodeSurface, globals_fold: GlobalsFold, frozen: FrozenResults, args: ArgHasher) -> None:
+    def __init__(
+        self,
+        code: CodeSurface,
+        globals_fold: GlobalsFold,
+        values: GlobalValues,
+        frozen: FrozenResults,
+        args: ArgHasher,
+    ) -> None:
         self._code = code
         # A value a registered hasher keys (`ArgHasher.keys_by_registration`)
         # is not searched: the user has said what identifies it. The two
@@ -129,6 +137,7 @@ class CodeArgs:
         self._args = args
         self._registries = (args.override_hashers, args.type_hashers)
         self._globals = globals_fold
+        self._values = values
         self._frozen = frozen
         # A data global carries code the same way an argument does
         # (`GlobalsFold.fold_read_globals`), and folds it through this walk.
@@ -575,7 +584,7 @@ class CodeArgs:
                 # wrapper is cash's code, and the globals that code reads are
                 # cash's own -- a constant key part, and a false
                 # KEY-UNHASHABLE-GLOBAL naming them.
-                parts.append(f"cached:{carrier_name(cached)}:{self._globals.data_callable_identity(cached)}")
+                parts.append(f"cached:{carrier_name(cached)}:{self._values.data_callable_identity(cached)}")
                 continue
             if is_opaque(carrier):
                 continue
