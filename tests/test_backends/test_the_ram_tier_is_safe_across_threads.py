@@ -23,7 +23,7 @@ def _hammer(backend: InMemoryBackend, threads: int = 6, rounds: int = 800) -> li
                 backend.get(f"{(t + 1) % threads}-{i % 300}")
                 if i % 50 == 0:
                     backend.list_entries()
-        except Exception as exc:  # noqa: BLE001 - collected for the assertion
+        except Exception as exc:  # collected for the assertion
             errors.append(repr(exc))
 
     old = sys.getswitchinterval()

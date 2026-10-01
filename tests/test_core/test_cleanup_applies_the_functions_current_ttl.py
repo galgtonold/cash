@@ -26,7 +26,7 @@ def test_lowering_a_functions_ttl_lets_cleanup_remove_its_entries():
     assert c.cleanup() == 0, "control: under ttl=1000 the entry is fresh"
 
     @c.cache(ttl=10)
-    def f(x):  # noqa: F811 - the same function with a lower ttl
+    def f(x):  # the same function, with a lower ttl
         return x + 1
 
     assert c.cleanup() == 1

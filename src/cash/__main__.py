@@ -324,7 +324,7 @@ def _tier_default_ttl() -> int | None:
             ttl = dict(settings).get("default_ttl")
             if ttl is not None:
                 return int(ttl)
-    except Exception:  # noqa: BLE001 - a listing must not fail over config
+    except Exception:  # a listing must not fail over config
         logger.debug("Could not read the tiers' default_ttl", exc_info=True)
     return None
 
