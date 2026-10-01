@@ -47,7 +47,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from .._memo import MODULE_ANALYSES, MODULE_READ_DIGESTS, LruMemo
-from ..source_norm import read_code_text, stat_has_settled, unparse_without_docstrings
+from ..source_norm import unparse_without_docstrings
+from ..source_reading import read_code_text, stat_has_settled
 
 __all__ = ["closure_digest", "static_attribute_reads"]
 

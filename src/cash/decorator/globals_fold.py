@@ -31,7 +31,7 @@ from ..analysis.purity_analyzer import (
 from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
-from ..source_norm import getsource, own_source
+from ..source_reading import getsource, own_source
 from ..value_types import CODELESS_PRIMS, IMMUTABLE_LEAF_TYPES
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed

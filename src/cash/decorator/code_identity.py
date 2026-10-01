@@ -34,13 +34,13 @@ from ..source_norm import (
     callable_identity,
     code_consts_without_docstring,
     compiled_identity,
-    getsource,
     loaded_class_identity,
     loaded_code_matches_disk,
     own_source_digest,
     source_digest,
     unwrap_partials,
 )
+from ..source_reading import getsource
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
 

@@ -82,6 +82,8 @@ src/cash/
 ├── mutation_fingerprint.py # a digest that moves on an in-place edit
 ├── source_norm.py      # normalises source before hashing (comments,
 │                       #   blank lines)
+├── source_reading.py   # reads source files and source lines, memoised
+│                       #   per file version
 ├── cost_model.py       # predicted serialise and restore time per
 │                       #   type and backend
 ├── effectiveness.py    # notices when caching costs more than it

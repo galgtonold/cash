@@ -535,7 +535,7 @@ class TestSourceAwareCacheInvalidation:
         assert h1 != ""
 
         # Simulate getsource failure (e.g., IPython context with %cash_on)
-        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+        with patch("cash.source_reading.inspect.getsource", side_effect=OSError):
             h2 = callable_identity(my_func)
             assert h2 != "", "Should fall back to bytecode hash"
 
@@ -543,7 +543,7 @@ class TestSourceAwareCacheInvalidation:
         def my_func2(x):
             return x + 2
 
-        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+        with patch("cash.source_reading.inspect.getsource", side_effect=OSError):
             h3 = callable_identity(my_func2)
             assert h3 != ""
             assert h3 != h2, "Different bytecodes should produce different hashes"
@@ -563,7 +563,7 @@ class TestSourceAwareCacheInvalidation:
 
         # Clear cache and simulate getsource failure
         ft._source_cache.clear()
-        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+        with patch("cash.source_reading.inspect.getsource", side_effect=OSError):
             h2 = ft.get_function_source_hash(my_func)
             assert h2 is not None, "Should fall back to bytecode hash"
 
@@ -588,7 +588,7 @@ class TestSourceAwareCacheInvalidation:
         def triple(x):
             return x * 3
 
-        with patch("cash.source_norm.inspect.getsource", side_effect=OSError):
+        with patch("cash.source_reading.inspect.getsource", side_effect=OSError):
             assert callable_identity(deco(double)) != callable_identity(deco(triple))
             assert callable_identity(deco(double)) == callable_identity(deco(double))
 

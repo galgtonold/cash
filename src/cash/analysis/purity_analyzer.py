@@ -81,16 +81,8 @@ from ..purity import (
     is_pure,
     is_stateful,
 )
-from ..source_norm import (
-    callable_identity,
-    compiled_identity,
-    extension_file_digest,
-    getsource,
-    getsourcelines,
-    own_source,
-    settled_source_version,
-    source_version_unchanged,
-)
+from ..source_norm import callable_identity, compiled_identity, extension_file_digest
+from ..source_reading import getsource, getsourcelines, own_source, settled_source_version, source_version_unchanged
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
 from .annotations import assume_safe_block_lines, audited_lines

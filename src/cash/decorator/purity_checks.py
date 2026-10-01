@@ -35,7 +35,7 @@ from ..exceptions import (
     CashImpureFunctionError,
     CashImpurityWarning,
 )
-from ..source_norm import getsource, getsourcelines
+from ..source_reading import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
 from .code_identity import func_key, is_user_module, own_package
