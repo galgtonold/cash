@@ -1,7 +1,7 @@
 """Keying an object frame by frame keeps every answer it gave when pickled whole.
 
 These pass on the pickled path too: they pin that opening objects up
-(`object_hashing.holds_content_data`) still sees every edit, still shares an entry
+(`canonical_form.holds_content_data`) still sees every edit, still shares an entry
 between equal objects, and still caches an object that reaches itself.
 The speed-up itself is pinned in test_objects_holding_frames.py.
 """

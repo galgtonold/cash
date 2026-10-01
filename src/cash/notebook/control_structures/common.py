@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ...object_hashing import compute_hash
+from ...value_hash import compute_hash
 from ...value_types import IMMUTABLE_PRIMS
 
 if TYPE_CHECKING:

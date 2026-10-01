@@ -151,7 +151,7 @@ class TestFactoryCapWiring:
         # Big free disk → disk cap ≫ 1 GiB; modest RAM → its own smaller cap.
         monkeypatch.setattr(adaptive_caps, "free_bytes_on_volume", lambda p: 500 * _GIB)
         monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 16 * _GIB)
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         backend = self._build(CashConfig(cache_dir=str(tmp_path / "c")))
         ram, disk = backend.backends[0], backend.backends[1]
@@ -165,7 +165,7 @@ class TestFactoryCapWiring:
         from cash.backends import adaptive_caps
 
         monkeypatch.setattr(adaptive_caps, "_total_system_ram", lambda: 16 * _GIB)
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         backend = self._build(CashConfig(cache_dir=str(tmp_path / "c"), max_cache_size=777_000))
         ram, disk = backend.backends[0], backend.backends[1]

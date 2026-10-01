@@ -14,9 +14,9 @@ import pytest
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from cash import object_hashing
+from cash import sizing
 from cash.backends.memory_backend import InMemoryBackend
-from cash.object_hashing import estimate_object_size, pandas_nbytes
+from cash.sizing import estimate_object_size, pandas_nbytes
 
 pytestmark = [pytest.mark.core]
 
@@ -90,12 +90,12 @@ def test_python_objects_are_sampled_not_walked(monkeypatch):
     The column repeats every 5 rows, the shape a fixed stride aliases on."""
     looked = []
     real = sys.getsizeof
-    monkeypatch.setattr(object_hashing.sys, "getsizeof", lambda o: looked.append(1) or real(o))
+    monkeypatch.setattr(sizing.sys, "getsizeof", lambda o: looked.append(1) or real(o))
     col = np.array([f"row-{i}" * (1 + i % 5) for i in range(200_000)], dtype=object)
     frame = pd.DataFrame({"s": pd.Series(col, dtype=object)})
     assert frame["s"].dtype == object
     size = pandas_nbytes(frame)
-    assert len(looked) <= object_hashing._OBJECT_SAMPLE
+    assert len(looked) <= sizing._OBJECT_SAMPLE
     exact = int(frame.memory_usage(deep=True).sum())
     assert 0.85 * exact < size < 1.15 * exact
 

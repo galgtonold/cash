@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from cash.backends import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
-from cash.config import CashConfig
+from cash.config.schema import CashConfig
 from cash.core import Cash
 from cash.file_source import FileDataSource
 

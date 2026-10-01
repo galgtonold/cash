@@ -59,8 +59,10 @@ comments next to the calls they describe.
 cell asserts the badge on its first run and, with `rerun=`, on an immediate
 second run (CACHED, EXECUTED, MIXED or SKIPPED; a bare word means `first=`).
 Put it at the top of a stack of annotations: the other readers stop at a
-comment they do not know. The docs conftest caps `time.sleep` at 1 ms, so
-assert `rerun=CACHED` only on real compute or a `# @cash:persist` statement.
+comment they do not know. The docs conftest caps `time.sleep` at twice the
+statement store floor (`min_execution_time_to_cache_seconds`), so a
+`time.sleep(...)` stand-in for slow work is still slow enough to be stored:
+a statement that sleeps that long and is cacheable reads `rerun=CACHED`.
 
 `CASH_DOCS_RERUN_NB_CELLS=1` reruns every `{ .nb-cell }` fence that is not
 only imports and definitions, and fails when the rerun reads EXECUTED. It is
@@ -141,7 +143,7 @@ what a flag does, or what is cached and what is not. Paths are relative to
 | Form | Example | Checks |
 |---|---|---|
 | Fingerprint | `cash/core.py:Cash.cache @7a77d1c5` | the symbol exists and its source is unchanged |
-| Value | `cash/config.py:CashConfig.max_cache_size == None` | the literal in the source equals the one written |
+| Value | `cash/config/schema.py:CashConfig.max_cache_size == None` | the literal in the source equals the one written |
 | Existence | `cash/backends/redis.py:RedisBackend` | the symbol exists |
 
 Use a value anchor when the sentence quotes a constant. Write a fingerprint

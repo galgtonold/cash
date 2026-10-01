@@ -12,8 +12,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from ..config import human_bytes
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..units import human_bytes
 
 try:
     import pandas as pd

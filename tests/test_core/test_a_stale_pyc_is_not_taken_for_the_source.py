@@ -17,8 +17,8 @@ import uuid
 
 import pytest
 
-from cash import source_norm
-from cash.source_norm import loaded_code_matches_disk
+from cash import loaded_code, process_start
+from cash.loaded_code import loaded_code_matches_disk
 
 OLD = "def f(rows):\n    return sum(rows)\n"
 NEW = "def f(rows):\n    return max(rows)\n"
@@ -51,7 +51,7 @@ def _import(name):
 
 def loaded_module_matches_disk(module):
     # Imported here so the file collects against a tree without it.
-    from cash.source_norm import loaded_module_matches_disk as check
+    from cash.loaded_code import loaded_module_matches_disk as check
 
     return check(module)
 
@@ -92,7 +92,7 @@ def test_a_module_compiled_from_its_source_matches_its_file(helper):
 def test_a_function_loaded_from_a_stale_pyc_is_not_proven_by_its_header(helper, monkeypatch):
     """The decorator's check: both files predate the process, and the header
     matches -- which a same-second, same-size edit keeps."""
-    monkeypatch.setattr(source_norm, "_PROCESS_START", time.time() + 60)
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
     module = _stale(*helper)
     assert loaded_code_matches_disk(module.f) is False
 
@@ -105,11 +105,11 @@ def test_a_pyc_written_after_the_source_settled_is_still_proof(helper, monkeypat
     os.utime(path, (old, old))
     _compile(path)
     module = _import(name)
-    monkeypatch.setattr(source_norm, "_PROCESS_START", time.time() + 60)
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
 
     def no_compile(_path):
         raise AssertionError("the header was proof, and the file was compiled anyway")
 
-    monkeypatch.setattr(source_norm, "_compiled_module", no_compile)
+    monkeypatch.setattr(loaded_code, "_compiled_module", no_compile)
     assert loaded_code_matches_disk(module.f) is True
     assert loaded_module_matches_disk(module) is True

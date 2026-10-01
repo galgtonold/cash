@@ -11,8 +11,8 @@ import linecache
 import sys
 import types
 
+from cash.analysis.helper_code import own_code_is_user
 from cash.analysis.namespace_effects import user_callee_writing_files
-from cash.analysis.purity_analyzer import own_code_is_user
 from cash.decorator.code_identity import is_user_class
 from cash.install_paths import clear_caches
 

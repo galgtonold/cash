@@ -139,7 +139,7 @@ def test_a_module_used_the_moment_it_is_written_is_still_its_code(nb_runner, tmp
     """The same, with the module written by the cell before the one that uses it.
 
     For two seconds after a write cash does not memoise what it read from a
-    file (``source_norm.stat_has_settled``), so building the key re-reads the
+    file (``source_reading.stat_has_settled``), so building the key re-reads the
     module. It did that with plain ``open``, inside the running statement, and
     the statement's own file tracker recorded the module as a data file it
     read: the comment added below changed the bytes and the call re-ran. The

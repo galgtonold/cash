@@ -435,7 +435,7 @@ class TestSizeAwareEdgeCases:
 
     def test_estimate_object_size_basic_types(self):
         """estimate_object_size should handle basic Python types."""
-        from cash.object_hashing import estimate_object_size
+        from cash.sizing import estimate_object_size
 
         # Small objects
         assert estimate_object_size(42) < 10000
@@ -448,7 +448,7 @@ class TestSizeAwareEdgeCases:
 
     def test_estimate_object_size_none(self):
         """estimate_object_size should handle None."""
-        from cash.object_hashing import estimate_object_size
+        from cash.sizing import estimate_object_size
 
         assert estimate_object_size(None) >= 0
 

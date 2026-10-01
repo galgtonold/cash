@@ -9,7 +9,7 @@ a driver and recompute everything you already had.
 
 Two places had to agree, which is what made the first attempt only half work.
 ``Cash.get_func_key`` names the entry, and the purity analyzer's
-``_qualname_of`` names each helper in ``helper_source_hashes``, which is folded
+``qualname_of`` names each helper in ``helper_source_hashes``, which is folded
 into the state hash as ``helper:{qual}:{digest}``. Normalising one left the
 function name matching and the state hash not, so the entry still missed --
 with byte-identical digests either side. ``test_the_state_hash_agrees_too``

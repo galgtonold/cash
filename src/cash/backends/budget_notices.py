@@ -26,8 +26,8 @@ import os
 import threading
 from typing import NamedTuple
 
-from ..config import format_size, human_bytes
 from ..effectiveness import CUMULATIVE_WASTE_SECONDS
+from ..units import format_size, human_bytes
 
 __all__ = [
     "EVICTED_RECOMPUTE_WARN_SECONDS",

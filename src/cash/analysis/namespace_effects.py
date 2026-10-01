@@ -24,7 +24,7 @@ from ..effects import is_open_write_mode
 from ..exceptions import CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
 from ..purity import is_pure
-from ..source_norm import getsource
+from ..source_reading import getsource
 from .ast_util import resolve_callee
 from .file_effects import (
     READ_TEXT_MARKERS,

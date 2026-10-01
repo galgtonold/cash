@@ -17,7 +17,8 @@ from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.cacheability_decision import identity_coupled_reason
-from ..analysis.purity_analyzer import (
+from ..analysis.helper_bindings import resolve_binding
+from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_MUTABLE_GLOBAL,
@@ -25,7 +26,6 @@ from ..analysis.purity_analyzer import (
     ISSUE_UNTRACKABLE_DEP,
     PurityIssue,
     PurityReport,
-    resolve_binding,
 )
 from ..effect_observer import EffectObserver, observed_label
 from ..effects import EffectKind
@@ -35,14 +35,14 @@ from ..exceptions import (
     CashImpureFunctionError,
     CashImpurityWarning,
 )
-from ..source_norm import getsource, getsourcelines
+from ..source_reading import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
 from .code_identity import func_key, is_user_module, own_package
 from .globals_fold import plain_data_kind
 
 if TYPE_CHECKING:
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from .arg_hashing import ArgHasher
     from .frozen import FrozenResults
     from .globals_fold import GlobalsFold

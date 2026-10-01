@@ -12,7 +12,7 @@ import ast
 import pytest
 
 from cash.analysis.aliases import aliased_sources, bare_alias_targets
-from cash.analysis.cacheability import StatementAnalysis, alias_mutation_sources, analyze_statement
+from cash.analysis.cacheability import StatementAnalysis, analyze_statement
 from cash.analysis.callee_effects import (
     callee_global_mutations,
     function_arg_mutations,
@@ -1222,11 +1222,12 @@ class TestInterproceduralArgMutations:
 
 
 class TestAliasMutationSources:
-    """``alias_mutation_sources`` maps an in-place mutation through a bare
+    """``aliased_sources`` maps an in-place mutation through a bare
     ``y = x`` alias back to the upstream source ``x``."""
 
     def _src(self, code):
-        return alias_mutation_sources(ast.parse(code))
+        tree = ast.parse(code)
+        return aliased_sources(tree, analyze_statement(code, tree).all_mutated_vars)
 
     def test_method_mutation(self):
         assert self._src("y = x\ny.append(99)") == {"x"}

@@ -54,7 +54,7 @@ def _write_distribution(root):
         import time
 
         import cash
-        from cash.config import get_config
+        from cash.config.resolve import get_config
 
 
         @cash.cache
@@ -187,7 +187,7 @@ def test_a_plain_script_is_unaffected(installed_tool, tmp_path):
     project.mkdir()
     (project / "pyproject.toml").write_text('[project]\nname = "demo"\nversion = "0"\n', encoding="utf-8")
     script = project / "run.py"
-    script.write_text("from cash.config import get_config\nprint(get_config().cache_dir)\n", encoding="utf-8")
+    script.write_text("from cash.config.resolve import get_config\nprint(get_config().cache_dir)\n", encoding="utf-8")
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()

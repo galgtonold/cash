@@ -6,7 +6,7 @@ Only the helper walk read a ``functools.wraps`` wrapper's OWN code; the other
 two let ``inspect.getsource`` unwrap it and hashed the wrapped function's text
 instead, so the wrapper's body was invisible to them: editing what a decorator
 does around the function kept the key. They now all use
-``cash.source_norm.callable_identity``, which reads the wrapper's own code and
+``cash.code_digest.callable_identity``, which reads the wrapper's own code and
 folds in the identity of what it wraps.
 """
 
@@ -17,8 +17,8 @@ import textwrap
 import pytest
 
 from cash import Cash
+from cash.code_digest import callable_identity
 from cash.decorator.code_identity import hash_callable_source
-from cash.source_norm import callable_identity
 from cash.tracking.function_tracker import FunctionTracker
 
 MODULE = textwrap.dedent("""

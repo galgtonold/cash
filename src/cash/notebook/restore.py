@@ -22,8 +22,8 @@ import pickle
 import types
 from typing import Any
 
-from ..object_hashing import compute_hash
 from ..tracking.file_dep_snapshot import snapshot_is_fresh
+from ..value_hash import compute_hash
 from ._protocols import ShellProtocol
 from .cache_status import CacheStatus
 from .call_refs import resolve_call_refs

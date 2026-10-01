@@ -23,23 +23,16 @@ from typing import TYPE_CHECKING, Any
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
+from ..analysis.helper_code import UnwalkableLayers, callable_layers
+from ..canonical_form import stable_key_repr
+from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
+from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package
-from ..object_hashing import stable_key_repr
-from ..source_norm import (
-    bytecode_identity,
-    callable_identity,
-    code_consts_without_docstring,
-    compiled_identity,
-    getsource,
-    loaded_class_identity,
-    loaded_code_matches_disk,
-    own_source_digest,
-    source_digest,
-    unwrap_partials,
-)
+from ..loaded_code import loaded_class_identity, loaded_code_matches_disk
+from ..source_norm import bytecode_identity, code_consts_without_docstring
+from ..source_reading import getsource
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
 
@@ -158,7 +151,7 @@ def func_key(func: Callable) -> str:
         inner = func_key(func.func)
         try:
             bound = hashlib.sha256(
-                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items()))), protocol=4),
+                pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items())), BUILTIN_CONTENT), protocol=4),
             ).hexdigest()[:12]
         except Exception:  # noqa: BLE001 - an unpicklable argument keys on its type
             shape = [type(v).__qualname__ for v in (*func.args, *func.keywords.values())]
@@ -194,7 +187,7 @@ def hash_callable_source(fn: Callable) -> str:
     HELPER -- so what this returns decides whether editing a helper
     recomputes its callers.
 
-    This is `cash.source_norm.callable_identity`, plus a memo per code
+    This is `cash.code_digest.callable_identity`, plus a memo per code
     object and a check that the file still holds the code that runs.
 
     Resolution order:
@@ -311,7 +304,7 @@ def code_fingerprint(code: types.CodeType) -> str:
 #: building a function per lookup), where the walk would never end. Past it
 #: the key would leave code out, so the call runs uncached instead
 #: (KEY-HELPERS-UNWALKABLE), as the helper walk does
-#: (``PurityAnalyzer._WALK_LIMIT``).
+#: (``HelperWalk.WALK_LIMIT``).
 MAX_CODE_REF_TARGETS = 5_000
 
 

@@ -18,9 +18,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._paths import REPLACE_RETRY_DELAYS
-from ..config import human_bytes
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
+from ..units import human_bytes
 from . import adaptive_caps as _caps
 from ._base import gdsf_value
 from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume

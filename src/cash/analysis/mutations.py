@@ -8,7 +8,8 @@ bare method call, and the accumulator-loop shapes.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from .file_effects import SideEffectVisitor
 
@@ -29,12 +30,12 @@ __all__ = [
     "consumed_input_names",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
-    "standalone_method_call_inner_methods",
     "module_setting_receivers",
     "chain_is_pure",
-    "top_level_call_argument_bases",
     "is_pandas_plot_call",
     "assigned_method_call_receivers",
+    "TopLevelCalls",
+    "top_level_calls",
     "selfref_reassignment_targets",
     "accumulator_loop_body_shape",
     "cacheable_accumulator_loop",
@@ -559,8 +560,8 @@ def module_level_stmts(body: list[ast.stmt]):
         if isinstance(node, DEFERRED_SCOPES):
             continue
         yield node
-        for field in ("body", "orelse", "finalbody"):
-            nested = getattr(node, field, None)
+        for block in ("body", "orelse", "finalbody"):
+            nested = getattr(node, block, None)
             if nested:
                 yield from module_level_stmts(nested)
         for handler in getattr(node, "handlers", []):  # try/except handler bodies
@@ -900,25 +901,7 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
     * Pure standalone calls (``df.head()``) use a method outside the known
       mutating sets and are excluded — so they are never over-invalidated.
     """
-    if tree is None:
-        return frozenset()
-    receivers: set[str] = set()
-    for node in tree.body:
-        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
-        # numpy ``out=`` writes its target in place (works regardless of how the
-        # call's own receiver is spelled), so bump the out target's lineage.
-        receivers.update(_out_kwarg_target_bases(call))
-        if not isinstance(call.func, ast.Attribute):
-            continue
-        method_name = call.func.attr
-        base = _extract_receiver_base_name(call.func.value)
-        if not base:
-            continue
-        if method_name in MUTATING_METHODS or (method_name in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)):
-            receivers.add(base)
-    return frozenset(receivers)
+    return top_level_calls(tree).mutation_receivers
 
 
 def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:
@@ -933,68 +916,7 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
     (top-level) bare ``Expr`` statements, so loop/function bodies and captured
     results (``r = df.head()``) are excluded.
     """
-    if tree is None:
-        return frozenset()
-    calls: set[tuple[str, str]] = set()
-    for node in tree.body:
-        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
-        # numpy ``out=`` target is a candidate receiver (method label ``out=``);
-        # it is tier-1 (known-mutating) so the runtime/sim route it directly.
-        for out_base in _out_kwarg_target_bases(call):
-            calls.add((out_base, "out="))
-        if not isinstance(call.func, ast.Attribute):
-            continue
-        base = _extract_receiver_base_name(call.func.value)
-        if base:
-            method = call.func.attr
-            # ``df.plot.bar(...)``: label it by the accessor, so the classifiers
-            # can tell pandas' plotting from a method named ``bar``.
-            if isinstance(call.func.value, ast.Attribute) and call.func.value.attr == "plot":
-                method = f"plot.{method}"
-            calls.add((base, method))
-    return frozenset(calls)
-
-
-def standalone_method_call_inner_methods(
-    tree: ast.Module | None,
-) -> dict[tuple[str, str], frozenset[str]]:
-    """The methods called INSIDE each receiver of
-    :func:`standalone_method_call_receivers`, keyed like its pairs.
-
-    ``feat_demo.describe().round(3)`` is the pair ``('feat_demo', 'round')``;
-    this says ``describe`` ran on ``feat_demo`` on the way (see
-    :func:`chain_is_pure`). Two statements with the same pair merge their
-    inner methods, the conservative way.
-    """
-    if tree is None:
-        return {}
-    inner: dict[tuple[str, str], frozenset[str]] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
-            continue
-        func = node.value.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        base = _extract_receiver_base_name(func.value)
-        if not base:
-            continue
-        methods: set[str] = set()
-        receiver = func.value
-        while True:
-            if isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute):
-                methods.add(receiver.func.attr)
-                receiver = receiver.func.value
-            elif isinstance(receiver, (ast.Attribute, ast.Subscript)):
-                receiver = receiver.value
-            else:
-                break
-        method = func.attr
-        if isinstance(func.value, ast.Attribute) and func.value.attr == "plot":
-            method = f"plot.{method}"
-        inner[(base, method)] = inner.get((base, method), frozenset()) | methods
-    return inner
+    return top_level_calls(tree).method_calls
 
 
 #: Module functions that change a setting the module keeps: ``pd.set_option``,
@@ -1029,28 +951,7 @@ def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
     because ``plt.rcParams.update`` in the setup cell was not replayed.
     Counted as a change to the module, it is replayed with the import.
     """
-    if tree is None:
-        return frozenset()
-    names: set[str] = set()
-    for node in tree.body:
-        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
-            continue
-        func = node.value.func
-        if not isinstance(func, ast.Attribute):
-            continue
-        base = _extract_receiver_base_name(func.value)
-        if not base:
-            continue
-        method = func.attr
-        on_attribute = isinstance(func.value, ast.Attribute)
-        if (
-            (on_attribute and method in MUTATING_METHODS)
-            or method == "set"
-            or method.startswith("set_")
-            or method in MODULE_SETTING_FUNCTIONS
-        ):
-            names.add(base)
-    return frozenset(names)
+    return top_level_calls(tree).setting_receivers
 
 
 def chain_is_pure(method: str, inner: frozenset[str]) -> bool:
@@ -1079,30 +980,6 @@ def _argument_root(node: ast.AST) -> str | None:
     while isinstance(node, (ast.Attribute, ast.Subscript, ast.Starred)):
         node = node.value
     return node.id if isinstance(node, ast.Name) else None
-
-
-def top_level_call_argument_bases(tree: ast.Module | None) -> frozenset[str]:
-    """Names handed as arguments to the top-level call of each statement.
-
-    ``tot.plot(ax=axes[0])`` -> ``{'axes'}``; ``bars = df.plot.bar(ax=ax)`` ->
-    ``{'ax'}``. The runtime and the simulation route such an argument as
-    MUTATED when it is a live Axes/Figure: a plotting call draws on the axes
-    it is given. Keyed on the receiver alone, ``imp.plot.barh(..., ax=ax)``
-    looked like a pure call on ``imp``, was served from cache during a replay,
-    and the re-created figure was saved blank.
-    """
-    if tree is None:
-        return frozenset()
-    names: set[str] = set()
-    for node in tree.body:
-        value = node.value if isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign)) else None
-        if not isinstance(value, ast.Call):
-            continue
-        for arg in [*value.args, *(kw.value for kw in value.keywords)]:
-            root = _argument_root(arg)
-            if root:
-                names.add(root)
-    return frozenset(names)
 
 
 _PANDAS_PLOT_METHODS = frozenset({"plot", "hist", "boxplot"})
@@ -1145,25 +1022,128 @@ def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[s
     routed and still caches. Scope is ``tree.body`` (top-level) assignments only,
     matching the bare-``Expr`` helper.
     """
+    return top_level_calls(tree).assigned_method_calls
+
+
+@dataclass(frozen=True)
+class TopLevelCalls:
+    """What the top-level statements of a cell call, gathered in one pass over
+    ``tree.body``. Each field is the answer of the function named after it."""
+
+    #: `standalone_method_mutation_receivers`
+    mutation_receivers: frozenset[str] = frozenset()
+    #: `standalone_method_call_receivers`
+    method_calls: frozenset[tuple[str, str]] = frozenset()
+    #: The methods called INSIDE each receiver of ``method_calls``, keyed like
+    #: its pairs: ``feat_demo.describe().round(3)`` is the pair
+    #: ``('feat_demo', 'round')``, and ``describe`` ran on ``feat_demo`` on the
+    #: way (see :func:`chain_is_pure`). Two statements with the same pair merge
+    #: their inner methods, the conservative way.
+    inner_methods: Mapping[tuple[str, str], frozenset[str]] = field(default_factory=dict)
+    #: `module_setting_receivers`
+    setting_receivers: frozenset[str] = frozenset()
+    #: `assigned_method_call_receivers`
+    assigned_method_calls: frozenset[tuple[str, str]] = frozenset()
+    #: Names handed as arguments to the top-level call of each statement:
+    #: ``tot.plot(ax=axes[0])`` -> ``{'axes'}``; ``bars = df.plot.bar(ax=ax)``
+    #: -> ``{'ax'}``. The runtime and the simulation route such an argument as
+    #: MUTATED when it is a live Axes/Figure: a plotting call draws on the
+    #: axes it is given, whatever its receiver.
+    argument_bases: frozenset[str] = frozenset()
+
+
+def top_level_calls(tree: ast.Module | None) -> TopLevelCalls:
+    """The calls *tree*'s top-level statements make (see :class:`TopLevelCalls`)."""
     if tree is None:
-        return frozenset()
-    calls: set[tuple[str, str]] = set()
+        return TopLevelCalls()
+    collector = _TopLevelCallCollector()
     for node in tree.body:
-        if isinstance(node, ast.Assign):
-            value: ast.AST | None = node.value
-        elif isinstance(node, ast.AnnAssign):
-            value = node.value  # None for a bare annotation (``x: int``)
+        collector.statement(node)
+    return collector.result()
+
+
+class _TopLevelCallCollector:
+    """Fills a :class:`TopLevelCalls`, one top-level statement at a time."""
+
+    def __init__(self) -> None:
+        self.mutation_receivers: set[str] = set()
+        self.method_calls: set[tuple[str, str]] = set()
+        self.inner_methods: dict[tuple[str, str], frozenset[str]] = {}
+        self.setting_receivers: set[str] = set()
+        self.assigned_method_calls: set[tuple[str, str]] = set()
+        self.argument_bases: set[str] = set()
+
+    def statement(self, node: ast.stmt) -> None:
+        value = node.value if isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign)) else None
+        if isinstance(value, ast.Call):
+            for arg in [*value.args, *(kw.value for kw in value.keywords)]:
+                root = _argument_root(arg)
+                if root:
+                    self.argument_bases.add(root)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            self._bare_call(node.value)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            # The whole RHS, so a draw nested in a larger expression
+            # (``h = [ax.hist(d) for d in data]``) is caught too.
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                    base = _extract_receiver_base_name(sub.func.value)
+                    if base:
+                        self.assigned_method_calls.add((base, sub.func.attr))
+
+    def _bare_call(self, call: ast.Call) -> None:
+        # numpy ``out=`` writes its target in place (however the call's own
+        # receiver is spelled): a known-mutated receiver, labelled ``out=``.
+        for out_base in _out_kwarg_target_bases(call):
+            self.mutation_receivers.add(out_base)
+            self.method_calls.add((out_base, "out="))
+        func = call.func
+        if not isinstance(func, ast.Attribute):
+            return
+        base = _extract_receiver_base_name(func.value)
+        if not base:
+            return
+        method = func.attr
+        if method in MUTATING_METHODS or (method in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)):
+            self.mutation_receivers.add(base)
+        on_attribute = isinstance(func.value, ast.Attribute)
+        if (
+            (on_attribute and method in MUTATING_METHODS)
+            or method == "set"
+            or method.startswith("set_")
+            or method in MODULE_SETTING_FUNCTIONS
+        ):
+            self.setting_receivers.add(base)
+        # ``df.plot.bar(...)``: label it by the accessor, so the classifiers
+        # can tell pandas' plotting from a method named ``bar``.
+        label = f"plot.{method}" if on_attribute and func.value.attr == "plot" else method
+        self.method_calls.add((base, label))
+        key = (base, label)
+        self.inner_methods[key] = self.inner_methods.get(key, frozenset()) | _chain_methods(func.value)
+
+    def result(self) -> TopLevelCalls:
+        return TopLevelCalls(
+            mutation_receivers=frozenset(self.mutation_receivers),
+            method_calls=frozenset(self.method_calls),
+            inner_methods=self.inner_methods,
+            setting_receivers=frozenset(self.setting_receivers),
+            assigned_method_calls=frozenset(self.assigned_method_calls),
+            argument_bases=frozenset(self.argument_bases),
+        )
+
+
+def _chain_methods(receiver: ast.AST) -> frozenset[str]:
+    """The methods called on the way down a receiver chain:
+    ``feat_demo.describe()`` -> ``{'describe'}``."""
+    methods: set[str] = set()
+    while True:
+        if isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute):
+            methods.add(receiver.func.attr)
+            receiver = receiver.func.value
+        elif isinstance(receiver, (ast.Attribute, ast.Subscript)):
+            receiver = receiver.value
         else:
-            continue
-        if value is None:
-            continue
-        for sub in ast.walk(value):
-            if not isinstance(sub, ast.Call) or not isinstance(sub.func, ast.Attribute):
-                continue
-            base = _extract_receiver_base_name(sub.func.value)
-            if base:
-                calls.add((base, sub.func.attr))
-    return frozenset(calls)
+            return frozenset(methods)
 
 
 def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:

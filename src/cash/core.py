@@ -29,7 +29,9 @@ from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
 from .backends.budget_notices import DiskBudget, cap_text
 from .backends.factory import build_tiered
-from .config import CashConfig, get_config
+from .config.resolve import get_config
+from .config.schema import CashConfig
+from .content_hashers import builtin_hash_family
 from .data_source import DataSource
 from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,
@@ -83,7 +85,6 @@ from .exceptions import (
     CashCacheStoreFailedWarning,
 )
 from .graph import DependencyGraph
-from .object_hashing import builtin_hash_family
 from .reconfigure import apply_overrides
 from .tracking.file_tracker import install_read_watch
 from .tracking.reader_patches import file_registry
@@ -278,7 +279,7 @@ class Cash:
 
         Tells a user at ``register_hasher`` time that the hasher they just
         handed over would never be consulted -- the moment they can still do
-        something about it. See `cash.object_hashing.builtin_hash_family`.
+        something about it. See `cash.content_hashers.builtin_hash_family`.
         """
         return builtin_hash_family(type_)
 

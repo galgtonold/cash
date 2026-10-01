@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from cash.object_hashing import compute_hash
+from cash.value_hash import compute_hash
 
 
 def test_ndarray_out_of_sample_difference_distinct():
@@ -116,7 +116,7 @@ def test_equal_values_with_equal_schema_still_share_a_key():
 
 def test_the_notebook_and_the_decorator_hash_a_frame_alike():
     """One hasher: the notebook's hash of a library value IS the decorator's key for it."""
-    from cash.object_hashing import builtin_hash
+    from cash.content_hashers import builtin_hash
 
     frame = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
     assert compute_hash(frame) == builtin_hash(frame)

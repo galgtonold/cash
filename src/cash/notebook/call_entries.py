@@ -27,7 +27,7 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
-from cash.object_hashing import estimate_object_size, pickled_size_estimate
+from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
 from ..cost_model import estimated_restore_time

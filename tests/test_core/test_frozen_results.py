@@ -26,7 +26,7 @@ import warnings
 
 import pytest
 
-from cash import Cash, object_hashing
+from cash import Cash, content_hashers
 
 np = pytest.importorskip("numpy")
 
@@ -182,7 +182,7 @@ def test_a_frozen_numpy_result_comes_back_read_only(c):
 
 def test_a_frozen_numpy_result_is_hashed_once(c, monkeypatch):
     calls = []
-    real = object_hashing.hash_numpy
+    real = content_hashers.hash_numpy
 
     def counting(value):
         calls.append(1)
@@ -197,7 +197,7 @@ def test_a_frozen_numpy_result_is_hashed_once(c, monkeypatch):
         return float(a.sum())
 
     a = grid(1000)
-    monkeypatch.setattr(object_hashing, "hash_numpy", counting)
+    monkeypatch.setattr(content_hashers, "hash_numpy", counting)
     for _ in range(5):
         total(a)
     assert len(calls) == 1

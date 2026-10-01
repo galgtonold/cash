@@ -33,7 +33,7 @@ max_cache_size = "5GB"
 `cash info` prints every setting in effect and the layer it came from
 ([CLI](../cli.md#cash-info)).
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @edf1f957 -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
 ### What paths are relative to
 
 A relative `cache_dir` is resolved against whoever wrote it:
@@ -60,7 +60,7 @@ says how the folder is chosen and capped.
 A `pyproject.toml` marks a project only when it has a `[project]`,
 `[build-system]`, `[tool.poetry]` or `[tool.cash]` table.
 
-<!-- claim: cash/config.py:CashConfig @7fe9f694 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config/schema.py:CashConfig @7fe9f694 broad="the field table is a claim about every field of the dataclass" -->
 ## All settings
 
 Every setting is named by its field. In a TOML file the key is the field
@@ -70,7 +70,7 @@ A setting applies to both paths unless it is marked
 <span class="md-tag">decorator only</span> or
 <span class="md-tag">notebook only</span>.
 
-<!-- claim: cash/config.py:validate_value @b391f4e9, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @31e81d57 -->
+<!-- claim: cash/config/schema.py:validate_value @d16596ad, cash/units.py:parse_size @11b4b371, cash/config/resolve.py:_validated_layer @ea2b7c73 -->
 Values are checked whichever layer they come from:
 
 | Value | Accepted |
@@ -188,11 +188,11 @@ export CASH_TIER_1_HOST=prod-redis.example.com
 ```
 
 A tier's `type` decides which other keys it uses (details under
-[`TierConfig`](../api/config.md#cash.config.TierConfig)). A key its type does
+[`TierConfig`](../api/config.md#cash.config.schema.TierConfig)). A key its type does
 not use does nothing, and cash warns
 [`CONFIG-INVALID`](../warnings.md#config-invalid).
 
-<!-- claim: cash/config.py:_TIER_FIELDS @3f70dfeb, cash/config.py:TierConfig.__post_init__ @02c67b7c -->
+<!-- claim: cash/backends/factory.py:TIER_FIELDS @e9cbbb70, cash/config/schema.py:TierConfig.__post_init__ @099eecbf -->
 | `type` | Keys |
 |---|---|
 | `memory` | `max_entries`, `max_size_bytes` |
@@ -236,7 +236,7 @@ from cash import Cash
 app = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
+<!-- claim: cash/config/resolve.py:_layers @e199f8bf, cash/config/resolve.py:_merge_layers @b261ee82 -->
 The named file ranks above the project and user files and below environment
 variables and code. That lets an installed package ship its own settings: put
 a TOML file inside the package and pass
@@ -244,7 +244,7 @@ a TOML file inside the package and pass
 `[cash]` or `[tool.cash]`. A relative `cache_dir` in it is relative to the
 file, and `~` is your home directory.
 
-<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
+<!-- claim: cash/config/resolve.py:_resolve_config @75ccfd52, cash/config/resolve.py:_warn_named_file_missing @fa72ccc3 -->
 A missing file warns [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing).
 `cash info --config path/to/cash.toml` shows what a file resolves to.
 
@@ -283,7 +283,7 @@ In worker processes (`multiprocessing`, `ProcessPoolExecutor`, joblib):
 
 See [Threads and processes](../tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 
-<!-- claim: cash/reconfigure.py:apply_overrides @b8ecc0a2, cash/config.py:validated_overrides @fecbc461 -->
+<!-- claim: cash/reconfigure.py:apply_overrides @b8ecc0a2, cash/config/resolve.py:validated_overrides @fecbc461 -->
 Values are checked exactly as `Cash(...)` checks them, before anything
 changes:
 

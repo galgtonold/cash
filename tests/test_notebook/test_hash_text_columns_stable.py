@@ -17,14 +17,14 @@ import textwrap
 
 import pytest
 
-from cash.object_hashing import compute_hash
+from cash.value_hash import compute_hash
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
 PROBE = textwrap.dedent("""
     import numpy as np, pandas as pd
-    from cash.object_hashing import compute_hash
+    from cash.value_hash import compute_hash
     rs = np.random.RandomState(0)
     frame = pd.DataFrame({"id": np.arange(1000), "region": rs.choice(["NA", "OCE", "EU"], 1000),
                           "amount": rs.rand(1000)})
@@ -68,7 +68,7 @@ def test_different_text_still_hashes_differently():
 
 def test_a_frame_hashes_by_its_whole_content():
     """A frame is hashed as the decorator keys it (`builtin_hash`), every row."""
-    from cash.object_hashing import builtin_hash
+    from cash.content_hashers import builtin_hash
 
     frame = pd.DataFrame({"a": np.arange(10), "b": np.arange(10) * 0.5})
     assert compute_hash(frame) == builtin_hash(frame)
@@ -77,7 +77,7 @@ def test_a_frame_hashes_by_its_whole_content():
 def test_a_collection_of_frames_is_hashed_frame_by_frame():
     """A dict holding frames is hashed item by item, each frame as it is
     hashed on its own, not pickled whole with the dict."""
-    from cash.object_hashing import builtin_hash
+    from cash.content_hashers import builtin_hash
 
     big = pd.DataFrame({"a": np.arange(1000, dtype=float), "b": np.arange(1000, dtype=float)})
     blocks = {4: big, 8: big + 1}
