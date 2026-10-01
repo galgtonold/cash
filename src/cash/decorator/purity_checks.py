@@ -820,16 +820,38 @@ class PurityChecks:
         is then shown once per distinct finding rather than once per name, so
         a second closure reaching an impure helper is told.
         """
+        issues = self._reported_issues(func_name, report, mode)
+        if not issues or mode == "silent":
+            return
+        if mode != "strict":
+            # strict=True keeps every issue in the one exception it raises:
+            # there, every issue is a hard stop and splitting the report
+            # would hide half of it.
+            _raise_untrackable(func_name, issues)
+            issues = self._warn_ambient_reads(func_name, issues, per_report)
+            issues = self._warn_network_reads(func_name, issues, per_report)
+        if not issues:
+            return
+        self._static_flagged.add(func_name)
+        summary = format_issues_summary(issues)
+        if mode == "strict":
+            raise CashImpureFunctionError(
+                f"@cash.cache(strict=True) on {func_name}: purity issues "
+                f"detected. Fix the function, mark callees with "
+                f"@pure / @stateful, put `# @cash:assume-safe` on the lines you "
+                f"have audited (or `with cash.assume_safe():` around them), or "
+                f"relax to assume_safe=True.\n{summary}"
+            )
+        self._warn_side_effects(func_name, summary, per_report)
 
-        def slot(kind: str, findings: str) -> str:
-            if not per_report:
-                return kind
-            return f"{kind}:{hashlib.sha256(findings.encode('utf-8')).hexdigest()[:16]}"
-
+    def _reported_issues(self, func_name: str, report: PurityReport, mode: str) -> list:
+        """The issues of *report* to surface under *mode*: without those the
+        key already covers, without network reads a ``ttl=`` answers, and
+        with the opaque callees under ``strict``."""
         issues = [i for i in report.issues if not self._mutable_global_is_keyed(func_name, report, i)]
         if any(getattr(i, "kind", None) == ISSUE_NETWORK_READ for i in issues):
             # Named statically, so the observer does not report the same read
-            # as a connection -- whether or not the advisory below is shown.
+            # as a connection -- whether or not `_warn_network_reads` warns.
             self._static_flagged.add(func_name)
             cf = self._registry.cached.get(func_name)
             if self._registry.effective_ttl(func_name, cf.ttl if cf is not None else None) is not None:
@@ -841,52 +863,27 @@ class PurityChecks:
             if len(report.opaque_callees) > 5:
                 opaque_list += f", ... +{len(report.opaque_callees) - 5} more"
             issues.append(make_opaque_issue(func_name, opaque_list))
+        return issues
 
-        if not issues:
-            return
-        if mode == "silent":
-            return
+    def _warn_ambient_reads(self, func_name: str, issues: list, per_report: bool) -> list:
+        """Warn about the ambient reads among *issues*; return the rest.
 
-        summary = format_issues_summary(issues)
-
-        # Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
-        # dynamic dispatch, importlib.import_module) RAISE by default, even in
-        # the ordinary "warn" mode: cash cannot see an edit to a dependency it
-        # resolves from a runtime value, so a cached result can go silently
-        # stale, and caching correctness can no longer be guaranteed. The user
-        # must acknowledge the risk with assume_safe=True (the ``silent`` mode
-        # handled above) to cache anyway.
-        untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
-        if untrackable and mode != "strict":
-            untrackable_summary = format_issues_summary(untrackable)
-            raise CashImpureFunctionError(
-                f"@cash.cache on {func_name}: a dependency is resolved from a "
-                f"runtime value, so cash cannot tell when it changes and a cached "
-                f"result could be silently stale. Caching correctness cannot be "
-                f"guaranteed for this function.\nPut `# @cash:assume-safe` on "
-                f"the line named below (or `with cash.assume_safe():` around "
-                f"it) to accept the risk for that statement alone, pass "
-                f"@cash.cache(assume_safe=True) to waive the whole function, or "
-                f"refactor to a statically-named call.\n{untrackable_summary}"
-            )
-
-        # Ambient reads get their own warning, not the side-effects one. The
-        # hazard is the opposite shape -- nothing is skipped, a hidden INPUT is
-        # frozen -- and so is the fix: pass the value in as an argument, where
-        # it reaches the key. Filing them under "likely side effects" told the
-        # user to audit for writes that are not there, and left the actual
-        # failure (a nightly job whose `date.today()` is the night it first
-        # ran) unnamed.
-        # strict=True keeps them in the one exception it raises: there, every
-        # issue is a hard stop and splitting the report would hide half of it.
+        Ambient reads get their own warning, not the side-effects one. The
+        hazard is the opposite shape -- nothing is skipped, a hidden INPUT is
+        frozen -- and so is the fix: pass the value in as an argument, where
+        it reaches the key. Filing them under "likely side effects" told the
+        user to audit for writes that are not there, and left the actual
+        failure (a nightly job whose `date.today()` is the night it first
+        ran) unnamed.
+        """
         ambient = [i for i in issues if getattr(i, "kind", None) == ISSUE_AMBIENT_READ]
-        if ambient and mode != "strict":
+        if ambient:
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_AMBIENT_READ]
             self._static_flagged.add(func_name)
             self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
-                slot("ambient", format_issues_summary(ambient)),
+                _warning_slot("ambient", format_issues_summary(ambient), per_report),
                 f"@cash.cache on {func_name}: the body reads ambient state "
                 f"(the clock, the environment, a fresh UUID). That value is "
                 f"not part of the cache key, so the first call's answer is "
@@ -900,18 +897,24 @@ class PurityChecks:
                 "cash.assume_safe():` around it.",
                 once_per_version=True,
             )
-        # A network or database read gets its own advisory too, for the same
-        # reason as an ambient read: nothing is skipped, an input the key
-        # cannot see is frozen. Unlike the clock it has a knob made for it,
-        # `ttl=`, which silences it (above). Under strict=True it raises with
-        # the other issues unless a ttl= is set.
+        return issues
+
+    def _warn_network_reads(self, func_name: str, issues: list, per_report: bool) -> list:
+        """Warn about the network and database reads among *issues*; return the rest.
+
+        Its own advisory, for the same reason as an ambient read: nothing is
+        skipped, an input the key cannot see is frozen. Unlike the clock it
+        has a knob made for it, `ttl=`, which silences it
+        (`_reported_issues`). Under strict=True it raises with the other
+        issues unless a ttl= is set.
+        """
         remote = [i for i in issues if getattr(i, "kind", None) == ISSUE_NETWORK_READ]
-        if remote and mode != "strict":
+        if remote:
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_NETWORK_READ]
             self._notices.warn_once(
                 CashImpurityWarning,
                 func_name,
-                slot("network_read", format_issues_summary(remote)),
+                _warning_slot("network_read", format_issues_summary(remote), per_report),
                 f"@cash.cache on {func_name}: the result depends on what a "
                 f"server or a database returned, and that answer is not part "
                 f"of the cache key. The first call's answer is what every later call gets "
@@ -925,25 +928,14 @@ class PurityChecks:
                 "on that line, or `with cash.assume_safe():` around it.",
                 once_per_version=True,
             )
-        if not issues:
-            return
-        summary = format_issues_summary(issues)
+        return issues
 
-        self._static_flagged.add(func_name)
-
-        if mode == "strict":
-            raise CashImpureFunctionError(
-                f"@cash.cache(strict=True) on {func_name}: purity issues "
-                f"detected. Fix the function, mark callees with "
-                f"@pure / @stateful, put `# @cash:assume-safe` on the lines you "
-                f"have audited (or `with cash.assume_safe():` around them), or "
-                f"relax to assume_safe=True.\n{summary}"
-            )
-        # mode == "warn"
+    def _warn_side_effects(self, func_name: str, summary: str, per_report: bool) -> None:
+        """The ``warn``-mode warning for the side effects in *summary*."""
         self._notices.warn_once(
             CashImpurityWarning,
             func_name,
-            slot("purity", summary),
+            _warning_slot("purity", summary, per_report),
             f"@cash.cache on {func_name}: reading the source found likely "
             f"side effects or scope mutations, so cached results may not "
             f"reflect what the body does.\n{summary}",
@@ -963,4 +955,38 @@ class PurityChecks:
                 "later. No waiver changes the function's cache key."
             ),
             once_per_version=True,
+        )
+
+
+def _warning_slot(kind: str, findings: str, per_report: bool) -> str:
+    """The dedup slot of a purity warning of *kind*: one per function, or with
+    *per_report* one per distinct *findings* (`PurityChecks.surface_purity`)."""
+    if not per_report:
+        return kind
+    return f"{kind}:{hashlib.sha256(findings.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _raise_untrackable(func_name: str, issues: list) -> None:
+    """Raise when *issues* include an untrackable dependency.
+
+    Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
+    dynamic dispatch, importlib.import_module) RAISE by default, even in
+    the ordinary "warn" mode: cash cannot see an edit to a dependency it
+    resolves from a runtime value, so a cached result can go silently
+    stale, and caching correctness can no longer be guaranteed. The user
+    must acknowledge the risk with assume_safe=True (the ``silent`` mode,
+    which never reaches here) to cache anyway.
+    """
+    untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
+    if untrackable:
+        untrackable_summary = format_issues_summary(untrackable)
+        raise CashImpureFunctionError(
+            f"@cash.cache on {func_name}: a dependency is resolved from a "
+            f"runtime value, so cash cannot tell when it changes and a cached "
+            f"result could be silently stale. Caching correctness cannot be "
+            f"guaranteed for this function.\nPut `# @cash:assume-safe` on "
+            f"the line named below (or `with cash.assume_safe():` around "
+            f"it) to accept the risk for that statement alone, pass "
+            f"@cash.cache(assume_safe=True) to waive the whole function, or "
+            f"refactor to a statically-named call.\n{untrackable_summary}"
         )
