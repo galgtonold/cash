@@ -31,6 +31,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...tracking.module_symbols import static_attribute_reads
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
@@ -307,28 +308,36 @@ class StatementLineageBuilder:
         code: str,
         user_ns: dict,
     ) -> None:
-        """Update granular module attribute dependency tracking for *var_name*."""
+        """Update granular module attribute dependency tracking for *var_name*.
+
+        A module input gets an entry only when the statement does nothing with
+        it but read plain attributes; any other use (passing it, a dynamic
+        getattr) leaves no entry, so an edit to that module invalidates the
+        variable whichever symbol changed. This is the same rule the cache key
+        applies (``static_attribute_reads``).
+        """
         try:
-            attr_accesses = self.function_tracker.extract_module_attribute_accesses(code)
-            mod_deps: dict[str, set[str]] = {}
-            for input_name, attrs in attr_accesses.items():
-                input_val = user_ns.get(input_name)
-                # Tracked under its REAL name; recorded under the name read,
-                # which is what the invalidator looks it up by. Checking the
-                # name read missed `import tickets_lib as tl` (see 9785293).
-                if (
-                    isinstance(input_val, types.ModuleType)
-                    and getattr(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
-                ):
-                    mod_deps[input_name] = attrs
-            if mod_deps:
-                tracking_state.module_attribute_deps[var_name] = mod_deps
-            elif var_name in tracking_state.module_attribute_deps:
-                del tracking_state.module_attribute_deps[var_name]
-        except (AttributeError, TypeError, ValueError, SyntaxError):
-            logger.debug(
-                "[PROCESSOR] Module attribute tracking failed for '%s', falling back to full invalidation", var_name
-            )
+            tree = ast.parse(code)
+        except SyntaxError:
+            tracking_state.module_attribute_deps.pop(var_name, None)
+            return
+        names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        mod_deps: dict[str, set[str]] = {}
+        for input_name in names:
+            input_val = user_ns.get(input_name)
+            # Tracked under its REAL name; recorded under the name read,
+            # which is what the invalidator looks it up by.
+            if not (
+                isinstance(input_val, types.ModuleType)
+                and getattr(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
+            ):
+                continue
+            attrs = static_attribute_reads(code, input_name)
+            if attrs is not None:
+                mod_deps[input_name] = attrs
+        if mod_deps:
+            tracking_state.module_attribute_deps[var_name] = mod_deps
+        else:
             tracking_state.module_attribute_deps.pop(var_name, None)
 
     def _update_variable_content_hashes(

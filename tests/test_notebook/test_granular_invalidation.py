@@ -317,68 +317,66 @@ class TestGetChangedSymbols:
 # ============================================================================
 
 
-class TestExtractModuleAttributeAccesses:
-    """Tests for FunctionTracker.extract_module_attribute_accesses."""
+class TestRecordedModuleAttributeDeps:
+    """Which module attributes a statement is recorded as reading.
 
-    def test_simple_attribute_access(self):
-        """mod.attr should be detected."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("x = mod.compute(5)")
-        assert "mod" in accesses
-        assert "compute" in accesses["mod"]
+    A variable keeps its value across a module edit only when it reads
+    nothing of the module but the attributes recorded here, so a module the
+    statement also uses whole (passed to a function, read through a dynamic
+    getattr) must leave no entry, whatever order the uses appear in.
+    """
 
-    def test_multiple_attributes(self):
-        """Multiple attributes of same module should all be tracked."""
-        code = "a = mod.compute(5)\nb = mod.format_result(a)"
-        accesses = FunctionTracker.extract_module_attribute_accesses(code)
-        assert "mod" in accesses
-        assert accesses["mod"] == {"compute", "format_result"}
+    @pytest.fixture
+    def tracked(self, cash_magics, mock_shell, temp_module):
+        module_name, module_file, _ = temp_module
+        mod = importlib.import_module(module_name)
+        mock_shell.user_ns[module_name] = mod
+        sp = cash_magics._statement_processor
+        sp.function_tracker.track_module(module_name)
+        sp.process_statement(f"import {module_name}", silent=True)
+        sp.process_statement("def run(m):\n    return len(m.format_result(1))", silent=True)
+        sp.process_statement("name = 'format_result'", silent=True)
+        return cash_magics, module_name, module_file
 
-    def test_constant_access(self):
-        """mod.CONST should be detected."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("v = mod.VERSION")
-        assert "mod" in accesses
-        assert "VERSION" in accesses["mod"]
+    @staticmethod
+    def _deps(cash_magics, code):
+        sp = cash_magics._statement_processor
+        metrics = sp.process_statement(code, silent=True, annotation=_PERSIST)
+        assert metrics["status"] == CacheStatus.COMPUTED
+        return sp.tracking_state.module_attribute_deps.get("x")
 
-    def test_mixed_function_and_constant(self):
-        """Both function calls and constant access tracked."""
-        code = "v = mod.VERSION\nr = mod.compute(5)"
-        accesses = FunctionTracker.extract_module_attribute_accesses(code)
-        assert accesses["mod"] == {"VERSION", "compute"}
+    def test_plain_attribute_reads_are_recorded(self, tracked):
+        magics, m, _ = tracked
+        assert self._deps(magics, f"x = {m}.compute(int(float({m}.VERSION)))") == {m: {"compute", "VERSION"}}
 
-    def test_getattr_with_constant_string(self):
-        """getattr(mod, 'attr') with string constant should track attr."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("getattr(mod, 'compute')")
-        assert "mod" in accesses
-        assert "compute" in accesses["mod"]
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "x = run({m}) + {m}.compute(1)",
+            "x = {m}.compute(1) + run({m})",
+            "x = len(getattr({m}, name)(1)) + {m}.compute(1)",
+            "x = {m}.compute(1) + len(getattr({m}, name)(1))",
+        ],
+    )
+    def test_a_whole_module_use_records_nothing(self, tracked, template):
+        magics, m, _ = tracked
+        self._deps(magics, f"x = {m}.compute(1)")
+        assert self._deps(magics, template.format(m=m)) is None
 
-    def test_getattr_with_dynamic_attr(self):
-        """getattr(mod, var) with dynamic second arg cannot be tracked."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("getattr(mod, name)")
-        # Should still have 'mod' but with bare use flagged
-        assert "mod" in accesses
-
-    def test_no_module_access(self):
-        """Code without module access returns empty."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("x = 1 + 2")
-        assert accesses == {}
-
-    def test_syntax_error_returns_empty(self):
-        """Syntax error in code returns empty dict."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("def foo(\n  broken")
-        assert accesses == {}
-
-    def test_chained_attribute_access(self):
-        """mod.sub.attr should track 'sub' on mod."""
-        accesses = FunctionTracker.extract_module_attribute_accesses("mod.sub.attr")
-        assert "mod" in accesses
-        assert "sub" in accesses["mod"]
-
-    def test_multiple_modules(self):
-        """Multiple different modules tracked separately."""
-        code = "a = m1.func()\nb = m2.other()"
-        accesses = FunctionTracker.extract_module_attribute_accesses(code)
-        assert "m1" in accesses and "func" in accesses["m1"]
-        assert "m2" in accesses and "other" in accesses["m2"]
+    def test_editing_a_symbol_used_through_the_whole_module_invalidates(self, tracked, mock_shell):
+        magics, m, module_file = tracked
+        sp = magics._statement_processor
+        self._deps(magics, f"x = {m}.compute(1) + run({m})")
+        assert "x" in sp.tracking_state.variable_lineage
+        time.sleep(0.05)
+        with open(module_file, encoding="utf-8") as f:
+            source = f.read()
+        with open(module_file, "w", encoding="utf-8") as f:
+            f.write(source.replace("f'Result: {x}'", "f'Changed: {x}'"))
+        changed_modules, per_mod_syms = sp.function_tracker.check_and_reload_changed_modules(mock_shell.user_ns)
+        assert per_mod_syms.get(m) == {"format_result"}
+        magics._module_invalidator.invalidate(changed_modules, sp, per_mod_syms)
+        assert "x" not in sp.tracking_state.variable_lineage
 
 
 # ============================================================================
