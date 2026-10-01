@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from cash.analytics import AnalyticsManager
     from cash.backends import CacheBackend
-    from cash.config import CashConfig
+    from cash.config.schema import CashConfig
 
 
 @runtime_checkable

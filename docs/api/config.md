@@ -19,7 +19,7 @@ from cash import CashConfig, get_config, create_default_config
 
 ---
 
-::: cash.config.TierConfig
+::: cash.config.schema.TierConfig
     options:
       show_if_no_docstring: true
       filters: ["!^_"]

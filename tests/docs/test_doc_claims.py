@@ -19,7 +19,7 @@ import unicodedata
 from dataclasses import fields
 from pathlib import Path
 
-from cash.config import CashConfig, TierConfig
+from cash.config.schema import CashConfig, TierConfig
 from tools.claims.anchors import published_pages, strip_code_fences
 
 

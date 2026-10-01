@@ -181,7 +181,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
     Lines are relative to *src*.
     """
     from ..analysis.ast_util import resolve_callee
-    from ..analysis.purity_analyzer import build_namespace, local_import_map, resolve_local_import
+    from ..analysis.helper_bindings import build_namespace, local_import_map, resolve_local_import
 
     try:
         tree = ast.parse(src)

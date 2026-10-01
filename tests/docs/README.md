@@ -141,7 +141,7 @@ what a flag does, or what is cached and what is not. Paths are relative to
 | Form | Example | Checks |
 |---|---|---|
 | Fingerprint | `cash/core.py:Cash.cache @7a77d1c5` | the symbol exists and its source is unchanged |
-| Value | `cash/config.py:CashConfig.max_cache_size == None` | the literal in the source equals the one written |
+| Value | `cash/config/schema.py:CashConfig.max_cache_size == None` | the literal in the source equals the one written |
 | Existence | `cash/backends/redis.py:RedisBackend` | the symbol exists |
 
 Use a value anchor when the sentence quotes a constant. Write a fingerprint

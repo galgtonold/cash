@@ -22,7 +22,8 @@ import pytest
 
 from cash.analysis.callee_effects import callee_global_mutations, source_global_mutations
 from cash.analysis.code_analyzer import CodeAnalyzer
-from cash.analysis.purity_analyzer import PurityAnalyzer, _modified_globals_in_source
+from cash.analysis.mutable_globals import modified_globals_in_source
+from cash.analysis.purity_analyzer import PurityAnalyzer
 from cash.notebook.call_key import callee_mutated_globals
 
 pytestmark = pytest.mark.core
@@ -46,7 +47,7 @@ CASES = [
 @pytest.mark.parametrize(("source", "expected"), CASES)
 def test_notebook_and_decorator_agree(source, expected):
     assert set(source_global_mutations(source)) == expected
-    assert set(_modified_globals_in_source(source)) == expected
+    assert set(modified_globals_in_source(source)) == expected
 
 
 def test_a_local_of_the_callee_is_not_an_output_of_the_statement():

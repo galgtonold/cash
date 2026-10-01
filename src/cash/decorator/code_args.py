@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
+from ..analysis.purity_analyzer import get_analyzer
+from ..analysis.purity_report import ISSUE_UNTRACKABLE_DEP
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_code_module

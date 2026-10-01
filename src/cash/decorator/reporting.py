@@ -22,7 +22,7 @@ from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
 from .explain import MissKind, MissReason, entry_id_of
 
 if TYPE_CHECKING:
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from ..effectiveness import EffectivenessLedger
     from .backend_slot import BackendSlot
     from .cached_function import CachedFunction

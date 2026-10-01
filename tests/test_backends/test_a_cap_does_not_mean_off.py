@@ -29,7 +29,7 @@ import pytest
 
 from cash import Cash
 from cash.backends.factory import build_backend_from_config
-from cash.config import CashConfig
+from cash.config.schema import CashConfig
 
 
 def _instance(tmp_path, cap):

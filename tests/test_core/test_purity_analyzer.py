@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from cash.analysis.purity_analyzer import (
+from cash.analysis.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_report import (
     ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
     ISSUE_IMPURE_CALL,
     ISSUE_SCOPE_MUTATION,
     ISSUE_UNTRACKABLE_DEP,
-    PurityAnalyzer,
 )
 from cash.purity import pure, stateful
 

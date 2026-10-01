@@ -25,7 +25,7 @@ except ImportError:
     HAS_MATPLOTLIB = False
 
 from ..analytics import AnalyticsManager
-from ..config import get_config
+from ..config.resolve import get_config
 
 logger = logging.getLogger(__name__)
 

@@ -71,7 +71,7 @@ results computed from the old data. Return a version you bump, a content id,
 or the source file's path with its modification time. Here, bump
 `version` whenever the data behind `sales-2026` changes.
 
-<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/config.py:CashConfig.check_cash_keys == True -->
+<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/config/schema.py:CashConfig.check_cash_keys == True -->
 cash checks this for you. The first time an object is keyed by its
 `__cash_key__` in a process, cash reads its content on a background thread
 and compares it with what the same key stood for before, in this run or an

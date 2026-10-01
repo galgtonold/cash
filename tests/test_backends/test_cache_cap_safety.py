@@ -178,7 +178,7 @@ class TestNoThrashAcceptance:
         # Big free disk → adaptive disk cap ≫ the two frames combined.
         monkeypatch.setattr(adaptive_caps, "free_bytes_on_volume", lambda p: 500 * 1024**3)
         from cash.backends.factory import build_backend_from_config
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         backend = build_backend_from_config(CashConfig(cache_dir=str(tmp_path / "c")))
         disk = backend.backends[1]

@@ -29,7 +29,8 @@ from .backends._base import entry_expired
 from .backends._writes import in_multiprocessing_child
 from .backends.budget_notices import DiskBudget, cap_text
 from .backends.factory import build_tiered
-from .config import CashConfig, get_config
+from .config.resolve import get_config
+from .config.schema import CashConfig
 from .data_source import DataSource
 from .decorator.arg_hashing import (
     CODE_VALUE_TYPES,

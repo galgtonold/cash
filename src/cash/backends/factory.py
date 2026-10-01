@@ -18,7 +18,7 @@ import os
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from ..config import TIER_TYPES, TierConfig
+from ..config.schema import TIER_TYPES, TierConfig
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
@@ -30,11 +30,12 @@ from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
-    from cash.config import CashConfig
+    from cash.config.schema import CashConfig
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "TIER_FIELDS",
     "apply_persistence_settings",
     "build_backend_from_config",
     "build_tiered",
@@ -138,6 +139,19 @@ def _settings(tier: TierConfig, config: CashConfig) -> dict[str, Any]:
             "prefix": tier.prefix or config.s3_prefix,
         }
     raise ValueError(f"Unknown tier type {t!r}: one of {', '.join(sorted(TIER_TYPES))}.")
+
+
+#: The `TierConfig` fields each tier type is built from: the keys `_settings`
+#: reads for it (a test holds the two together). Any other field set on a tier
+#: does nothing, and `TierConfig` reports it (CONFIG-INVALID) rather than
+#: silently ignoring it.
+TIER_FIELDS: dict[str, frozenset[str]] = {
+    "memory": frozenset({"max_size_bytes", "max_entries"}),
+    "file": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "compress", "flush_interval"}),
+    "sqlite": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "db_path", "wal_mode"}),
+    "redis": frozenset({"host", "port", "db", "password", "prefix"}),
+    "s3": frozenset({"bucket", "region", "prefix"}),
+}
 
 
 def tier_cap(kind: str, settings: dict[str, Any], held_bytes: int = 0) -> int | None:

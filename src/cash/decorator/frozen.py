@@ -19,7 +19,7 @@ from ..object_hashing import builtin_hash
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 
 if TYPE_CHECKING:
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from .reporting import Notices
 
 #: A frozen object is re-hashed at its 8th use as an argument and every 64th

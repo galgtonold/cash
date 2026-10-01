@@ -26,7 +26,8 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.analysis.purity_analyzer import ISSUE_NETWORK_READ, PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_report import ISSUE_NETWORK_READ
 from cash.exceptions import CashImpureFunctionError
 
 pytestmark = [pytest.mark.timeout(120)]

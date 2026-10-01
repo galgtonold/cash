@@ -261,7 +261,7 @@ the statement if the read is cheap.
 
 ### A file read into a memo before cash was imported
 
-<!-- claim: cash/__init__.py:_watch_reads_from_import @25ca0666 -->
+<!-- claim: cash/__init__.py:_watch_reads_from_import @072f3639 -->
 **Symptom:** a cached function gets its config from a loader memoised with
 `functools.lru_cache`, you edit the config file, and the function returns
 the old result with no warning.

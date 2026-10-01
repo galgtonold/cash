@@ -19,10 +19,10 @@ import sys
 import threading
 from typing import TYPE_CHECKING, Any
 
-from cash.config import get_config
+from cash.config.resolve import get_config
 
 if TYPE_CHECKING:
-    from cash.config import CashConfig
+    from cash.config.schema import CashConfig
     from cash.core import Cash
 
 __all__ = [
