@@ -14,7 +14,6 @@ import time
 import pytest
 
 from cash.core import Cash
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
 @pytest.fixture
@@ -78,7 +77,6 @@ def _disk(c):
 
 
 def rates(x):
-    time.sleep(ABOVE_PERSISTENCE_FLOOR_S)  # past the persistence floor: reaches disk
     return x * 2
 
 

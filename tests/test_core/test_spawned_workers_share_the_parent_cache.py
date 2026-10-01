@@ -30,7 +30,6 @@ def test_the_parent_hits_what_a_spawned_worker_stored(tmp_path):
         @cash.cache(assume_safe=True)
         def work(x):
             print("RUN", x, file=sys.stderr)
-            time.sleep(0.15)                 # past the persistence floor
             return x * x
 
         if __name__ == "__main__":

@@ -704,18 +704,21 @@ def _retry_evidence(longrepr: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Persistence-floor constants for tests.
+# Persistence-floor constant for notebook tests.
 #
-# Cross-process persistence has a ~0.1 s compute floor (see
-# ``cash.backends.persistence_policy.COMPUTE_FLOOR_S``): a result cheaper
-# than that is never written past RAM. A test that spawns a second process and
-# asserts something about a *cached* value therefore proves nothing unless the
-# work exceeds the floor -- the second process simply recomputes, and the
-# assertion holds whether or not the bug under test exists. Two brand-new tests
-# passed against unfixed source exactly this way.
+# In a notebook, cash caches every statement and call unit by itself, so it
+# keeps a result past RAM only when recomputing it costs more than a compute
+# floor (``cash.backends.persistence_policy.COMPUTE_FLOOR_S``, 0.1 s). A
+# notebook test that restarts the kernel and asserts something about a
+# *cached* value therefore proves nothing unless the work exceeds the floor:
+# the restarted kernel simply recomputes, and the assertion holds whether or
+# not the bug under test exists.
 #
-# Use ABOVE_PERSISTENCE_FLOOR_S for the sleep, and assert the body ran once
-# across the runs so the test also proves the value was genuinely cached.
+# ``@cash.cache`` has no such floor: decorating a function is the decision to
+# cache it, however quick it is, so decorator tests need no sleep to reach
+# disk. Use ABOVE_PERSISTENCE_FLOOR_S only for notebook statements and call
+# units, and assert the body ran once so the test also proves the value was
+# genuinely cached.
 # ---------------------------------------------------------------------------
 ABOVE_PERSISTENCE_FLOOR_S = 0.2
 

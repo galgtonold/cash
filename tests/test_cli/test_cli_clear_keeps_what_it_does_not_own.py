@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -83,13 +82,11 @@ def _notebook_cache(cache_dir):
     from cash.backends.sqlite_backend import SQLiteBackend
     from cash.notebook import compute_baselines, loop_split
     from cash.notebook.statement.miss_guard import GUARD_AFTER_CONSECUTIVE_CHURN_MISSES, MissGuard
-    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
     c = Cash(cache_dir=str(cache_dir), register_magic=False)
 
     @c.cache
     def fit(x):
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         return x
 
     fit(1)

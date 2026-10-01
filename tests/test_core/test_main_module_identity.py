@@ -52,8 +52,6 @@ WORKER = """
     @c.cache(assume_safe=True)
     def work(n):
         print("COMPUTED")
-        import time
-        time.sleep(0.3)          # clear the persist floor so it reaches disk
         return n + 1
 
     if __name__ == "__main__":
@@ -147,8 +145,6 @@ def test_two_scripts_with_different_names_stay_apart(tmp_path):
 
             @c.cache(assume_safe=True)
             def F(n):
-                import time
-                time.sleep(0.3)
                 return n * {value}
 
             print(F(1))
@@ -188,7 +184,6 @@ PROGRAM = """
 
     @c.cache(assume_safe=True)
     def work(n):{extra}
-        time.sleep(0.3)
         print("COMPUTED")
         return helper(n) + THRESHOLD + {body_const}
 

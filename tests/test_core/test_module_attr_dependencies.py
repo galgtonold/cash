@@ -26,10 +26,6 @@ import types
 import cash
 from cash.decorator.code_identity import is_user_module
 
-# The sleep is load-bearing, not padding. Cross-process persistence has a
-# ~0.1s compute floor: a cheaper function is never written to disk, so every
-# fresh process recomputes and the test passes whether or not the bug exists.
-# Without it these two tests pass against the UNFIXED source -- a vacuous green.
 MAIN = """\
 import warnings; warnings.simplefilter('ignore')
 import time
@@ -41,7 +37,6 @@ RAN = [0]
 @cash.cache
 def compute(x):
     RAN[0] += 1
-    time.sleep(0.2)
     {body}
 
 print(compute(10), RAN[0])

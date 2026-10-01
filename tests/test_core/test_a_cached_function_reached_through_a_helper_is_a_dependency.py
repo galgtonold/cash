@@ -15,7 +15,6 @@ import time
 import pytest
 
 import cash
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 from tests.test_core._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
@@ -44,7 +43,6 @@ def load(n):
 
 @cash.cache
 def report(n):
-    time.sleep({floor})
     return {call}
 
 
@@ -75,7 +73,7 @@ EDITS = {
 def test_editing_the_cached_function_recomputes_the_caller(tmp_path, shape, edit):
     helper, call = SHAPES[shape]
     edits, env = EDITS[edit]
-    source = PIPELINE.format(shape=helper, call=call, floor=ABOVE_PERSISTENCE_FLOOR_S)
+    source = PIPELINE.format(shape=helper, call=call)
     first, after, uncached = edited_runs(tmp_path, {"main.py": source}, edits, env)
     assert first == "5"
     assert after == uncached != first
@@ -105,7 +103,6 @@ import cash
 
 @cash.cache
 def report(n):
-    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     {body}
 """
     files = {"inner.py": INNER, "top.py": top, "main.py": "import top\nprint(top.report(2))\n"}
@@ -128,7 +125,6 @@ def test_the_caller_refreshes_at_the_ttl_of_a_cached_function_behind_a_helper(tm
 
     @c.cache
     def report(n):
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         return prepare(n)
 
     first = report(1)

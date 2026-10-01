@@ -7,8 +7,7 @@ The helper name is still statically visible (it is a read name), so
 this is trackable; only genuinely dynamic dispatch (`getattr(m, s)()`) is not.
 
 Cross-process, because the stale-serve only shows up when a second process
-rebuilds the key and matches the persisted entry. `time.sleep(0.3)` clears the
-persistence floor; without it nothing persists and the test is vacuous.
+rebuilds the key and matches the persisted entry.
 """
 
 from __future__ import annotations
@@ -48,14 +47,12 @@ RAN = [0]
 @cash.cache
 def via_variable(x):
     RAN[0] += 1
-    time.sleep(0.3)
     fn = helper          # reached through a value, not called by name
     return fn(x)
 
 @cash.cache
 def via_argument(x):
     RAN[0] += 1
-    time.sleep(0.3)
     return _apply(helper, x)   # helper passed as an argument
 
 print("V", via_variable(5), "A", via_argument(5), "RAN", RAN[0])

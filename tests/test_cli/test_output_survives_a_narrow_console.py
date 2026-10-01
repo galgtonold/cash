@@ -24,7 +24,6 @@ import cash, time
 
 @cash.cache
 def 数据(x):
-    time.sleep(0.2)  # past the persistence floor: the entry reaches disk
     return x
 
 数据(1)

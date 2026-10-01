@@ -223,11 +223,13 @@ features, feature pairs or step sequences per second of runtime, and writes
 2. Run the relevant integration tests, chosen as above.
 3. Show that a new test fails without the fix: `python scripts/fails_first.py <test file>`.
    It runs the tests against the last commit's `src/` in a temporary worktree and fails if any pass anyway. Common ways a
-   test passes vacuously: the mechanism never engages (a cached function faster
-   than the persistence floor is never written to disk; sleep
-   `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S`), empty input satisfies the
-   assertion, a different gate stands in for the real one, or state is checked
-   instead of behaviour. Give every filter or exclusion a positive control.
+   test passes vacuously: the mechanism never engages (in a notebook, a
+   statement or call unit faster than the persistence floor is never written
+   to disk; sleep `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S` there. A
+   `@cash.cache` function persists however quick it is, so decorator tests
+   need no such sleep), empty input satisfies the assertion, a different gate
+   stands in for the real one, or state is checked instead of behaviour. Give
+   every filter or exclusion a positive control.
 
 ### Debugging
 

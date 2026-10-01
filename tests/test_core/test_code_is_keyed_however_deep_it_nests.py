@@ -26,7 +26,6 @@ import cash
 from cash import Cash
 from cash.decorator.globals_fold import stabilize_for_global_hash
 from cash.source_norm import opaque_identity
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 pytestmark = [pytest.mark.core]
 
@@ -67,7 +66,6 @@ JOB = """
     @cash.cache
     def run(arg):
         print("[RUN]", file=sys.stderr)  # @cash:assume-safe
-        time.sleep({sleep})  # @cash:assume-safe
         return {body}
 
 
@@ -77,7 +75,7 @@ JOB = """
 
 def _edited_answer(tmp_path: Path, helper: str, edit: tuple[str, str], body: str) -> list[tuple[str, int]]:
     _write(tmp_path / "helper.py", helper)
-    _write(tmp_path / "job.py", JOB.format(sleep=ABOVE_PERSISTENCE_FLOOR_S, body=body))
+    _write(tmp_path / "job.py", JOB.format(body=body))
     runs = [_run(tmp_path), _run(tmp_path)]
     old, new = edit
     assert old in helper

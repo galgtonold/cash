@@ -136,9 +136,10 @@ python scripts/fails_first.py tests/test_core/test_your_change.py
 ```
 
 It runs your tests against the last commit's `src/` in a temporary
-worktree, and fails if they pass anyway. A test can pass vacuously when the mechanism never engages (a cached
-function faster than the persistence floor never reaches disk; sleep
-`tests.conftest.ABOVE_PERSISTENCE_FLOOR_S`), when empty input satisfies the
+worktree, and fails if they pass anyway. A test can pass vacuously when the mechanism never engages (in a
+notebook, a statement faster than the persistence floor never reaches disk;
+sleep `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S` there. A `@cash.cache`
+function persists however quick it is), when empty input satisfies the
 assertion, or when it checks state instead of behaviour.
 
 **Changing behaviour the docs describe:**

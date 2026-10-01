@@ -91,7 +91,6 @@ def test_a_file_rewritten_during_the_call_is_not_cached(c, tmp_path):
         with open(path, encoding="utf-8") as fh:
             value = sum(int(x) for x in fh.read().split())
         writer.after_read()
-        time.sleep(0.2)  # over the persistence floor
         return value
 
     with warnings.catch_warnings(record=True) as rec:

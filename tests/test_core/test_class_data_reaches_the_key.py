@@ -20,8 +20,8 @@ the value changed, with no warning:
 * a user transformer in a library pipeline whose ``transform`` reads a
   module constant.
 
-Fresh process per run; the body sleeps past the persistence floor and prints
-RAN, so an unchanged second run proves nothing over-invalidates.
+Fresh process per run; the body prints RAN, so an unchanged second run proves
+nothing over-invalidates.
 """
 
 from __future__ import annotations
@@ -156,7 +156,6 @@ MAIN = textwrap.dedent("""
 
     def body():
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
 
     @cash.cache
     def base_method(x):
@@ -415,7 +414,6 @@ SKLEARN_MAIN = textwrap.dedent("""
     @cash.cache
     def predict(x):
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
         return float(PIPE.transform(np.array([[x]]))[0, 0])
 
     print(json.dumps({"predict": predict(2.0)}))

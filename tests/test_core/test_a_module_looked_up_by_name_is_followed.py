@@ -17,7 +17,6 @@ import pytest
 
 import cash
 from cash.exceptions import CashImpureFunctionError, CashImpurityWarning
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 from tests.test_core._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
@@ -48,7 +47,6 @@ import helper
 
 @cash.cache
 def f(x):
-    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     return {call}
 
 

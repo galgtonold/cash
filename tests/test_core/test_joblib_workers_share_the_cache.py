@@ -30,7 +30,6 @@ from joblib import Parallel, delayed
 @cash.cache(assume_safe=True)
 def work(x):
     print("RUN", x, file=sys.stderr)
-    time.sleep(0.15)                 # past the persistence floor
     return x * x
 """
 

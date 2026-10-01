@@ -132,7 +132,6 @@ def get_settings():
 @cash.cache
 def convert(amount):
     print("RAN", file=sys.stderr)
-    time.sleep(0.25)          # over the persistence floor: the entry must reach disk
     return round(amount * get_settings()["rate"], 2)
 
 if __name__ == "__main__":
@@ -192,7 +191,6 @@ from config import load_cfg
 @cash.cache
 def f(x):
     print("RAN", file=sys.stderr)
-    time.sleep(0.25)          # over the persistence floor: the entry must reach disk
     return x * load_cfg()["k"]
 
 print(f(2))

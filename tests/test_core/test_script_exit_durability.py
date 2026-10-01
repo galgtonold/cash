@@ -21,11 +21,6 @@ def test_decorator_writes_survive_script_exit(tmp_path: Path):
     """A script that computes a cached value, then exits cleanly, must
     leave the cache files on disk. Cash's atexit handler must drain
     the per-backend async writes before the process terminates.
-
-    The compute is deliberately slow enough (>= 0.1s) to clear the
-    default smart-persistence floor — that policy decides whether a
-    value gets promoted to disk at all, and is orthogonal to the
-    async-write durability we're testing here.
     """
     cache_dir = tmp_path / "cash"
     script = textwrap.dedent(f"""
@@ -34,7 +29,6 @@ def test_decorator_writes_survive_script_exit(tmp_path: Path):
         c = Cash(cache_dir={str(cache_dir)!r}, register_magic=False)
         @c.cache
         def expensive(x):
-            time.sleep(0.15)  # clear the smart-persistence 0.1s compute floor
             return x * 2
         result = expensive(123)
         assert result == 246
@@ -77,7 +71,6 @@ def test_cache_value_readable_in_second_script(tmp_path: Path):
 
         @c.cache
         def expensive(x):
-            time.sleep(0.15)  # clear smart-persistence 0.1s floor
             n = int(sentinel.read_text()) if sentinel.exists() else 0
             sentinel.write_text(str(n + 1))
             return x * 2
