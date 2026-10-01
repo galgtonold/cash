@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
 from ..effects import environment_component, environment_input
-from ..object_hashing import compute_hash_full, is_identity_fallback_hash
+from ..object_hashing import compute_hash, is_identity_fallback_hash
 from ..source_norm import module_identity
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
@@ -176,7 +176,7 @@ def no_cache_value_digest(value: Any) -> str:
     its readers always recompute: the identity fallback stays the same under
     in-place change, and a new object can reuse an old one's address.
     """
-    digest = compute_hash_full(value)
+    digest = compute_hash(value)
     if is_identity_fallback_hash(value, digest):
         return "fresh:" + secrets.token_hex(16)
     return digest

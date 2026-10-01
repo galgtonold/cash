@@ -6,15 +6,16 @@ cannot drift apart on what makes two values the same:
 * ``builtin_hash`` and the per-library hashers under it (pandas, numpy,
   polars, PyArrow, modin, dask) read every byte of a value together with its
   schema -- column names, dtypes, an array's memory layout. The decorator keys
-  arguments on them; ``compute_hash_full`` uses them for the notebook's
-  per-iteration loop keys and call keys.
+  arguments on them; ``compute_hash`` uses them for every value the notebook
+  hashes.
 * ``stable_key_repr`` is the canonical form a key pickles a value in: sets and
   dicts in a stable order, every container tagged with its type.
-* ``compute_hash`` hashes a value's whole content too, a collection of
-  frames item by item. It is the ``compute_hash_fn`` seam threaded into
-  ``StatementProcessor`` and ``UpstreamChecker``, and what ``Restorer`` checks
-  a restored object against. No value hash here samples: a sample decides
-  "unchanged" for an edit outside it.
+* ``compute_hash`` is the notebook's one value hash: a value's whole
+  content, a collection of frames item by item. It is the ``compute_hash_fn``
+  seam threaded into ``StatementProcessor`` and ``UpstreamChecker``, what
+  ``Restorer`` checks a restored object against, and the digest of a loop
+  variable, a call's arguments and the globals a call writes. No value hash
+  here samples: a sample decides "unchanged" for an edit outside it.
 
 And every size cash estimates, from one set of rules for what a frame, an
 array or a sparse matrix holds:
@@ -594,7 +595,7 @@ _NATIVE_STATE: dict[type, bool] = {}
 
 # ---------------------------------------------------------------------------
 # Content hashers: one per library, shared by the decorator's argument keys and
-# the notebook's full-content hash (`compute_hash_full`)
+# the notebook's value hash (`compute_hash`)
 # ---------------------------------------------------------------------------
 
 
@@ -1193,6 +1194,9 @@ def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
     return hash_value == identity_hash(obj)
 
 
+_COLLECTIONS = frozenset((list, tuple, dict, set, frozenset))
+
+
 def compute_hash(obj: Any) -> str:
     """Hash *obj* over its whole content, with explicit fallbacks.
 
@@ -1205,11 +1209,17 @@ def compute_hash(obj: Any) -> str:
        ``is_identity_fallback_hash`` for why this tier is content-BLIND, not
        merely a cruder content hash.
 
-    Never a sample. This is the ``compute_hash_fn`` seam of the notebook: a
-    variable with no lineage is keyed on it, and every "did this value change?"
-    check (a call's arguments, a restored input, a loop's mutated variables)
-    compares two of its digests. A digest of a frame's first rows or a list's
-    ends let an edit elsewhere read as no change.
+    Never a sample. This is the notebook's one value hash: a variable with no
+    lineage, a loop variable, a call's arguments and the globals a call
+    writes are keyed on it, and every "did this value change?" check (a
+    restored input, a loop's mutated variables) compares two of its digests.
+    A digest of a frame's first rows or a list's ends let an edit elsewhere
+    read as no change.
+
+    A library value goes through ``builtin_hash``, the hasher the decorator
+    keys arguments on, so it carries the value's schema as well: an ``int64``
+    and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
+    F-ordered array holding equal values hash apart.
     """
     type_name = type(obj).__name__
 
@@ -1227,7 +1237,9 @@ def compute_hash(obj: Any) -> str:
             return hashlib.sha256(
                 f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}".encode("utf-8")
             ).hexdigest()
-        if isinstance(obj, (list, tuple, dict, set, frozenset)):
+        if type(obj) in _COLLECTIONS:
+            # Exact types: a subclass is pickled whole, with the attributes
+            # it holds beside its items.
             return _hash_collection(obj)
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     except _HASH_ERRORS as exc:
@@ -1246,33 +1258,6 @@ def compute_hash(obj: Any) -> str:
             raise
 
     return identity_hash(obj)
-
-
-def compute_hash_full(obj: Any) -> str:
-    """Full-content hash for cache-KEY discrimination.
-
-    Hashes every byte, as ``compute_hash`` does; the two differ in how they
-    hash a collection and a namedtuple, so each keeps the digests its keys
-    already hold.
-
-    A library value goes through ``builtin_hash``, the hasher the decorator
-    keys arguments on, so it carries the value's schema as well: an ``int64``
-    and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
-    F-ordered array holding equal values key apart here too. Anything else is
-    pickled whole; what cannot be pickled falls back to ``compute_hash``.
-    """
-    digest = builtin_hash(obj)
-    if digest is not None:
-        return digest
-    try:
-        return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-    except _HASH_ERRORS as exc:
-        logger.debug("Full hash failed for %s: %s", type(obj).__name__, exc)
-    except BaseException as exc:
-        if not is_native_panic(exc):
-            raise
-        logger.debug("Full hash of a %s panicked: %s", type(obj).__name__, exc)
-    return compute_hash(obj)
 
 
 # ---------------------------------------------------------------------------

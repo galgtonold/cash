@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from ...object_hashing import compute_hash_full
+from ...object_hashing import compute_hash
 from ...value_types import IMMUTABLE_PRIMS
 
 if TYPE_CHECKING:
@@ -180,12 +180,10 @@ def build_iteration_context(
             continue
         # repr() TRUNCATES large numpy/pandas objects and embeds addresses for
         # plain objects, so hash the full content. Reuse the caller's digest
-        # when it has one: it is the same `compute_hash_full` of the same
-        # object. Do NOT weaken the fallback to `compute_hash` -- a sampled
-        # hash here is exactly the collision this exists to prevent.
+        # when it has one: it is the same `compute_hash` of the same object.
         digest = digests.get(name)
         if digest is None:
-            digest = compute_hash_full(value)
+            digest = compute_hash(value)
         try:
             hash(value)
         except TypeError:
@@ -211,7 +209,7 @@ def compute_context_hash(context: dict[str, Any]) -> str:
         if not _is_primitive(value):
             digest = context.get(_DIGEST_PREFIX + key)
             if digest is None:
-                digest = compute_hash_full(value)
+                digest = compute_hash(value)
             value = digest
         items.append((key, value))
     context_str = str(sorted(items))

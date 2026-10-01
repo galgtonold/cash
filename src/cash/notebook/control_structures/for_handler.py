@@ -29,7 +29,7 @@ from cash.control_markers import iteration_digest, mark_iteration
 
 from ...analysis.mutations import accumulator_loop_body_shape, cacheable_accumulator_loop
 from ...lineage_tag import own_tag
-from ...object_hashing import compute_hash_full
+from ...object_hashing import compute_hash
 from ...tracking.file_tracker import FileAccessTracker
 from ..cache_status import CacheStatus
 from ..loop_split import split_nodes
@@ -404,9 +404,8 @@ class ForLoopHandler:
         for name, val in bindings.items():
             try:
                 # The loop variable's hash IS the per-iteration cache-key
-                # discriminator: hash full content here, never a sample, or
-                # two iterations over arrays agreeing in it share ONE entry.
-                full = compute_hash_full(val)
+                # discriminator: its whole content.
+                full = compute_hash(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]` want
                 # different things. `variable_lineage` wants PROVENANCE, and
                 # `val`'s own `_cash_lineage_hash` is the cheap right answer.
@@ -414,7 +413,7 @@ class ForLoopHandler:
                 # discriminator: a tag names where a value came from, not
                 # what it holds, and if two frames carried one tag,
                 # `for df in [df_a, df_b]:` would collapse iteration 2 onto
-                # iteration 1's cached value. Only `compute_hash_full` of
+                # iteration 1's cached value. Only `compute_hash` of
                 # `val` answers it soundly -- one full hash per iteration.
                 tag = own_tag(val)
                 h = tag if tag is not None else full
@@ -425,7 +424,7 @@ class ForLoopHandler:
 
         # `loop_var_digests` is fully populated by the loop above, over these
         # same bindings. Handing it over stops `build_iteration_context`
-        # recomputing an identical `compute_hash_full` on an identical object --
+        # recomputing an identical `compute_hash` on an identical object --
         # a full duplicate of the most expensive thing an iteration does when
         # the loop target is large.
         iteration_context = build_iteration_context(target_names, self.shell.user_ns, parent_context, loop_var_digests)

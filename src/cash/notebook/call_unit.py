@@ -1008,7 +1008,7 @@ class CallCache:
         Same reasoning as :meth:`_default_loop_vars`. ``{}`` here is what
         ``call_cache_key``'s ``_loop_var_digest`` already treats as "no
         precomputed digest" -- it falls through to a fresh
-        ``compute_hash_full`` of the value, correct, merely undiscounted.
+        ``compute_hash`` of the value, correct, merely undiscounted.
         """
         return {}
 

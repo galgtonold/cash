@@ -221,7 +221,7 @@ An earlier cell re-run can see the changed data.
 
 ### A loop variable changed before it is read
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @6a19a3f5 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @08e3c37d -->
 This one can give a wrong answer on the first Run All. cash keys each iteration
 on the loop variable's value when the `for` binds it. A body that changes that
 value, or computes a new body-local variable, before the cached work is not seen:

@@ -187,7 +187,7 @@ class CallRouting:
         # own names only -- deliberately NOT pre-merged with an ancestor
         # loop's digests, unlike ``_loop_vars``). Exists so
         # ``call_key._loop_var_digest`` can look a digest up instead of
-        # recomputing ``compute_hash_full`` on every intercepted call --
+        # recomputing ``compute_hash`` on every intercepted call --
         # ``for_handler.py`` already computes this exact hash once per
         # iteration for ``variable_lineage``, and this reuses it.
         #
