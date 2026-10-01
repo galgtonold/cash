@@ -362,7 +362,6 @@ class TestCashCleanup:
             return x * 2
 
         compute(1)
-        time.sleep(0.5)
         removed = c.cleanup(max_age=0)  # Remove everything
         assert removed >= 0
 

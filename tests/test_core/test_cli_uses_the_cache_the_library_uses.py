@@ -170,7 +170,7 @@ def a_cache_in_a_file_tier_s_own_dir(tmp_path):
         encoding="utf-8",
     )
     (tmp_path / "model.py").write_text(
-        "import cash, time\n@cash.cache(assume_safe=True)\ndef f(x):\n    time.sleep(0.3)\n    return x + 1\nf(1)\n",
+        "import cash\n@cash.cache(assume_safe=True)\ndef f(x):\n    return x + 1\nf(1)\n",
         encoding="utf-8",
     )
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}

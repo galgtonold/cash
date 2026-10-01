@@ -114,7 +114,6 @@ def test_the_replay_still_hits_and_is_complete(disk_cash):
     def stream():
         calls.append(1)
         for i in range(4):
-            time.sleep(0.1)
             yield i
 
     with warnings.catch_warnings():
@@ -131,7 +130,6 @@ def test_a_partially_consumed_generator_stores_nothing(disk_cash):
     def stream():
         calls.append(1)
         for i in range(6):
-            time.sleep(0.05)
             yield i
 
     with warnings.catch_warnings():
@@ -171,7 +169,6 @@ def test_a_lazily_read_file_is_still_a_dependency(disk_cash, tmp_path):
     @disk_cash.cache
     def stream():
         yield "start"
-        time.sleep(0.12)
         yield data.read_text(encoding="utf-8")
 
     with warnings.catch_warnings():
@@ -191,7 +188,6 @@ def test_the_callers_own_file_reads_are_not_attributed(disk_cash, tmp_path):
     @disk_cash.cache
     def stream():
         calls.append(1)
-        time.sleep(0.12)
         yield 1
         yield 2
 
@@ -393,7 +389,6 @@ def test_a_cached_generator_survives_a_fresh_cash_instance(tmp_path):
         def stream():
             runs.append(1)
             for i in range(5):
-                time.sleep(0.03)
                 yield i
 
         return stream
@@ -421,7 +416,6 @@ def test_a_manifest_whose_chunks_vanished_is_a_miss_not_a_short_answer(tmp_path)
     def stream():
         runs.append(1)
         for i in range(6):
-            time.sleep(0.02)
             yield i
 
     with warnings.catch_warnings():

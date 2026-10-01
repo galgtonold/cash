@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 import types
 import weakref
 
@@ -50,7 +49,6 @@ log.propagate = False
 
 
 def step(n):
-    time.sleep(0.01)
     log.warning("step %d", n)
     return n + 1
 
