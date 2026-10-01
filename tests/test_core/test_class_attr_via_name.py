@@ -82,7 +82,7 @@ def test_only_user_classes_are_folded():
     import collections
     import decimal
 
-    from cash.decorator.code_identity import is_user_class
+    from cash.decorator.user_code import is_user_class
 
     # stdlib / builtin classes -> excluded
     assert is_user_class(decimal.Decimal) is False

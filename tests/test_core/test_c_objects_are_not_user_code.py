@@ -27,7 +27,8 @@ import warnings
 import pytest
 
 from cash import Cash, FileBackend
-from cash.decorator.code_identity import is_user_code_module, is_user_code_object
+from cash.decorator.user_code import is_user_code_object
+from cash.install_paths import is_user_code_module
 
 log = logging.getLogger("cash-test.c-objects.work")
 

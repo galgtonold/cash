@@ -24,13 +24,13 @@ import sys
 import types
 
 import cash
-from cash.decorator.code_identity import is_user_module
+from cash.install_paths import is_user_module
 
 MAIN = """\
 import warnings; warnings.simplefilter('ignore')
 import time
 import cash
-from cash.decorator.code_identity import is_user_module
+from cash.install_paths import is_user_module
 import conf
 RAN = [0]
 

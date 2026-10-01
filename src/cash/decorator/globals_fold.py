@@ -31,23 +31,14 @@ from ..analysis.purity_analyzer import (
 from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
+from ..install_paths import is_user_module
 from ..source_norm import getsource, own_source
 from ..value_types import CODELESS_PRIMS, IMMUTABLE_LEAF_TYPES
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
-from .code_identity import (
-    SYNC_TYPES,
-    cash_wrapped,
-    hash_callable_source,
-    is_cash_wrapper,
-    is_user_class,
-    is_user_code_object,
-    is_user_module,
-    iter_contained,
-    own_package,
-    wraps_code,
-)
+from .code_identity import SYNC_TYPES, hash_callable_source, iter_contained
+from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
     from ..dependency_state import DependencyStateHasher

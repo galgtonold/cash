@@ -1045,7 +1045,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @a8991ed8, cash/install_paths.py:is_user_module @a54a6d7a, cash/decorator/code_identity.py:is_user_code_object @07d4f95a -->
+<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @a8991ed8, cash/install_paths.py:is_user_module @a54a6d7a, cash/decorator/user_code.py:is_user_code_object @07d4f95a -->
 **What happened.** A function, class or object from your own code reached a
 cached call (as an argument or a default), and cash could not hash its code.
 The typical case is a class of yours whose behaviour comes from a compiled

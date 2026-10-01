@@ -28,10 +28,9 @@ from .code_identity import (
     SYNC_TYPES,
     code_fingerprint,
     hash_callable_source,
-    is_cash_wrapper,
     is_immutable_capture,
-    is_user_code_object,
 )
+from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher

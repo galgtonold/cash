@@ -1,7 +1,7 @@
 import sys
 import types
 
-from cash.decorator.code_identity import is_user_code_module
+from cash.install_paths import is_user_code_module
 
 
 def test_a_fileless_module_counts_as_user_code():

@@ -13,7 +13,7 @@ import types
 
 from cash.analysis.namespace_effects import user_callee_writing_files
 from cash.analysis.purity_analyzer import own_code_is_user
-from cash.decorator.code_identity import is_user_class
+from cash.decorator.user_code import is_user_class
 from cash.install_paths import clear_caches
 
 # The verdicts are imported inside each test: `scripts/fails_first.py` runs

@@ -35,11 +35,13 @@ from ..exceptions import (
     CashImpureFunctionError,
     CashImpurityWarning,
 )
+from ..install_paths import is_user_module
 from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
-from .code_identity import func_key, is_user_module, own_package
+from .code_identity import func_key
 from .globals_fold import plain_data_kind
+from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..config import CashConfig

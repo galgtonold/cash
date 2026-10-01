@@ -22,8 +22,8 @@ from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
-from .code_identity import cached_function_in, is_user_code_object
 from .globals_fold import class_surface_functions
+from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher

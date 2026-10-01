@@ -108,7 +108,7 @@ def test_a_notebook_defined_class_has_no_source_but_is_still_user_code(nb_runner
             "except Exception as exc:\n"
             "    SOURCE_ERR = type(exc).__name__\n"
             "_c = cash.Cash()\n"
-            "from cash.decorator.code_identity import is_user_code_object\n"
+            "from cash.decorator.user_code import is_user_code_object\n"
             "IS_USER_CODE = is_user_code_object(Schema)\n"
             "DIGEST = _c._code.code_surface_hash(Schema)\n",
         ],
