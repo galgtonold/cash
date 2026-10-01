@@ -20,8 +20,11 @@ __all__ = [
     "params_mutated_in_function",
     "standalone_call_arg_targets",
     "function_arg_mutations",
+    "scope_locals",
     "free_vars_mutated_in_function",
+    "module_function_global_changes",
     "source_global_mutations",
+    "source_called_names",
     "callee_global_mutations",
     "stateful_self_functions",
     "partial_arg_mutations",
@@ -208,64 +211,229 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
     return frozenset(out)
 
 
-def free_vars_mutated_in_function(
-    func: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> frozenset[str]:
-    """Module-global / free variables a function body mutates in place.
+def _collect_bound_names(target: ast.AST, out: set[str]) -> None:
+    """Names bound by an assignment target (``Name`` / nested tuple/list)."""
+    if isinstance(target, ast.Name):
+        out.add(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List, ast.Starred)):
+        for el in ast.iter_child_nodes(target):
+            _collect_bound_names(el, out)
 
-    A name mutated in place (``items.append``, ``store[k]=``, ``g += 1`` under a
-    ``global`` declaration) that is neither a parameter nor a plain local
-    assignment is a free variable resolved from the enclosing / module scope —
-    calling the function mutates that global. Parameter mutations are a
-    separate job and are excluded; a name rebound locally (``acc = []`` then
-    ``acc.append``) refers to the local and is excluded, UNLESS declared
-    ``global`` / ``nonlocal``.
+
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def scope_locals(scope_node: ast.AST) -> frozenset[str]:
+    """Names local to a function (or class body) scope: parameters plus the
+    names it binds, minus any declared ``global``/``nonlocal``.
+
+    Every binding form counts (``=``, annotated and augmented assignment,
+    ``:=``, ``for`` and ``with`` targets, ``except ... as``, imports, and the
+    names of nested ``def``/``class``), because Python makes each of them
+    local to the whole scope. Nested scopes are not entered.
     """
-    params = all_param_names(func)
-    global_decls: set[str] = set()
-    local_assigned: set[str] = set()
-    for node in ast.walk(func):
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            global_decls.update(node.names)
-        elif isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                for leaf in iter_store_targets(tgt):
-                    if isinstance(leaf, ast.Name):
-                        local_assigned.add(leaf.id)
-    visitor = MutationVisitor()
-    for stmt in func.body:
+    args = getattr(scope_node, "args", None)
+    locs: set[str] = set()
+    decl: set[str] = set()
+    if args is not None:
+        for a in args.posonlyargs + args.args + args.kwonlyargs:
+            locs.add(a.arg)
+        if args.vararg:
+            locs.add(args.vararg.arg)
+        if args.kwarg:
+            locs.add(args.kwarg.arg)
+    body = getattr(scope_node, "body", [])
+    # A lambda's body is a single expression, not a statement list.
+    stack = list(body) if isinstance(body, list) else [body]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, _NESTED_SCOPES):
+            if not isinstance(n, ast.Lambda):
+                locs.add(n.name)
+            continue  # separate scope
+        if isinstance(n, (ast.Global, ast.Nonlocal)):
+            decl.update(n.names)
+        elif isinstance(n, ast.Assign):
+            for t in n.targets:
+                _collect_bound_names(t, locs)
+        elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            if isinstance(n.target, ast.Name):
+                locs.add(n.target.id)
+        elif isinstance(n, (ast.For, ast.AsyncFor)):
+            _collect_bound_names(n.target, locs)
+        elif isinstance(n, (ast.With, ast.AsyncWith)):
+            for item in n.items:
+                if item.optional_vars:
+                    _collect_bound_names(item.optional_vars, locs)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            locs.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for al in n.names:
+                locs.add(al.asname or al.name.split(".")[0])
+        stack.extend(ast.iter_child_nodes(n))
+    return frozenset(locs - decl)
+
+
+#: Mutation kinds that come from a method call on the receiver.
+_METHOD_MUTATION_KINDS = frozenset({"method_call", "inplace_kwarg"})
+
+
+class _ScopeMutations(MutationVisitor):
+    """:class:`MutationVisitor` over ONE scope.
+
+    Nested functions, lambdas and classes are collected in ``nested`` rather
+    than entered; what runs in this scope when they are defined (decorators,
+    defaults, bases) is visited. A comprehension's own loop variables are its
+    locals, so a mutation of one is dropped. ``stored`` collects every name
+    rebound or deleted here, ``declared`` the ``global``/``nonlocal`` names.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.nested: list[ast.AST] = []
+        self.stored: set[str] = set()
+        self.declared: set[str] = set()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        for expr in (*node.decorator_list, *node.args.defaults, *(d for d in node.args.kw_defaults if d)):
+            self.visit(expr)
+        self.nested.append(node)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        for expr in (*node.args.defaults, *(d for d in node.args.kw_defaults if d)):
+            self.visit(expr)
+        self.nested.append(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for expr in (*node.decorator_list, *node.bases, *(k.value for k in node.keywords)):
+            self.visit(expr)
+        self.nested.append(node)
+
+    def _visit_comprehension(self, node: ast.AST) -> None:
+        inner = _ScopeMutations()
+        inner.generic_visit(node)
+        targets: set[str] = set()
+        for gen in node.generators:  # type: ignore[attr-defined]
+            _collect_bound_names(gen.target, targets)
+        self.mutations.extend(m for m in inner.mutations if m.variable not in targets)
+        self.nested.extend(inner.nested)
+        self.stored |= inner.stored - targets
+
+    visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _visit_comprehension
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.stored.add(node.id)
+
+    def visit_Global(self, node: ast.Global) -> None:
+        self.declared.update(node.names)
+
+    visit_Nonlocal = visit_Global
+
+
+def _scope_free_changes(scope: ast.AST, module_names: frozenset[str]) -> set[str]:
+    visitor = _ScopeMutations()
+    body = scope.body  # type: ignore[attr-defined]
+    for stmt in body if isinstance(body, list) else [body]:
         visitor.visit(stmt)
-    mutated = {m.variable for m in visitor.mutations}
-    local_assigned -= global_decls
-    return frozenset(mutated - params - local_assigned)
+    own = scope_locals(scope)
+    changed = {
+        m.variable for m in visitor.mutations if not (m.kind in _METHOD_MUTATION_KINDS and m.variable in module_names)
+    }
+    changed = (changed - own) | (visitor.declared & visitor.stored)
+    # A function's free names include those of the functions it defines,
+    # unless they are its own locals. A class body is not an enclosing scope
+    # for its methods, so its locals do not hide theirs.
+    hides = frozenset() if isinstance(scope, ast.ClassDef) else own
+    for nested in visitor.nested:
+        changed |= _scope_free_changes(nested, module_names) - hides
+    return changed
+
+
+def free_vars_mutated_in_function(
+    func: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+    *,
+    module_names: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """Free names calling *func* changes: the one answer to "which globals
+    does this function change".
+
+    A name counts when the body (or a function it defines) changes it in
+    place -- a mutating method (``append``, ``popitem``, ``setdefault``, a
+    pandas ``inplace=True`` call), a subscript or attribute store, ``+=``,
+    ``del x[k]``, a numpy ``out=`` -- or rebinds it under ``global`` /
+    ``nonlocal``, and the name is not local to the scope that does it. The
+    scope model is Python's: a parameter, any binding (loop and ``with``
+    targets, annotated assignments included) or a comprehension variable is
+    local, so ``for r in rows: r.append(1)`` changes no global.
+
+    *module_names* are names bound to imported modules: a method call on one
+    (``requests.post``) calls a function, it does not change the module.
+
+    The decorator's module scan, the notebook's callee analysis and the call
+    units all read this, so they cannot disagree on what a write is.
+    """
+    return frozenset(_scope_free_changes(func, module_names))
+
+
+def module_function_global_changes(tree: ast.Module, module_names: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Module globals changed by any function or lambda defined in *tree*.
+
+    Code at module level (a class body included) runs once, at import, so
+    what it changes is not counted; every function body, at any depth, is.
+    """
+    out: set[str] = set()
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                out |= free_vars_mutated_in_function(child, module_names=module_names)
+            else:
+                stack.append(child)
+    return frozenset(out)
+
+
+def _parse_function(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    try:
+        parsed = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    node = parsed.body[0] if parsed.body else None
+    return node if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
 
 
 @functools.lru_cache(maxsize=4096)
 def source_global_mutations(source: str) -> frozenset[str]:
-    """Globals the function defined by *source* mutates in place.
+    """Globals the function defined by *source* itself changes
+    (:func:`free_vars_mutated_in_function`).
 
-    The one per-callee answer to "which globals does calling this function
-    change": the free variables its body mutates (see
-    :func:`free_vars_mutated_in_function`). Every engine asks this, whether it
-    found the source through the user namespace, the notebook's cell text or a
-    live function object, so they cannot disagree on what counts as a
-    callee's write.
-
-    Empty for anything that is not a single function definition; never raises.
-    The verdict is purely syntactic (no namespace is consulted), so memoising
-    on the source text is sound.
+    Empty for anything that is not a single function definition. The verdict
+    is purely syntactic (no namespace is consulted), so memoising on the
+    source text is sound.
     """
-    try:
-        parsed = ast.parse(textwrap.dedent(source))
-    except (SyntaxError, ValueError, RecursionError):
-        return frozenset()
-    node = parsed.body[0] if parsed.body else None
-    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    node = _parse_function(source)
+    if node is None:
         return frozenset()
     try:
         return free_vars_mutated_in_function(node)
-    except (ValueError, RecursionError):
+    except RecursionError:
         return frozenset()
+
+
+@functools.lru_cache(maxsize=4096)
+def source_called_names(source: str) -> frozenset[str]:
+    """Free names the function defined by *source* calls as ``name(...)``.
+
+    A name the function binds itself (a parameter, a local) is not a call to
+    another module-level function, so it is left out.
+    """
+    node = _parse_function(source)
+    if node is None:
+        return frozenset()
+    return called_names(node) - scope_locals(node)
 
 
 def callee_global_mutations(
@@ -283,9 +451,9 @@ def callee_global_mutations(
     narrows the result with
     :func:`~cash.analysis.namespace_effects.capturable_globals`.
 
-    Only the callee's own body counts: a global mutated by a helper the callee
-    calls is not detected (the write is then skipped on a hit, as for any call
-    cash cannot see into).
+    The callees' own callees count too, at any depth (``outer()`` calling
+    ``inner()``, which appends to ``LOG``), as for parameter mutations: a
+    hit skips the whole call, so every write inside it must be known.
 
     The statement path asks with ``scope="no_control_bodies"``: a loop or
     branch is one unit to the upstream simulation and to the accumulator
@@ -296,13 +464,20 @@ def callee_global_mutations(
     writes, including through a loop.
     """
     out: set[str] = set()
-    for name in called_names(tree, scope):
+    seen: set[str] = set()
+    pending = list(called_names(tree, scope))
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
         try:
             source = resolve_source(name)
         except Exception:  # noqa: BLE001 - a resolver must never break analysis
             continue
         if source:
             out |= source_global_mutations(source)
+            pending.extend(source_called_names(source))
     return frozenset(out)
 
 

@@ -101,7 +101,7 @@ _GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
 
 def callee_mutated_globals(fn) -> tuple[str, ...]:
     """Names in *fn*'s own globals, or in its closure, that calling *fn*
-    mutates in place, sorted.
+    changes, sorted.
 
     The same analysis the statement path applies to a callee it finds by name
     (:func:`~cash.analysis.callee_effects.source_global_mutations`), read from
@@ -113,7 +113,11 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     globals_dict = getattr(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
         return ()
-    cached = _source_mutations(fn)
+    # The functions *fn* reaches in the same namespace write those globals
+    # too, at any depth: a hit skips them along with *fn*.
+    cached = sorted(
+        {name for reached in _functions_reached_in(globals_dict, fn) for name in _source_mutations(reached)}
+    )
     # Filtered per call, not memoised: whether a name is bound (and not a
     # module) can change between calls, and the memo is about the source.
     capturable = capturable_globals(cached, globals_dict)
@@ -122,6 +126,33 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     # drops it, and the second `add('a')` was served the first one's length.
     cells = closure_cells(fn)
     return tuple(n for n in cached if n in cells or n in capturable)
+
+
+#: ``code object -> _code_names(code)``, so a call does not disassemble its
+#: callee on every invocation.
+_CODE_NAMES: LruMemo[Any, frozenset[str]] = LruMemo(CODE_OBJECTS)
+
+
+def _functions_reached_in(globals_dict: dict, fn) -> list:
+    """*fn* and every function it calls by a global name, at any depth, that
+    lives in *globals_dict* too."""
+    reached = [fn]
+    seen = {id(fn)}
+    pending = [fn]
+    while pending:
+        code = getattr(pending.pop(), "__code__", None)
+        if code is None:
+            continue
+        names = _CODE_NAMES.get(code)
+        if names is None:
+            names = _CODE_NAMES[code] = _code_names(code)
+        for name in names:
+            value = globals_dict.get(name)
+            if isinstance(value, _types.FunctionType) and value.__globals__ is globals_dict and id(value) not in seen:
+                seen.add(id(value))
+                reached.append(value)
+                pending.append(value)
+    return reached
 
 
 def _source_mutations(fn) -> tuple[str, ...]:
