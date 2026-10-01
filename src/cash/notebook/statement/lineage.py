@@ -60,6 +60,45 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _record_file_reads(
+    tracking_state: "TrackingState",
+    cache_key: str,
+    accessed_files: set[str] | None,
+    accessed_remote: set[str] | None,
+) -> str:
+    """Record the files and remote objects a statement read under its
+    *cache_key*; returns their lineage component (empty when it read none)."""
+    file_hash_component = ""
+    if accessed_files or accessed_remote:
+        file_hash_component = compute_file_hash_component(
+            accessed_files or set(),
+            accessed_remote,
+        )
+    if cache_key:
+        tracking_state.statement_file_reads[cache_key] = (
+            frozenset(accessed_files or ()),
+            frozenset(accessed_remote or ()),
+        )
+    return file_hash_component
+
+
+def _clear_rebound_edges(
+    tracking_state: "TrackingState", outputs: set[str], inputs: set[str], user_ns: dict[str, Any]
+) -> None:
+    """Drop the derivation-alias edges of the outputs a statement rebinds.
+
+    A fresh rebind (``g = ...`` — output not also read as an input) drops the
+    var's stale edges before they are re-detected; an in-place mutation
+    (``df.iloc[...] = ...`` — output IS an input) keeps them. All outputs are
+    cleared BEFORE any is detected: clearing ``fig`` also drops edges INTO
+    it, so ``fig, ax = plt.subplots()`` would lose ``ax -> fig`` whenever the
+    set happened to yield ``ax`` first.
+    """
+    for var_name in outputs:
+        if var_name in user_ns and var_name not in inputs:
+            clear_edges_for(tracking_state.derivation_edges, var_name)
+
+
 class StatementLineageBuilder:
     """Compute + record lineage hashes for statement outputs.
 
@@ -113,18 +152,7 @@ class StatementLineageBuilder:
         """
         captured_vars: dict[str, Any] = {}
         user_ns = self.shell.user_ns
-
-        file_hash_component = ""
-        if accessed_files or accessed_remote:
-            file_hash_component = compute_file_hash_component(
-                accessed_files or set(),
-                accessed_remote,
-            )
-        if cache_key:
-            tracking_state.statement_file_reads[cache_key] = (
-                frozenset(accessed_files or ()),
-                frozenset(accessed_remote or ()),
-            )
+        file_hash_component = _record_file_reads(tracking_state, cache_key, accessed_files, accessed_remote)
 
         # A draw READS its module's hidden RNG variable: fold that
         # variable's lineage into every output's lineage so a re-seed upstream
@@ -143,15 +171,7 @@ class StatementLineageBuilder:
         environment = statement_environment_component(code, user_ns)
         value_digests: dict[str, str] = {}
 
-        # Derivation-alias edges. A fresh rebind (``g = ...`` — output not also
-        # read as an input) drops the var's stale edges before we re-detect; an
-        # in-place mutation (``df.iloc[...] = ...`` — output IS an input) keeps
-        # them. All outputs are cleared BEFORE any is detected: clearing ``fig``
-        # also drops edges INTO it, so ``fig, ax = plt.subplots()`` would lose
-        # ``ax -> fig`` whenever the set happened to yield ``ax`` first.
-        for var_name in outputs:
-            if var_name in user_ns and var_name not in inputs:
-                clear_edges_for(tracking_state.derivation_edges, var_name)
+        _clear_rebound_edges(tracking_state, outputs, inputs, user_ns)
 
         # The inputs as the statement read them, taken once before any output
         # is recorded. Read inside the loop, an output that is also an input
@@ -183,27 +203,16 @@ class StatementLineageBuilder:
                 self._no_cache_value(value_digests, var_name, value) if no_cache else "",
             )
 
-            # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
-            # are written together and cannot drift.
-            tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
-
-            detect_derivation_edges(tracking_state.derivation_edges, var_name, value, user_ns)
-
-            self._apply_granular_module_update(tracking_state, var_name, value, output_lineage_hash)
-
-            if var_name not in tracking_state.executed_cell_hashes:
-                tracking_state.executed_cell_hashes[var_name] = set()
-            tracking_state.executed_cell_hashes[var_name].add(source_hash)
-
-            tracking_state.executed_cell_codes[var_name] = code
-
-            self._update_module_attribute_deps(tracking_state, var_name, code, user_ns)
-            self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash)
-
-            tracking_state.variable_sources[var_name] = cache_key
-
-            self._file_deps.update_for_var(
-                tracking_state, var_name, accessed_files, inputs, value, rebind=var_name not in inputs
+            self._record_output(
+                tracking_state,
+                var_name,
+                value,
+                output_lineage_hash,
+                code=code,
+                source_hash=source_hash,
+                cache_key=cache_key,
+                inputs=inputs,
+                accessed_files=accessed_files,
             )
 
         if cache_key:
@@ -227,6 +236,45 @@ class StatementLineageBuilder:
         )
 
         return captured_vars
+
+    def _record_output(
+        self,
+        tracking_state: "TrackingState",
+        var_name: str,
+        value: Any,
+        output_lineage_hash: str,
+        *,
+        code: str,
+        source_hash: str,
+        cache_key: str,
+        inputs: set[str],
+        accessed_files: set[str] | None,
+    ) -> None:
+        """Record everything the tracking state keeps about the output
+        *var_name*, once its lineage is known."""
+        user_ns = self.shell.user_ns
+        # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
+        # are written together and cannot drift.
+        tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
+
+        detect_derivation_edges(tracking_state.derivation_edges, var_name, value, user_ns)
+
+        self._apply_granular_module_update(tracking_state, var_name, value, output_lineage_hash)
+
+        if var_name not in tracking_state.executed_cell_hashes:
+            tracking_state.executed_cell_hashes[var_name] = set()
+        tracking_state.executed_cell_hashes[var_name].add(source_hash)
+
+        tracking_state.executed_cell_codes[var_name] = code
+
+        self._update_module_attribute_deps(tracking_state, var_name, code, user_ns)
+        self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash)
+
+        tracking_state.variable_sources[var_name] = cache_key
+
+        self._file_deps.update_for_var(
+            tracking_state, var_name, accessed_files, inputs, value, rebind=var_name not in inputs
+        )
 
     @staticmethod
     def _no_cache_value(digests: dict[str, str], var_name: str, value: Any) -> str:
