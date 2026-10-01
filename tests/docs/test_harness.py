@@ -406,8 +406,8 @@ def test_every_pending_fence_entry_still_matches_a_fence():
     assert not stale, "remove these PENDING_FENCES entries from tests/docs/_harness.py:\n  " + "\n  ".join(stale)
 
 
-# The docs conftest caps time.sleep at 1 ms, so nothing here is slow enough to
-# clear cash's cost floor; ``# @cash:persist`` caches the statement regardless.
+# Nothing here sleeps or computes long enough to clear cash's cost floor;
+# ``# @cash:persist`` caches the statement regardless.
 _BADGE_PAGE = """# Badges
 
 ```python { .nb-cell }
@@ -483,3 +483,16 @@ def test_rerun_mode_fails_a_cell_that_executes_again(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     assert _harness.run_page(page).tested_fences == 3
+
+
+def test_a_capped_sleep_is_still_slow_enough_to_be_stored():
+    """A page's ``time.sleep(...)`` stand-in for slow work must still clear the
+    statement store floor under the docs conftest's cap, or whether the
+    statement is stored, and the badge the page asserts, turns on timing."""
+    import time
+
+    from cash.backends.persistence_policy import STORE_FLOOR_S
+
+    start = time.perf_counter()
+    time.sleep(5)
+    assert time.perf_counter() - start >= STORE_FLOOR_S

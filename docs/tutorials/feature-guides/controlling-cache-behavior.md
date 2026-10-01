@@ -46,7 +46,7 @@ chat = ChatClient()
 A price, a feed or anything else that changes on its own should not be served
 forever. Give the statement a lifetime in seconds:
 
-<!-- test:expect-badge rerun=EXECUTED -->
+<!-- test:expect-badge rerun=CACHED -->
 ```python { .nb-cell }
 # @cash:ttl=60
 price = fetch_price("AAPL")    # cached for a minute, then fetched again
@@ -111,7 +111,7 @@ class SearchSession:
 session = SearchSession()
 ```
 
-<!-- test:expect-badge rerun=EXECUTED -->
+<!-- test:expect-badge rerun=CACHED -->
 ```python { .nb-cell }
 # @cash:assume-safe
 # @cash:ttl=3600
