@@ -21,8 +21,8 @@ from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.badge_renderer.view import SubUnitGroup
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge, build_sub_unit_groups
 from cash.notebook.control_structures.for_handler import (
-    _stamp_call_events_body_index,
-    _stamp_call_events_loop_header,
+    _stamp_body_index,
+    _stamp_loop_header,
 )
 from tests._cell_driver import run_cash_cell
 
@@ -204,7 +204,7 @@ def test_no_sub_units_means_no_sub_call_section():
 
 def test_stamp_call_events_loop_header_propagates_to_events():
     m = {"decorator_calls": [_event("compute(x)", 0, True)]}
-    _stamp_call_events_loop_header(m, "for x in items:")
+    _stamp_loop_header(m, "for x in items:")
     event = m["decorator_calls"][0]
     assert event["loop_header"] == "for x in items:"
     assert event["loop_header_chain"] == ["for x in items:"]
@@ -214,8 +214,8 @@ def test_stamp_call_events_loop_header_prepends_for_nesting():
     """Outer loop's header must end up FIRST in the chain (outermost-first),
     matching the enclosing metric's own chain convention exactly."""
     m = {"decorator_calls": [_event("compute(x)", 0, True)]}
-    _stamp_call_events_loop_header(m, "for y in inner:")  # inner runs first
-    _stamp_call_events_loop_header(m, "for x in outer:")  # then outer prepends
+    _stamp_loop_header(m, "for y in inner:")  # inner runs first
+    _stamp_loop_header(m, "for x in outer:")  # then outer prepends
     event = m["decorator_calls"][0]
     assert event["loop_header_chain"] == ["for x in outer:", "for y in inner:"]
     # first-writer-wins for the scalar field, same as the metric-level rule
@@ -224,22 +224,38 @@ def test_stamp_call_events_loop_header_prepends_for_nesting():
 
 def test_stamp_call_events_body_index_propagates_to_events():
     m = {"decorator_calls": [_event("compute(x)", 0, True)]}
-    _stamp_call_events_body_index(m, 2)
+    _stamp_body_index(m, 2)
     assert m["decorator_calls"][0]["body_index_chain"] == [2]
 
 
 def test_stamp_call_events_skips_non_dict_events():
     """Must never raise on a malformed event -- badge plumbing is cosmetic."""
     m = {"decorator_calls": ["not a dict", None]}
-    _stamp_call_events_loop_header(m, "for x in items:")
-    _stamp_call_events_body_index(m, 0)  # no exception
+    _stamp_loop_header(m, "for x in items:")
+    _stamp_body_index(m, 0)  # no exception
 
 
-def test_stamp_call_events_no_decorator_calls_key_is_a_noop():
+def test_a_metric_without_call_events_gets_only_its_own_stamps():
     m = {}
-    _stamp_call_events_loop_header(m, "for x in items:")
-    _stamp_call_events_body_index(m, 0)
-    assert m == {}
+    _stamp_loop_header(m, "for x in items:")
+    _stamp_body_index(m, 0)
+    assert m == {
+        "loop_header": "for x in items:",
+        "loop_header_chain": ["for x in items:"],
+        "body_index_chain": [0],
+        "body_index": 0,
+    }
+
+
+def test_the_metric_and_its_events_get_the_same_stamps():
+    m = {"decorator_calls": [_event("compute(x)", 0, True)]}
+    for header, idx in (("for y in inner:", 1), ("for x in outer:", 3)):
+        _stamp_loop_header(m, header)
+        _stamp_body_index(m, idx)
+    event = m["decorator_calls"][0]
+    for field in ("loop_header", "loop_header_chain", "body_index_chain"):
+        assert event[field] == m[field], field
+    assert m["body_index"] == 1
 
 
 # --------------------------------------------------------- real pipeline (e2e)

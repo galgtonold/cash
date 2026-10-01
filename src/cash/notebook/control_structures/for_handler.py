@@ -52,37 +52,48 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _stamp_call_events_loop_header(m: dict, loop_header: str) -> None:
-    """Propagate *m*'s ``loop_header``/``loop_header_chain`` onto its call events.
+def _stamped(m: dict) -> list[dict]:
+    """*m* and its intercepted sub-call events (``m['decorator_calls']``).
 
-    ``m['decorator_calls']`` may hold intercepted (on by default) sub-call
-    events. Those need the identical loop-nesting stamp
-    the enclosing metric just got, or the badge view-builder has nothing to
-    key nesting on and renders them as siblings of the loop instead of
-    inside it. Mirrors the caller's own first-writer-wins / prepend rules
-    exactly so the two can never disagree.
-
-    Defensive by construction: a malformed event (not a dict) is skipped
-    rather than raising -- this must never break statement execution.
+    The events need the same loop-nesting stamps as the metric, or the badge
+    view-builder renders them as siblings of the loop instead of inside it.
+    A malformed event (not a dict) is skipped: badge plumbing must never
+    break statement execution.
     """
-    for event in m.get("decorator_calls") or ():
-        if not isinstance(event, dict):
-            continue
-        if "loop_header" not in event:
-            event["loop_header"] = loop_header
-        echain = event.setdefault("loop_header_chain", [])
-        if not echain or echain[0] != loop_header:
-            echain.insert(0, loop_header)
+    return [m, *(e for e in m.get("decorator_calls") or () if isinstance(e, dict))]
 
 
-def _stamp_call_events_body_index(m: dict, body_idx: int) -> None:
-    """Propagate *m*'s ``body_index_chain`` onto its call events. See above."""
-    for event in m.get("decorator_calls") or ():
-        if not isinstance(event, dict):
-            continue
-        echain = event.setdefault("body_index_chain", [])
-        if not echain or echain[0] != body_idx:
-            echain.insert(0, body_idx)
+def _prepend(target: dict, field: str, value: Any) -> None:
+    chain = target.setdefault(field, [])
+    if not chain or chain[0] != value:
+        chain.insert(0, value)
+
+
+def _stamp_loop_header(m: dict, loop_header: str) -> None:
+    """Stamp *m* and its call events with an enclosing for-loop's header.
+
+    ``loop_header`` is the innermost enclosing loop: the first handler in the
+    recursion to see the metric wins. ``loop_header_chain`` is the whole
+    enclosing chain, outermost-first: each handler prepends its own header,
+    so the outermost one leaves the complete chain.
+    """
+    for target in _stamped(m):
+        target.setdefault("loop_header", loop_header)
+        _prepend(target, "loop_header_chain", loop_header)
+
+
+def _stamp_body_index(m: dict, body_idx: int) -> None:
+    """Stamp *m* and its call events with their statement's index in a loop body.
+
+    ``body_index_chain`` is outermost-first like ``loop_header_chain``: a
+    metric in for-b inside for-a gets ``[idx_of_for-b_in_for-a, idx_in_for-b]``,
+    and the view-builder sorts each loop level by its own entry, so the body
+    renders in source order even when nested controls split the metric
+    stream. ``body_index`` on the metric is the innermost index.
+    """
+    for target in _stamped(m):
+        _prepend(target, "body_index_chain", body_idx)
+    m.setdefault("body_index", body_idx)
 
 
 class ForLoopHandler:
@@ -329,30 +340,9 @@ class ForLoopHandler:
                 body_files=_body_files,
             )
 
-            # Stamp every body metric with this for-loop's source header.
-            # ``loop_header`` itself = innermost enclosing for-loop (the
-            # first for-handler in the recursion to see this metric wins).
-            # ``loop_header_chain`` = full enclosing chain, outermost-first:
-            # we PREPEND this loop's header on each recursion frame so the
-            # outermost call ends up with the complete chain. Used by the
-            # view-builder to nest for-loop groups instead of rendering
-            # them as siblings.
             for m in all_metrics:
-                if not isinstance(m, dict):
-                    continue
-                if "loop_header" not in m:
-                    m["loop_header"] = loop_header
-                chain = m.setdefault("loop_header_chain", [])
-                if not chain or chain[0] != loop_header:
-                    chain.insert(0, loop_header)
-                # A statement's intercepted (on by default) sub-call
-                # events need this SAME stamp, or the view-builder has no way
-                # to tell they belong inside this loop and renders them as
-                # siblings instead. ``event`` is a dict
-                # inside ``m['decorator_calls']`` -- stamped in lockstep with
-                # ``m`` itself, same first-writer-wins / prepend rules, so
-                # nesting can never disagree between the two.
-                _stamp_call_events_loop_header(m, loop_header)
+                if isinstance(m, dict):
+                    _stamp_loop_header(m, loop_header)
 
             return ControlStructureResult(
                 success=True,
@@ -435,20 +425,6 @@ class ForLoopHandler:
         context_hash = compute_context_hash(iteration_context)
         loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
         iteration_cached = True
-        # Track the AST body index of each emitted metric so the view-
-        # builder can render the for-loop's body in source order even
-        # when nested controls split the metric stream (some iterations
-        # produce control_context'd metrics, others don't; without the
-        # index the renderer would group all "before"/"after" stmts then
-        # show the control after them, instead of the source order
-        # before / if / after).
-        #
-        # ``body_index_chain`` is recorded outermost-first (analogous to
-        # ``loop_header_chain``): a metric in for-b inside for-a gets
-        # chain ``[idx_of_for-b_in_for-a, idx_in_for-b]``. The view-builder
-        # uses chain[depth] when sorting items inside a specific for-loop
-        # level. ``body_index`` itself is the *innermost* index (the
-        # tail of the chain).
         # Pushed once for the WHOLE iteration's body, not per statement: an
         # intercepted sub-call needs the CURRENT iteration's loop-var values
         # as a key discriminator wherever it sits, including inside a nested
@@ -472,7 +448,8 @@ class ForLoopHandler:
                 else:
                     was_computed = self._execute_loop_body_statement(
                         body_node,
-                        iteration_context,
+                        context_hash,
+                        loop_vars,
                         ttl,
                         silent,
                         all_metrics,
@@ -480,20 +457,8 @@ class ForLoopHandler:
                         loop_annotation,
                     )
                 for m in all_metrics[before_count:]:
-                    if not isinstance(m, dict):
-                        continue
-                    chain = m.setdefault("body_index_chain", [])
-                    # Prepend this loop's body_idx (outermost wins by being
-                    # at index 0). Innermost handler runs first and ends up
-                    # at the chain tail; outer handlers prepend their idx.
-                    if not chain or chain[0] != body_idx:
-                        chain.insert(0, body_idx)
-                    if "body_index" not in m:
-                        m["body_index"] = body_idx
-                    # Same stamp, same reason, onto this statement's intercepted
-                    # sub-call events -- see the loop_header
-                    # stamp above for why.
-                    _stamp_call_events_body_index(m, body_idx)
+                    if isinstance(m, dict):
+                        _stamp_body_index(m, body_idx)
                 if was_computed:
                     iteration_cached = False
         return iteration_cached
@@ -540,7 +505,8 @@ class ForLoopHandler:
     def _execute_loop_body_statement(
         self,
         body_node: ast.AST,
-        iteration_context: dict[str, Any],
+        context_hash: str,
+        loop_vars: dict[str, Any],
         ttl: int | None,
         silent: bool,
         all_metrics: list,
@@ -549,12 +515,10 @@ class ForLoopHandler:
     ) -> bool:
         """Run one plain statement of the loop body; True if it computed.
 
-        The iteration context (loop variable values and the iterable's
-        lineage) goes into the cache key as a marker, so each iteration is
-        its own entry.
+        *context_hash*, the digest of the iteration context (loop variable
+        values and the iterable's lineage), goes into the cache key as a
+        marker, so each iteration is its own entry.
         """
-        context_hash = compute_context_hash(iteration_context)
-        loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
         metrics = _helpers.run_marked_statement(
             self.statement_processor,
             body_node,
