@@ -148,7 +148,7 @@ class PurityReport:
     #: through a plain helper or a function-local import had none, and an
     #: edit to it served its callers' old results.
     cached_callees: tuple[Any, ...] = ()
-    #: Why the walk for the key could not finish (`PurityAnalyzer._WALK_LIMIT`),
+    #: Why the walk for the key could not finish (`HelperWalk.WALK_LIMIT`),
     #: or "". A report that did not reach every helper cannot key the call,
     #: so the call runs uncached.
     unwalkable: str = ""
