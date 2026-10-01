@@ -74,7 +74,7 @@ A `# @cash:` comment that cash could not honour. Every code here starts `ANNOT-`
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @58513e3e -->
 **What happened.** The value after `# @cash:ttl=` is not a whole number of
 seconds (`ttl=5m`, `ttl=300.0`, `ttl=-5`, or no `=`), so cash ignored the
 annotation.
@@ -83,9 +83,8 @@ annotation.
 If the TTL was the only thing meant to refresh it, the stored value is served
 until something else invalidates it.
 
-<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
-**What to do.** Write plain seconds: `# @cash:ttl=300` for five minutes. Put
-one directive per line: a second `# @cash:` on the same line is not read. See
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @58513e3e -->
+**What to do.** Write plain seconds: `# @cash:ttl=300` for five minutes. See
 [Annotations](annotations.md).
 
 **When it is safe to ignore.** When cash already tracks what the value depends

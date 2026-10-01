@@ -66,9 +66,12 @@ When several directives reach one statement, they combine: each flag applies if
 any of them sets it, and the last `ttl=` wins. `no-cache` beats `persist` and
 also switches off the caching of calls inside the statement.
 
-<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
-Spelling: `@cash:` must be lower case, and a space after the colon or around `=`
-is fine (`# @cash: persist`, `# @cash:ttl = 60`). An unknown name warns once with
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @58513e3e -->
+Spelling: `@cash:` must be lower case; the directive name may be any case, and a
+space after the colon or around `=` is fine (`# @cash: persist`, `# @cash:ttl = 60`).
+Several directives may share a line (`# @cash: no-cache  # @cash: assume-safe`).
+The notebook, the decorator and the runtime checks read them the same way. An
+unknown name warns once with
 [`ANNOT-UNKNOWN-DIRECTIVE`](warnings.md#annot-unknown-directive) and suggests the
 right spelling (`nocache` → `no-cache`).
 

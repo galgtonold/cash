@@ -64,7 +64,7 @@ import os
 import sys
 from typing import Any
 
-from .analysis.annotations import ASSUME_SAFE_RE
+from .analysis.annotations import line_assumes_safe
 from .effects import EffectKind
 from .install_paths import is_user_path, norm_dir, normcase_path
 from .tracking import io_watch
@@ -138,10 +138,10 @@ def _is_library_file(filename: str) -> bool:
 
 def line_waived(filename: str, lineno: int) -> bool:
     """Does ``# @cash:assume-safe`` cover *lineno* -- on it, or alone above it?"""
-    if ASSUME_SAFE_RE.search(linecache.getline(filename, lineno)):
+    if line_assumes_safe(linecache.getline(filename, lineno)):
         return True
     above = linecache.getline(filename, lineno - 1)
-    return above.lstrip().startswith("#") and bool(ASSUME_SAFE_RE.search(above))
+    return above.lstrip().startswith("#") and line_assumes_safe(above)
 
 
 class _AssumeSafe(contextlib.AbstractContextManager):

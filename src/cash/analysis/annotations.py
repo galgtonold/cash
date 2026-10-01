@@ -22,7 +22,7 @@ __all__ = [
     "parse_annotations_in_range",
     "get_statement_annotations",
     "extract_annotations_for_statements",
-    "ASSUME_SAFE_RE",
+    "line_assumes_safe",
     "audited_lines",
     "assume_safe_block_lines",
     "is_assume_safe_block",
@@ -139,22 +139,40 @@ def _warn_unknown_directive(directive: str, lineno: int | None) -> None:
     warn_diagnostic(CashCacheIneffectiveWarning, "ANNOT-UNKNOWN-DIRECTIVE", what, fix, location=location)
 
 
-def parse_annotation_line(line: str, lineno: int | None = None) -> CacheAnnotation | None:
+def parse_annotation_line(line: str, lineno: int | None = None, *, warn: bool = True) -> CacheAnnotation | None:
     """
     Parse a single line for cache annotations.
 
+    Every ``# @cash:`` directive on the line counts, so
+    ``# @cash: no-cache  # @cash: assume-safe`` sets both. Directive names are
+    matched case-insensitively. This is the one parser for ``# @cash:``
+    comments: the notebook, the decorator's purity analysis and the runtime
+    effect observer all read waivers through it, so a spelling waives in all
+    of them or in none.
+
     *lineno* is the line's 1-based number in its cell, if known; an unknown
-    directive's warning points there.
+    directive's warning points there. ``warn=False`` parses without warning,
+    for callers on a per-call path that only need the answer.
 
-    Returns CacheAnnotation if found, None otherwise.
+    Returns CacheAnnotation if any directive was found, None otherwise.
     """
-    match = ANNOTATION_PATTERN.search(line)
-    if not match:
-        return None
+    result: CacheAnnotation | None = None
+    for match in ANNOTATION_PATTERN.finditer(line):
+        ann = _parse_directive(match.group(1).lower(), match.group(2), lineno, warn)
+        if ann is not None:
+            result = ann if result is None else result.merge(ann)
+    return result
 
-    directive = match.group(1).lower()
-    value = match.group(2)
 
+def line_assumes_safe(line: str) -> bool:
+    """Does *line* carry ``# @cash:assume-safe``? Quiet, for hot paths."""
+    if "@cash" not in line:
+        return False
+    ann = parse_annotation_line(line, warn=False)
+    return ann is not None and ann.assume_safe
+
+
+def _parse_directive(directive: str, value: str | None, lineno: int | None, warn: bool) -> CacheAnnotation | None:
     if directive == "persist":
         return CacheAnnotation(persist=True)
     if directive == "no-cache":
@@ -172,6 +190,8 @@ def parse_annotation_line(line: str, lineno: int | None = None) -> CacheAnnotati
         # like the superscript two, which ``int()`` then refuses.
         if value is not None and value.isascii() and value.isdigit():
             return CacheAnnotation(ttl=int(value))
+        if not warn:
+            return None
         if value is None:
             problem = "`# @cash:ttl` gives no number of seconds"
         else:
@@ -184,7 +204,7 @@ def parse_annotation_line(line: str, lineno: int | None = None) -> CacheAnnotati
             "minutes -- with no unit suffix and no decimal point.",
         )
         return None
-    if directive not in KNOWN_DIRECTIVES:
+    if warn and directive not in KNOWN_DIRECTIVES:
         _warn_unknown_directive(directive, lineno)
     return None
 
@@ -356,7 +376,7 @@ def extract_annotations_for_statements(full_source: str) -> dict[int, CacheAnnot
     return annotations
 
 
-#: ``# @cash:assume-safe`` -- a waiver scoped to ONE statement.
+# ``# @cash:assume-safe`` -- a waiver scoped to ONE statement.
 #
 # ``assume_safe=True`` on the decorator silences the whole function, for good.
 # Audit a call today, add an unrelated ``session.post(...)`` next month, and
@@ -367,7 +387,6 @@ def extract_annotations_for_statements(full_source: str) -> dict[int, CacheAnnot
 # A waiver written NEXT TO the statement cannot do that. New code arrives
 # unannotated, so it is reported. The scope of the exemption is visible in the
 # diff that grants it, which is the property blanket suppression cannot have.
-ASSUME_SAFE_RE = re.compile(r"#\s*@cash:\s*assume-safe\b")
 
 
 def audited_lines(src: str) -> tuple[frozenset[int], bool]:
@@ -385,7 +404,10 @@ def audited_lines(src: str) -> tuple[frozenset[int], bool]:
     lines = src.splitlines()
     marked: set[int] = set()
     for index, line in enumerate(lines, start=1):
-        if not ASSUME_SAFE_RE.search(line):
+        if "@cash" not in line:
+            continue
+        ann = parse_annotation_line(line)
+        if ann is None or not ann.assume_safe:
             continue
         marked.add(index)
         if line.strip().startswith("#"):
