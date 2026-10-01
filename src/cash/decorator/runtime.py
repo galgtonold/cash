@@ -293,7 +293,9 @@ class KeyBuilder:
             normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
             if self._registry.cached[func_name].seed_params:
                 self._rng.warn_if_seed_is_none(func, func_name, args, kwargs)
-            state_hash = self._code_args.fold_code_args(*normalized_args, state_hash, func_name=func_name)
+            state_hash = self._code_args.fold_code_args(
+                *normalized_args, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
+            )
             chain.append(state_hash)
             dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args)

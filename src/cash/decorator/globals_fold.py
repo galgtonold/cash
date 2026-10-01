@@ -35,7 +35,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
 from ..source_norm import getsource, own_source
 from ..value_types import CODELESS_PRIMS, IMMUTABLE_LEAF_TYPES
 from .arg_hashing import is_opaque
-from .call_state import CAPTURE_WATCH
+from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
 from .code_identity import (
     hash_callable_source,
@@ -1009,7 +1009,9 @@ class GlobalsFold:
             # only, and the one-level look above does not reach them; the
             # argument walk does, so a global goes through it too.
             if self.code_args is not None:
-                code_parts = self.code_args.carrier_parts(v, func_name)
+                code_parts = self.code_args.carrier_parts(
+                    v, func_name, owner_code=owner_code if owner_code is not None else code
+                )
                 if code_parts:
                     digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
                     parts.append((f"{name}#code", digest))
@@ -1196,6 +1198,45 @@ class GlobalsFold:
             owner_code=owner_code,
             seen=seen,
         )
+
+    def fold_passed_function_reads(self, fn: types.FunctionType, func_name: str, owner_code: Any) -> str:
+        """What a function that reaches the call as data reads, as one digest
+        ("" when it reads nothing): an argument, or a function a data global
+        holds.
+
+        The folds a cached function's own reads go through: its globals
+        (`GlobalsFold.fold_read_globals`), then what its helpers read
+        (`GlobalsFold.fold_passed_helper_reads`). *owner_code* is the cached
+        function's code, which the drift guard records under.
+
+        Raises `KeyBuildFailed` when the helpers cannot be found.
+        """
+        seen: set = set()
+        digest = self.fold_read_globals(fn, func_name, "", owner_code=owner_code, seen=seen)
+        return self.fold_passed_helper_reads(fn, func_name, digest, owner_code=owner_code, seen=seen)
+
+    def fold_passed_helper_reads(
+        self, fn: types.FunctionType, func_name: str, state_hash: str, *, owner_code: Any, seen: set
+    ) -> str:
+        """Fold what the helpers of *fn*, a function that reaches the call as
+        data, read: their globals and the data their bindings carry (a global
+        ``partial(scale, k=2)``), from *fn*'s own purity report, as
+        `GlobalsFold.fold_helper_read_globals` does for the cached function.
+
+        Raises `KeyBuildFailed` when the helpers cannot be found.
+        """
+        try:
+            report = get_analyzer().analyze(fn)
+        except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
+            report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({type(e).__name__}: {e})")
+        if report.unwalkable:
+            raise KeyBuildFailed(
+                "KEY-HELPERS-UNWALKABLE",
+                f"@cash.cache on {func_name}: {getattr(fn, '__qualname__', '?')} reaches the call as data, "
+                f"and {report.unwalkable}, so the call ran uncached.",
+                "If the function itself runs fine, this is a bug in cash: report it with the error.",
+            )
+        return self._fold_paths_read_globals(report, fn, func_name, state_hash, owner_code=owner_code, seen=seen)
 
     def _fold_paths_read_globals(
         self,

@@ -22,6 +22,7 @@ from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machine
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
 from .code_identity import is_user_code_module, is_user_code_object
+from .globals_fold import class_surface_functions
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -529,7 +530,9 @@ class CodeArgs:
         _seen.add(id(cls))
         return cls if is_user_code_object(cls) else None
 
-    def fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
+    def fold_code_args(
+        self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?", owner_code: Any = None
+    ) -> str:
         """Fold user code reached through the arguments into the key.
 
         ``args_hash`` is a digest of the PICKLED arguments, and pickle
@@ -544,14 +547,19 @@ class CodeArgs:
         parts: list[str] = []
         seen_carriers: set[int] = set()
         for param, value in (*((None, a) for a in args), *kwargs.items()):
-            parts.extend(self.carrier_parts(value, func_name, param, seen_carriers))
+            parts.extend(self.carrier_parts(value, func_name, param, seen_carriers, owner_code))
         if not parts:
             return state_hash
         payload = ":".join(sorted(set(parts)))
         return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
 
     def carrier_parts(
-        self, value: Any, func_name: str = "?", param: str | None = None, seen_carriers: set[int] | None = None
+        self,
+        value: Any,
+        func_name: str = "?",
+        param: str | None = None,
+        seen_carriers: set[int] | None = None,
+        owner_code: Any = None,
     ) -> list[str]:
         """Key parts for the user code *value* carries: each carrier's code and
         what that code reads. One walk for an argument and a data global.
@@ -561,6 +569,7 @@ class CodeArgs:
         `CodeIdentity.code_surface_hash` once instead of three times. Safe by
         identity because every carrier stays reachable from the values for
         the whole key build, so no id can be recycled underneath us.
+        *owner_code* is the cached function's code, for the drift guard.
         """
         if seen_carriers is None:
             seen_carriers = set()
@@ -593,7 +602,7 @@ class CodeArgs:
                 # changed, while the same read one call level deeper,
                 # or in the cached function itself, invalidated.
                 if is_user_code_carrier(carrier):
-                    parts.extend(self._carrier_read_global_parts(carrier, func_name))
+                    parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)
             elif is_user_code_carrier(carrier):
                 # User code we could not hash: a C-extension type, an
@@ -604,39 +613,30 @@ class CodeArgs:
                 self._warn_unhashable_code_once(carrier, func_name, param)
         return parts
 
-    def _carrier_read_global_parts(self, carrier: Any, func_name: str) -> list[str]:
-        """Key parts for the module data a code carrier's functions read.
-
-        The same channel the cached function's own globals go through
-        (`GlobalsFold.read_global_data_names` + `GlobalsFold.safe_global_hash`, plus the
-        ``module.ATTR`` fold), applied to code that arrived as an ARGUMENT: a
-        function, a bound method's function, or a class's own methods -- which
-        is how a callable instance's ``__call__`` is reached.
+    def _carrier_read_global_parts(self, carrier: Any, func_name: str, owner_code: Any) -> list[str]:
+        """Key parts for the data a code carrier's functions read: a
+        function's or a bound method's through
+        `GlobalsFold.fold_passed_function_reads`, a class's through
+        `GlobalsFold.class_parts`. *owner_code* is the cached function's
+        code, which the drift guard records under.
         """
-
         if isinstance(carrier, type):
-            # A class: what it holds and what every function it can run --
-            # inherited, a property, `__init__` -- reads (`GlobalsFold.class_parts`).
-            return [f"argclass:{label}:{h}" for label, h in self._globals.class_parts(carrier, func_name)]
+            parts = [
+                f"argclass:{label}:{h}"
+                for label, h in self._globals.class_parts(carrier, func_name, owner_code=owner_code)
+            ]
+            seen: set = set()
+            helpers = ""
+            for member in class_surface_functions(carrier):
+                if is_user_code_object(member):
+                    helpers = self._globals.fold_passed_helper_reads(
+                        member, func_name, helpers, owner_code=owner_code, seen=seen
+                    )
+            if helpers:
+                parts.append(f"argclass:{carrier.__qualname__}#helpers:{helpers}")
+            return parts
         fn = getattr(carrier, "__func__", carrier)
-        functions = [fn] if isinstance(fn, types.FunctionType) else []
-        parts: list[str] = []
-        for fn in functions:
-            g = getattr(fn, "__globals__", None)
-            if not isinstance(g, dict):
-                continue
-            owner = getattr(fn, "__qualname__", "?")
-            for name in self._globals.read_global_data_names(fn):
-                if name not in g:
-                    continue
-                value = g[name]
-                if isinstance(value, (types.ModuleType, type)):
-                    continue
-                if callable(value) and not isinstance(value, (dict, list, tuple, set)):
-                    continue
-                h = self._globals.safe_global_hash(value, func_name, f"{owner}.{name}")
-                if h is not None:
-                    parts.append(f"argglobal:{owner}.{name}:{h}")
-            for label, h in self._globals.module_attr_parts(fn, func_name, g):
-                parts.append(f"argglobal:{owner}:{label}:{h}")
-        return parts
+        if not isinstance(fn, types.FunctionType):
+            return []
+        digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)
+        return [f"argglobal:{getattr(fn, '__qualname__', '?')}:{digest}"] if digest else []
