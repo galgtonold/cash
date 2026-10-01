@@ -84,7 +84,7 @@ def entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
     return ttl_expired(metadata.timestamp, ttl)
 
 
-def compute_cache_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
+def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
     return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
 
@@ -306,7 +306,7 @@ class KeyBuilder:
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
             raise UnhashableArgs
-        cache_key = compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
+        cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 
 

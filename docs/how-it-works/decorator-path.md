@@ -25,7 +25,7 @@ build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:compute_cache_key @fe76bcca, cash/decorator/code_identity.py:func_key @88a3b5fb -->
+<!-- claim: cash/decorator/runtime.py:decorator_key @fe76bcca, cash/decorator/code_identity.py:func_key @88a3b5fb -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
