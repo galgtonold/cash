@@ -40,6 +40,7 @@ from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_d
 from .globals_fold import CLASSES_FOLDED, READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
+from .store import StoreRequest
 from .rng import capture_rng_pre_state, replay_rng_state
 
 if TYPE_CHECKING:
@@ -678,21 +679,7 @@ class CallRunner:
                 args_hash=call.args_hash,
                 cache_key=call.cache_key,
             )
-            return StreamingCachedIterator(
-                self._store.stream_and_store(
-                    res,
-                    cache_key=call.cache_key,
-                    spec=spec,
-                    tracker=run.tracker,
-                    observer=run.observer,
-                    rng_new=run.rng_new,
-                    args=args,
-                    kwargs=kwargs,
-                    args_hash=call.args_hash,
-                    current_state_hash=call.state_hash,
-                    ttl=call.ttl,
-                )
-            )
+            return StreamingCachedIterator(self._store.stream_and_store(res, spec, call, run))
 
         self._purity.check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
         self._purity.report_observed_effects(func_name, run.observer)
@@ -713,17 +700,16 @@ class CallRunner:
             # that was never written.
             self._store.attach_lineage(res, call.cache_key, auto_file_deps, ttl=call.ttl, func_name=func_name)
             self._store.store(
-                call.cache_key,
-                func_name,
+                StoreRequest(
+                    call,
+                    func_name,
+                    execution_time=execution_time,
+                    auto_file_deps=auto_file_deps,
+                    body_seconds=run.body_seconds,
+                    saves_seconds=run.saves_seconds,
+                    rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
+                ),
                 res,
-                call.ttl,
-                call.state_hash,
-                call.args_hash,
-                execution_time,
-                auto_file_deps=auto_file_deps,
-                body_seconds=run.body_seconds,
-                saves_seconds=run.saves_seconds,
-                rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
             )
         # A result the disk cap had evicted, computed again: say what that cost.
         if self._misses.pending_eviction(call.cache_key) is not None:

@@ -9,7 +9,9 @@ import inspect
 import logging
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+import dataclasses
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
@@ -24,7 +26,7 @@ from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
-from .call_state import NO_WATCH
+from .call_state import NO_WATCH, BodyRun, Call
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
@@ -109,6 +111,27 @@ def lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
         )
     ).hexdigest()
     return f"{cache_key}:fdeps:{fp}"
+
+
+@dataclass(frozen=True)
+class StoreRequest:
+    """One result to store: the call it answers (its key, ttl and key
+    segments, `Call`), and what the entry's metadata records besides."""
+
+    call: Call
+    func_name: str
+    #: The wall-clock cost of the call; *body_seconds* replaces it when known.
+    execution_time: float = 0.0
+    auto_file_deps: dict[str, dict[str, float]] | None = None
+    body_seconds: float | None = None
+    saves_seconds: float | None = None
+    rng_replay: dict[str, Any] | None = None
+    #: The fields that make the entry a chunked iterator's manifest
+    #: (``iterator_storage``, ``n_chunks``, ``chunk_stream``).
+    manifest: dict[str, Any] | None = None
+    #: Why one of a manifest's chunks stayed in RAM, which leaves the entry
+    #: RAM-only whatever happens to the manifest itself.
+    chunks_not_persisted: str | None = None
 
 
 class ResultStore:
@@ -349,30 +372,11 @@ class ResultStore:
                 type(result).__name__,
             )
 
-    def store(
-        self,
-        cache_key: str,
-        func_name: str,
-        result: Any,
-        ttl: int | None,
-        state_hash: str,
-        args_hash: str,
-        execution_time: float = 0.0,
-        auto_file_deps: dict[str, dict[str, float]] | None = None,
-        body_seconds: float | None = None,
-        saves_seconds: float | None = None,
-        rng_replay: dict[str, Any] | None = None,
-        manifest: dict[str, Any] | None = None,
-        chunks_not_persisted: str | None = None,
-    ) -> bool:
-        """Store *result* under *cache_key*; True if a backend took it.
-
-        *manifest*: the fields that make this entry a chunked iterator's
-        manifest (``iterator_storage``, ``n_chunks``, ``chunk_stream``),
-        stored like any decorated result. *chunks_not_persisted*: why one of
-        its chunks stayed in RAM, which leaves the entry RAM-only whatever
-        happens to the manifest itself.
-        """
+    def store(self, request: StoreRequest, result: Any) -> bool:
+        """Store *result* for *request*; True if a backend took it."""
+        call, func_name = request.call, request.func_name
+        cache_key, ttl = call.cache_key, call.ttl
+        execution_time, body_seconds = request.execution_time, request.body_seconds
         try:
             serializer = PickleSerializer()
 
@@ -406,16 +410,16 @@ class ResultStore:
                 # measured from the top of the wrapper and includes the
                 # key hashing whose worth is the question.
                 body_seconds=body_seconds,
-                saves_seconds=saves_seconds,
+                saves_seconds=request.saves_seconds,
                 serializer_cls=type(serializer),
                 ttl=ttl,
                 ttl_declared=ttl_declared,
-                args_hash=args_hash,
-                state_hash=state_hash,
+                args_hash=call.args_hash,
+                state_hash=call.state_hash,
                 # Each entry: path -> {'mtime': float, 'size': int}.
                 # Validated on subsequent get() via FileDeps.auto_file_deps_fresh.
-                auto_file_deps=auto_file_deps or None,
-                rng_replay=rng_replay or None,
+                auto_file_deps=request.auto_file_deps or None,
+                rng_replay=request.rng_replay or None,
                 # Decorating a function IS the decision to cache it, however
                 # quick it is. The compute floor belongs to the notebook, where
                 # cash caches every statement by itself; here it meant a script
@@ -434,7 +438,7 @@ class ResultStore:
                 copy_required=not self._registry.is_frozen(func_name),
                 read_only=_read_only_array(result) or None,
                 result_ref=self._result_ref(func_name, result),
-                **(manifest or {}),
+                **(request.manifest or {}),
             )
 
             # Kept, not a temporary: TieredBackend writes back where the value
@@ -447,7 +451,7 @@ class ResultStore:
             store_errors = meta_dict.get("store_errors")
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
-            not_persisted = not_persisted_reason(meta_dict) or chunks_not_persisted
+            not_persisted = not_persisted_reason(meta_dict) or request.chunks_not_persisted
             self._misses.remember_outcome(
                 cache_key,
                 {
@@ -509,21 +513,7 @@ class ResultStore:
             "see.",
         )
 
-    def stream_and_store(
-        self,
-        source,
-        *,
-        cache_key,
-        spec,
-        tracker,
-        observer,
-        rng_new,
-        args,
-        kwargs,
-        args_hash,
-        current_state_hash,
-        ttl,
-    ):
+    def stream_and_store(self, source: Iterator[Any], spec: CachedFunction, call: Call, run: BodyRun) -> Iterator[Any]:
         """Yield the producer's items as they come, and cache once it ends.
 
         Three things have to hold at once, and they are why this is not simply
@@ -557,6 +547,8 @@ class ResultStore:
         """
         func_name, cache_if = spec.name, spec.cache_if
         chunk_max_items, chunk_max_bytes = spec.chunk_max_items, spec.chunk_max_bytes
+        cache_key, ttl, args, kwargs = call.cache_key, call.ttl, call.args, call.kwargs
+        tracker, observer = run.tracker, run.observer
 
         buffer: list[Any] = []
         buffer_bytes = 0
@@ -615,7 +607,7 @@ class ResultStore:
                         observer.resume(observer_token)
                         tracker.resume(tracker_token)
 
-            self._purity.check_argument_mutation(func_name, args, kwargs, args_hash, observer)
+            self._purity.check_argument_mutation(func_name, args, kwargs, call.args_hash, observer)
             self._purity.report_observed_effects(func_name, observer)
             self._files.credit_remembered_reads(func_name, tracker, args, kwargs)
             auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
@@ -624,7 +616,7 @@ class ResultStore:
                 # Everything fit in one chunk, so cache_if can still see the
                 # whole result -- it gates STORAGE, never what the caller
                 # already received.
-                refusal = self.refusal(None, func_name, buffer, rng_new, cache_if, tracker, observer=observer)
+                refusal = self.refusal(None, func_name, buffer, run.rng_new, cache_if, tracker, observer=observer)
                 if refusal is not None:
                     self._misses.note_not_stored(cache_key, refusal)
                 else:
@@ -635,16 +627,15 @@ class ResultStore:
                     # An empty iterator still gets a zero-chunk manifest, so a
                     # hit returns empty instead of recomputing.
                     self._store_chunked_manifest(
-                        cache_key,
-                        func_name,
+                        StoreRequest(
+                            call,
+                            func_name,
+                            execution_time=produced_seconds,
+                            auto_file_deps=auto_file_deps,
+                            chunks_not_persisted=chunks_not_persisted,
+                        ),
                         {"n_chunks": 1 if buffer else 0, "total_items": total_items, **_returned(returned)},
-                        ttl,
-                        current_state_hash,
-                        args_hash,
-                        produced_seconds,
-                        auto_file_deps,
                         stream,
-                        chunks_not_persisted,
                     )
             else:
                 if buffer:
@@ -655,16 +646,15 @@ class ResultStore:
                     )
                     chunk_index += 1
                 self._store_chunked_manifest(
-                    cache_key,
-                    func_name,
+                    StoreRequest(
+                        call,
+                        func_name,
+                        execution_time=produced_seconds,
+                        auto_file_deps=auto_file_deps,
+                        chunks_not_persisted=chunks_not_persisted,
+                    ),
                     {"n_chunks": chunk_index, "total_items": total_items, **_returned(returned)},
-                    ttl,
-                    current_state_hash,
-                    args_hash,
-                    produced_seconds,
-                    auto_file_deps,
                     stream,
-                    chunks_not_persisted,
                 )
 
             committed = True
@@ -747,20 +737,8 @@ class ResultStore:
             return None
         return not_persisted_reason(chunk_metadata)
 
-    def _store_chunked_manifest(
-        self,
-        cache_key: str,
-        func_name: str,
-        manifest_data: dict[str, Any],
-        ttl: int | None,
-        state_hash: str,
-        args_hash: str,
-        execution_time: float,
-        auto_file_deps: dict[str, dict[str, float]] | None,
-        stream: str,
-        chunks_not_persisted: str | None,
-    ) -> None:
-        """Write the manifest entry for a chunked iterator at *cache_key*.
+    def _store_chunked_manifest(self, request: StoreRequest, manifest_data: dict[str, Any], stream: str) -> None:
+        """Write the manifest entry for a chunked iterator at the call's key.
 
         The value stored at the key is the manifest dict (``n_chunks``,
         ``total_items``), stored as any decorated result is
@@ -770,24 +748,20 @@ class ResultStore:
         *stream* whose chunks it covers. The chunks of the manifest it
         replaces are deleted once it is written: nothing names them any more.
         """
+        cache_key = request.call.cache_key
         replaced = self._replaced_stream(cache_key, stream)
         stored = self.store(
-            cache_key,
-            func_name,
+            dataclasses.replace(
+                request,
+                # The producer's time is all body: only the spans inside `next()`.
+                body_seconds=request.execution_time,
+                manifest={
+                    "iterator_storage": "chunked",
+                    "n_chunks": manifest_data["n_chunks"],
+                    "chunk_stream": stream,
+                },
+            ),
             manifest_data,
-            ttl,
-            state_hash,
-            args_hash,
-            execution_time=execution_time,
-            auto_file_deps=auto_file_deps,
-            # The producer's time is all body: only the spans inside `next()`.
-            body_seconds=execution_time,
-            manifest={
-                "iterator_storage": "chunked",
-                "n_chunks": manifest_data["n_chunks"],
-                "chunk_stream": stream,
-            },
-            chunks_not_persisted=chunks_not_persisted,
         )
         if stored and replaced is not None:
             self._drop_chunks(*replaced)
