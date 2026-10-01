@@ -9,6 +9,10 @@ state hash, poisoning it — and two lambdas collided outright.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 from cash import Cash, FileBackend
 
 
@@ -51,6 +55,38 @@ def test_same_line_lambdas_distinct_entries(tmp_path):
     f, g = c.cache(lambda x: x + 1), c.cache(lambda x: x + 100)  # one source line
     assert f(1) == 2
     assert g(1) == 101, "same-line lambdas share source text; the code fingerprint must disambiguate them"
+
+
+def test_same_line_lambdas_differing_only_in_nested_code_are_distinct(tmp_path):
+    """A comprehension (before 3.12) and a lambda inside a lambda are nested
+    code objects: the pin must see into them."""
+    c = _cash(tmp_path)
+    double, triple = c.cache(lambda xs: [x * 2 for x in xs]), c.cache(lambda xs: [x * 3 for x in xs])
+    assert double((1, 2)) == [2, 4]
+    assert triple((1, 2)) == [3, 6]
+    a, b = c.cache(lambda: (lambda: "AAA")()), c.cache(lambda: (lambda: "BBB")())
+    assert (a(), b()) == ("AAA", "BBB")
+
+
+def test_a_lambda_pin_is_the_same_under_every_string_hash_seed():
+    """A set literal compiles to a frozenset constant, whose repr follows the
+    per-process string hash."""
+    script = (
+        "from cash.decorator.code_identity import code_fingerprint\n"
+        "f = lambda x: x in {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'}\n"
+        "print(code_fingerprint(f.__code__))\n"
+    )
+    digests = {
+        subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": str(seed)},
+        ).stdout.strip()
+        for seed in (1, 2, 3, 4)
+    }
+    assert len(digests) == 1, digests
 
 
 def test_named_function_keys_stable_across_instances(tmp_path):

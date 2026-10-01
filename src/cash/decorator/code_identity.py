@@ -299,6 +299,10 @@ def code_fingerprint(code: types.CodeType) -> str:
     for const in code_consts_without_docstring(code):
         if isinstance(const, types.CodeType):
             parts.append(code_fingerprint(const))
+        elif isinstance(const, frozenset):
+            # `x in {"a", "b"}` compiles to a frozenset, whose repr follows
+            # the per-process string hash: its sorted members instead.
+            parts.append(f"frozenset({sorted(map(repr, const))})")
         else:
             parts.append(repr(const))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
@@ -807,8 +811,9 @@ class CodeIdentity:
         stale wrapper store its results under the new function's identity.
 
         For named functions the pin is the registration-time source hash.
-        Lambdas additionally fold the code fingerprint: two lambdas defined on the SAME source line share
-        their source text, and only ``co_code``/consts tell them apart.
+        Lambdas additionally fold `code_fingerprint`: two lambdas defined on
+        the SAME source line share their source text, and only their code,
+        nested code included, tells them apart.
 
         Taken when the decorator runs (*source_hash* is the hash registration
         just computed), because that is when the text on disk is the text the
@@ -867,12 +872,7 @@ class CodeIdentity:
         if getattr(func, "__name__", "") == "<lambda>":
             code = getattr(func, "__code__", None)
             if code is not None:
-                # Primitive consts only: nested code objects repr with
-                # memory addresses, which would destabilise the key.
-                consts = tuple(
-                    c for c in code.co_consts if isinstance(c, (bool, int, float, complex, str, bytes, type(None)))
-                )
-                pin = hashlib.sha256(f"{pin}:{code.co_code.hex()}:{consts!r}".encode("utf-8")).hexdigest()
+                pin = hashlib.sha256(f"{pin}:{code_fingerprint(code)}".encode("utf-8")).hexdigest()
         self._own_pins_unverified.discard(key)
         if key in self._own_pins or len(self._own_pins) < self.OWN_PINS_MAX:
             self._own_pins[key] = (self._pin_owner_ref(owner, key), pin)
