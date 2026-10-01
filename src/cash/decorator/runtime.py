@@ -49,11 +49,11 @@ if TYPE_CHECKING:
     from .backend_slot import BackendSlot
     from .closure_fold import ClosureFold
     from .code_args import CodeArgs
-    from .code_identity import CodeIdentity
     from .explain import MissHistory
     from .file_deps import FileDeps
     from .function_identity import OwnSourcePins
     from .globals_fold import GlobalsFold
+    from .method_deps import MethodClassDeps
     from .purity_checks import PurityChecks
     from .registry import FunctionRegistry
     from .reporting import CallLog, Notices
@@ -93,7 +93,7 @@ class KeyBuilder:
         self,
         registry: FunctionRegistry,
         args: ArgHasher,
-        code: CodeIdentity,
+        method_deps: MethodClassDeps,
         pins: OwnSourcePins,
         files: FileDeps,
         closures: ClosureFold,
@@ -106,7 +106,7 @@ class KeyBuilder:
     ) -> None:
         self._registry = registry
         self._args = args
-        self._code = code
+        self._method_deps = method_deps
         self._pins = pins
         self._files = files
         self._closures = closures
@@ -281,7 +281,7 @@ class KeyBuilder:
             chain: list[str] = []
             ledger_note("@chain", chain)
             state_hash = self._code_state(func, func_name, chain, note=True)
-            state_hash = self._code.fold_method_class_deps(func, args, state_hash)
+            state_hash = self._method_deps.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `CodeArgs.fold_code_args` on the RAW arguments saw a class

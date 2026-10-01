@@ -59,6 +59,7 @@ from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
 from .decorator.function_identity import OwnSourcePins, func_key, hash_callable_source
 from .decorator.globals_fold import GlobalsFold
+from .decorator.method_deps import MethodClassDeps
 from .decorator.purity_checks import LearnedMutations, PurityChecks
 from .decorator.registry import FunctionRegistry, checked_depends_on, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
@@ -390,7 +391,7 @@ class Cash:
         self._keys = KeyBuilder(
             self._registry,
             self._args,
-            self._code,
+            MethodClassDeps(self._args),
             self._pins,
             self._files,
             self._closures,
