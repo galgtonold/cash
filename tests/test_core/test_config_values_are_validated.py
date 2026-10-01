@@ -15,8 +15,6 @@ a stray setting cannot stop a program. Byte-size fields also take "2GB" /
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 import cash
@@ -52,7 +50,6 @@ def test_a_size_string_in_the_constructor_caches_to_disk(tmp_path):
 
     @c.cache(assume_safe=True)
     def slow(x):
-        time.sleep(0.2)  # past the persistence floor
         return x
 
     slow(1)

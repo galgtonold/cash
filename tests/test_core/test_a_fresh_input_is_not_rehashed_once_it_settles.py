@@ -109,7 +109,6 @@ file_dep_snapshot.file_content_hash = counting
 c = cash.Cash(cache_dir=sys.argv[1], register_magic=False)
 @c.cache
 def head(p):
-    time.sleep({floor})
     with open(p, "rb") as fh:
         return fh.read(4)
 data = sys.argv[2]
@@ -129,10 +128,9 @@ print(len(reads), head.cache_info()["hits"])
 
 
 def test_the_remembered_check_reaches_the_next_process(tmp_path):
-    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
     script = tmp_path / "run.py"
-    script.write_text(textwrap.dedent(_SCRIPT).replace("{floor}", str(ABOVE_PERSISTENCE_FLOOR_S)), encoding="utf-8")
+    script.write_text(textwrap.dedent(_SCRIPT), encoding="utf-8")
     cache, data = str(tmp_path / "cache"), str(tmp_path / "data.bin")
 
     def run(mode):

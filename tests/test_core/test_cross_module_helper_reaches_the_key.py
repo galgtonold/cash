@@ -42,7 +42,6 @@ def _project(tmp_path, bump_by):
 
         @cash.cache(assume_safe=True)
         def pipeline(x):
-            time.sleep(0.3)          # clear the persistence floor
             print("RAN", flush=True)
             return bump(x)
 

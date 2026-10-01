@@ -80,6 +80,31 @@ def test_magics_are_registered_under_their_class_name():
     )
 
 
+def test_the_session_reset_the_integration_harness_runs_exists():
+    """``NotebookTestRunner.reset_cash_state()`` runs exactly these names in the kernel."""
+    pytest.importorskip("IPython")
+    from cash.notebook.tracking_state import TrackingState
+    from cash.notebook.upstream._types import SimulationCache
+    from cash.notebook.upstream.checker import UpstreamChecker
+
+    assert callable(getattr(TrackingState, "reset_session_state", None))
+    assert callable(getattr(SimulationCache, "reset", None))
+    shell = type("Shell", (), {"user_ns": {}})()
+    checker = UpstreamChecker(shell, tracking_state=TrackingState())
+    assert isinstance(checker.simulator.cache, SimulationCache), (
+        "reset_cash_state() resets the simulation through "
+        "_upstream_checker.simulator.cache; if that path moves, the reset "
+        "must move with it"
+    )
+
+
+def test_the_magics_keep_the_upstream_checker_where_the_reset_looks():
+    pytest.importorskip("IPython")
+    from cash.notebook.ipython.magics import CashMagics
+
+    assert "_upstream_checker" in CashMagics._init_processing_components.__code__.co_names
+
+
 @pytest.mark.parametrize(
     "field",
     [

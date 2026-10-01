@@ -19,7 +19,6 @@ import pytest
 
 import cash
 from cash import Cash
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 pytestmark = [pytest.mark.core]
 
@@ -101,7 +100,6 @@ def total(x):
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     os.write(fd, b"x")  # @cash:assume-safe
     os.close(fd)  # @cash:assume-safe
-    time.sleep({sleep})  # @cash:assume-safe
     return helper(x)
 
 print("ANSWER", total(1))
@@ -109,9 +107,7 @@ print("ANSWER", total(1))
 
 
 def _run(project: Path, marker: str, step: int) -> str:
-    (project / "job.py").write_text(
-        JOB.format(marker=marker, step=step, sleep=ABOVE_PERSISTENCE_FLOOR_S), encoding="utf-8"
-    )
+    (project / "job.py").write_text(JOB.format(marker=marker, step=step), encoding="utf-8")
     src = str(Path(cash.__file__).resolve().parents[1])  # the cash under test
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(project / ".cash")

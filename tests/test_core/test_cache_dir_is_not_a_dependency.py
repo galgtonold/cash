@@ -10,7 +10,6 @@ and the directory itself became the outer entry's dependency.
 from __future__ import annotations
 
 import os
-import time
 
 import pytest
 
@@ -31,13 +30,11 @@ def test_a_nested_store_does_not_make_the_cache_dir_an_outer_dependency(tmp_path
 
     @c.cache(assume_safe=True)
     def inner(i):
-        time.sleep(0.12)  # past the floor: it goes to disk
         return i * 2
 
     @c.cache(assume_safe=True)
     def outer(i):
         runs.append(i)
-        time.sleep(0.12)
         return inner(i) + 1
 
     assert outer(1) == 3

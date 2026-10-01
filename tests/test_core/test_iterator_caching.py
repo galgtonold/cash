@@ -220,9 +220,6 @@ def test_cache_persists_across_instances(tmp_path):
     """The cached chunks (not the wrapper) are what's persisted — so a
     fresh Cash instance pointed at the same cache_dir should still
     return the values via a fresh iterator wrapper.
-
-    Uses an explicit FileBackend so we don't depend on TieredBackend's
-    smart-persistence floor (which gates short calls from reaching disk).
     """
     from cash.backends.file_backend import FileBackend
 

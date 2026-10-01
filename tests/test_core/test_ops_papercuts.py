@@ -74,7 +74,6 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
     @c.cache
     def f(x):
         calls.append(x)
-        time.sleep(0.15)  # past the persistence floor, so it reaches disk
         return x * 2
 
     f(1)
@@ -112,7 +111,6 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
     @c.cache
     def f(x):
         calls.append(x)
-        time.sleep(0.15)
         return x * 2
 
     f(1)
@@ -154,7 +152,6 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
         @c.cache
         def rate(x):
             calls.append(x)
-            time.sleep(0.15)
             return x * 2
 
         @c.cache

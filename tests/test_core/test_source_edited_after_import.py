@@ -149,9 +149,7 @@ def test_an_unedited_helper_is_silent(tmp_path):
 # root's identity was pinned at its FIRST CALL, from the text on disk, so an
 # edit between import and that call keyed the old code's result by the new
 # text. Now the pin is taken when the decorator runs, from the text the import
-# compiled. The body sleeps past the 0.1 s persistence floor: a call that
-# never reaches disk cannot show a cross-process stale entry, which is how the
-# original "no network" control passed while the bug was still there.
+# compiled.
 # ---------------------------------------------------------------------------
 
 OWN_OLD = textwrap.dedent("""
@@ -161,7 +159,6 @@ OWN_OLD = textwrap.dedent("""
     @cash.cache
     def compute(x):
         print("COMPUTE", file=sys.stderr, flush=True)  # @cash:assume-safe
-        time.sleep(0.25)  # @cash:assume-safe
         return x * 14
 
     def unrelated():
@@ -259,7 +256,6 @@ IMPORT_WINDOW = textwrap.dedent("""
     @cash.cache
     def compute(x):
         print("COMPUTE", file=sys.stderr, flush=True)  # @cash:assume-safe
-        time.sleep(0.25)  # @cash:assume-safe
         return x * 14
 """)
 

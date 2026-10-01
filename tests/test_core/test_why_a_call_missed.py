@@ -276,7 +276,6 @@ def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
 
     @c.cache(assume_safe=True)
     def read(path):
-        time.sleep(0.2)  # past the floor, so it reaches disk
         with open(path, encoding="utf-8") as f:
             return f.read()
 

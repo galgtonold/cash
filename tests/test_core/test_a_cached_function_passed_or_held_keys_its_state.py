@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 from tests.test_core._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
@@ -39,9 +38,7 @@ PASSED = {
     "held by an object": "apply_held(Box(steps.scale), 5)",
 }
 
-APP = f"""
-import time
-
+APP = """
 import cash
 
 
@@ -52,19 +49,16 @@ class Box:
 
 @cash.cache
 def apply(fn, x):
-    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     return fn(x) + 1
 
 
 @cash.cache
 def apply_first(fns, x):
-    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     return fns[0](x) + 1
 
 
 @cash.cache
 def apply_held(box, x):
-    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     return box.fn(x) + 1
 """
 
@@ -105,17 +99,17 @@ def _plain_env():
 
 HOLDERS = {
     "a module dict": "from steps import scale\nSTEPS = {'scale': scale}\n\n\n@cash.cache\ndef run(x):\n"
-    "    time.sleep(FLOOR)\n    return STEPS['scale'](x) + 1\n",
+    "    return STEPS['scale'](x) + 1\n",
     "a module list": "from steps import scale\nSTEPS = [scale]\n\n\n@cash.cache\ndef run(x):\n"
-    "    time.sleep(FLOOR)\n    return STEPS[0](x) + 1\n",
+    "    return STEPS[0](x) + 1\n",
     "a factory's closure": "from steps import scale\n\n\ndef make(fn):\n    @cash.cache\n    def run(x):\n"
-    "        time.sleep(FLOOR)\n        return fn(x) + 1\n\n    return run\n\n\nrun = make(scale)\n",
+    "        return fn(x) + 1\n\n    return run\n\n\nrun = make(scale)\n",
 }
 
 
 @pytest.mark.parametrize("holder", list(HOLDERS))
 def test_a_held_cached_function_is_keyed_by_the_globals_it_reads(tmp_path, holder):
-    app = f"import time\n\nimport cash\n\nFLOOR = {ABOVE_PERSISTENCE_FLOOR_S}\n{HOLDERS[holder]}"
+    app = f"import cash\n\n{HOLDERS[holder]}"
     files = {"steps.py": STEPS, "app.py": app, "main.py": "import app\n\nprint(app.run(5))\n"}
     first, after, uncached = edited_runs(tmp_path, files, [("steps.py", "RATE = 2", "RATE = 4")])
     assert first == "11"

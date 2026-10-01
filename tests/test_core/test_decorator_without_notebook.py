@@ -16,7 +16,6 @@ import textwrap
 from pathlib import Path
 
 import cash
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 _BLOCKER = """
 import sys
@@ -55,7 +54,6 @@ def load(scale):
     fd = os.open(RUNS, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
     os.write(fd, b"x\\n")
     os.close(fd)
-    time.sleep({sleep})
     random.seed(scale)
     with open(DATA) as f:
         return [scale * int(v) + random.randint(0, 0) for v in f.read().split()]
@@ -87,7 +85,7 @@ def test_a_cached_function_runs_without_the_notebook_package(tmp_path):
     (tmp_path / "data.txt").write_text("1 2 3\n", encoding="utf-8")
     script = tmp_path / "use_cash.py"
     script.write_text(
-        textwrap.dedent(_BLOCKER) + textwrap.dedent(_SCRIPT).replace("{sleep}", str(ABOVE_PERSISTENCE_FLOOR_S)),
+        textwrap.dedent(_BLOCKER) + textwrap.dedent(_SCRIPT),
         encoding="utf-8",
     )
 

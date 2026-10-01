@@ -59,7 +59,6 @@ def _write_distribution(root):
 
         @cash.cache
         def slow(n):
-            time.sleep(0.3)          # over the persistence floor
             return n * 2
 
 

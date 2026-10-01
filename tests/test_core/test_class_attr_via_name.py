@@ -7,8 +7,7 @@ constant served a stale result. Class config constants (``Config.BATCH_SIZE``,
 function too, not only methods.
 
 Cross-process (the stale serve only shows after a second process rebuilds the
-key); ``time.sleep(0.3)`` clears the persistence floor; ``.cash`` is never
-cleared, or the test is vacuous.
+key); ``.cash`` is never cleared, or the test is vacuous.
 """
 
 from __future__ import annotations
@@ -39,7 +38,6 @@ class Cfg:
     LIMIT = {k}
 @cash.cache
 def compute(x):
-    time.sleep(0.3)
     return x + Cfg.LIMIT
 print("R", compute(100))
 """
@@ -53,7 +51,6 @@ class Model:
         self.x = x
     @cash.cache
     def compute(self, y):
-        time.sleep(0.3)
         return self.x + y + type(self).THRESH
     def __hash__(self):
         return hash(self.x)

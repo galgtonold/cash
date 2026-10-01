@@ -26,7 +26,6 @@ same function source on both sides.
 
 from __future__ import annotations
 
-import time
 from unittest.mock import patch
 
 import pytest
@@ -41,7 +40,6 @@ def _make_cached_fn(c: Cash, calls: dict):
 
     @c.cache
     def f(x):
-        time.sleep(0.12)  # clear smart-persistence floor
         calls["n"] += 1
         return x * 3
 

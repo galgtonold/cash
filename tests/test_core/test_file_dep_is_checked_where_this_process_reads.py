@@ -38,7 +38,6 @@ _READER = textwrap.dedent("""
     @cash.cache
     def total(path):
         print("RAN", file=sys.stderr, flush=True)
-        time.sleep(0.25)                      # over the persistence floor
         with open(path, encoding="utf-8") as fh:
             return sum(int(line) for line in fh if line.strip())
 
@@ -159,7 +158,6 @@ _PKG_INIT = textwrap.dedent("""
     @cash.cache
     def eur_total(n):
         print("RAN", file=sys.stderr, flush=True)
-        time.sleep(0.25)
         return round(n * _rate("EUR"), 4)
 """)
 

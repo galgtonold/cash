@@ -33,8 +33,8 @@ jobs:
       # without anyone adding it here (tests/test_tooling/test_ci_covers_the_suite.py checks).
       # Excluded: test_notebook_integration/ starts real kernels and is too slow
       # per push (the integration-core job runs its core set);
-      # test_wheel_gate/ builds a wheel and drives a real Jupyter server, so no
-      # workflow runs it: run it by hand before a release (see that file).
+      # test_wheel_gate/ builds a wheel and drives a real Jupyter server for
+      # minutes; nightly.yml runs it.
       # docs/ has its own job.
       # `perf` tests assert wall-clock thresholds and run in benchmarks.yml.
       # -n auto replaces pyproject's -n 16, which oversubscribes 3-4 vCPU runners.

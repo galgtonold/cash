@@ -46,7 +46,6 @@ _JOB = """
     @cash.cache(assume_safe=True)
     def work(n):
         calls.append(n)
-        time.sleep(0.2)             # past the persistence floor
         return n * 2
 
     work(1); work(1); work(1)

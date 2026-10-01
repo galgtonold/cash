@@ -168,7 +168,6 @@ def test_lowering_a_tier_default_ttl_shortens_entries_already_written(temp_cache
         @c.cache(assume_safe=True)
         def f(x):
             runs.append(x)
-            time.sleep(0.15)  # past the persistence floor: the next run reads disk
             return x
 
         return f
@@ -193,7 +192,6 @@ def test_an_entry_expired_under_the_tier_default_says_so(temp_cache_dir, monkeyp
     explain(). It is recorded with the ttl it was written with now."""
 
     def body(x):
-        time.sleep(0.15)  # past the persistence floor: the next run reads disk
         return x
 
     c = _tiered(monkeypatch, temp_cache_dir, 5)
@@ -231,7 +229,6 @@ def test_ttl_zero_recomputes_even_within_one_clock_tick(cash_instance, clock):
     @cash_instance.cache(ttl=0)
     def fetch(x):
         runs.append(x)
-        time.sleep(0.15)  # over the persistence floor
         return x
 
     assert fetch(1) == 1
@@ -256,7 +253,6 @@ def test_cleanup_removes_what_a_read_would_not_serve(temp_cache_dir, monkeypatch
     serve any more."""
 
     def body(x):
-        time.sleep(0.15)  # past the persistence floor: the entry reaches disk
         return x
 
     first = _tiered(monkeypatch, temp_cache_dir, 86400)

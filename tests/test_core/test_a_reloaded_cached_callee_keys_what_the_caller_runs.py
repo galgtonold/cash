@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 from tests.test_core._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
@@ -25,16 +24,13 @@ def load(n):
     return n * 2
 """
 
-OUTER = f"""
-import time
-
+OUTER = """
 import cash
 from inner import load
 
 
 @cash.cache
 def top(n):
-    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     return load(n) + 1
 """
 

@@ -46,7 +46,6 @@ _SCRIPT = textwrap.dedent("""
     def draw(n):
         name = os.path.join(os.environ["COUNTER"], os.urandom(8).hex())
         os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
-        time.sleep(0.15)                      # past the persistence floor
         return os.urandom(8).hex()            # the bug under test: n is ignored
 
 

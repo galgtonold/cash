@@ -18,7 +18,7 @@ decorator arguments, library wrappers that hold the user's function
 
 Each case: write v1, run cached twice (cold, then warm -- which must not
 execute), apply one edit, then compare a cached run with ``CASH_DISABLE=1``.
-Every step is a fresh process; the body sleeps past the persistence floor.
+Every step is a fresh process.
 """
 
 from __future__ import annotations
@@ -45,7 +45,6 @@ JOB = D("""
     @cash.cache
     def f(x):
         print("[RUN]", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)  # @cash:assume-safe
         return h(x)
 
     print(float(f(2)))
@@ -136,8 +135,7 @@ TWO_JOB = (
     JOB.replace("from helpers import h", "from helpers import h, h_other")
     .replace(
         "    return h(x)\n",
-        "    return h(x)\n\n\n@cash.cache\ndef g(x):\n    time.sleep(0.2)  # @cash:assume-safe\n"
-        "    return h_other(x)\n",
+        "    return h(x)\n\n\n@cash.cache\ndef g(x):\n    return h_other(x)\n",
     )
     .replace("print(float(f(2)))", "g(2)\nprint(float(f(2)))")
 )

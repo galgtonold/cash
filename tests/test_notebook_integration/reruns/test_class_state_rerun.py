@@ -56,7 +56,6 @@ def test_instance_method_appends_and_returns(nb_runner):
     reason="cross-cell class-var accumulator needs a "
     "per-cell snapshot; class-def re-run is suppressed to "
     "avoid clobbering the upstream cell's contribution",
-    strict=False,
 )
 def test_init_increments_class_counter(nb_runner):
     # A class counter incremented by an UPSTREAM cell (w0) AND this cell (w): the

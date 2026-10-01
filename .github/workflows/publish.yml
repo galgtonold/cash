@@ -53,8 +53,74 @@ jobs:
           name: dist
           path: dist/
 
-  publish-test:
+  # PyPI never takes a version back, so the wheel is installed and checked
+  # before anything is uploaded: in a clean venv (never the checkout, whose
+  # src/ would shadow what the wheel actually ships), its __version__ must be
+  # the release tag, and JupyterLab must list the bundled extension. Nothing
+  # else catches a wheel that installs but registers no extension.
+  verify-wheel:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the wheel into a clean venv
+        run: |
+          set -euo pipefail
+          wheels=(dist/*.whl)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "expected exactly one wheel in dist/, found: ${wheels[*]}"
+            exit 1
+          fi
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install "${wheels[0]}"
+
+      # A manual dispatch has no release tag; it still checks that the wheel's
+      # file name and __version__ agree.
+      - name: Check __version__ against the release tag
+        working-directory: ${{ runner.temp }}
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          version=$("$RUNNER_TEMP/wheel-venv/bin/python" -c "import cash; print(cash.__version__)")
+          echo "installed cash.__version__ = $version"
+          wheel=$(basename "$GITHUB_WORKSPACE"/dist/*.whl)
+          case "$wheel" in
+            "cash_lib-$version-"*) ;;
+            *) echo "wheel $wheel does not carry version $version"; exit 1 ;;
+          esac
+          if [ "$EVENT" = "release" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "$version" != "$tag" ]; then
+              echo "release tag $GITHUB_REF_NAME does not match cash.__version__ $version"
+              exit 1
+            fi
+          fi
+
+      - name: Check the JupyterLab extension registers
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install "jupyterlab>=4,<5"
+          listing=$("$RUNNER_TEMP/wheel-venv/bin/jupyter" labextension list 2>&1)
+          echo "$listing"
+          echo "$listing" | grep -E "cash-live-cells.*enabled.*OK" >/dev/null || {
+            echo "the wheel installs but cash-live-cells is not registered and enabled"
+            exit 1
+          }
+
+  publish-test:
+    needs: [build, verify-wheel]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.test_pypi == 'true'
     environment: test-pypi
@@ -72,7 +138,7 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
 
   publish:
-    needs: build
+    needs: [build, verify-wheel]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment: pypi

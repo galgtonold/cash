@@ -90,7 +90,6 @@ class TestIsolatedRerunGaps:
         "reassigned-names gate excludes it. Re-run reads the renamed "
         "frame -> KeyError. Same idempotency tension as the "
         "downstream-advancement case.",
-        strict=False,
     )
     def test_object_mutate_then_reassign_nonidempotent(self, nb_runner):
         _two_cell(

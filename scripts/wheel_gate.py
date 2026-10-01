@@ -30,7 +30,7 @@ WHAT IT DOES
 ------------
   1. Builds a wheel from the current tree (or accepts `--wheel <path>`).
   2. Creates a FRESH venv on a SHORT path (<gate root>/venv -- MAX_PATH!)
-     and installs `<wheel>` + pandas pyarrow numpy scikit-learn jupyter-server
+     and installs `<wheel>` + pandas pyarrow numpy scikit-learn matplotlib jupyter-server
      jupyter-client nbformat ipykernel. NEVER installs into the developer's Python.
   3. Registers a UNIQUE `wheelgate` kernelspec INTO the venv
      (`ipykernel install --sys-prefix`, never `--user`) so the kernel can only
@@ -214,6 +214,8 @@ def setup_venv(wheel: Path, *, reuse: bool) -> Path:
             "pyarrow",
             "numpy",
             "scikit-learn",
+            # S5 and S7 draw and save charts.
+            "matplotlib",
             "jupyter-server",
             "jupyter-client",
             "nbformat",

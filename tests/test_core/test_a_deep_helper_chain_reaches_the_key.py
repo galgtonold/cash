@@ -27,7 +27,6 @@ import cash
 from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer, get_analyzer
 from cash.exceptions import CashWarning
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 pytestmark = [pytest.mark.core]
 
@@ -60,7 +59,6 @@ def total(x):
     fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     os.write(fd, b"x")  # @cash:assume-safe
     os.close(fd)  # @cash:assume-safe
-    time.sleep({sleep})  # @cash:assume-safe
     return h0(x) + h1(x) + h2(x) + h3(x) + h4(x)
 
 
@@ -70,9 +68,7 @@ print("ANSWER", total(1))
 
 def _write(project: Path, step: int) -> None:
     (project / "deep_helpers.py").write_text(_helpers(step), encoding="utf-8")
-    (project / "job.py").write_text(
-        JOB.format(helpers="deep_helpers", sleep=ABOVE_PERSISTENCE_FLOOR_S), encoding="utf-8"
-    )
+    (project / "job.py").write_text(JOB.format(helpers="deep_helpers"), encoding="utf-8")
 
 
 def _run(project: Path, seed: str = "0") -> str:

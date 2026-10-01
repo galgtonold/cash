@@ -12,7 +12,6 @@ misbehaviour after the fact.
 from __future__ import annotations
 
 import threading
-import time
 import warnings
 
 import pytest
@@ -25,7 +24,6 @@ from cash.exceptions import CashCacheStoreFailedWarning
 def _unpicklable_maker(cash):
     @cash.cache
     def make_lock(n):
-        time.sleep(0.3)  # past the persistence floor: the disk tier is asked
         return {"n": n, "lock": threading.Lock()}
 
     return make_lock

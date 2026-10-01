@@ -7,8 +7,7 @@ a stale result. At decoration time the class does not exist yet; the
 fix resolves these against the real class at CALL time, where ``self`` is known.
 
 Cross-process, because the stale serve only appears when a second process
-rebuilds the key and matches the persisted entry. ``time.sleep(0.3)`` clears the
-persistence floor, or nothing persists and the test is vacuous.
+rebuilds the key and matches the persisted entry.
 """
 
 from __future__ import annotations
@@ -44,7 +43,6 @@ class Model:
         return x * {k}
     @cash.cache
     def compute(self, x):
-        time.sleep(0.3)
         return self.helper(x) + 1
 print("R", Model().compute(21))
 """
@@ -56,7 +54,6 @@ class M:
     RATE = {k}
     @cash.cache
     def price(self, b):
-        time.sleep(0.3)
         return b * self.RATE
 print("R", M().price(100))
 """
@@ -70,7 +67,6 @@ class Base:
 class Child(Base):
     @cash.cache
     def compute(self, x):
-        time.sleep(0.3)
         return super().base_calc(x) * 2
 print("R", Child().compute(10))
 """
@@ -83,7 +79,6 @@ class M:
     @classmethod
     @cash.cache
     def scaled(cls, x):
-        time.sleep(0.3)
         return x * cls.FACTOR
 print("R", M.scaled(10))
 """
@@ -119,7 +114,6 @@ class Model:
         return x + self.RATE          # helper reads RATE; compute does not
     @cash.cache
     def compute(self, x):
-        time.sleep(0.3)
         return self.helper(x) + 4
 print("R", Model().compute(10))
 """
@@ -135,7 +129,6 @@ class Model:
         return self.b(x)
     @cash.cache
     def compute(self, x):
-        time.sleep(0.3)
         return self.a(x)
 print("R", Model().compute(10))
 """
@@ -150,7 +143,6 @@ class Model:
         return self.x + {k}
     @cash.cache
     def total(self, y):
-        time.sleep(0.3)
         return self.computed + y
 print("R", Model().total(0))
 """

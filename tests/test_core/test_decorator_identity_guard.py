@@ -29,14 +29,12 @@ observable instead: the bytes pyplot writes, or an execution counter.
 from __future__ import annotations
 
 import asyncio
-import time
 import warnings
 
 import pytest
 
 import cash
 from cash.exceptions import CashCacheIneffectiveWarning
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
@@ -70,7 +68,6 @@ def _make_builder():
 
     def build(n):
         calls.append(n)
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         fig, ax = plt.subplots()
         return fig, ax
 
@@ -128,7 +125,6 @@ def test_an_ordinary_result_still_caches(tmp_path):
 
     def compute(n):
         calls.append(n)
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         return n * 10
 
     cached = c.cache(compute)
@@ -149,7 +145,6 @@ def test_an_axes_array_is_refused_too(tmp_path):
 
     def build_grid(n):
         calls.append(n)
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         _fig, axes = plt.subplots(2, 2)
         return axes
 
@@ -184,7 +179,6 @@ def test_the_async_wrapper_refuses_too(tmp_path):
 
     async def build(n):
         calls.append(n)
-        await asyncio.sleep(ABOVE_PERSISTENCE_FLOOR_S)
         fig, ax = plt.subplots()
         return fig, ax
 

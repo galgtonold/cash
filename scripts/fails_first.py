@@ -11,10 +11,10 @@ testing your fix -- it is vacuously green.
 
 Vacuous green has four shapes, all of which have shipped in this repo:
 
-1. The mechanism never engages. A decorator test whose function runs faster
-   than the ~0.1 s persistence floor never writes to disk, so a second process
-   recomputes and the assertion holds whether or not the bug exists. This one
-   silently passed two brand-new tests against unfixed source.
+1. The mechanism never engages. A notebook statement or call unit faster
+   than the ~0.1 s persistence floor never writes to disk, so a restarted
+   kernel recomputes and the assertion holds whether or not the bug exists.
+   (A ``@cash.cache`` function persists however quick it is.)
 2. Empty input trivially satisfies the assertion. "Is this output encodable?"
    passes for an empty string, so a harness that failed to execute anything
    looks like a pass. Assert the input is non-empty first.
@@ -163,7 +163,7 @@ def main() -> int:
         for name, kind in not_failed.items():
             print(f"  {name} ({kind})")
         print("They do not exercise the change. Common cause: the mechanism")
-        print("never engages -- e.g. a cached function under the ~0.1 s")
+        print("never engages -- e.g. a notebook statement under the ~0.1 s")
         print("persistence floor is never written to disk at all.")
         return 1
 

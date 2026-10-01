@@ -60,13 +60,12 @@ MUTATE = "obj.inner.append(42)\nobj.tag = 'mutated'"
 # this one (see the module docstring). The computed-alias half — "the bind must not be
 # restored from cache" — is asserted separately and unconditionally below, and
 # passes for every form; these xfails cover only the end-to-end identity, which
-# additionally needs the re-derivation fix. Non-strict so they flip to XPASS the moment it
-# lands rather than silently masking it.
+# additionally needs the re-derivation fix. Strict, so the run fails the moment that fix
+# lands and the marker has to come off.
 _REDERIVE_SWAPS_OBJ = pytest.mark.xfail(
     reason="upstream re-derivation swaps live `obj` while the container "
     "keeps the original, so identity breaks on the COLD run too "
     "(bind cell reports 'executed', not 'RESTORED' — the computed-alias half is fixed)",
-    strict=False,
 )
 # `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not lst`).
 # Refusing to cache the binding would not fix that, and `list(...)` is a call that
@@ -74,7 +73,6 @@ _REDERIVE_SWAPS_OBJ = pytest.mark.xfail(
 _ELEMENT_ALIAS = pytest.mark.xfail(
     reason="element-level aliasing through a freshly-built container; the binding "
     "itself is not the alias, so the computed-alias refusal does not apply",
-    strict=False,
 )
 
 FORMS = [

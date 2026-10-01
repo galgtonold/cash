@@ -24,7 +24,6 @@ import pytest
 
 import cash
 from cash.decorator.globals_fold import stabilize_for_global_hash
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 pytestmark = [pytest.mark.core]
 
@@ -62,7 +61,6 @@ JOB = """
     @cash.cache
     def run(x):
         print("[RUN]", file=sys.stderr)  # @cash:assume-safe
-        time.sleep({sleep})  # @cash:assume-safe
         return {body}
 
 
@@ -119,7 +117,7 @@ DATACLASS_IN_A_LIST = """
 )
 def test_editing_the_function_recomputes(tmp_path, helper, body):
     _write(tmp_path / "helper.py", helper)
-    _write(tmp_path / "job.py", JOB.format(sleep=ABOVE_PERSISTENCE_FLOOR_S, body=body))
+    _write(tmp_path / "job.py", JOB.format(body=body))
     first = [_run(tmp_path), _run(tmp_path)]
     assert first == [("2", 1), ("2", 0)], "the unedited project was not cached"
     _write(tmp_path / "helper.py", helper.replace("x + 1", "x + 100"))
