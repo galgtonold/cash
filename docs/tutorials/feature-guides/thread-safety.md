@@ -73,7 +73,7 @@ duplicate computation costs less than the lock.
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/_paths.py:resolve_main_module @fd6aef0f, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/_paths.py:resolve_main_module @fd6aef0f, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @f2a46f9f -->
 Worker processes use the cache folder of the process that started them, so what
 one worker computes is a hit for the other workers, for the parent, and for the
 next run.

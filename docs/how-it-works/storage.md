@@ -64,7 +64,7 @@ a cap you set reads `(set by max_cache_size)`.
 
 === "Decorator"
 
-    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/core.py:Cash._summary_budget @187bcd8a -->
+    <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/decorator/run_summary.py:RunSummary._budget @187bcd8a -->
     The first result a process writes to disk logs the line on the
     `cash.storage` logger. `verbose=True`, `debug=True` (or `CASH_VERBOSE=1`,
     `CASH_DEBUG=1`) or your own `logging` at INFO shows it; otherwise it stays

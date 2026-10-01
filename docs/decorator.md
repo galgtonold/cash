@@ -161,7 +161,7 @@ and to answer "why did it miss?" when a call ran that you expected to be a
 cache hit. Each miss names its reason: new arguments, a changed file, a
 helper you edited, an expired `ttl`.
 
-<!-- claim: cash/core.py:Cash.run_summary @1b06ce83, cash/core.py:Cash._summary_reasons @a0f367d6, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/decorator/run_summary.py:RunSummary.text @1b06ce83, cash/decorator/run_summary.py:RunSummary.reasons @a0f367d6, cash/decorator/run_summary.py:RunSummary.print_at_exit @f2a46f9f -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
 process ends: hits and misses per function, the time saved, and why calls
 missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
