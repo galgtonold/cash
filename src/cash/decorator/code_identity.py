@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
+from ..analysis.helper_code import UnwalkableLayers, callable_layers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package

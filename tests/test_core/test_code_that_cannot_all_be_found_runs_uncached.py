@@ -21,7 +21,7 @@ import pytest
 import cash.decorator.code_identity as code_identity
 import cash.decorator.registry as registry
 from cash import Cash
-from cash.analysis.purity_analyzer import callable_layers
+from cash.analysis.helper_code import callable_layers
 from cash.exceptions import CashWarning
 
 pytestmark = [pytest.mark.core]
@@ -64,7 +64,7 @@ class _Opaque:
 
 
 def test_a_callable_that_cannot_be_looked_into_raises():
-    from cash.analysis.purity_analyzer import UnwalkableLayers
+    from cash.analysis.helper_code import UnwalkableLayers
 
     with pytest.raises(UnwalkableLayers, match="not now"):
         callable_layers(_Opaque())
