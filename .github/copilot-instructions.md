@@ -39,14 +39,21 @@ notebook keys a statement on its source and the lineage of its inputs, and
 decides per statement whether to persist. They share the hashing helpers, the
 storage backends and the effect vocabulary (`effects.py`), not a key builder.
 
-- **`src/cash/core.py`**: the `Cash` class and `@cash.cache`.
+- **`src/cash/core.py`**: the `Cash` class and `@cash.cache`: its settings and
+  the wiring of the objects below.
 - **`src/cash/decorator/`**: the objects `Cash.__init__` builds and wires together.
   Each one takes what it uses as constructor arguments; there are no mixins and no
   shared `self`. `FunctionRegistry` holds the cached functions and their analysis.
+  `Wrappers` (`wrappers.py`) builds the function `@cash.cache` returns.
   `KeyBuilder` and `CallRunner` (`runtime.py`) build the key and run a call.
-  `ResultStore` stores results, and `Explainer` answers `f.explain()`. The key
-  folds live in `closure_fold.py`, `globals_fold.py`, `code_args.py`,
-  `code_identity.py` and `arg_hashing.py`.
+  `ResultStore` stores results, and `Explainer` answers `f.explain()`.
+  `Maintenance` deletes entries and `RunSummary` prints the end-of-run table.
+  The key folds: `closure_fold.py` (captures and defaults), `globals_fold.py`
+  (the globals a function reads, through `global_reads.py`,
+  `global_values.py`, `class_data.py` and `module_attrs.py`), `code_args.py`,
+  `code_surface.py` (code reached from a value), `function_identity.py`
+  (source and bytecode fingerprints), `environment_fold.py` and
+  `arg_hashing.py`.
 - **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.

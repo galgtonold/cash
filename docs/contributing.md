@@ -40,12 +40,12 @@ src/cash/
 ├── __init__.py         # the public API (cash.__all__) and the
 │                       #   default Cash instance
 ├── __main__.py         # the `cash` command line
-├── core.py             # the Cash class: registries, configuration,
-│                       #   the cache decorator front
-├── decorator/          # what a cached call does: its key (code,
-│                       #   globals, closures, arguments, seed, files),
-│                       #   the call itself, explain() and the warnings
-│                       #   it raises
+├── core.py             # the Cash class: its settings and the wiring
+│                       #   of decorator/
+├── decorator/          # what a cached call does: the wrapper, its key
+│                       #   (code, globals, closures, arguments, seed,
+│                       #   files), the call itself, explain(), the
+│                       #   warnings it raises and the run summary
 ├── notebook/           # the notebook engine (only the magics loaders
 │                       #   import it)
 │   ├── ipython/        #   the magics and the cell executor
