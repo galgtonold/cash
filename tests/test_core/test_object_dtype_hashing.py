@@ -9,7 +9,7 @@ could alias distinct content onto one key. These assert content-based hashing.
 import numpy as np
 
 from cash import Cash
-from cash.object_hashing import hash_numpy
+from cash.content_hashers import hash_numpy
 
 
 class TestObjectDtypeArrayHashing:

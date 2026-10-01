@@ -21,7 +21,7 @@ from ..backends.serialization import PickleSerializer
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..lineage_tag import set_tags
-from ..object_hashing import estimate_object_size
+from ..sizing import estimate_object_size
 from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cache_metadata import CacheMetadata

@@ -25,7 +25,7 @@ from .._memo import PURITY_REPORTS, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..purity import is_stateful
-from ..source_norm import getsource
+from ..source_reading import getsource
 from .helper_bindings import bindings_changed
 from .helper_code import qualname_of
 from .helper_walk import HelperWalk

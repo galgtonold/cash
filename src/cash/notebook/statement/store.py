@@ -26,7 +26,7 @@ from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
-from cash.object_hashing import estimate_object_size
+from cash.sizing import estimate_object_size
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state

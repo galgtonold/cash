@@ -28,7 +28,7 @@ from ..effects import (
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..install_paths import is_user_code_file
-from ..source_norm import getsource
+from ..source_reading import getsource
 from .ast_util import called_names, resolve_callee
 from .file_effects import get_base_name
 from .helper_bindings import build_namespace, callee_chain

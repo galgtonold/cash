@@ -107,7 +107,7 @@ def evaluate(model, data):
     return model.weights @ data
 ```
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/source_norm.py:callable_identity @4e3b5359 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/code_digest.py:callable_identity @4e3b5359 -->
 From now on, every `MyModel` argument is identified by `hash_model(model)`,
 and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
 `Cash(...)` instance, call `app.register_hasher(...)` instead.
@@ -146,7 +146,7 @@ the hasher return something that changes with it, or name it with
   identity only if it really identifies the value, such as a version you
   control.
 
-<!-- claim: cash/object_hashing.py:hash_numpy @f6df9c37 -->
+<!-- claim: cash/content_hashers.py:hash_numpy @f6df9c37 -->
 To check a hasher, call it on two equal but separately built instances. The
 strings must match. `evaluate.explain(model, data).cache_key` shows the key a
 call would use.
@@ -196,7 +196,7 @@ data changes.
 
 ## Overriding a built-in content hasher
 
-<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b broad="the list enumerates every type the builtin dispatcher recognises", cash/object_hashing.py:builtin_hash_family @b0c04a56 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @dd82c01b broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @b0c04a56 -->
 cash hashes these types by their full content, before it looks at your
 registrations:
 
@@ -224,7 +224,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @99cd3791 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7af4e89b -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result.
 

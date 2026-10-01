@@ -1,4 +1,4 @@
-"""Performance tests for `cash.object_hashing.estimate_object_size`.
+"""Performance tests for `cash.sizing.estimate_object_size`.
 
 Single canonical sizer; tests call the module function directly.
 """
@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cash.object_hashing import estimate_object_size
+from cash.sizing import estimate_object_size
 
 
 def test_dataframe_uses_memory_usage():

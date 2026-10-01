@@ -79,9 +79,19 @@ src/cash/
 ├── purity.py           # @pure, @stateful and the known-pure registry
 ├── dependency_state.py # the state hash: own source, dependencies,
 │                       #   helpers
-├── object_hashing.py   # content hashes and sizes of values
+├── canonical_form.py   # the form a key pickles a value in
+├── content_hashers.py  # content hashes of frames, arrays, tables
+├── sizing.py           # how big a frame, array or container is
+├── value_hash.py       # the notebook's value hash (compute_hash)
+├── mutation_fingerprint.py # a digest that moves on an in-place edit
 ├── source_norm.py      # normalises source before hashing (comments,
-│                       #   blank lines)
+│                       #   blank lines, docstrings)
+├── code_digest.py      # the digest that stands for a callable's or a
+│                       #   module's code
+├── source_reading.py   # reads source files and source lines, memoised
+│                       #   per file version
+├── process_start.py    # when this process started (no psutil import)
+├── loaded_code.py      # is the code on disk still the code running?
 ├── cost_model.py       # predicted serialise and restore time per
 │                       #   type and backend
 ├── effectiveness.py    # notices when caching costs more than it

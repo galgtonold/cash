@@ -15,7 +15,7 @@ re-execute the producer, which is exactly what ``run_all`` does (and why
 ``run_all`` is already correct for these cases).
 
 **Why a bespoke probe instead of the existing content-hash check?**
-``object_hashing.compute_hash`` falls back to ``sha256(str(id(obj)))`` for
+``value_hash.compute_hash`` falls back to ``sha256(str(id(obj)))`` for
 unpicklable objects. Consumables drain in place, so their identity never
 changes and their hash is byte-identical before and after being drained. The
 simulator's content-base staleness check therefore *cannot* fire for them; each

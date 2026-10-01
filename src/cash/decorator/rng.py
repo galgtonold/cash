@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..analysis.annotations import parse_annotation_line
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import getsource, getsourcelines
+from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,

@@ -18,7 +18,7 @@ from typing import Any
 
 from .._memo import MODULE_ANALYSES, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import settled_source_version, source_version_unchanged
+from ..source_reading import settled_source_version, source_version_unchanged
 from ..value_types import BUILTIN_NAMES
 from .callee_effects import module_function_global_changes, scope_locals
 from .purity_report import ISSUE_MUTABLE_GLOBAL, PurityIssue

@@ -109,7 +109,7 @@ def test_the_cap_is_compared_against_the_size_it_governs(tmp_path):
 
     from cash.backends.memory_backend import InMemoryBackend
     from cash.backends.tiered_backend import TieredBackend
-    from cash.object_hashing import memory_footprint
+    from cash.sizing import memory_footprint
 
     value = [f"string-number-{i}" for i in range(40_000)]
     in_memory = memory_footprint(value)

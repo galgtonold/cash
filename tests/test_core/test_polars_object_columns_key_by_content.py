@@ -15,8 +15,9 @@ import numpy as np
 import pytest
 
 from cash import Cash, FileBackend
+from cash.content_hashers import hash_polars
 from cash.exceptions import CashCacheIneffectiveWarning
-from cash.object_hashing import compute_hash, hash_polars
+from cash.value_hash import compute_hash
 
 pl = pytest.importorskip("polars")
 

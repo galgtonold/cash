@@ -34,16 +34,11 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from .._annotation_refs import annotation_referents
+from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..purity import is_pure, is_stateful
-from ..source_norm import (
-    callable_identity,
-    compiled_identity,
-    extension_file_digest,
-    getsourcelines,
-    own_source,
-)
+from ..source_reading import getsourcelines, own_source
 from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee

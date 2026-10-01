@@ -26,8 +26,8 @@ import pytest
 
 import cash
 from cash.analysis.code_analyzer import CodeAnalyzer
+from cash.code_digest import callable_identity
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
-from cash.source_norm import callable_identity
 
 # Prose that fails to tokenize on EVERY supported Python.
 #

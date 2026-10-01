@@ -62,7 +62,7 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
-from cash.object_hashing import estimate_object_size
+from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.randomness import capture_rng_state, rng_modules_changed
 

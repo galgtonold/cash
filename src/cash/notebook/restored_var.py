@@ -14,7 +14,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from cash.object_hashing import builtin_hash_family
+from cash.content_hashers import builtin_hash_family
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata

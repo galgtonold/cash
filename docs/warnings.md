@@ -1072,8 +1072,8 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @5d0686e2 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
@@ -1099,7 +1099,7 @@ did not expect the file to change.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/decorator/cash_key.py:content_digest @8f2ced8a -->
+<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/decorator/cash_key.py:content_digest @85326417 -->
 **What happened.** A class's
 [`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key)
 returned the same key for two objects holding different data. cash reads an
@@ -1126,7 +1126,7 @@ class Dataset:
 Then clear the results stored under the old key with `f.cache_clear()` on the
 cached functions that took the object.
 
-<!-- claim: cash/decorator/cash_key.py:content_digest @8f2ced8a -->
+<!-- claim: cash/decorator/cash_key.py:content_digest @85326417 -->
 **When it is safe to ignore.** When the difference is state that never
 changes a result: a lazily filled memo, a load timestamp, a handle. cash
 compares every attribute it can pickle, so such an attribute set before the
