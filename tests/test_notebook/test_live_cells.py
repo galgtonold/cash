@@ -450,7 +450,7 @@ def test_install_expiry_hook_survives_a_keyerror_from_events_register():
     still-narrower event set the way a future or embedded `EventManager`
     might have one. The production catch must be at least as wide as this
     file's own model of what can go wrong, or exactly this would propagate
-    out of `install_expiry_hook`, out of `_init_session_state`, i.e. out of
+    out of `install_expiry_hook`, out of `_install_shell_hooks`, i.e. out of
     `import cash`.
     """
     shell = SimpleNamespace(events=_FakeEvents())
@@ -464,7 +464,7 @@ def test_wiring_cashmagics_installs_both_halves_of_the_live_cell_contract():
     `expire` and `register_target` can both be perfect while `magics.py` calls
     neither, and every test above would still pass -- the "correct logic,
     missing wiring" failure this file's other wiring tests exist to catch.
-    Drives `_init_session_state`, the method that installs cash's shell hooks,
+    Drives `_install_shell_hooks`, the method that installs cash's shell hooks,
     and checks that the comm target AND the expiry hook both ended up attached.
     """
     from cash.notebook.ipython.magics import CashMagics
@@ -476,8 +476,7 @@ def test_wiring_cashmagics_installs_both_halves_of_the_live_cell_contract():
     shell.run_cell_async = None
 
     magics = CashMagics.__new__(CashMagics)
-    magics._cash_instance = None
-    magics._init_session_state(shell)
+    magics._install_shell_hooks(shell)
 
     assert TARGET in shell.kernel.comm_manager.targets, "the comm target was never registered"
     assert _on_post_run_cell in shell.events.registered.get("post_run_cell", []), (

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import functools
 import json
 import logging
 import weakref
@@ -45,12 +44,13 @@ from ..tracking_state import TrackingState
 from ..upstream import UpstreamChecker
 from ._args import parse_mode, strip_inline_comment
 from ._help import help_text
-from .badges import BadgePresenter
 from ._types import CellMetrics, PipelineCompleted, PipelineSyntaxError, RunInstead
+from .badges import BadgePresenter
 from .cell_executor import CellExecutor
 from .inspection import show_provenance, show_stats
 from .notifications import discarded_writes_notification
 from .session import CashSession
+from .shell_hooks import register_event, remove_previous_hooks, signature_preserving_proxy, stash_hooks
 
 __all__ = ["CashMagics"]
 
@@ -76,14 +76,15 @@ def _is_silent(args: tuple, kwargs: dict) -> bool:
 @magics_class
 class CashMagics(Magics):
     def __init__(self, shell: ShellProtocol, cash_instance: Cash) -> None:
-        """Initialise CashMagics in three phases (ordering matters):
+        """Initialise CashMagics in four phases (ordering matters):
 
         1. **State setup** — mode flags, tracking dicts, convenience aliases.
         2. **Processing components** — upstream checker, statement processor,
            control structure processor, module invalidator (requires state
            from phase 1).
-        3. **Session state** — badge throttle, cell tracking, event hooks
+        3. **Session state** — cell tracking and the session statistics
            (requires components from phase 2).
+        4. **Shell hooks** — cell events and the ``run_cell`` proxies.
         """
         super().__init__(shell)
         self._cash_instance = cash_instance
@@ -111,7 +112,8 @@ class CashMagics(Magics):
         self.tracking_state = TrackingState()
 
         self._init_processing_components(shell, cash_instance)
-        self._init_session_state(shell)
+        self._init_session_state()
+        self._install_shell_hooks(shell)
 
     def _init_processing_components(self, shell: ShellProtocol, cash_instance: Cash) -> None:
         """Create upstream checker, statement processor, control structure processor,
@@ -164,8 +166,8 @@ class CashMagics(Magics):
             control_structure_processor=self._control_structure_processor,
         )
 
-    def _init_session_state(self, shell: ShellProtocol) -> None:
-        """Initialise cell ID tracking, session stats, and event hooks."""
+    def _init_session_state(self) -> None:
+        """Initialise cell ID tracking, the last cell's metrics and the session."""
         # Whether %cash_on has shown its save-the-notebook tip this session.
         self._save_hint_shown = False
         # How many discarded cache writes the badge has already reported.
@@ -190,160 +192,85 @@ class CashMagics(Magics):
             store_floor_s=lambda: self._statement_processor.persistence_policy().store_floor_s,
         )
 
-        # When CashMagics is re-instantiated in a still-running kernel
-        # (cash.reset_session(), a second Cash(), or %load_ext after a reset),
-        # un-patch the previous instance's hooks FIRST. Otherwise we'd capture an
-        # already-wrapped run_cell as our "original" (nesting wrappers on every
-        # reset) and stack duplicate pre_run_cell handlers. The true-original
-        # run_cell and the prior handler are stashed on the shell for this.
-        prior = getattr(shell, "_cash_hooks", None)
-        if isinstance(prior, dict):
-            try:
-                shell.events.unregister("pre_run_cell", prior["capture_cell_id"])
-            except (ValueError, KeyError, AttributeError, TypeError):
-                pass
-            try:
-                shell.run_cell = prior["original_run_cell"]
-            except (KeyError, AttributeError):
-                pass
-            # Restore the async entry point too, so a reset_session /
-            # second-Cash re-patch captures the true-original run_cell_async
-            # rather than nesting our wrapper on every reset.
-            if "original_run_cell_async" in prior:
-                try:
-                    shell.run_cell_async = prior["original_run_cell_async"]
-                except (KeyError, AttributeError):
-                    pass
+    def _install_shell_hooks(self, shell: ShellProtocol) -> None:
+        """Hook cash into *shell*: its cell events, the live-cell comm, and
+        ``run_cell`` / ``run_cell_async``.
 
-        # Durability checkpoint. Registered on IPython's own event
-        # rather than inside CellExecutor: the pipeline has several exit paths
-        # and a drain placed after its last phase turned out to run for only
-        # one cell in three, missing precisely the cells that do the caching.
+        A previous instance's hooks are removed first, so a re-instantiation
+        in a running kernel (``cash.reset_session()``, a second ``Cash()``,
+        ``%load_ext`` after a reset) neither nests wrappers nor stacks
+        handlers.
+        """
+        remove_previous_hooks(shell)
+
+        # Durability checkpoint. Registered on IPython's own event rather
+        # than inside CellExecutor: the pipeline has several exit paths, and
         # post_run_cell fires for every cell however it finished.
-        if isinstance(prior, dict) and prior.get("flush_pending_writes") is not None:
-            try:
-                shell.events.unregister("post_run_cell", prior["flush_pending_writes"])
-            except (ValueError, KeyError, AttributeError, TypeError):
-                pass
-        try:
-            shell.events.register("post_run_cell", self._flush_pending_writes)
-        except (AttributeError, TypeError) as e:
-            logger.warning(
-                "Could not register post_run_cell handler: %s. Cached results "
-                "will still be written, but a kernel killed (rather than shut "
-                "down) may lose writes that were still queued.",
-                e,
-            )
+        register_event(
+            shell,
+            "post_run_cell",
+            self._flush_pending_writes,
+            "Could not register post_run_cell handler: %s. Cached results "
+            "will still be written, but a kernel killed (rather than shut "
+            "down) may lose writes that were still queued.",
+        )
+        register_event(
+            shell,
+            "pre_run_cell",
+            self._capture_cell_id,
+            "Could not register pre_run_cell event handler: %s. "
+            "Cell ID tracking will be disabled — upstream change detection "
+            "and VS Code cell-level caching may not work correctly.",
+        )
 
-        # Register event handler to capture cell_id before execution
-        try:
-            shell.events.register("pre_run_cell", self._capture_cell_id)
-        except (AttributeError, TypeError) as e:
-            logger.warning(
-                "Could not register pre_run_cell event handler: %s. "
-                "Cell ID tracking will be disabled — upstream change detection "
-                "and VS Code cell-level caching may not work correctly.",
-                e,
-            )
-
-        # JupyterLab live-cell push: register the comm target
-        # that receives cell sources pushed by cash's frontend extension, when
-        # one is present. A silent no-op everywhere else — register_target()
-        # returns False rather than raising when there is no kernel / comm
-        # manager to attach to (bare IPython, older ipykernel, MockShell, ...).
+        # JupyterLab live-cell push: register the comm target that receives
+        # cell sources pushed by cash's frontend extension, when one is
+        # present. A silent no-op everywhere else — register_target() returns
+        # False rather than raising when there is no kernel / comm manager to
+        # attach to (bare IPython, older ipykernel, MockShell, ...).
         register_target(shell)
-        # ...and retire each pushed snapshot when the execution it arrived for
-        # ends. The store outlives the frontend that fills it, so without this a
-        # frontend that stops pushing without re-opening (a reload onto the same
-        # kernel with the extension disabled, a second client attached without
-        # it, the extension erroring after having worked once) leaves cash
-        # serving one frozen snapshot for the rest of the kernel's life -- and
-        # suppressing the notice that would have said so. See ``expire``.
-        #
-        # Registered here rather than beside _flush_pending_writes above because
-        # it belongs to the comm, not to the cache: both halves of the live-cell
-        # contract are then visible in one place, and neither is conditional on
-        # %cash_on having run.
+        # ...and retire each pushed snapshot when the execution it arrived
+        # for ends. The store outlives the frontend that fills it, so without
+        # this a frontend that stops pushing without re-opening (a reload onto
+        # the same kernel with the extension disabled, a second client
+        # attached without it, the extension erroring after having worked
+        # once) would leave cash serving one frozen snapshot for the rest of
+        # the kernel's life. See ``expire``. Both halves of the live-cell
+        # contract are installed here, and neither depends on %cash_on.
         install_expiry_hook(shell)
 
-        # Monkey-patch run_cell to intercept execution.
-        #
-        # Both hooks are installed as ``functools.wraps``-ed proxies rather than
-        # as the bound methods directly. That is load-bearing, not cosmetic:
-        # ipykernel introspects these signatures to decide what to pass us
-        # (ipkernel.py: ``_accepts_parameters(run_cell, ["cell_id"])``), and its
-        # helper treats a ``**kwargs`` signature as "accepts every parameter".
-        # Our proxies are ``(*args, **kwargs)``, so bare they would claim to
-        # accept ``cell_id`` even against an IPython too old to have it (<8.3,
-        # which cash does not rule out) — ipykernel
-        # would then pass ``cell_id=...``, our forward would raise TypeError
-        # before ``execute_reply`` was sent, and the cell would hang at ``[*]``.
-        # ``functools.wraps`` sets ``__wrapped__``, which ``inspect.signature``
-        # follows, so introspection sees the *original's* signature and every
-        # verdict about us is identical to the verdict about the shell we
-        # replaced.
-        self._original_run_cell = shell.run_cell
-        shell.run_cell = self._signature_preserving_proxy(
-            self._original_run_cell,
-            "_execute_cell",
+        self._patch_run_cell(shell)
+        stash_hooks(
+            shell,
+            original_run_cell=self._original_run_cell,
+            capture_cell_id=self._capture_cell_id,
+            flush_pending_writes=self._flush_pending_writes,
+            original_run_cell_async=self._original_run_cell_async,
         )
+
+    def _patch_run_cell(self, shell: ShellProtocol) -> None:
+        """Route *shell*'s ``run_cell`` (and ``run_cell_async``) through cash.
+
+        Both are replaced by :func:`signature_preserving_proxy` wrappers, so
+        ipykernel's introspection of them sees the originals' signatures.
+        """
+        self._original_run_cell = shell.run_cell
+        shell.run_cell = signature_preserving_proxy(self, self._original_run_cell, "_execute_cell")
 
         # Also intercept run_cell_async: ipykernel dispatches top-level-await
         # cells (``x = await f()``) through ``shell.run_cell_async``, NOT the
-        # sync ``run_cell`` we patch above, so without this they would bypass
+        # sync ``run_cell`` patched above, so without this they would bypass
         # cash's pipeline entirely (no upstream reconstruction, no self-mod
         # reset). Guarded because older IPython lacks run_cell_async.
         self._original_run_cell_async = None
         if hasattr(shell, "run_cell_async"):
             self._original_run_cell_async = shell.run_cell_async
-            shell.run_cell_async = self._signature_preserving_proxy(
+            shell.run_cell_async = signature_preserving_proxy(
+                self,
                 self._original_run_cell_async,
                 "_execute_cell_async",
                 is_async=True,
             )
-
-        try:
-            shell._cash_hooks = {
-                "original_run_cell": self._original_run_cell,
-                "capture_cell_id": self._capture_cell_id,
-                "flush_pending_writes": self._flush_pending_writes,
-            }
-            if self._original_run_cell_async is not None:
-                shell._cash_hooks["original_run_cell_async"] = self._original_run_cell_async
-        except (AttributeError, TypeError):
-            pass
-
-    def _signature_preserving_proxy(
-        self,
-        original: Any,
-        handler_name: str,
-        is_async: bool = False,
-    ) -> Any:
-        """Wrap *original* with a proxy that dispatches to ``self.<handler_name>``.
-
-        The proxy forwards ``*args, **kwargs`` verbatim but, thanks to
-        ``functools.wraps``, presents *original*'s signature to
-        ``inspect.signature`` (via ``__wrapped__``). Callers that introspect
-        these hooks to decide what to pass — ipykernel does exactly this for
-        ``cell_id`` — therefore get the same answer they would have got from the
-        unpatched shell, so we can never be handed an argument the real callee
-        rejects.
-
-        The handler is resolved by name **at call time** rather than captured, so
-        tests can swap ``self._execute_cell`` out and still be routed through.
-        """
-        if is_async:
-
-            @functools.wraps(original)
-            async def proxy(*args: Any, **kwargs: Any) -> Any:
-                return await getattr(self, handler_name)(*args, **kwargs)
-        else:
-
-            @functools.wraps(original)
-            def proxy(*args: Any, **kwargs: Any) -> Any:
-                return getattr(self, handler_name)(*args, **kwargs)
-
-        return proxy
 
     @line_magic
     def cash_on(self, line: str) -> None:
