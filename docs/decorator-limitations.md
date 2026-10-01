@@ -116,7 +116,7 @@ with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decora
 
 ## Reads cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @a7a12595, cash/tracking/reader_patches.py:_patch_process_pool_submit @56972fff -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @a7a12595, cash/tracking/reader_patches.py:_patch_process_pool_submit @1f70759c -->
 cash does not record a file opened by a C extension, `os.open`, a subprocess,
 or a `threading.Thread` you start. Name such a file with `file_depends_on=`.
 
