@@ -43,18 +43,15 @@ from .callee_effects import (
 from .code_analyzer import CodeAnalyzer, parse_cell_source
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
-    assigned_method_call_receivers,
+    TopLevelCalls,
     chain_is_pure,
     crossref_reassigned_vars,
     is_pandas_plot_call,
-    module_setting_receivers,
     selfref_inplace_write_vars,
     selfref_reassignment_targets,
-    standalone_method_call_inner_methods,
-    standalone_method_call_receivers,
     standalone_method_mutation_receivers,
     subscript_view_bindings,
-    top_level_call_argument_bases,
+    top_level_calls,
 )
 from .namespace_effects import capturable_globals, fits_its_receiver
 from .object_protocol import ObjectProtocolResets, object_protocol_mutations
@@ -771,9 +768,11 @@ class ReceiverClasses:
 def drawn_on_arguments(tree: ast.Module | None, namespace: Mapping[str, Any]) -> frozenset[str]:
     """Figures and Axes handed to a call, which draws on them: by a method
     (``df.plot(ax=ax)``) or by a plain function (``forest(axes[0], df)``)."""
-    return frozenset(
-        name for name in top_level_call_argument_bases(tree) if receiver_is_identity_coupled(namespace.get(name))
-    )
+    return _drawn_on(top_level_calls(tree), namespace)
+
+
+def _drawn_on(calls: TopLevelCalls, namespace: Mapping[str, Any]) -> frozenset[str]:
+    return frozenset(name for name in calls.argument_bases if receiver_is_identity_coupled(namespace.get(name)))
 
 
 def classify_receivers(
@@ -795,17 +794,18 @@ def classify_receivers(
     A module is never a receiver: ``pd.set_option(...)`` is a module
     function call, counted only as a change to a setting the module keeps.
     """
-    candidates = standalone_method_call_receivers(tree)
+    calls = top_level_calls(tree)
+    candidates = calls.method_calls
     # A captured return (``counts, bins, _ = ax.hist(...)``) is an assignment,
     # so it is not a bare-``Expr`` candidate; it must not hit the early return.
-    assigned = assigned_method_call_receivers(tree)
-    drawn_args = drawn_on_arguments(tree, namespace)
+    assigned = calls.assigned_method_calls
+    drawn_args = _drawn_on(calls, namespace)
     args = frozenset(arguments) - drawn_args
     if not candidates and not assigned and not drawn_args and not args:
         return ReceiverClasses()
-    tier1 = standalone_method_mutation_receivers(tree)
-    inner = standalone_method_call_inner_methods(tree)
-    settings = module_setting_receivers(tree)
+    tier1 = calls.mutation_receivers
+    inner = calls.inner_methods
+    settings = calls.setting_receivers
     verdict = load_verdict()
     mutated: set[str] = set()
     unknown: set[str] = set()
