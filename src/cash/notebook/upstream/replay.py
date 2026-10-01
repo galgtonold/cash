@@ -78,7 +78,8 @@ class StatementReplay:
         A statement re-run as an upstream repair ran with no annotation: one notebook
         put ``# @cash:no-cache-calls`` on a comprehension, and its calls were
         cached whenever a cell below repaired it. The repair has the
-        statement's code, keyed as the simulator keys it; the directive is read
+        statement's code, keyed as the simulator keys it (``statement_code``,
+        which keeps a display-suppressing ``;``); the directive is read
         from its cell as a direct run reads it. Only statements that carry one;
         a ``with cash.assume_safe():`` statement carries ``assume-safe``.
         """
@@ -95,7 +96,7 @@ class StatementReplay:
                 try:
                     annotation = get_statement_annotations(clean, node)
                     if annotation.has_directives():
-                        found.setdefault(ast.unparse(node), annotation)
+                        found.setdefault(statement_code(node, clean), annotation)
                 except (ValueError, RecursionError):  # a directive lookup never breaks a repair
                     continue
         return found

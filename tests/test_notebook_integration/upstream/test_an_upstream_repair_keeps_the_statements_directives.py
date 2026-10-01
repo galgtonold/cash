@@ -51,3 +51,21 @@ def test_no_cache_calls_holds_when_the_statement_is_repaired(nb_runner):
     nb_runner.run_cell(5)
     assert "SUM 2109" in nb_runner.get_output(5), nb_runner.get_output(5)
     assert _calls(nb_runner) - before == 19, "the repair cached the calls the directive refuses"
+
+
+def test_the_directive_holds_on_a_statement_ending_in_a_semicolon(nb_runner):
+    """``;`` hides the repr and is part of the statement's key: the directive
+    is looked up under the same key the repair runs the statement as."""
+    cell = WORK + "\n\nacc = []\n# @cash:no-cache-calls\nacc.extend([work(i) for i in range(N)]);"
+    nb_runner.create_notebook(["import cash\n%cash_on", "N = 20", "pass", cell, "print('SUM', sum(acc))"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.set_cell_source(2, "N = 21")
+    nb_runner.run_cell(5)
+    assert "SUM 2870" in nb_runner.get_output(5), nb_runner.get_output(5)
+
+    before = _calls(nb_runner)
+    nb_runner.set_cell_source(2, "N = 19")
+    nb_runner.run_cell(5)
+    assert "SUM 2109" in nb_runner.get_output(5), nb_runner.get_output(5)
+    assert _calls(nb_runner) - before == 19, "the repair cached the calls the directive refuses"
