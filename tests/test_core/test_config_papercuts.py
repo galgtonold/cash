@@ -23,7 +23,8 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.config import get_config, parse_size
+from cash.config import get_config
+from cash.units import parse_size
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -92,7 +93,7 @@ def test_a_byte_order_mark_is_named(tmp_path):
     ],
 )
 def test_a_size_is_shown_in_the_unit_it_was_written_in(written, shown):
-    from cash.config import format_size
+    from cash.units import format_size
 
     assert format_size(parse_size(written)) == shown
 

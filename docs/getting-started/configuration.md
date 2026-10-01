@@ -70,7 +70,7 @@ A setting applies to both paths unless it is marked
 <span class="md-tag">decorator only</span> or
 <span class="md-tag">notebook only</span>.
 
-<!-- claim: cash/config.py:validate_value @b391f4e9, cash/config.py:parse_size @11b4b371, cash/config.py:_validated_layer @31e81d57 -->
+<!-- claim: cash/config.py:validate_value @b391f4e9, cash/units.py:parse_size @11b4b371, cash/config.py:_validated_layer @31e81d57 -->
 Values are checked whichever layer they come from:
 
 | Value | Accepted |

@@ -17,7 +17,7 @@ from cash.__main__ import (
     main,
 )
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
-from cash.config import human_bytes
+from cash.units import human_bytes
 from tests._cli_args import cli_args
 
 

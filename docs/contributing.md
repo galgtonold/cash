@@ -68,6 +68,7 @@ src/cash/
 ├── labextension/       # the prebuilt JupyterLab extension (source in
 │                       #   labextension/ at the repo root)
 ├── config.py           # CashConfig and how settings are resolved
+├── units.py            # byte sizes: "2GB" read, and written back
 ├── effects.py          # which calls write files, send requests, read
 │                       #   the clock or environment
 ├── effect_observer.py  # side effects a cached function performs on

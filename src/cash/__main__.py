@@ -30,10 +30,9 @@ from cash.config import (
     TOML_SECTION,
     CashConfig,
     config_provenance,
-    format_size,
     get_config,
-    human_bytes,
 )
+from cash.units import format_size, human_bytes
 
 logger = logging.getLogger(__name__)
 

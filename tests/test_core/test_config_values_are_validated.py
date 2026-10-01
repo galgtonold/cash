@@ -37,7 +37,7 @@ pytestmark = pytest.mark.core
     ],
 )
 def test_sizes_parse(raw, expected):
-    from cash.config import parse_size
+    from cash.units import parse_size
 
     assert parse_size(raw) == expected
 
