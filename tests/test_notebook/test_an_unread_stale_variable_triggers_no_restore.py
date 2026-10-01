@@ -1,5 +1,6 @@
-import unittest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.upstream import UpstreamChecker
@@ -19,8 +20,9 @@ class MockCodeAnalyzer:
         return set(), set()
 
 
-class TestIssueReproduction(unittest.TestCase):
-    def setUp(self):
+class TestIssueReproduction:
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.shell = MagicMock()
         # Configure backend
         self.shell.cash_instance.backend.get.return_value = ({"output_lineages": {}}, {})
@@ -101,12 +103,6 @@ class TestIssueReproduction(unittest.TestCase):
                     else:
                         print(f"X BUG STILL PRESENT: Unnecessary restoration occurred: {restored_codes}")
 
-                    self.assertEqual(
-                        restored_codes,
-                        [],
-                        "Unused broken variable 'stats' should NOT trigger restoration when only 'ticker_stats' is required",
+                    assert restored_codes == [], (
+                        "Unused broken variable 'stats' should NOT trigger restoration when only 'ticker_stats' is required"
                     )
-
-
-if __name__ == "__main__":
-    unittest.main()

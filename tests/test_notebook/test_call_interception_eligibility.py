@@ -11,7 +11,6 @@ for "don't cache the mutation itself".
 """
 
 import ast
-import unittest
 
 from cash.notebook.call_interception import eligible_call_nodes
 
@@ -22,26 +21,26 @@ def _calls(src: str) -> list[str]:
     return [ast.unparse(node) for node in eligible_call_nodes(stmt)]
 
 
-class TestEligibility(unittest.TestCase):
+class TestEligibility:
     def test_accumulator_fold_extracts_the_call(self):
         """``s += compute(x)`` — compute reads x, not s."""
-        self.assertEqual(_calls("s += compute(x)"), ["compute(x)"])
+        assert _calls("s += compute(x)") == ["compute(x)"]
 
     def test_append_extracts_the_argument_not_the_append(self):
         """``out.append(compute(x))`` — the append reads `out` and is excluded."""
-        self.assertEqual(_calls("out.append(compute(x))"), ["compute(x)"])
+        assert _calls("out.append(compute(x))") == ["compute(x)"]
 
     def test_subscript_store_extracts_the_call(self):
         """``prices[t] = compute(t)`` — target base is `prices`."""
-        self.assertEqual(_calls("prices[t] = compute(t)"), ["compute(t)"])
+        assert _calls("prices[t] = compute(t)") == ["compute(t)"]
 
     def test_fold_reading_the_accumulator_is_excluded(self):
         """``s = merge(s, x)`` — the call reads `s`; it IS the fold."""
-        self.assertEqual(_calls("s = merge(s, x)"), [])
+        assert _calls("s = merge(s, x)") == []
 
     def test_inplace_method_on_the_target_is_excluded(self):
         """``df.sort_values(inplace=True)`` — the mutation is the expensive part."""
-        self.assertEqual(_calls("df.sort_values(inplace=True)"), [])
+        assert _calls("df.sort_values(inplace=True)") == []
 
     def test_plain_assignment_extracts_the_call(self):
         """``y = compute(x)`` is structurally eligible.
@@ -49,7 +48,7 @@ class TestEligibility(unittest.TestCase):
         Whether it is *worth* intercepting is the processor's call — statement
         caching already covers this shape. This unit answers eligibility only.
         """
-        self.assertEqual(_calls("y = compute(x)"), ["compute(x)"])
+        assert _calls("y = compute(x)") == ["compute(x)"]
 
     def test_a_nested_call_is_returned_after_the_outer_one(self):
         """An argument runs whether the outer call hits or not.
@@ -59,22 +58,22 @@ class TestEligibility(unittest.TestCase):
         ever reused (nine fits nested in another call once re-ran every
         time). The outer call comes first.
         """
-        self.assertEqual(_calls("out.append(f(g(x)))"), ["f(g(x))", "g(x)"])
+        assert _calls("out.append(f(g(x)))") == ["f(g(x))", "g(x)"]
 
     def test_a_nested_call_reading_the_target_is_still_excluded(self):
-        self.assertEqual(_calls("out.append(f(g(out)))"), [])
+        assert _calls("out.append(f(g(out)))") == []
 
     def test_multiple_independent_calls_are_all_returned(self):
         """Siblings are separate work and each deserves its own entry."""
-        self.assertEqual(_calls("out.append(f(x) + g(y))"), ["f(x)", "g(y)"])
+        assert _calls("out.append(f(x) + g(y))") == ["f(x)", "g(y)"]
 
     def test_call_reading_the_target_deep_inside_is_excluded(self):
         """The target check must see through attributes and subscripts."""
-        self.assertEqual(_calls("s += compute(s.total)"), [])
-        self.assertEqual(_calls("s += compute(s[0])"), [])
+        assert _calls("s += compute(s.total)") == []
+        assert _calls("s += compute(s[0])") == []
 
     def test_no_calls_yields_nothing(self):
-        self.assertEqual(_calls("s += 1"), [])
+        assert _calls("s += 1") == []
 
     def test_compound_statements_are_not_searched(self):
         """A whole loop or branch is out of scope, and that is a safety rule.
@@ -93,17 +92,13 @@ class TestEligibility(unittest.TestCase):
         compound statements are declined outright rather than searched with a
         rule that does not apply to them.
         """
-        self.assertEqual(_calls("for x in xs:\n    log_it(x)"), [])
-        self.assertEqual(_calls("for x in xs:\n    s += compute(x)"), [])
-        self.assertEqual(_calls("if flag:\n    out.append(compute(x))"), [])
-        self.assertEqual(_calls("while go:\n    emit(x)"), [])
-        self.assertEqual(_calls("with open(p) as fh:\n    data = parse(fh)"), [])
+        assert _calls("for x in xs:\n    log_it(x)") == []
+        assert _calls("for x in xs:\n    s += compute(x)") == []
+        assert _calls("if flag:\n    out.append(compute(x))") == []
+        assert _calls("while go:\n    emit(x)") == []
+        assert _calls("with open(p) as fh:\n    data = parse(fh)") == []
 
     def test_function_and_class_definitions_are_not_searched(self):
         """A def's body runs later, under its own statement, not here."""
-        self.assertEqual(_calls("def f():\n    return compute(1)"), [])
-        self.assertEqual(_calls("class C:\n    x = compute(1)"), [])
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert _calls("def f():\n    return compute(1)") == []
+        assert _calls("class C:\n    x = compute(1)") == []

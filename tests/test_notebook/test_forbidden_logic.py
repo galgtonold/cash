@@ -1,9 +1,7 @@
-import unittest
-
 from cash.analysis.code_analyzer import CodeAnalyzer
 
 
-class TestForbidden(unittest.TestCase):
+class TestForbidden:
     def test_forbidden_detection(self):
         # Case 1: time.time() with no imports in code (assuming user_ns or builtins?)
         # Actually my implementation relies on resolving Names.
@@ -18,7 +16,7 @@ class TestForbidden(unittest.TestCase):
         t = time.time()
         """)
         reasons = CodeAnalyzer.scan_for_forbidden_functions(code1, {})
-        self.assertIn("time.time", reasons)
+        assert "time.time" in reasons
 
         # Test 2: Import from inside code
         code2 = textwrap.dedent("""
@@ -26,7 +24,7 @@ class TestForbidden(unittest.TestCase):
         n = datetime.now()
         """)
         reasons = CodeAnalyzer.scan_for_forbidden_functions(code2, {})
-        self.assertIn("datetime.now", reasons)
+        assert "datetime.now" in reasons
 
         # Test 3: Alias
         code3 = textwrap.dedent("""
@@ -34,7 +32,7 @@ class TestForbidden(unittest.TestCase):
         x = t.monotonic()
         """)
         reasons = CodeAnalyzer.scan_for_forbidden_functions(code3, {})
-        self.assertIn("time.monotonic", reasons)
+        assert "time.monotonic" in reasons
 
         # Test 4: Existing user_ns
         import time
@@ -42,13 +40,9 @@ class TestForbidden(unittest.TestCase):
         user_ns = {"time": time}
         code4 = "time.perf_counter()"
         reasons = CodeAnalyzer.scan_for_forbidden_functions(code4, user_ns)
-        self.assertIn("time.perf_counter", reasons)
+        assert "time.perf_counter" in reasons
 
         # Test 5: Safe code
         code5 = "x = 1 + 1"
         reasons = CodeAnalyzer.scan_for_forbidden_functions(code5, {})
-        self.assertEqual(len(reasons), 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(reasons) == 0

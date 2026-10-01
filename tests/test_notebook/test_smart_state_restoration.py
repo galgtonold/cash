@@ -3,8 +3,6 @@ Test smart state restoration with %cash_on mode
 Tests the exact scenario user reported with commented DataFrame columns
 """
 
-import unittest
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,14 +10,15 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 
-class TestSmartStateRestoration(unittest.TestCase):
+class TestSmartStateRestoration:
     """Test smart dependency-based state restoration."""
 
     @pytest.fixture(autouse=True)
     def _notebook(self, cash_magics, mock_shell, clean_backend):
         self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _set_up(self, _notebook):
         # Create realistic DataFrame
         np.random.seed(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
@@ -58,8 +57,8 @@ class TestSmartStateRestoration(unittest.TestCase):
         run_cash_cell(self.magics, cell1)
 
         # Verify both columns exist
-        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
-        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" in self.shell.user_ns["df_clean"].columns
+        assert "month" in self.shell.user_ns["df_clean"].columns
         print(f"Columns after step 1: {list(self.shell.user_ns['df_clean'].columns)}")
 
         # Step 2: User comments out revenue line
@@ -84,12 +83,10 @@ class TestSmartStateRestoration(unittest.TestCase):
         print(f"Columns after step 2: {list(self.shell.user_ns['df_clean'].columns)}")
 
         # KEY ASSERTION: revenue should NOT exist (was commented out)
-        self.assertNotIn(
-            "revenue",
-            self.shell.user_ns["df_clean"].columns,
-            "BUG: revenue column should not exist when line is commented!",
+        assert "revenue" not in self.shell.user_ns["df_clean"].columns, (
+            "BUG: revenue column should not exist when line is commented!"
         )
-        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
+        assert "month" in self.shell.user_ns["df_clean"].columns
 
         print("✓ Test passed: Commented line correctly skipped!")
 
@@ -103,7 +100,7 @@ class TestSmartStateRestoration(unittest.TestCase):
         cell1 = "summary = 'test_value'"
         run_cash_cell(self.magics, cell1)
 
-        self.assertEqual(self.shell.user_ns["summary"], "test_value")
+        assert self.shell.user_ns["summary"] == "test_value"
 
         # Step 2: Execute cell that uses summary (but doesn't change it)
         cell2 = "result = summary + '_result'"
@@ -115,8 +112,8 @@ class TestSmartStateRestoration(unittest.TestCase):
         run_cash_cell(self.magics, cell2)
 
         #  result should exist
-        self.assertIn("result", self.shell.user_ns)
-        self.assertEqual(self.shell.user_ns["result"], "test_value_result")
+        assert "result" in self.shell.user_ns
+        assert self.shell.user_ns["result"] == "test_value_result"
 
         print("✓ Test passed: Variable state correctly maintained!")
 
@@ -126,7 +123,3 @@ class ExecutionInfo:
         self.raw_cell = raw_cell
         self.store_history = True
         self.silent = False
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

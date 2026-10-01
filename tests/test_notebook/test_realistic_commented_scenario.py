@@ -11,8 +11,6 @@ against the fresh ``df_clean`` and therefore recomputes rather than restoring
 the stale cached frame that still carried ``revenue``.
 """
 
-import unittest
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -20,14 +18,15 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 
-class TestRealisticCommentedCodeScenario(unittest.TestCase):
+class TestRealisticCommentedCodeScenario:
     """Test the EXACT scenario the user reported."""
 
     @pytest.fixture(autouse=True)
     def _notebook(self, cash_magics, mock_shell, clean_backend):
         self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _set_up(self, _notebook):
         # Create a realistic DataFrame
         np.random.seed(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
@@ -63,8 +62,8 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
         run_cash_cell(self.magics, original_cell)
-        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
-        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" in self.shell.user_ns["df_clean"].columns
+        assert "month" in self.shell.user_ns["df_clean"].columns
 
         # User comments out the revenue line and re-runs against a fresh frame.
         commented_cell = (
@@ -75,12 +74,10 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
         run_cash_cell(self.magics, commented_cell)
 
         # The commented-out mutation must not be restored from cache.
-        self.assertNotIn(
-            "revenue",
-            self.shell.user_ns["df_clean"].columns,
-            "revenue column should not reappear after commenting out the line",
+        assert "revenue" not in self.shell.user_ns["df_clean"].columns, (
+            "revenue column should not reappear after commenting out the line"
         )
-        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
+        assert "month" in self.shell.user_ns["df_clean"].columns
 
     def test_saved_notebook_with_commented_line(self):
         """
@@ -95,7 +92,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             "df_clean['month'] = df_clean['date'].dt.to_period('M')"
         )
         run_cash_cell(self.magics, original_cell)
-        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" in self.shell.user_ns["df_clean"].columns
 
         commented_cell = (
             "#df_clean['revenue'] = df_clean['sales'] * df_clean['units']\n"
@@ -104,13 +101,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
         self._fresh_df_clean()
         run_cash_cell(self.magics, commented_cell)
 
-        self.assertNotIn(
-            "revenue",
-            self.shell.user_ns["df_clean"].columns,
-            "revenue column should not reappear after commenting out the line",
+        assert "revenue" not in self.shell.user_ns["df_clean"].columns, (
+            "revenue column should not reappear after commenting out the line"
         )
-        self.assertIn("month", self.shell.user_ns["df_clean"].columns)
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+        assert "month" in self.shell.user_ns["df_clean"].columns

@@ -7,54 +7,52 @@ single statement, or -- from a cell's leading comment block, alongside
 ``no-cache`` -- for every statement in the cell.
 """
 
-import unittest
-
 from cash.analysis.annotations import CacheAnnotation, leading_cell_annotation, parse_annotation_line
 
 
-class TestNoCacheCallsAnnotation(unittest.TestCase):
+class TestNoCacheCallsAnnotation:
     def test_no_cache_calls_is_parsed(self):
         ann = parse_annotation_line("# @cash:no-cache-calls")
-        self.assertIsNotNone(ann)
-        self.assertTrue(ann.no_cache_calls)
-        self.assertFalse(ann.no_cache, "must not disable the statement cache too")
+        assert ann is not None
+        assert ann.no_cache_calls
+        assert not ann.no_cache, "must not disable the statement cache too"
 
     def test_space_after_colon_is_tolerated(self):
         """The spaced form users actually write must not be silently ignored,
         matching the precedent already set for every other directive."""
         ann = parse_annotation_line("# @cash: no-cache-calls")
-        self.assertIsNotNone(ann)
-        self.assertTrue(ann.no_cache_calls)
+        assert ann is not None
+        assert ann.no_cache_calls
 
     def test_default_is_off(self):
         """Absent the directive, the opt-out is not engaged -- interception
         proceeds."""
-        self.assertFalse(CacheAnnotation().no_cache_calls)
+        assert not CacheAnnotation().no_cache_calls
 
     def test_has_directives_reports_it(self):
         """A statement carrying only no-cache-calls must not look un-annotated."""
-        self.assertTrue(CacheAnnotation(no_cache_calls=True).has_directives())
+        assert CacheAnnotation(no_cache_calls=True).has_directives()
 
     def test_merge_is_sticky(self):
         """Merging must OR the flag in from either side, like the other bools."""
         a = parse_annotation_line("# @cash:no-cache-calls")
         b = parse_annotation_line("# @cash:persist")
         merged = a.merge(b)
-        self.assertTrue(merged.no_cache_calls)
-        self.assertTrue(merged.persist)
-        self.assertTrue(b.merge(a).no_cache_calls)
+        assert merged.no_cache_calls
+        assert merged.persist
+        assert b.merge(a).no_cache_calls
 
     def test_merge_does_not_cross_wire_no_cache(self):
         """no-cache-calls and no-cache are independent flags -- setting one
         must not silently set the other, in either direction."""
         only_calls = CacheAnnotation(no_cache_calls=True)
         only_stmt = CacheAnnotation(no_cache=True)
-        self.assertFalse(only_calls.no_cache)
-        self.assertFalse(only_stmt.no_cache_calls)
+        assert not only_calls.no_cache
+        assert not only_stmt.no_cache_calls
 
         both = only_calls.merge(only_stmt)
-        self.assertTrue(both.no_cache_calls)
-        self.assertTrue(both.no_cache)
+        assert both.no_cache_calls
+        assert both.no_cache
 
     def test_propagates_from_the_cell_header(self):
         """Like no-cache, no-cache-calls reaches every top-level statement in
@@ -68,7 +66,7 @@ class TestNoCacheCallsAnnotation(unittest.TestCase):
             "b = compute(2)",
         ]
         header = leading_cell_annotation(source)
-        self.assertTrue(header.no_cache_calls)
+        assert header.no_cache_calls
 
     def test_persist_does_not_propagate_from_the_header(self):
         """Positive control: only the two SAFETY opt-outs (no-cache,
@@ -76,9 +74,5 @@ class TestNoCacheCallsAnnotation(unittest.TestCase):
         stay statement-scoped."""
         source = ["# @cash:persist", "a = compute(1)"]
         header = leading_cell_annotation(source)
-        self.assertFalse(header.persist, "persist must stay statement-scoped")
-        self.assertFalse(header.no_cache_calls)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert not header.persist, "persist must stay statement-scoped"
+        assert not header.no_cache_calls

@@ -3,9 +3,6 @@ Test for dependency invalidation when upstream cells change in notebook
 """
 
 import json
-import os
-import tempfile
-import unittest
 from unittest.mock import patch
 
 import pytest
@@ -13,24 +10,16 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 
-class TestNotebookDependencyInvalidation(unittest.TestCase):
+class TestNotebookDependencyInvalidation:
     """Test dependency invalidation with real notebook file simulation."""
 
     @pytest.fixture(autouse=True)
     def _notebook(self, cash_magics, mock_shell, clean_backend):
         self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
-    def setUp(self):
-        # Create a temporary notebook file
-        self.temp_dir = tempfile.mkdtemp()
-        self.notebook_path = os.path.join(self.temp_dir, "test.ipynb")
-
-    def tearDown(self):
-        # Clean up temporary files
-        import shutil
-
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
+    @pytest.fixture(autouse=True)
+    def _set_up(self, _notebook, tmp_path):
+        self.notebook_path = str(tmp_path / "test.ipynb")
 
     def create_notebook(self, cells):
         """Create a notebook file with given cell contents."""
@@ -78,21 +67,21 @@ class TestNotebookDependencyInvalidation(unittest.TestCase):
             print("\n--- Step 2: Execute Cell 1 ---")
             run_cash_cell(self.magics, cell1_v1)
 
-            self.assertEqual(self.shell.user_ns.get("selected_region"), "South")
+            assert self.shell.user_ns.get("selected_region") == "South"
             print(f"[OK] selected_region = {self.shell.user_ns['selected_region']}")
 
             # Step 3: Execute Cell 2 (first time)
             print("\n--- Step 3: Execute Cell 2 (first time) ---")
             run_cash_cell(self.magics, cell2)
 
-            self.assertEqual(self.shell.user_ns.get("result"), "Region: South")
+            assert self.shell.user_ns.get("result") == "Region: South"
             print(f"[OK] result = {self.shell.user_ns['result']}")
 
             # Step 4: Execute Cell 2 again (should cache)
             print("\n--- Step 4: Execute Cell 2 again (cache hit expected) ---")
             run_cash_cell(self.magics, cell2)
 
-            self.assertEqual(self.shell.user_ns.get("result"), "Region: South")
+            assert self.shell.user_ns.get("result") == "Region: South"
             print(f"[OK] result = {self.shell.user_ns['result']} (from cache)")
 
             # Step 5: Modify Cell 1 in notebook
@@ -110,10 +99,6 @@ class TestNotebookDependencyInvalidation(unittest.TestCase):
             print(f"  selected_region after = {self.shell.user_ns.get('selected_region')}")
             print(f"  result after = {self.shell.user_ns.get('result')}")
 
-            self.assertEqual(self.shell.user_ns.get("selected_region"), "North")
-            self.assertEqual(self.shell.user_ns.get("result"), "Region: North")
+            assert self.shell.user_ns.get("selected_region") == "North"
+            assert self.shell.user_ns.get("result") == "Region: North"
             print("[OK] Test passed: Upstream cell was re-executed automatically!")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

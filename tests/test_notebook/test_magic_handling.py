@@ -3,9 +3,6 @@ Test handling of Jupyter magics in upstream cells
 """
 
 import json
-import os
-import tempfile
-import unittest
 from unittest.mock import patch
 
 import pytest
@@ -13,22 +10,16 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 
-class TestMagicHandling(unittest.TestCase):
+class TestMagicHandling:
     """Test that Jupyter magics are correctly ignored in upstream cells."""
 
     @pytest.fixture(autouse=True)
     def _notebook(self, cash_magics, mock_shell, clean_backend):
         self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.notebook_path = os.path.join(self.temp_dir, "test.ipynb")
-
-    def tearDown(self):
-        import shutil
-
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
+    @pytest.fixture(autouse=True)
+    def _set_up(self, _notebook, tmp_path):
+        self.notebook_path = str(tmp_path / "test.ipynb")
 
     def create_notebook(self, cells):
         notebook = {
@@ -88,9 +79,5 @@ class TestMagicHandling(unittest.TestCase):
 
             print(f"x in memory: {self.shell.user_ns.get('x')}")
             # If re-execution works despite magic, x should be 20
-            self.assertEqual(self.shell.user_ns.get("x"), 20)
+            assert self.shell.user_ns.get("x") == 20
             print("[OK] Cell 1 re-executed successfully (magic ignored)")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

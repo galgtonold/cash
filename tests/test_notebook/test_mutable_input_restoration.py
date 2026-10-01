@@ -4,15 +4,13 @@ Ensures that when statements modify mutable inputs in-place,
 the pre-modification state is restored correctly on cache hits.
 """
 
-import unittest
-
 import pandas as pd
 import pytest
 
 from tests._cell_driver import run_cash_cell
 
 
-class TestMutableInputRestoration(unittest.TestCase):
+class TestMutableInputRestoration:
     """Test restoration of mutable input states."""
 
     @pytest.fixture(autouse=True)
@@ -32,7 +30,7 @@ class TestMutableInputRestoration(unittest.TestCase):
         code = "df['B'] = df['A'] * 2"
         run_cash_cell(self.magics, code)
 
-        self.assertIn("B", self.shell.user_ns["df"].columns)
+        assert "B" in self.shell.user_ns["df"].columns
 
         # Verify source tracking
         # The statement processor should have updated variable_sources['df']
@@ -40,27 +38,27 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         # Get cache key (we can't easily get it, but we can check if it exists)
         processor = self.magics._statement_processor
-        self.assertIn("df", processor.tracking_state.variable_sources)
+        assert "df" in processor.tracking_state.variable_sources
         print(f"Source for df: {processor.tracking_state.variable_sources['df']}")
 
         # 3. Simulate state before second run (Reset state)
         self.shell.user_ns["df"] = pd.DataFrame({"A": [1, 2, 3]})
-        self.assertNotIn("B", self.shell.user_ns["df"].columns)
+        assert "B" not in self.shell.user_ns["df"].columns
 
         # 4. Run cached statement (Second Run - Cache Hit)
         print("Running cached statement...")
         run_cash_cell(self.magics, code)
 
-        self.assertIn("B", self.shell.user_ns["df"].columns)
-        self.assertEqual(self.shell.user_ns["df"]["B"].tolist(), [2, 4, 6])
+        assert "B" in self.shell.user_ns["df"].columns
+        assert self.shell.user_ns["df"]["B"].tolist() == [2, 4, 6]
 
         # Verify source is still tracked correctly after restore
-        self.assertIn("df", processor.tracking_state.variable_sources)
+        assert "df" in processor.tracking_state.variable_sources
         print(f"Source for df after restore: {processor.tracking_state.variable_sources['df']}")
 
         print("✓ DataFrame output correctly restored")
 
-    @unittest.skip("Feature not yet implemented: cache consistency check for input_snapshots")
+    @pytest.mark.skip(reason="Feature not yet implemented: cache consistency check for input_snapshots")
     def test_partial_cache_inconsistency(self):
         """
         Reproduce the user's issue:
@@ -87,7 +85,7 @@ class TestMutableInputRestoration(unittest.TestCase):
         self.shell.user_ns["df"]["B"] = 2
 
         print(f"Current DF columns (Dirty): {self.shell.user_ns['df'].columns.tolist()}")
-        self.assertIn("B", self.shell.user_ns["df"].columns)
+        assert "B" in self.shell.user_ns["df"].columns
 
         # 4. Restore from bad cache
         # This call should now RAISE ValueError due to consistency check.
@@ -95,14 +93,14 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         processor = self.magics._statement_processor
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             processor._restore_from_cache(bad_payload, {}, False, 0.0)
 
         print(f"Restored DF columns: {self.shell.user_ns['df'].columns.tolist()}")
 
         # Verify that df was NOT reverted (B is still present)
         # Because we aborted before applying snapshots
-        self.assertIn("B", self.shell.user_ns["df"].columns)
+        assert "B" in self.shell.user_ns["df"].columns
         print("✓ Verified: Partial cache inconsistency raised ValueError and preserved state")
 
     def test_dirty_state_restoration(self):
@@ -118,7 +116,7 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         # Mutate df2
         run_cash_cell(self.magics, "df2['B'] = 2")
-        self.assertIn("B", self.shell.user_ns["df2"].columns)
+        assert "B" in self.shell.user_ns["df2"].columns
 
         # Verify restoration works
         # Reset df2
@@ -126,10 +124,6 @@ class TestMutableInputRestoration(unittest.TestCase):
 
         # Restore mutation
         run_cash_cell(self.magics, "df2['B'] = 2")
-        self.assertIn("B", self.shell.user_ns["df2"].columns)
+        assert "B" in self.shell.user_ns["df2"].columns
 
         print("✓ Dirty state restoration test passed")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

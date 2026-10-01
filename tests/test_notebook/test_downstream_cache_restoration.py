@@ -8,16 +8,18 @@ This test reproduces the scenario where:
 """
 
 import hashlib
-import unittest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cash.notebook.upstream import UpstreamChecker
 
 
-class TestDownstreamCacheRestoration(unittest.TestCase):
+class TestDownstreamCacheRestoration:
     """Test that cached results from downstream cells are properly restored."""
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.shell = MagicMock()
         self.shell.user_ns = {}
 
@@ -136,11 +138,9 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
 
         # For now, document the current behavior
         # The test will fail if cell_sort is in the re-execution list
-        self.assertNotIn(
-            cell_sort[:-1] if cell_sort.endswith("'Date')") else cell_sort,
-            [s for s in statements_to_reexec if "sort" in s.lower()],
-            "BUG: Sort step should not need re-execution - it should restore from cache",
-        )
+        assert (cell_sort[:-1] if cell_sort.endswith("'Date')") else cell_sort) not in [
+            s for s in statements_to_reexec if "sort" in s.lower()
+        ], "BUG: Sort step should not need re-execution - it should restore from cache"
 
         print("✓ Test passed: Sort step correctly restored from cache")
 
@@ -177,9 +177,5 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
 
         # Without cache data, simulation can't build virtual lineage,
         # so it can't detect x as missing. This is expected by design.
-        self.assertEqual(statements_to_reexec, [], "Without cache data, simulation cannot detect missing vars")
+        assert statements_to_reexec == [], "Without cache data, simulation cannot detect missing vars"
         print("✓ Test passed: Simulation correctly returns empty list without cache data")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

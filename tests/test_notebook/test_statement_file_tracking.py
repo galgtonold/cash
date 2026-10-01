@@ -1,20 +1,20 @@
 import os
 import tempfile
 import time
-import unittest
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
 from cash.backends import CacheBackend
 from cash.core import Cash
 from cash.notebook.statement import StatementProcessor
 
 
-class TestFileTracking(unittest.TestCase):
-    def setUp(self):
-        self.mock_shell = MagicMock()
-        self.mock_shell.user_ns = {}
+class TestFileTracking:
+    @pytest.fixture(autouse=True)
+    def _set_up(self, mock_shell):
+        self.mock_shell = mock_shell
 
         # A backend double that keeps entries in a dict. Specced, and with no
         # cache dir, like the in-memory backend it stands in for.
@@ -39,8 +39,7 @@ class TestFileTracking(unittest.TestCase):
             # comparing against the raw name failed there while passing on any
             # machine whose temp dir happens to already be canonical.
             self.temp_path = os.path.realpath(tf.name).replace(os.sep, "/")
-
-    def tearDown(self):
+        yield
         if os.path.exists(self.temp_path):
             os.remove(self.temp_path)
 
@@ -55,7 +54,7 @@ class TestFileTracking(unittest.TestCase):
         self.processor.process_statement(code)
 
         # Verify content matches
-        self.assertEqual(self.mock_shell.user_ns.get("content"), "data1")
+        assert self.mock_shell.user_ns.get("content") == "data1"
 
         # Check if cache entry was created with file dependency
         cache_key = list(self._cache_storage.keys())[0]
@@ -63,8 +62,8 @@ class TestFileTracking(unittest.TestCase):
 
         print(f"Metadata: {metadata}")
         # NOTE: This assertion will fail until implementation is done
-        self.assertIn("file_dependencies", metadata)
-        self.assertIn(self.temp_path, metadata["file_dependencies"])
+        assert "file_dependencies" in metadata
+        assert self.temp_path in metadata["file_dependencies"]
 
         # Modify file
         time.sleep(1.1)  # Ensure mtime changes (some systems have 1s resolution)
@@ -78,7 +77,7 @@ class TestFileTracking(unittest.TestCase):
 
         self.processor.process_statement(code)
 
-        self.assertEqual(self.mock_shell.user_ns.get("content"), "data2")
+        assert self.mock_shell.user_ns.get("content") == "data2"
 
     def test_pandas_tracking(self):
         # Create CSV
@@ -98,8 +97,8 @@ class TestFileTracking(unittest.TestCase):
             cache_key = [k for k in self._cache_storage if "stmt" in k][-1]
             metadata, _ = self._cache_storage[cache_key]
             # NOTE: Will fail until implemented
-            self.assertIn("file_dependencies", metadata)
-            self.assertIn(csv_path, metadata["file_dependencies"])
+            assert "file_dependencies" in metadata
+            assert csv_path in metadata["file_dependencies"]
 
             # Modify CSV
             time.sleep(1.1)
@@ -111,7 +110,7 @@ class TestFileTracking(unittest.TestCase):
             self.processor.process_statement(code)
 
             result_df = self.mock_shell.user_ns["df"]
-            self.assertEqual(result_df.iloc[0]["a"], 5)
+            assert result_df.iloc[0]["a"] == 5
 
         finally:
             if os.path.exists(csv_path):
@@ -130,8 +129,8 @@ class TestFileTracking(unittest.TestCase):
             # Check dependency
             cache_key = list(self._cache_storage.keys())[-1]
             metadata, _ = self._cache_storage[cache_key]
-            self.assertIn("file_dependencies", metadata)
-            self.assertIn(self.temp_path, metadata["file_dependencies"])
+            assert "file_dependencies" in metadata
+            assert self.temp_path in metadata["file_dependencies"]
 
             # Modify file
             time.sleep(1.1)
@@ -145,7 +144,7 @@ class TestFileTracking(unittest.TestCase):
 
             self.processor.process_statement(code)
 
-            self.assertEqual(self.mock_shell.user_ns.get("content"), "data_pathlib_2")
+            assert self.mock_shell.user_ns.get("content") == "data_pathlib_2"
 
         except ImportError:
             pass
@@ -174,7 +173,7 @@ class TestFileTracking(unittest.TestCase):
             if not found_dep:
                 print("WARNING: Numpy dependency NOT found in metadata")
 
-            self.assertTrue(found_dep, "Numpy file dependency not tracked")
+            assert found_dep, "Numpy file dependency not tracked"
 
             # Modify file
             time.sleep(1.1)
@@ -185,14 +184,10 @@ class TestFileTracking(unittest.TestCase):
             self.processor.process_statement(code)
 
             result_arr = self.mock_shell.user_ns["arr"]
-            self.assertEqual(result_arr[0], 4.0)
+            assert result_arr[0] == 4.0
 
             if os.path.exists(txt_path):
                 os.remove(txt_path)
 
         except ImportError:
             print("Skipping numpy test: numpy not installed")
-
-
-if __name__ == "__main__":
-    unittest.main()

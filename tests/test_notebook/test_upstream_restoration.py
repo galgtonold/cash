@@ -1,5 +1,6 @@
-import unittest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cash.notebook.upstream import UpstreamChecker
 
@@ -8,8 +9,9 @@ from cash.notebook.upstream import UpstreamChecker
 # We rely on the fact that CodeAnalyzer works for simple expressions like "x = 1".
 
 
-class TestUpstreamRestoration(unittest.TestCase):
-    def setUp(self):
+class TestUpstreamRestoration:
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.shell = MagicMock()
         # Configure backend to return empty metadata/data by default to avoid Truthy mocks
         self.shell.cash_instance.backend.get.return_value = ({"output_lineages": {}}, {})
@@ -67,10 +69,10 @@ class TestUpstreamRestoration(unittest.TestCase):
         # 1. code_new_base (x=2) because it produces x (which is broken).
         # 2. code_extension (x=x+1) because x is broken & it's Unsaved Code.
 
-        self.assertIn(code_new_base, reexecute_list)
+        assert code_new_base in reexecute_list
         # Extension should be DROPPED because x was updated by the trace (x=2)
         # This prevents stale extensions from overwriting new code
-        self.assertNotIn(code_extension, reexecute_list)
+        assert code_extension not in reexecute_list
 
         # Check Order - irrelevant if absent
         # idx_base = reexecute_list.index(code_new_base)
@@ -78,9 +80,3 @@ class TestUpstreamRestoration(unittest.TestCase):
         # self.assertLess(idx_base, idx_ext, "Base must execute before Extension")
 
         print("✓ Correctly restored unsaved extension after base update")
-
-
-if __name__ == "__main__":
-    # Need to verify if CodeAnalyzer works in this env
-    # It parses "x=2" fine.
-    unittest.main()

@@ -2,8 +2,6 @@
 Test for uncommenting lines scenario - variables should reflect current session state
 """
 
-import unittest
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,14 +9,15 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 
-class TestUncommentLine(unittest.TestCase):
+class TestUncommentLine:
     """Test uncommenting a line and using the modified variable in next cell."""
 
     @pytest.fixture(autouse=True)
     def _notebook(self, cash_magics, mock_shell, clean_backend):
         self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _set_up(self, _notebook):
         # Create initial DataFrame
         np.random.seed(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
@@ -50,7 +49,7 @@ class TestUncommentLine(unittest.TestCase):
         run_cash_cell(self.magics, cell1)
 
         # Verify revenue column exists
-        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" in self.shell.user_ns["df_clean"].columns
         print(f"Columns after step 1: {list(self.shell.user_ns['df_clean'].columns)}")
 
         # Step 2: Try to use revenue column in next cell
@@ -60,8 +59,8 @@ class TestUncommentLine(unittest.TestCase):
         run_cash_cell(self.magics, cell2)
 
         # Verify summary was created successfully
-        self.assertIn("summary", self.shell.user_ns)
-        self.assertIsNotNone(self.shell.user_ns["summary"])
+        assert "summary" in self.shell.user_ns
+        assert self.shell.user_ns["summary"] is not None
         print(f"Summary created: {type(self.shell.user_ns['summary'])}")
         print("✓ Test passed: Revenue column accessible in next cell!")
 
@@ -75,7 +74,7 @@ class TestUncommentLine(unittest.TestCase):
         print("\n--- Step 1: Execute with revenue ---")
         cell1 = "df_clean['revenue'] = df_clean['sales'] * df_clean['units']"
         run_cash_cell(self.magics, cell1)
-        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" in self.shell.user_ns["df_clean"].columns
 
         # Step 2: Comment out revenue line (reset df)
         print("\n--- Step 2: Comment out revenue (reset df) ---")
@@ -90,24 +89,20 @@ class TestUncommentLine(unittest.TestCase):
                 "region": np.random.choice(["North", "South", "East", "West"], 100),
             }
         )
-        self.assertNotIn("revenue", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" not in self.shell.user_ns["df_clean"].columns
 
         # Step 3: Uncomment revenue line again
         print("\n--- Step 3: Uncomment revenue line ---")
         cell3 = "df_clean['revenue'] = df_clean['sales'] * df_clean['units']"
         run_cash_cell(self.magics, cell3)
-        self.assertIn("revenue", self.shell.user_ns["df_clean"].columns)
+        assert "revenue" in self.shell.user_ns["df_clean"].columns
 
         # Step 4: Use revenue in next cell
         print("\n--- Step 4: Use revenue column ---")
         cell4 = "summary = df_clean['revenue'].sum()"
         run_cash_cell(self.magics, cell4)
 
-        self.assertIn("summary", self.shell.user_ns)
-        self.assertIsInstance(self.shell.user_ns["summary"], (int, float, np.number))
+        assert "summary" in self.shell.user_ns
+        assert isinstance(self.shell.user_ns["summary"], (int, float, np.number))
         print(f"Summary value: {self.shell.user_ns['summary']}")
         print("✓ Test passed: Revenue accessible after uncommenting!")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

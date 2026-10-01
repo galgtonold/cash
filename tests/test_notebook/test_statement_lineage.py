@@ -3,9 +3,6 @@ Test for statement-level dependency invalidation
 """
 
 import json
-import os
-import tempfile
-import unittest
 from unittest.mock import patch
 
 import pytest
@@ -13,23 +10,16 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 
-class TestStatementLineage(unittest.TestCase):
+class TestStatementLineage:
     """Test statement-level dependency tracking."""
 
     @pytest.fixture(autouse=True)
     def _notebook(self, cash_magics, mock_shell, clean_backend):
         self.magics, self.shell, self.backend = cash_magics, mock_shell, clean_backend
 
-    def setUp(self):
-        # Create a temporary notebook file
-        self.temp_dir = tempfile.mkdtemp()
-        self.notebook_path = os.path.join(self.temp_dir, "test_stmts.ipynb")
-
-    def tearDown(self):
-        import shutil
-
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
+    @pytest.fixture(autouse=True)
+    def _set_up(self, _notebook, tmp_path):
+        self.notebook_path = str(tmp_path / "test_stmts.ipynb")
 
     def create_notebook(self, cells):
         notebook = {
@@ -95,13 +85,13 @@ class TestStatementLineage(unittest.TestCase):
             # Execute Cell 1
             print("Running Cell 1 (v1)...")
             run_cash_cell(self.magics, cell1_v1)
-            self.assertEqual(self.shell.user_ns.get("a"), 1)
-            self.assertEqual(self.shell.user_ns.get("b"), 2)
+            assert self.shell.user_ns.get("a") == 1
+            assert self.shell.user_ns.get("b") == 2
 
             # Execute Cell 2
             print("Running Cell 2...")
             run_cash_cell(self.magics, cell2)
-            self.assertEqual(self.shell.user_ns.get("c"), 3)
+            assert self.shell.user_ns.get("c") == 3
 
             # Step 2: Modify Cell 1
             # Keep 'a=1', change 'b=2' -> 'b=3'
@@ -129,9 +119,9 @@ class TestStatementLineage(unittest.TestCase):
             run_cash_cell(self.magics, cell2)
 
             # Verify results
-            self.assertEqual(self.shell.user_ns.get("a"), 1)
-            self.assertEqual(self.shell.user_ns.get("b"), 3, "Upstream b should be updated to 3")
-            self.assertEqual(self.shell.user_ns.get("c"), 4, "Downstream c should include updated b")
+            assert self.shell.user_ns.get("a") == 1
+            assert self.shell.user_ns.get("b") == 3, "Upstream b should be updated to 3"
+            assert self.shell.user_ns.get("c") == 4, "Downstream c should include updated b"
 
             print("[OK] Test passed.")
 
@@ -184,7 +174,7 @@ class TestStatementLineage(unittest.TestCase):
             print("Running Cell 1...")
             run_cash_cell(self.magics, cell1)
             d_val = self.shell.user_ns.get("d")
-            self.assertEqual(d_val, {"val": 0, "a": 1, "b": 2})
+            assert d_val == {"val": 0, "a": 1, "b": 2}
 
             # Verify lineage matches expectation manually
             # This helps confirm if StatementProcessor did its job right
@@ -202,9 +192,7 @@ class TestStatementLineage(unittest.TestCase):
                     print(f"DEBUG: Re-executed statements: {stmts}")
 
                 # Expectation: 0 re-executions because state is consistent
-                self.assertEqual(
-                    mock_reexec.call_count, 0, "Should not re-execute any statements if state is consistent"
-                )
+                assert mock_reexec.call_count == 0, "Should not re-execute any statements if state is consistent"
 
             print("[OK] Test passed: No redundant re-execution.")
 
@@ -252,7 +240,7 @@ class TestStatementLineage(unittest.TestCase):
 
             # Run Cell 1 first so math is in user_ns
             run_cash_cell(self.magics, cell1)
-            self.assertIn("math", self.shell.user_ns)
+            assert "math" in self.shell.user_ns
 
             # Run Cell 2 — should succeed (math is available)
             run_cash_cell(self.magics, cell2)
@@ -261,10 +249,6 @@ class TestStatementLineage(unittest.TestCase):
             # re-execute the import (modules are skipped by design)
             with patch("cash.notebook.upstream.replay.StatementReplay.reexecute") as mock_reexec:
                 run_cash_cell(self.magics, cell2)
-                self.assertEqual(mock_reexec.call_count, 0, "Should not re-execute import statements")
+                assert mock_reexec.call_count == 0, "Should not re-execute import statements"
 
             print("[OK] Test passed: Modules are not tracked as broken vars.")
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

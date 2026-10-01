@@ -1,13 +1,15 @@
 import sys
 import time
-import unittest
 from unittest.mock import patch
+
+import pytest
 
 from cash.backends import InMemoryBackend
 
 
-class TestSmartMemoryBackend(unittest.TestCase):
-    def setUp(self):
+class TestSmartMemoryBackend:
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.backend = InMemoryBackend(max_memory_percent=0.8, check_interval=1)
 
     def test_eviction_logic(self):
@@ -34,9 +36,9 @@ class TestSmartMemoryBackend(unittest.TestCase):
             self.backend.set("item4", "D", metadata={"execution_time": 0.1})
 
             keys = [e["key"] for e in self.backend.list_entries()]
-            self.assertNotIn("item1", keys)
-            self.assertIn("item2", keys)
-            self.assertIn("item3", keys)
+            assert "item1" not in keys
+            assert "item2" in keys
+            assert "item3" in keys
 
     def test_malloc_trim_called(self):
         if not sys.platform.startswith("linux"):
@@ -58,7 +60,7 @@ class TestSmartMemoryBackend(unittest.TestCase):
         time.sleep(0.01)
         backend.set("key3", "val3", metadata={"execution_time": 0.1})
 
-        self.assertEqual(len(backend._store), 3)
+        assert len(backend._store) == 3
 
         # Access key1 to make it recently used
         backend.get("key1")
@@ -67,19 +69,15 @@ class TestSmartMemoryBackend(unittest.TestCase):
         # Add 4th item - should evict the LRU (key2, since key1 was accessed more recently)
         backend.set("key4", "val4", metadata={"execution_time": 0.1})
 
-        self.assertEqual(len(backend._store), 3)
+        assert len(backend._store) == 3
         keys = {e["key"] for e in backend.list_entries()}
-        self.assertIn("key1", keys, "key1 was recently accessed, should not be evicted")
-        self.assertIn("key4", keys, "key4 was just added, should not be evicted")
-        self.assertNotIn("key2", keys, "key2 was LRU, should be evicted")
+        assert "key1" in keys, "key1 was recently accessed, should not be evicted"
+        assert "key4" in keys, "key4 was just added, should not be evicted"
+        assert "key2" not in keys, "key2 was LRU, should be evicted"
 
     def test_max_entries_none_unlimited(self):
         """Test that max_entries=None allows unlimited entries."""
         backend = InMemoryBackend(max_entries=None)
         for i in range(100):
             backend.set(f"key_{i}", f"val_{i}")
-        self.assertEqual(len(backend._store), 100)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert len(backend._store) == 100

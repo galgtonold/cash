@@ -1,9 +1,6 @@
-import unittest
 from unittest.mock import MagicMock, patch
 
-from cash.backends import InMemoryBackend
-from cash.core import Cash
-from cash.notebook.ipython.magics import CashMagics
+import pytest
 
 # Patch locations where get_notebook_cells is used (upstream module only)
 PATCH_TARGETS = {
@@ -12,38 +9,11 @@ PATCH_TARGETS = {
 }
 
 
-class TestVSCodeDuplicates(unittest.TestCase):
-    def setUp(self):
-        # Dynamically check for real IPython at test time (not import time)
-        # to handle sys.modules pollution from other test modules
-        try:
-            from IPython.core.interactiveshell import InteractiveShell as IS
-
-            has_real_ipython = not isinstance(IS, MagicMock)
-        except (ImportError, AttributeError):
-            has_real_ipython = False
-
-        if has_real_ipython:
-            from IPython.core.interactiveshell import InteractiveShell
-
-            self.shell = MagicMock(spec=InteractiveShell)
-            try:
-                from traitlets.config import Config
-
-                self.shell.config = Config()
-            except ImportError:
-                pass
-        else:
-            self.shell = MagicMock()
-            self.shell.user_ns = {}
-            self.shell.ast_transformers = []
-            self.shell.events = MagicMock()
-
-        self.cash = MagicMock(spec=Cash)
-        self.cash.debug = False
-        self.cash.backend = InMemoryBackend()
-        self.magics = CashMagics(self.shell, self.cash)
-
+class TestVSCodeDuplicates:
+    @pytest.fixture(autouse=True)
+    def _set_up(self, cash_magics, mock_shell):
+        self.shell, self.magics = mock_shell, cash_magics
+        # What the cell executor hands to IPython is the observation: record it.
         self.magics._original_run_cell = MagicMock()
         self.magics._auto_cache_enabled = True
 
@@ -65,8 +35,8 @@ class TestVSCodeDuplicates(unittest.TestCase):
         self.magics._original_run_cell.assert_called_once()
         args, _ = self.magics._original_run_cell.call_args
         executed_code = args[0]
-        self.assertIn("raise AmbiguousCellError", executed_code)
-        self.assertIn("Ambiguous cell execution", executed_code)
+        assert "raise AmbiguousCellError" in executed_code
+        assert "Ambiguous cell execution" in executed_code
 
     @patch(PATCH_TARGETS["upstream_cells_ids"])
     @patch(PATCH_TARGETS["upstream_cells"])
@@ -129,10 +99,6 @@ class TestVSCodeDuplicates(unittest.TestCase):
 
         args, _ = self.magics._original_run_cell.call_args
         executed_code = args[0]
-        self.assertIn("raise AmbiguousCellError(", executed_code)
+        assert "raise AmbiguousCellError(" in executed_code
         compile(executed_code, "<cash-generated>", "exec")
-        self.assertIn("appears 2 times", executed_code)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert "appears 2 times" in executed_code

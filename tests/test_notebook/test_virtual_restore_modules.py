@@ -14,14 +14,15 @@ The fix unifies all cache key computation in cash.notebook.cache_key.
 """
 
 import hashlib
-import unittest
 from unittest.mock import MagicMock
+
+import pytest
 
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.upstream import UpstreamChecker
 
 
-class TestComputeCacheKey(unittest.TestCase):
+class TestComputeCacheKey:
     """Direct tests for the unified compute_cache_key function."""
 
     def test_basic_key_computation(self):
@@ -35,10 +36,10 @@ class TestComputeCacheKey(unittest.TestCase):
             ctx=CacheKeyContext(variable_lineage={"x": x_lineage}, user_ns={"x": 42}),
         )
 
-        self.assertTrue(key.startswith("stmt:"))
-        self.assertEqual(input_hashes, [x_lineage])
-        self.assertEqual(func_hashes, [])
-        self.assertEqual(mod_hashes, [])
+        assert key.startswith("stmt:")
+        assert input_hashes == [x_lineage]
+        assert func_hashes == []
+        assert mod_hashes == []
 
     def test_module_included_when_in_variable_lineage(self):
         """Modules in variable_lineage get included in module_component."""
@@ -57,8 +58,8 @@ class TestComputeCacheKey(unittest.TestCase):
         )
 
         # np is a module and IS in variable_lineage -> included in module_component
-        self.assertEqual(input_hashes, [df_lineage])  # Only non-module
-        self.assertEqual(mod_hashes, [f"np:{np_lineage}"])
+        assert input_hashes == [df_lineage]  # Only non-module
+        assert mod_hashes == [f"np:{np_lineage}"]
 
     def test_module_excluded_when_not_in_variable_lineage(self):
         """Modules NOT in variable_lineage are excluded from module_component."""
@@ -74,8 +75,8 @@ class TestComputeCacheKey(unittest.TestCase):
         )
 
         # np is a module but NOT in variable_lineage -> excluded
-        self.assertEqual(input_hashes, [df_lineage])
-        self.assertEqual(mod_hashes, [])
+        assert input_hashes == [df_lineage]
+        assert mod_hashes == []
 
     def test_virtual_lineage_fallback_for_non_modules(self):
         """For non-module inputs, virtual_lineage is used as fallback."""
@@ -95,7 +96,7 @@ class TestComputeCacheKey(unittest.TestCase):
         )
 
         # Both should produce the same key
-        self.assertEqual(key1, key2)
+        assert key1 == key2
 
     def test_virtual_modules_detected(self):
         """Variables in virtual_modules are treated as modules."""
@@ -112,8 +113,8 @@ class TestComputeCacheKey(unittest.TestCase):
         )
 
         # np is in virtual_modules AND in variable_lineage -> included
-        self.assertEqual(input_hashes, [df_lineage])
-        self.assertEqual(mod_hashes, [f"np:{np_lineage}"])
+        assert input_hashes == [df_lineage]
+        assert mod_hashes == [f"np:{np_lineage}"]
 
     def test_ipython_internals_skipped(self):
         """get_ipython and __builtins__ are always skipped."""
@@ -126,7 +127,7 @@ class TestComputeCacheKey(unittest.TestCase):
             ctx=CacheKeyContext(variable_lineage={"x": x_lineage}, user_ns={"x": 42}),
         )
 
-        self.assertEqual(input_hashes, [x_lineage])
+        assert input_hashes == [x_lineage]
 
     def test_output_modules_for_import_statements(self):
         """For import statements, output module lineages are included."""
@@ -143,7 +144,7 @@ class TestComputeCacheKey(unittest.TestCase):
         )
 
         # Output module should be included
-        self.assertIn(f"out:np:{np_lineage}", mod_hashes)
+        assert f"out:np:{np_lineage}" in mod_hashes
 
     def test_multiple_modules_sorted(self):
         """Multiple module inputs should be sorted in module_component."""
@@ -162,7 +163,7 @@ class TestComputeCacheKey(unittest.TestCase):
         )
 
         # Should be sorted by variable name
-        self.assertEqual(mod_hashes, [f"np:{np_lineage}", f"os:{os_lineage}"])
+        assert mod_hashes == [f"np:{np_lineage}", f"os:{os_lineage}"]
 
     def test_identical_keys_across_call_patterns(self):
         """The same inputs must produce the same key regardless of call pattern.
@@ -197,13 +198,14 @@ class TestComputeCacheKey(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(key_runtime, key_sim, "Runtime and simulation must produce identical cache keys")
+        assert key_runtime == key_sim, "Runtime and simulation must produce identical cache keys"
 
 
-class TestModuleLineagePropagation(unittest.TestCase):
+class TestModuleLineagePropagation:
     """Verify that simulating an import propagates module lineages."""
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.shell = MagicMock()
         self.shell.user_ns = {}
         mock_backend = MagicMock()
@@ -222,28 +224,28 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
 
         # pd should now be in both virtual_lineage AND variable_lineage
-        self.assertIn("pd", virtual_lineage)
-        self.assertIn("pd", virtual_modules)
-        self.assertIn("pd", self.checker.tracking_state.variable_lineage)
-        self.assertEqual(self.checker.tracking_state.variable_lineage["pd"], virtual_lineage["pd"])
+        assert "pd" in virtual_lineage
+        assert "pd" in virtual_modules
+        assert "pd" in self.checker.tracking_state.variable_lineage
+        assert self.checker.tracking_state.variable_lineage["pd"] == virtual_lineage["pd"]
 
     def test_from_import_propagates_lineage(self):
         """'from ... import' statements should propagate lineage."""
         sim = self.checker.simulator.simulate_cell("from numpy import array")
         virtual_lineage, virtual_modules = sim.virtual_lineage, sim.virtual_modules
 
-        self.assertIn("array", virtual_lineage)
-        self.assertIn("array", virtual_modules)
+        assert "array" in virtual_lineage
+        assert "array" in virtual_modules
         # array is detected as module output -> propagated
-        self.assertIn("array", self.checker.tracking_state.variable_lineage)
+        assert "array" in self.checker.tracking_state.variable_lineage
 
     def test_non_import_does_not_propagate(self):
         """Non-import statements should not propagate to variable_lineage."""
         virtual_lineage = self.checker.simulator.simulate_cell("y = x + 1", {"x": "abc123"}).virtual_lineage
 
         # y should be in virtual_lineage but NOT in variable_lineage
-        self.assertIn("y", virtual_lineage)
-        self.assertNotIn("y", self.checker.tracking_state.variable_lineage)
+        assert "y" in virtual_lineage
+        assert "y" not in self.checker.tracking_state.variable_lineage
 
     def test_existing_variable_lineage_not_overwritten(self):
         """If variable_lineage already has a module, don't overwrite it."""
@@ -253,10 +255,10 @@ class TestModuleLineagePropagation(unittest.TestCase):
         self.checker.simulator.simulate_cell("import pandas as pd")
 
         # Should NOT be overwritten
-        self.assertEqual(self.checker.tracking_state.variable_lineage["pd"], existing_lineage)
+        assert self.checker.tracking_state.variable_lineage["pd"] == existing_lineage
 
 
-class TestSimulationRuntimeKeyMatch(unittest.TestCase):
+class TestSimulationRuntimeKeyMatch:
     """End-to-end test: simulation cache key matches runtime key.
 
     This simulates the real flow:
@@ -266,7 +268,8 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
     4. Both keys MUST match
     """
 
-    def setUp(self):
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.shell = MagicMock()
         self.shell.user_ns = {}
         mock_backend = MagicMock()
@@ -326,10 +329,8 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(
-            sim_key,
-            runtime_key,
-            f"Simulation key must match runtime key.\nSimulation: {sim_key}\nRuntime: {runtime_key}",
+        assert sim_key == runtime_key, (
+            f"Simulation key must match runtime key.\nSimulation: {sim_key}\nRuntime: {runtime_key}"
         )
 
     def test_try_virtual_restore_key_matches(self):
@@ -372,10 +373,8 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(
-            restore_key,
-            runtime_key,
-            f"Virtual restore key must match runtime key.\nRestore: {restore_key}\nRuntime: {runtime_key}",
+        assert restore_key == runtime_key, (
+            f"Virtual restore key must match runtime key.\nRestore: {restore_key}\nRuntime: {runtime_key}"
         )
 
     def test_module_in_user_ns_detected(self):
@@ -408,8 +407,8 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
                 variable_lineage={"df": df_lineage, "np": np_lineage}, user_ns={"np": np, "df": [1, 2, 3]}
             ),
         )
-        self.assertIn(f"np:{np_lineage}", mod_hashes)
-        self.assertEqual(sim_key, runtime_key)
+        assert f"np:{np_lineage}" in mod_hashes
+        assert sim_key == runtime_key
 
     def test_empty_user_ns_after_restart(self):
         """After kernel restart, user_ns is empty. Module detection via virtual_modules."""
@@ -442,8 +441,4 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(sim_key, runtime_key, "After kernel restart with empty user_ns, keys must match")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert sim_key == runtime_key, "After kernel restart with empty user_ns, keys must match"

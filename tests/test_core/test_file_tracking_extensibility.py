@@ -1,8 +1,9 @@
 import os
 import sys
 import tempfile
-import unittest
 from unittest.mock import MagicMock
+
+import pytest
 
 from cash.core import Cash
 from cash.tracking import reader_patches
@@ -10,10 +11,10 @@ from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.reader_patches import FileDependencyRegistry, file_registry
 
 
-class TestFileTrackingExtensibility(unittest.TestCase):
-    def setUp(self):
-        self.mock_shell = MagicMock()
-        self.mock_shell.user_ns = {}
+class TestFileTrackingExtensibility:
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
+        self.user_ns = {}
 
         # A fresh registry for each test, so handlers do not leak between them
         self._saved_registry = reader_patches._registry
@@ -27,8 +28,7 @@ class TestFileTrackingExtensibility(unittest.TestCase):
             # symlink, Windows 8.3 short name) and cash records the resolved
             # path, so the raw name never matches there.
             self.temp_path = os.path.realpath(tf.name).replace(os.sep, "/")
-
-    def tearDown(self):
+        yield
         reader_patches._registry = self._saved_registry
         if os.path.exists(self.temp_path):
             os.remove(self.temp_path)
@@ -38,10 +38,10 @@ class TestFileTrackingExtensibility(unittest.TestCase):
 
         # Check defaults
         handlers = registry.get_handlers_for_module("sqlite3")
-        self.assertTrue(any(h[0] == "connect" for h in handlers))
+        assert any(h[0] == "connect" for h in handlers)
 
         handlers = registry.get_handlers_for_module("pandas")
-        self.assertTrue(any(h[0] == "read_*" for h in handlers))
+        assert any(h[0] == "read_*" for h in handlers)
 
     def test_api_registration(self):
         cash = Cash()
@@ -66,11 +66,11 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         cash.register_file_handler("mylib", "read_custom", custom_handler)
 
         # Verify it works
-        tracker = FileAccessTracker(self.mock_shell.user_ns)
+        tracker = FileAccessTracker(self.user_ns)
         with tracker:
             mock_lib.read_custom(self.temp_path)
 
-        self.assertIn(self.temp_path, tracker.get_accessed_files())
+        assert self.temp_path in tracker.get_accessed_files()
 
         del sys.modules["mylib"]
 
@@ -102,14 +102,10 @@ class TestFileTrackingExtensibility(unittest.TestCase):
 
         registry.register("wildlib", "load_*", path_handler)
 
-        tracker = FileAccessTracker(self.mock_shell.user_ns)
+        tracker = FileAccessTracker(self.user_ns)
         with tracker:
             mock_lib.load_data(self.temp_path)
 
-        self.assertIn(self.temp_path, tracker.get_accessed_files())
+        assert self.temp_path in tracker.get_accessed_files()
 
         del sys.modules["wildlib"]
-
-
-if __name__ == "__main__":
-    unittest.main()

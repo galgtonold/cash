@@ -1,13 +1,15 @@
 import hashlib
-import unittest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 
 
-class TestUpstreamSafety(unittest.TestCase):
-    def setUp(self):
+class TestUpstreamSafety:
+    @pytest.fixture(autouse=True)
+    def _set_up(self):
         self.shell = MagicMock()
         # `x` must be LIVE in the namespace: the missing-input check now gates on
         # the real ``user_ns`` instead of the tracking dict, since a
@@ -69,7 +71,7 @@ class TestUpstreamSafety(unittest.TestCase):
         print(f"Re-execute List (Valid Case): {reexecute}")
 
         # Expectation: Empty list (Valid Extension)
-        self.assertEqual(reexecute, [], "Should accept valid unsaved extension")
+        assert reexecute == [], "Should accept valid unsaved extension"
         print("✓ Valid Extension Accepted")
 
         # Scenario 2: Stale Dependency
@@ -95,9 +97,5 @@ class TestUpstreamSafety(unittest.TestCase):
         # Since 'x=x+1' projected on 'x=2' != 'x=x+1' projected on 'x=1'.
         # It should trigger re-execution of 'x=2' (the notebook cell).
 
-        self.assertIn(code_new_start, reexecute_stale, "Should re-execute stale upstream")
+        assert code_new_start in reexecute_stale, "Should re-execute stale upstream"
         print("✓ Stale Dependency Rejected")
-
-
-if __name__ == "__main__":
-    unittest.main()

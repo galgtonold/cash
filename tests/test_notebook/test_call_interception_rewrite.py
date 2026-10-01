@@ -17,7 +17,6 @@ decides whether the call is reached, exactly as before.
 """
 
 import ast
-import unittest
 
 from cash.notebook.call_interception import HELPER_NAME, CallSite, wrap_eligible_calls
 
@@ -28,43 +27,43 @@ def _rewrite(src: str) -> tuple[str, list[CallSite]]:
     return ast.unparse(new_tree), sites
 
 
-class TestRewrite(unittest.TestCase):
+class TestRewrite:
     def test_helper_name_is_dunder_private(self):
         """The injected name must not collide with anything a user would write."""
-        self.assertTrue(HELPER_NAME.startswith("__cash"))
+        assert HELPER_NAME.startswith("__cash")
 
     def test_accumulator_fold(self):
         out, sites = _rewrite("s += compute(x)")
-        self.assertEqual(out, "s += __cash_call__(compute, 0)(x)")
-        self.assertEqual(len(sites), 1)
+        assert out == "s += __cash_call__(compute, 0)(x)"
+        assert len(sites) == 1
 
     def test_append(self):
         out, sites = _rewrite("out.append(compute(x))")
-        self.assertEqual(out, "out.append(__cash_call__(compute, 0)(x))")
-        self.assertEqual(len(sites), 1)
+        assert out == "out.append(__cash_call__(compute, 0)(x))"
+        assert len(sites) == 1
 
     def test_ineligible_statement_is_untouched(self):
         out, sites = _rewrite("s = merge(s, x)")
-        self.assertEqual(out, "s = merge(s, x)")
-        self.assertEqual(len(sites), 0)
+        assert out == "s = merge(s, x)"
+        assert len(sites) == 0
 
     def test_argument_unpacking_survives(self):
         """Arguments are not rewritten, so *args/**kwargs need no special case."""
         out, sites = _rewrite("out.append(compute(*xs, k=1, **kw))")
-        self.assertEqual(out, "out.append(__cash_call__(compute, 0)(*xs, k=1, **kw))")
-        self.assertEqual(len(sites), 1)
+        assert out == "out.append(__cash_call__(compute, 0)(*xs, k=1, **kw))"
+        assert len(sites) == 1
 
     def test_short_circuit_is_preserved(self):
         """The load-bearing case: `g` stays under the `or`, not hoisted above it."""
         out, sites = _rewrite("out.append(f() or g())")
-        self.assertEqual(out, "out.append(__cash_call__(f, 0)() or __cash_call__(g, 1)())")
-        self.assertEqual(len(sites), 2)
+        assert out == "out.append(__cash_call__(f, 0)() or __cash_call__(g, 1)())"
+        assert len(sites) == 2
 
     def test_method_call_callee_is_wrapped_whole(self):
         """A bound method is a callable like any other; wrap the whole callee."""
         out, sites = _rewrite("s += model.predict(x)")
-        self.assertEqual(out, "s += __cash_call__(model.predict, 0)(x)")
-        self.assertEqual(len(sites), 1)
+        assert out == "s += __cash_call__(model.predict, 0)(x)"
+        assert len(sites) == 1
 
     def test_original_tree_is_not_mutated(self):
         """The caller keeps using the original tree for analysis and keying.
@@ -75,7 +74,7 @@ class TestRewrite(unittest.TestCase):
         tree = ast.parse("s += compute(x)")
         before = ast.unparse(tree)
         wrap_eligible_calls(tree)
-        self.assertEqual(ast.unparse(tree), before)
+        assert ast.unparse(tree) == before
 
     def test_rewritten_tree_compiles(self):
         """Locations must be fixed up or compile() rejects the new nodes."""
@@ -421,7 +420,3 @@ def test_calls_inside_a_while_body_are_never_intercepted():
     tree = ast.parse("while queue:\n    out.append(compute(queue.pop()))")
     _, sites = wrap_eligible_calls(tree)
     assert sites == []
-
-
-if __name__ == "__main__":
-    unittest.main()
