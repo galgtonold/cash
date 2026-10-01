@@ -8,7 +8,7 @@ cases that need a change on your side, and what that change is.
 
 ## Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7af4e89b -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6 -->
 An argument that cannot be pickled (a lock, an open file, a live connection, a
 closure) cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while
@@ -37,7 +37,7 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## An argument that does not change the result
 
-<!-- claim: cash/core.py:Cash.cache @2d082328 -->
+<!-- claim: cash/core.py:Cash.cache @5c304b0c -->
 Every argument is part of the key, and `@cash.cache` has no `ignore=`
 parameter. So a logger, a progress callback or a `verbose=` flag splits the
 cache: `fit(data, verbose=True)` misses after `fit(data)` ran.

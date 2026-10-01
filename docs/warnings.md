@@ -136,7 +136,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.cache @2d082328 -->
+<!-- claim: cash/core.py:Cash.cache @5c304b0c -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.
@@ -154,7 +154,7 @@ need it cached.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @b7c16174, cash/backends/file_eviction.py:FileEvictor.remove_path @ec89275a -->
+<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03, cash/backends/file_eviction.py:FileEvictor.remove_path @ec89275a -->
 **What happened.** `f.cache_clear()` could not remove some of the function's
 entries. The message says how many.
 
@@ -630,7 +630,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @aa5b9707 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @59f18700 -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -657,12 +657,12 @@ code if you must. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065 -->
 **What happened.** Before the first call, cash read the source of the
 function and its helpers and found shapes that make a cached result doubtful.
 Each finding has a line number and a label:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._mutable_global_is_keyed @1ccfb791 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._mutable_global_is_keyed @f2ffd435 -->
 <!-- claim: cash/analysis/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/analysis/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/analysis/purity_flow.py:is_log_line @90d04d4b, cash/effects.py:is_read_only_sql @94e903d1 -->
 | Label | What it flags | Reported as |
 |---|---|---|
@@ -980,7 +980,7 @@ time.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @985b955a -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @06de34b5 -->
 **What happened.** You cached a bound method (`c.cache(obj.method)`) and the
 instance could not be hashed, so cash keyed on the object's in-memory identity.
 
@@ -1001,7 +1001,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1045,7 +1045,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @a8991ed8, cash/install_paths.py:is_user_module @a54a6d7a, cash/decorator/user_code.py:is_user_code_object @07d4f95a -->
+<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @16845be0, cash/install_paths.py:is_user_module @a54a6d7a, cash/decorator/user_code.py:is_user_code_object @07d4f95a -->
 **What happened.** A function, class or object from your own code reached a
 cached call (as an argument or a default), and cash could not hash its code.
 The typical case is a class of yours whose behaviour comes from a compiled
@@ -1212,7 +1212,7 @@ is the classic case.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8d524a5e -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 

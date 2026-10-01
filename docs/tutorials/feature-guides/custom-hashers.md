@@ -46,7 +46,7 @@ sales.revenue()   # a hit: the frame is not read to build the key
 # test:inject: revenue = Dataset.revenue  # lets the harness read cache_info
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @579078d7, cash/decorator/cash_key.py:cash_key_method @affd7858 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823, cash/decorator/cash_key.py:cash_key_method @affd7858 -->
 `__cash_key__` returns what identifies the object, and the key uses that
 instead of reading the frames. Building the key costs microseconds however
 much data the object holds, and a stored result is found again after a
@@ -224,7 +224,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7af4e89b -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6 -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result.
 

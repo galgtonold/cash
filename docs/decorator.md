@@ -131,7 +131,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @0e137c19, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @b7c16174 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @9691cbcc, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -161,7 +161,7 @@ and to answer "why did it miss?" when a call ran that you expected to be a
 cache hit. Each miss names its reason: new arguments, a changed file, a
 helper you edited, an expired `ttl`.
 
-<!-- claim: cash/decorator/run_summary.py:RunSummary.text @1b06ce83, cash/decorator/run_summary.py:RunSummary.reasons @a0f367d6, cash/decorator/run_summary.py:RunSummary.print_at_exit @f2a46f9f -->
+<!-- claim: cash/decorator/run_summary.py:RunSummary.text @d64f5e55, cash/decorator/run_summary.py:RunSummary.reasons @e23c40a0, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
 process ends: hits and misses per function, the time saved, and why calls
 missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
@@ -223,7 +223,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99, cash/decorator/code_args.py:CodeArgs.fold_code_args @61607ad9 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8d524a5e, cash/decorator/code_args.py:CodeArgs.fold_code_args @61607ad9 -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -286,7 +286,7 @@ see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @2d082328 -->
+<!-- claim: cash/core.py:Cash.cache @5c304b0c -->
 All parameters are keyword-only and optional:
 
 | Parameter | Default | What it does |
@@ -322,7 +322,7 @@ def rates():
     return requests.get("https://api.example.com/rates").json()
 ```
 
-<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @4d5b2997, cash/core.py:Cash.cleanup @df64c5c1 -->
+<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @4d5b2997, cash/core.py:Cash.cleanup @c2aa13fc -->
 After the ttl, the next call recomputes and replaces the entry.
 
 - **The current ttl applies.** An entry is judged by the decorator's `ttl=`
@@ -449,7 +449,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
@@ -528,7 +528,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @9b54927a -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @206fd76a -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python
@@ -551,7 +551,7 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @4a73b796 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @38481769 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 

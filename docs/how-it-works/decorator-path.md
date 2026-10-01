@@ -25,7 +25,7 @@ build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:decorator_key @58733f82, cash/decorator/function_identity.py:func_key @88a3b5fb -->
+<!-- claim: cash/decorator/runtime.py:decorator_key @58733f82, cash/decorator/function_identity.py:func_key @b8dbd1c0 -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @1c273577, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @f61c38f8, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -54,7 +54,7 @@ that can change the result without changing an argument:
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made after the function was decorated, by the caller too (module level, or an outer function before it calls this one). Re-seeding recomputes, and two draws in a row under one seed are two entries. |
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8d524a5e -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
@@ -67,7 +67,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7af4e89b, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -161,7 +161,7 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065 -->
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
 `CashImpureFunctionError`, because cash cannot tell when that code changes.

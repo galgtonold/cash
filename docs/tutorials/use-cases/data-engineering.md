@@ -134,7 +134,7 @@ Cached methods key `self` by everything it holds, so every call reads all the
 tables to build the key, even a method that returns one number. With a few
 hundred MB of frames that is most of a second per call.
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @579078d7 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823 -->
 Give the class a `__cash_key__` that returns what identifies the snapshot,
 and the key uses that instead:
 
