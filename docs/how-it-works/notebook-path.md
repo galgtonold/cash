@@ -52,7 +52,7 @@ per statement, which the badge reports as cash's own overhead.
 
 ## Fine-grained caching: loops and branches
 
-<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @10c994da, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @f4b52c27 -->
+<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @f4b52c27 -->
 A `for` loop is cached one iteration at a time. Each iteration's statements
 are keyed with the loop variable's value, so changing one item of the list
 does not throw away the others.

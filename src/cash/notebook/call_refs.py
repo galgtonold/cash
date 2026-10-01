@@ -82,7 +82,7 @@ def digest_and_size(value: Any) -> tuple[str, int] | None:
 
     Every byte, since this is what decides a restore; over pickle protocol 5
     with its buffers hashed in place, which for a 64 MB frame is 24 ms --
-    ``compute_hash_full`` took 115 ms, and a call's store pays this.
+    ``compute_hash`` took 115 ms, and a call's store pays this.
     """
     try:
         buffers: list = []

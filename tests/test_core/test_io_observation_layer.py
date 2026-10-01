@@ -253,3 +253,20 @@ def test_the_shells_own_open_is_not_a_notebook_input(mock_shell):
 
     assert not is_cash_instrumentation(users_own_open)
     assert not is_cash_instrumentation(open)
+
+
+def test_a_folder_beside_the_cache_dir_is_the_users(tmp_path):
+    """cash's own storage is left out of the effects by directory, not by
+    string prefix: ``.cash_exports`` next to ``.cash`` is the user's output."""
+    cache_dir = tmp_path / ".cash"
+    exports = tmp_path / ".cash_exports"
+    cache_dir.mkdir()
+    exports.mkdir()
+    observer = EffectObserver(exclude_under=str(cache_dir))
+    with observer:
+        with open(cache_dir / "entry.pkl", "w") as f:
+            f.write("cash's own")
+        with open(exports / "report.csv", "w") as f:
+            f.write("a,b\n")
+    written = [detail.split(", at ")[0] for kind, detail in observer.effects if kind == "file write"]
+    assert written == [str(exports / "report.csv")], observer.effects

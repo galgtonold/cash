@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import builtins
+from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
 __all__ = [
@@ -88,8 +89,12 @@ def is_stateful(func: Any) -> bool:
 # Known-pure built-in and stdlib functions
 # ============================================================================
 
-# These built-in functions have no side effects and always return
-# the same output for the same inputs.
+#: Builtins that touch nothing but their arguments: no file, no global, no
+#: output. ``next`` advances the iterator it is handed; the rest only read.
+#: Not "same output for the same inputs": ``id`` and ``hash`` answer per
+#: object and per process.
+#: Matched by name, so a caller that can see the user's bindings checks that
+#: the name still means the builtin (`is_known_pure`).
 KNOWN_PURE_BUILTINS: frozenset[str] = frozenset(
     {
         # Type constructors / conversions
@@ -148,17 +153,15 @@ KNOWN_PURE_BUILTINS: frozenset[str] = frozenset(
 )
 
 
-def is_known_pure(name: str) -> bool:
-    """Check if a function name is a known-pure built-in.
+def is_known_pure(name: str, namespace: Mapping[str, Any] | None = None) -> bool:
+    """Is *name* one of `KNOWN_PURE_BUILTINS`, and, given the *namespace* it
+    is looked up in, still bound to that builtin there?
 
-    This allows the statement processor to skip mutation detection
-    for statements that only call known-pure built-in functions,
-    even without explicit ``@pure`` annotations.
-
-    Args:
-        name: The function name to check.
-
-    Returns:
-        True if the name is in the known-pure builtins list.
+    A user's own ``sorted`` or ``next`` marked `stateful` is not the builtin,
+    and must not be waved through on its name.
     """
-    return name in KNOWN_PURE_BUILTINS
+    if name not in KNOWN_PURE_BUILTINS:
+        return False
+    if namespace is None or name not in namespace:
+        return True
+    return namespace[name] is getattr(builtins, name, None)

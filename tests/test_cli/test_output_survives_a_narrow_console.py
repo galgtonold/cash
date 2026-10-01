@@ -71,3 +71,16 @@ def test_show_stats_escapes_the_name(cash_instance, monkeypatch):
     cash_instance.show_stats()  # raised UnicodeEncodeError
     sys.stdout.flush()
     assert b"\\u6570\\u636e" in buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("symbol", "fallback"),
+    [("⚙️", "[run]"), ("\U0001f3f7️", "[tag]"), ("♻️", "[reuse]")],
+)
+def test_an_emoji_with_a_variation_selector_gets_its_fallback(symbol, fallback):
+    """``⚙️`` is two code points: looked up one character at a time it was
+    dropped instead of replaced."""
+    from cash._console import safe_text
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    assert safe_text(f"{symbol} config ✅ ok", stream=stream) == f"{fallback} config [OK] ok"

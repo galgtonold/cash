@@ -33,7 +33,7 @@ from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
-from cash.object_hashing import compute_hash, compute_hash_full, pandas_nbytes
+from cash.object_hashing import compute_hash, pandas_nbytes
 
 if TYPE_CHECKING:
     from cash.notebook.call_interception import CallSite
@@ -70,12 +70,12 @@ def _is_dunder_loop_var(name: str) -> bool:
 
 
 def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, str]) -> str:
-    """The discriminating hash for one loop-var entry: full, never sampled.
+    """The discriminating hash for one loop-var entry: its whole content.
 
-    A loop variable is the per-iteration discriminator, so it gets the full
-    hash: a hash of a long list's ends would give two items agreeing there
-    one entry (a wrong value on the first run). The fallback stays
-    ``compute_hash_full``, the digest ``for_handler`` records.
+    A loop variable is the per-iteration discriminator: a hash of a long
+    list's ends would give two items agreeing there one entry (a wrong value
+    on the first run). The fallback is ``compute_hash``, the digest
+    ``for_handler`` records.
 
     A full hash of a large value can cost more than the call it keys, and is
     paid per call, so *loop_var_digests* -- the hashes ``for_handler`` took
@@ -85,7 +85,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     an inner loop reusing the outer loop's name it holds the inner value.
     """
     digest = loop_var_digests.get(name)
-    return digest if digest is not None else compute_hash_full(value)
+    return digest if digest is not None else compute_hash(value)
 
 
 #: ``code object -> the globals its body mutates``, before the namespace filter.
@@ -504,7 +504,7 @@ def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict, loop_vars: M
 def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     """PRE-call content hashes of the globals *fn* writes, for the key.
 
-    ``compute_hash_full``, every byte, for the same reason
+    ``compute_hash``, every byte, for the same reason
     :func:`_loop_var_digest` documents: this IS the discriminator. Two
     accumulator states that agree at both ends must not key alike, and an
     accumulator is precisely the shape that grows in the middle.
@@ -524,7 +524,7 @@ def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     for name in names:
         try:
             value = cells[name].cell_contents if name in cells else globals_dict[name]
-            digests[name] = compute_hash_full(value)
+            digests[name] = compute_hash(value)
         except Exception:  # noqa: BLE001 - a missing digest only widens the key
             logger.debug("call unit: could not digest global %r", name)
     return digests
@@ -551,7 +551,7 @@ class CallKeys:
         self._loop_vars_provider = loop_vars_provider or (lambda: {})
         # See `call_cache_key`'s `loop_var_digests` section and
         # `_loop_var_digest`'s docstring. `None` is always CORRECT (every
-        # entry falls through to a fresh `compute_hash_full`), only slower.
+        # entry falls through to a fresh `compute_hash`), only slower.
         self._loop_var_digests_provider = loop_var_digests_provider or (lambda: {})
         # Per call SITE: what its key was built from last time, and what moved
         # since -- the badge's answer to "why did this re-run?".
@@ -592,7 +592,7 @@ class CallKeys:
             by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
             if getattr(site, "in_loop_unit", False) and not by_content:
                 return None
-            arg_digests = self._arg_digests(site, args, kwargs, full=by_content)
+            arg_digests = self._arg_digests(site, args, kwargs)
             name_digests = self._name_digests(site, args, kwargs) if by_content else None
             if by_content and loop_vars:
                 loop_vars = _loop_vars_the_call_can_read(fn, site, loop_vars, name_digests)
@@ -636,8 +636,8 @@ class CallKeys:
             loop_vars = self._current_loop_vars()
             if not _keys_by_content(fn, received, args, kwargs, loop_vars):
                 return None
-            digests = [compute_hash_full(value) for value in args]
-            digests.extend(f"{name}:{compute_hash_full(kwargs[name])}" for name in sorted(kwargs))
+            digests = [compute_hash(value) for value in args]
+            digests.extend(f"{name}:{compute_hash(kwargs[name])}" for name in sorted(kwargs))
             if loop_vars:
                 loop_vars = _loop_vars_the_call_can_read(fn, received, loop_vars, None)
             return call_cache_key(
@@ -681,7 +681,7 @@ class CallKeys:
         ``key``'s own try/except, same reasoning as
         ``_current_loop_vars``: a provider failure degrades to "no
         precomputed digest available" ``{}``, which ``_loop_var_digest``
-        treats as "fall through to a fresh `compute_hash_full`" -- slower,
+        treats as "fall through to a fresh `compute_hash`" -- slower,
         never wrong -- not to refusing the key entirely.
         """
         try:
@@ -700,10 +700,10 @@ class CallKeys:
         digests = {}
         for name, pos in getattr(site, "name_arg_positions", ()):
             if pos < len(combined) and _nbytes(combined[pos]) <= _NAME_CONTENT_MAX_BYTES:
-                digests[name] = compute_hash_full(combined[pos])
+                digests[name] = compute_hash(combined[pos])
         return digests
 
-    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict, full: bool = False) -> list[str]:
+    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict) -> list[str]:
         """Content hashes of the live arguments at ``site.computed_arg_positions``.
 
         Positions are in ``(*args, *kwargs.values())`` order, matching how
@@ -712,21 +712,9 @@ class CallKeys:
         a different shape than the site predicted) is simply not appended --
         the resulting length mismatch is caught by ``call_cache_key`` itself,
         which refuses rather than mint a key with a discriminator missing.
-
-        *full* hashes every one of them in full: under content keying the
-        value is all the key knows of where the argument came from.
         """
         combined = (*args, *kwargs.values())
-        local = set(getattr(site, "local_arg_positions", ()))
-        digests = []
-        for pos in site.computed_arg_positions:
-            if pos >= len(combined):
-                continue
-            # A comprehension's own variable discriminates its elements, as a
-            # loop variable does its iterations: full hash, never sampled.
-            hash_fn = compute_hash_full if full or pos in local else compute_hash
-            digests.append(hash_fn(combined[pos]))
-        return digests
+        return [compute_hash(combined[pos]) for pos in site.computed_arg_positions if pos < len(combined)]
 
     def _note_key_parts(self, site: CallSite, key, ctx, arg_digests, global_digests) -> None:
         """Remember what this call site was keyed on, and what moved since the

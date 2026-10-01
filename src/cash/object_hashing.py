@@ -6,15 +6,16 @@ cannot drift apart on what makes two values the same:
 * ``builtin_hash`` and the per-library hashers under it (pandas, numpy,
   polars, PyArrow, modin, dask) read every byte of a value together with its
   schema -- column names, dtypes, an array's memory layout. The decorator keys
-  arguments on them; ``compute_hash_full`` uses them for the notebook's
-  per-iteration loop keys and call keys.
+  arguments on them; ``compute_hash`` uses them for every value the notebook
+  hashes.
 * ``stable_key_repr`` is the canonical form a key pickles a value in: sets and
   dicts in a stable order, every container tagged with its type.
-* ``compute_hash`` hashes a value's whole content too, a collection of
-  frames item by item. It is the ``compute_hash_fn`` seam threaded into
-  ``StatementProcessor`` and ``UpstreamChecker``, and what ``Restorer`` checks
-  a restored object against. No value hash here samples: a sample decides
-  "unchanged" for an edit outside it.
+* ``compute_hash`` is the notebook's one value hash: a value's whole
+  content, a collection of frames item by item. It is the ``compute_hash_fn``
+  seam threaded into ``StatementProcessor`` and ``UpstreamChecker``, what
+  ``Restorer`` checks a restored object against, and the digest of a loop
+  variable, a call's arguments and the globals a call writes. No value hash
+  here samples: a sample decides "unchanged" for an edit outside it.
 
 And every size cash estimates, from one set of rules for what a frame, an
 array or a sparse matrix holds:
@@ -53,7 +54,10 @@ from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, LEAF_TYPES, PARSED_
 
 logger = logging.getLogger(__name__)
 
-_HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError)
+#: What a hash that cannot read a value raises. RecursionError: a value nested
+#: deeper than pickle or a walk follows, such as a linked list of a few
+#: hundred objects, has no content hash either.
+_HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, RecursionError)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +99,14 @@ def object_state(value: Any) -> dict:
 _BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
 
 
-def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None, left: list | None = None) -> tuple:
+def _typed(
+    value: Any,
+    canon: Any,
+    stack: set | None = None,
+    seen: dict | None = None,
+    hook: Callable[[Any], Any] | None = None,
+    left: list | None = None,
+) -> tuple:
     """*canon*, a container's canonical items, tagged with the container's type.
 
     Every container carries its type, so containers holding equal items key
@@ -108,9 +119,11 @@ def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None, lef
     entry, and a ``dict`` subclass holding ``self.source`` served the first
     caller's answer for every source. The state is read from ``__dict__``
     and ``__slots__`` both (`object_state`): a subclass declaring slots kept
-    its values out of the key. Nothing is caught here: a part that
-    cannot be read is not left out of the key, it makes the call unkeyable
-    (run uncached, with a warning).
+    its values out of the key. The state is walked as part of the same walk
+    (*stack*, *seen*), so a list it shares with the items is marked as
+    shared and a loop back to the container is caught. Nothing is caught
+    here: a part that cannot be read is not left out of the key, it makes
+    the call unkeyable (run uncached, with a warning).
     """
     t = type(value)
     tag = _BUILTIN_CONTAINER_TAGS.get(t)
@@ -122,17 +135,15 @@ def _typed(value: Any, canon: Any, hook: Callable[[Any], Any] | None = None, lef
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
-        state += tuple(sorted((k, stable_key_repr(v, 45, hook=hook, left=left)) for k, v in own.items()))
+        state += tuple(sorted((k, _walk(v, stack, seen, hook, left)) for k, v in own.items()))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
 
 def stable_key_repr(
     value: Any,
-    _depth: int = 0,
-    _stack: set | None = None,
-    _seen: dict | None = None,
     *,
+    seen: dict | None = None,
     hook: Callable[[Any], Any] | None = None,
     left: list | None = None,
 ) -> Any:
@@ -167,20 +178,40 @@ def stable_key_repr(
 
     A container graph that loops back on itself raises `CyclicValueError` (a
     TypeError, so the value is reported as unhashable and the call runs
-    uncached). Expanding it path by path to the depth limit never returned,
-    and a form that stood in for the loop could make two different graphs key
-    alike, which would be a wrong answer.
+    uncached): a form that stood in for the loop could make two different
+    graphs key alike, which would be a wrong answer. A value nested deeper
+    than the walk can follow raises `TooDeepValueError`, a TypeError too.
+    There is no depth limit below that: a part cut off at a fixed depth and
+    left to pickle keeps its sets in the order PYTHONHASHSEED picks, and the
+    key changes from process to process.
 
+    *seen*, when given, is filled with the writable containers the walk met.
     *left*, when given, gets an entry for each object left to pickle whole
     (`canonical_bytes` reads it): only then can the form hold an object
     pickled twice, whose identity only pickle's memo records.
     """
-    if _depth > 50:
-        if left is not None:
-            left.append(value)
-        return value
+    try:
+        return _walk(value, set(), {} if seen is None else seen, hook, left)
+    except RecursionError:
+        raise TooDeepValueError(_too_deep(value)) from None
+
+
+class TooDeepValueError(TypeError):
+    """A value nested deeper than Python's recursion limit lets cash walk it,
+    such as a long linked list. A TypeError, so the value is reported as
+    unhashable and the call runs uncached: a key over part of it could serve
+    one value's result for another."""
+
+
+def _too_deep(value: Any) -> str:
+    return f"a {type(value).__qualname__} nested too deeply to key (deeper than the recursion limit)"
+
+
+def _walk(value: Any, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None, left: list | None) -> Any:
+    """`stable_key_repr` of one value, with the path walked so far (*_stack*)
+    and the containers met so far (*_seen*)."""
     if type(value) in CODELESS_PRIMS:
-        if type(value) is bytearray and _seen is not None:
+        if type(value) is bytearray:
             # Written into, one bytearray held twice changes in two places.
             first = _seen.get(id(value))
             if first is not None:
@@ -194,10 +225,6 @@ def stable_key_repr(
     if type(value) in _plain_data.numpy_scalar_set():
         # A number: pickled by value, nothing inside to order.
         return ("__cash_np__", value.dtype.char, value.tobytes())
-    if _stack is None:
-        _stack = set()
-    if _seen is None:
-        _seen = {}
     family = _builtin_family_of(type(value))
     if family is not None:
         if family in _WRITABLE_FAMILIES:
@@ -222,7 +249,7 @@ def stable_key_repr(
         _seen[id(value)] = (len(_seen), value)
     _stack.add(id(value))
     try:
-        return _stable_key_repr_of(value, _depth, _stack, _seen, hook, left)
+        return _walk_object(value, _stack, _seen, hook, left)
     finally:
         _stack.discard(id(value))
 
@@ -255,10 +282,14 @@ def canonical_bytes(value: Any, hook: Callable[[Any], Any] | None = None, seen: 
     the writable containers the walk met (`stable_key_repr`'s ``_seen``).
     """
     left: list = []
-    form = stable_key_repr(value, _seen=seen, hook=hook, left=left)
-    if left:
-        return b"m" + _plain_data.key_dumps(form)
-    return b"u" + _plain_data.content_dumps(form)
+    form = stable_key_repr(value, seen=seen, hook=hook, left=left)
+    try:
+        if left:
+            return b"m" + _plain_data.key_dumps(form)
+        return b"u" + _plain_data.content_dumps(form)
+    except RecursionError:
+        # An object left to pickle whole can be deeper than pickle follows.
+        raise TooDeepValueError(_too_deep(value)) from None
 
 
 #: Exact types `canonical_call_bytes` writes straight into the form: each is
@@ -398,22 +429,20 @@ def _builtin_family_of(type_: type) -> str | None:
 _FAMILIES: dict[type, str | None] = {}
 
 
-def _stable_key_repr_of(
-    value: Any, _depth: int, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None, left: list | None
-) -> Any:
-    """`stable_key_repr` of one object, with the path walked so far."""
+def _walk_object(value: Any, _stack: set, _seen: dict, hook: Callable[[Any], Any] | None, left: list | None) -> Any:
+    """`_walk` of a container or object, once it is on *_stack*."""
 
     def sub(v: Any) -> Any:
-        return stable_key_repr(v, _depth + 1, _stack, _seen, hook=hook, left=left)
+        return _walk(v, _stack, _seen, hook, left)
 
     if isinstance(value, (set, frozenset)):
         items = [sub(v) for v in value]
         items.sort(key=_plain_data.content_dumps)
-        return _typed(value, tuple(items), hook, left)
+        return _typed(value, tuple(items), _stack, _seen, hook, left)
     if isinstance(value, dict):
-        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), hook, left)
+        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), _stack, _seen, hook, left)
     if isinstance(value, (list, tuple)):
-        return _typed(value, tuple(sub(v) for v in value), hook, left)
+        return _typed(value, tuple(sub(v) for v in value), _stack, _seen, hook, left)
     t = type(value)
     if contains_set(value):
         return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
@@ -471,21 +500,21 @@ def _pickled_state(value: Any) -> Any:
     return tuple(parts)
 
 
-def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> bool:
+def contains_set(value: Any, _seen: set[int] | None = None) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
     inside objects). `stable_key_repr` opens an object up only when it holds
     one; any other object is left to pickle.
 
-    Each container or object is looked at once per walk. Without that, a
-    cyclic graph was walked once per PATH to the depth limit: a module-level
-    ``logger = logging.getLogger(...)`` read in a cached function reaches the
-    logging manager, whose dict of every logger reaches the manager again, and
-    the first call never returned -- in every release up to 0.10.0. A node
+    Each container or object is looked at once per walk, which is what ends
+    the walk on a cyclic graph: a module-level ``logger`` reaches the logging
+    manager, whose dict of every logger reaches the manager again. A node
     seen before is either still being walked (its other branches answer for
     it) or was walked and held no set, or the walk would have stopped there.
+    There is no depth limit: a set below one would be left to pickle, in the
+    order PYTHONHASHSEED picks. A value deeper than the recursion limit
+    raises RecursionError, which `stable_key_repr` reports as
+    `TooDeepValueError`.
     """
-    if _depth > 50:
-        return False
     if _seen is None:
         _seen = set()
     # An exact builtin primitive cannot contain anything, so it cannot contain
@@ -510,18 +539,18 @@ def contains_set(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> 
         return False  # a number; without this, an MRO walk per scalar
     _seen.add(id(value))
     if isinstance(value, dict):
-        return any(contains_set(k, _depth + 1, _seen) or contains_set(v, _depth + 1, _seen) for k, v in value.items())
+        return any(contains_set(k, _seen) or contains_set(v, _seen) for k, v in value.items())
     if isinstance(value, (list, tuple)):
-        return any(contains_set(v, _depth + 1, _seen) for v in value)
+        return any(contains_set(v, _seen) for v in value)
     obj_state = object_state(value)
-    if obj_state and any(contains_set(v, _depth + 1, _seen) for v in obj_state.values()):
+    if obj_state and any(contains_set(v, _seen) for v in obj_state.values()):
         return True
     if _holds_native_state(type(value)):
         try:
             parts = _pickled_state(value)
         except Exception:  # noqa: BLE001 - what cannot be reduced fails in the pickle, with its own error
             return False
-        return contains_set(parts, _depth + 1, _seen)
+        return contains_set(parts, _seen)
     return False
 
 
@@ -566,7 +595,7 @@ _NATIVE_STATE: dict[type, bool] = {}
 
 # ---------------------------------------------------------------------------
 # Content hashers: one per library, shared by the decorator's argument keys and
-# the notebook's full-content hash (`compute_hash_full`)
+# the notebook's value hash (`compute_hash`)
 # ---------------------------------------------------------------------------
 
 
@@ -1165,6 +1194,9 @@ def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
     return hash_value == identity_hash(obj)
 
 
+_COLLECTIONS = frozenset((list, tuple, dict, set, frozenset))
+
+
 def compute_hash(obj: Any) -> str:
     """Hash *obj* over its whole content, with explicit fallbacks.
 
@@ -1177,11 +1209,17 @@ def compute_hash(obj: Any) -> str:
        ``is_identity_fallback_hash`` for why this tier is content-BLIND, not
        merely a cruder content hash.
 
-    Never a sample. This is the ``compute_hash_fn`` seam of the notebook: a
-    variable with no lineage is keyed on it, and every "did this value change?"
-    check (a call's arguments, a restored input, a loop's mutated variables)
-    compares two of its digests. A digest of a frame's first rows or a list's
-    ends let an edit elsewhere read as no change.
+    Never a sample. This is the notebook's one value hash: a variable with no
+    lineage, a loop variable, a call's arguments and the globals a call
+    writes are keyed on it, and every "did this value change?" check (a
+    restored input, a loop's mutated variables) compares two of its digests.
+    A digest of a frame's first rows or a list's ends let an edit elsewhere
+    read as no change.
+
+    A library value goes through ``builtin_hash``, the hasher the decorator
+    keys arguments on, so it carries the value's schema as well: an ``int64``
+    and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
+    F-ordered array holding equal values hash apart.
     """
     type_name = type(obj).__name__
 
@@ -1199,7 +1237,9 @@ def compute_hash(obj: Any) -> str:
             return hashlib.sha256(
                 f"namedtuple:{type(obj).__name__}:{fields!r}:{_hash_collection(tuple(obj))}".encode("utf-8")
             ).hexdigest()
-        if isinstance(obj, (list, tuple, dict, set, frozenset)):
+        if type(obj) in _COLLECTIONS:
+            # Exact types: a subclass is pickled whole, with the attributes
+            # it holds beside its items.
             return _hash_collection(obj)
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
     except _HASH_ERRORS as exc:
@@ -1211,40 +1251,13 @@ def compute_hash(obj: Any) -> str:
 
     try:
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-    except (TypeError, pickle.PicklingError):
+    except (TypeError, pickle.PicklingError, RecursionError):
         pass
     except BaseException as exc:
         if not is_native_panic(exc):
             raise
 
     return identity_hash(obj)
-
-
-def compute_hash_full(obj: Any) -> str:
-    """Full-content hash for cache-KEY discrimination.
-
-    Hashes every byte, as ``compute_hash`` does; the two differ in how they
-    hash a collection and a namedtuple, so each keeps the digests its keys
-    already hold.
-
-    A library value goes through ``builtin_hash``, the hasher the decorator
-    keys arguments on, so it carries the value's schema as well: an ``int64``
-    and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
-    F-ordered array holding equal values key apart here too. Anything else is
-    pickled whole; what cannot be pickled falls back to ``compute_hash``.
-    """
-    digest = builtin_hash(obj)
-    if digest is not None:
-        return digest
-    try:
-        return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-    except _HASH_ERRORS as exc:
-        logger.debug("Full hash failed for %s: %s", type(obj).__name__, exc)
-    except BaseException as exc:
-        if not is_native_panic(exc):
-            raise
-        logger.debug("Full hash of a %s panicked: %s", type(obj).__name__, exc)
-    return compute_hash(obj)
 
 
 # ---------------------------------------------------------------------------

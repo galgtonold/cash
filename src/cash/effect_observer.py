@@ -66,7 +66,7 @@ from typing import Any
 
 from .analysis.annotations import ASSUME_SAFE_RE
 from .effects import EffectKind
-from .install_paths import is_user_path
+from .install_paths import is_user_path, norm_dir, normcase_path
 from .tracking import io_watch
 
 logger = logging.getLogger(__name__)
@@ -299,8 +299,9 @@ class EffectObserver:
         self._outer: list[Any] = []
         # cash's own cache directory. A write in there is cash storing the
         # entry, not the user's function doing I/O, and reporting it would
-        # make every cached function look impure.
-        self._exclude = os.path.abspath(exclude_under) if exclude_under else None
+        # make every cached function look impure. A directory prefix
+        # (`norm_dir`): ``.cash_exports`` beside ``.cash`` is the user's.
+        self._exclude = norm_dir(exclude_under) if exclude_under else None
         self._tokens: list[contextvars.Token] = []
         #: A ``unittest.mock`` object was called while the block ran: the
         #: result may be a test's fake, and must not be stored as the answer.
@@ -360,7 +361,7 @@ class EffectObserver:
     def note_created_dir(self, path: Any) -> None:
         """A directory the block made (see `effects`)."""
         try:
-            self._created_dirs.append(os.path.abspath(os.fspath(path)).rstrip(os.sep) + os.sep)
+            self._created_dirs.append(norm_dir(os.fspath(path)))
         except (TypeError, ValueError):
             pass
 
@@ -414,9 +415,10 @@ class EffectObserver:
             resolved = os.path.abspath(os.fspath(path))
         except (TypeError, ValueError):
             return
-        if self._exclude and resolved.startswith(self._exclude):
+        under = normcase_path(resolved) + "/"
+        if self._exclude and under.startswith(self._exclude):
             return
-        scratch = next((d for d in self._created_dirs if resolved.startswith(d)), None)
+        scratch = next((d for d in self._created_dirs if under.startswith(d)), None)
         self.record_effect(_LABELS[EffectKind.FILE_WRITE], resolved, scratch)
 
     # -- reporting ---------------------------------------------------------

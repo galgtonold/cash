@@ -1318,7 +1318,7 @@ class StatementProcessor:
         only, never through an object: reading an attribute of an object could
         run a property.
         """
-        if is_known_pure(name):
+        if is_known_pure(name, self.shell.user_ns):
             return False
         func_obj = resolve_dotted_name(name, self.shell.user_ns) if "." in name else self.shell.user_ns.get(name)
         return func_obj is not None and is_stateful(func_obj)

@@ -370,6 +370,21 @@ class TestPurityChecks:
         assert metrics["status"] == CacheStatus.COMPUTED
         assert any("stateful" in r.lower() for r in metrics.get("uncacheable_reasons", []))
 
+    def test_a_stateful_function_named_like_a_builtin_skips_cache(self, statement_processor, mock_shell):
+        """A user's ``sorted`` is not the builtin: its name alone must not
+        make it pure."""
+        from cash.purity import stateful
+
+        @stateful
+        def sorted(values):
+            return [3, 2, 1]
+
+        mock_shell.user_ns["sorted"] = sorted
+        metrics = statement_processor.process_statement("result = sorted([1, 2, 3])")
+        assert mock_shell.user_ns.get("result") == [3, 2, 1]
+        assert metrics["status"] == CacheStatus.COMPUTED
+        assert any("stateful" in r.lower() for r in metrics.get("uncacheable_reasons", []))
+
     def test_pure_function_is_cacheable(self, statement_processor, mock_shell):
         """@pure functions should be cacheable."""
         from cash.purity import pure

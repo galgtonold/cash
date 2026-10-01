@@ -16,7 +16,7 @@ import pytest
 
 from cash import Cash, FileBackend
 from cash.exceptions import CashCacheIneffectiveWarning
-from cash.object_hashing import compute_hash, compute_hash_full, hash_polars
+from cash.object_hashing import compute_hash, hash_polars
 
 pl = pytest.importorskip("polars")
 
@@ -85,5 +85,4 @@ def test_a_panic_never_escapes_the_notebook_hashes(monkeypatch):
     monkeypatch.setattr(pl.DataFrame, "__getstate__", _panic)
     frame = pl.DataFrame({"a": [1]})
     assert hash_polars(frame) is None
-    assert isinstance(compute_hash_full(frame), str)
     assert isinstance(compute_hash(frame), str)

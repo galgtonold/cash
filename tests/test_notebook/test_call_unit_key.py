@@ -150,13 +150,13 @@ _LONG_A = (1, 2, 3, 4, 5) + _MIDDLE_A + (10, 11, 12, 13, 14)
 _LONG_B = (1, 2, 3, 4, 5) + _MIDDLE_B + (10, 11, 12, 13, 14)
 
 
-def test_loop_vars_use_the_full_hash_not_the_sampling_one():
-    """Two long loop-var values that agree on `compute_hash`'s sampled
-    head/tail must still produce DIFFERENT keys.
+def test_loop_vars_key_on_the_whole_value():
+    """Two long loop-var values that agree at both ends must still produce
+    DIFFERENT keys.
 
     This exercises the FALLBACK branch specifically: `ctx`'s
     `variable_lineage` has no entry for `t`, so `_loop_var_digest` must fall
-    all the way through to a fresh `compute_hash_full(value)` call and still
+    all the way through to a fresh `compute_hash(value)` call and still
     get it right. `test_loop_vars_prefer_precomputed_lineage_when_available`
     below covers the other branch, where `variable_lineage` already has the
     answer.
@@ -167,9 +167,9 @@ def test_loop_vars_use_the_full_hash_not_the_sampling_one():
     would be served iteration 1's cached value -- first-run wrongness, no
     pre-existing cache required.
     """
-    from cash.object_hashing import compute_hash_full
+    from cash.object_hashing import compute_hash
 
-    assert compute_hash_full(_LONG_A) != compute_hash_full(_LONG_B), (
+    assert compute_hash(_LONG_A) != compute_hash(_LONG_B), (
         "test setup is broken -- these two tuples must be genuinely different"
     )
 
@@ -183,17 +183,17 @@ def test_loop_vars_use_the_full_hash_not_the_sampling_one():
 
 
 def test_loop_vars_discriminate_via_precomputed_digest_when_available():
-    """Same sampled-equal-but-different pair as above, this time going
+    """Same ends-equal-but-different pair as above, this time going
     through the PRECOMPUTED-DIGEST branch -- the path `for_handler.py`
     actually takes in production.
 
     `for_handler.py._process_one_iteration` computes the loop variable's own
     full hash (`h = val._cash_lineage_hash if hasattr(...) else
-    compute_hash_full(val)`) at binding time and pushes it through
+    compute_hash(val)`) at binding time and pushes it through
     `loop_vars_scope` alongside the value, BEFORE any body statement of that
     iteration runs. This test mirrors that: `call_cache_key`'s
-    `loop_var_digests={"t": ...}` is set to `compute_hash_full(_LONG_A)` /
-    `compute_hash_full(_LONG_B)` directly (exactly what `for_handler.py`
+    `loop_var_digests={"t": ...}` is set to `compute_hash(_LONG_A)` /
+    `compute_hash(_LONG_B)` directly (exactly what `for_handler.py`
     would have pushed), rather than leaving `_loop_var_digest` to compute it
     itself. Discrimination must be IDENTICAL to the fallback test above --
     same two genuinely-different values, same requirement that they produce
@@ -201,9 +201,9 @@ def test_loop_vars_discriminate_via_precomputed_digest_when_available():
     question, one from a dict lookup and one by computing it fresh.
 
     Mutation that must make this fail: `_loop_var_digest` reverted to ignore
-    `loop_var_digests` and always call `compute_hash_full(value)`. That
+    `loop_var_digests` and always call `compute_hash(value)`. That
     mutation would not actually break this specific test on its own here
-    (calling `compute_hash_full` on the real values still discriminates) --
+    (calling `compute_hash` on the real values still discriminates) --
     see `test_loop_vars_prefer_precomputed_digest_over_the_live_value` for
     the test that specifically catches "ignoring loop_var_digests".
 
@@ -217,7 +217,7 @@ def test_loop_vars_discriminate_via_precomputed_digest_when_available():
     supplying the right dict; `StatementProcessor`'s push/pop stack is what
     makes the PRODUCTION caller correct, not anything checked here).
     """
-    from cash.object_hashing import compute_hash_full
+    from cash.object_hashing import compute_hash
 
     ctx = _ctx({}, {"conn": object(), "fetch_next": len})
     site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))
@@ -226,14 +226,14 @@ def test_loop_vars_discriminate_via_precomputed_digest_when_available():
         ctx=ctx,
         arg_digests=[],
         loop_vars={"t": _LONG_A},
-        loop_var_digests={"t": compute_hash_full(_LONG_A)},
+        loop_var_digests={"t": compute_hash(_LONG_A)},
     )
     second = call_cache_key(
         site,
         ctx=ctx,
         arg_digests=[],
         loop_vars={"t": _LONG_B},
-        loop_var_digests={"t": compute_hash_full(_LONG_B)},
+        loop_var_digests={"t": compute_hash(_LONG_B)},
     )
 
     assert first != second

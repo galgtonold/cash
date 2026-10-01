@@ -1,7 +1,7 @@
 """A loop target is fully hashed once per iteration, not twice.
 
-`compute_hash_full` on a loop target is deliberate and load-bearing: a sampled
-hash once collided two iterations onto one cache entry and produced a wrong
+A full `compute_hash` of a loop target is deliberate and load-bearing: a
+sampled hash collides two iterations onto one cache entry and produces a wrong
 result on the first run, so `for_handler._process_one_iteration` pays the full
 hash for every binding (the comment there says why).
 
@@ -9,7 +9,7 @@ Paying it TWICE is not deliberate. `build_iteration_context` independently
 computed the same full hash for the same value, unaware that
 `_process_one_iteration` had just computed and stored it in `loop_var_digests`
 five lines earlier. Measured on the demo tour's bootstrap cell -- five ~200k-row
-groups -- a cached re-run spent 328ms in `compute_hash_full`, of which 164ms was
+groups -- a cached re-run spent 328ms in the full hash, of which 164ms was
 this duplicate.
 
 Counted, not timed: the defect is "the same value is hashed twice", which is
@@ -38,16 +38,16 @@ CELL = "seen = []\nfor arr in arrays:\n    seen.append(float(arr.sum()))\n"
 def counting_magics(monkeypatch, mock_shell, tmp_path):
     """Magics over a disk cache, whose full-content hashes are counted per object."""
     counts: dict[int, int] = {}
-    real = object_hashing.compute_hash_full
+    real = object_hashing.compute_hash
 
-    def counting_compute_hash_full(obj):
+    def counting_compute_hash(obj):
         counts[id(obj)] = counts.get(id(obj), 0) + 1
         return real(obj)
 
     # Both call sites bind the function when their module is imported, so
     # patch it where each of them looks it up.
-    monkeypatch.setattr("cash.notebook.control_structures.common.compute_hash_full", counting_compute_hash_full)
-    monkeypatch.setattr("cash.notebook.control_structures.for_handler.compute_hash_full", counting_compute_hash_full)
+    monkeypatch.setattr("cash.notebook.control_structures.common.compute_hash", counting_compute_hash)
+    monkeypatch.setattr("cash.notebook.control_structures.for_handler.compute_hash", counting_compute_hash)
 
     shell = mock_shell
     magics = CashMagics(shell, Cash(cache_dir=str(tmp_path), register_magic=False))

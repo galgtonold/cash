@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b, cash/object_hashing.py:compute_hash_full @4e7bb349 -->
+<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b, cash/object_hashing.py:compute_hash @391ac0f7 -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them wherever it hashes
 a value: a loop iteration's values, the arguments of a cached call inside a
@@ -50,7 +50,7 @@ contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 For other types, register a hasher; see
 [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/object_hashing.py:compute_hash @6ca6c1d7 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/object_hashing.py:compute_hash @391ac0f7 -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a
@@ -169,7 +169,7 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:compute_hash @6ca6c1d7 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/object_hashing.py:compute_hash @391ac0f7 -->
 For each input variable, the statement key uses the first of these that
 exists:
 

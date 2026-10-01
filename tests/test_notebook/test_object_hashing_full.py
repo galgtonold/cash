@@ -1,8 +1,8 @@
-"""compute_hash_full and compute_hash — full-content hashing.
+"""compute_hash -- the notebook's value hash reads every byte.
 
 Wherever a hash IS the cache-key discriminator (per-iteration loop keys) or
 decides that a value did not change, a difference outside a sample collided
-two keys. These tests pin that both hashes see every byte.
+two keys. These tests pin that the hash sees every byte.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from cash.object_hashing import compute_hash, compute_hash_full
+from cash.object_hashing import compute_hash
 
 
 def test_ndarray_out_of_sample_difference_distinct():
@@ -18,7 +18,6 @@ def test_ndarray_out_of_sample_difference_distinct():
     b = np.zeros(2000)
     b[1000] = 5.0  # past the first 100 elements
     assert compute_hash(a) != compute_hash(b)
-    assert compute_hash_full(a) != compute_hash_full(b)
 
 
 def test_dataframe_tail_difference_distinct():
@@ -26,7 +25,6 @@ def test_dataframe_tail_difference_distinct():
     df2 = df1.copy()
     df2.iloc[999, 0] = -1  # past the first 5 rows
     assert compute_hash(df1) != compute_hash(df2)
-    assert compute_hash_full(df1) != compute_hash_full(df2)
 
 
 def test_large_list_middle_difference_distinct():
@@ -34,41 +32,40 @@ def test_large_list_middle_difference_distinct():
     l2 = list(range(1000))
     l2[500] = -1  # between the first and last five
     assert compute_hash(l1) != compute_hash(l2)
-    assert compute_hash_full(l1) != compute_hash_full(l2)
 
 
 def test_equal_objects_hash_equal():
     a = np.arange(500.0)
-    assert compute_hash_full(a) == compute_hash_full(np.arange(500.0))
+    assert compute_hash(a) == compute_hash(np.arange(500.0))
     df = pd.DataFrame({"v": [1, 2]})
-    assert compute_hash_full(df) == compute_hash_full(df.copy())
+    assert compute_hash(df) == compute_hash(df.copy())
 
 
 def test_object_dtype_array_uses_content_not_pointers():
     a1 = np.array([{"k": 1}, {"k": 22}], dtype=object)
     a2 = np.array([{"k": 1}, {"k": 22}], dtype=object)
-    assert compute_hash_full(a1) == compute_hash_full(a2)
+    assert compute_hash(a1) == compute_hash(a2)
     a3 = np.array([{"k": 999}, {"k": 22}], dtype=object)
-    assert compute_hash_full(a1) != compute_hash_full(a3)
+    assert compute_hash(a1) != compute_hash(a3)
 
 
 def test_noncontiguous_array_hashable_and_content_true():
     base = np.arange(1000.0)
     view = base[::2]
-    assert compute_hash_full(view) == compute_hash_full(np.arange(1000.0)[::2])
+    assert compute_hash(view) == compute_hash(np.arange(1000.0)[::2])
 
 
 def test_unpicklable_falls_back_gracefully():
     import threading
 
-    h = compute_hash_full(threading.Lock())
+    h = compute_hash(threading.Lock())
     assert isinstance(h, str) and len(h) == 64
 
 
 # ---------------------------------------------------------------------------
 # The schema reaches the notebook's keys, as it reaches the decorator's
 # ---------------------------------------------------------------------------
-# `compute_hash_full` builds the per-iteration loop keys. It hashed a frame by
+# `compute_hash` builds the per-iteration loop keys. It hashed a frame by
 # its values alone and an array by its C-order bytes, so values that are equal
 # but are different objects to the code reading them keyed alike: the second
 # iteration was served the first one's result. The decorator's hasher had long
@@ -83,7 +80,7 @@ def _loop_key(value):
 
 
 def _distinct_on_the_notebook_path(a, b):
-    assert compute_hash_full(a) != compute_hash_full(b)
+    assert compute_hash(a) != compute_hash(b)
     assert _loop_key(a) != _loop_key(b)
 
 
@@ -118,10 +115,10 @@ def test_equal_values_with_equal_schema_still_share_a_key():
 
 
 def test_the_notebook_and_the_decorator_hash_a_frame_alike():
-    """One hasher: the full hash of a library value IS the decorator's key for it."""
+    """One hasher: the notebook's hash of a library value IS the decorator's key for it."""
     from cash.object_hashing import builtin_hash
 
     frame = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
-    assert compute_hash_full(frame) == builtin_hash(frame)
+    assert compute_hash(frame) == builtin_hash(frame)
     arr = np.arange(6).reshape(2, 3).T
-    assert compute_hash_full(arr) == builtin_hash(arr)
+    assert compute_hash(arr) == builtin_hash(arr)
