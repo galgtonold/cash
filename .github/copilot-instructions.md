@@ -183,7 +183,12 @@ format is cleared on first open.
   a second kernel over the same cache dir) builds that one difference on the
   shared fixtures and says why. Read state through `magics.tracking_state` and
   `%cash_status` (`cash_status("dict")`) where they have it, not private
-  attributes. Use `tmp_path` for files. Never mock `IPython` in `sys.modules`.
+  attributes, and take the processor and the Cash from the
+  `statement_processor` and `cash_instance` fixtures. A test that must pin
+  how the work is done (a memo, a call counter, a spy on a private method)
+  goes in `tests/test_core/internals/` or `tests/test_notebook/internals/`,
+  where a refactor expects failures. Use `tmp_path` for files. Never mock
+  `IPython` in `sys.modules`.
 - Decorator unit tests use `disk_cash` (a `Cash` over `tmp_path/.cash`) or
   `cash_instance` (in memory). A test that runs a script in a fresh
   interpreter calls `run_python` from `tests/_scripts.py`, never

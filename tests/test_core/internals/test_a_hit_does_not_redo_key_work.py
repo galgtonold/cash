@@ -29,7 +29,7 @@ from cash import _annotation_refs, canonical_form, content_hashers
 from cash.decorator import arg_hashing, cache_metadata, function_identity
 from cash.decorator.arg_hashing import ArgHasher
 from cash.decorator.module_attrs import ModuleAttrFold
-from tests.test_core import _hit_work_fixture as fx
+from tests.test_core.internals import _hit_work_fixture as fx
 
 pytestmark = pytest.mark.core
 

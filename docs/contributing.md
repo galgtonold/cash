@@ -203,7 +203,10 @@ def test_feature(cash_magics, mock_shell):
 
 Pass `cells=[...]` when the upstream check needs the notebook's other cells.
 Read state through `cash_magics.tracking_state` or
-`cash_magics.cash_status("dict")`, not private attributes.
+`cash_magics.cash_status("dict")`, not private attributes. A test that has
+to pin how the work is done (a memo, a call counter, a spy on a private
+method) goes in the `internals/` folder of `tests/test_core/` or
+`tests/test_notebook/`, so a refactor knows which failures to expect.
 
 A decorator test takes `disk_cash` (a `Cash` over a cache folder of the
 test's own) or `cash_instance` (in memory). To show that a result survives

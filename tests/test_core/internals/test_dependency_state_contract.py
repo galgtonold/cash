@@ -20,8 +20,7 @@ import inspect
 
 from cash import Cash
 from cash.source_norm import normalize_source_for_hash
-
-from . import _purity_helper_module as hm
+from tests.test_core import _purity_helper_module as hm
 
 
 def state_hash(c: Cash, name: str) -> str:
