@@ -25,8 +25,8 @@ from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
-from .code_identity import func_key, hash_callable_source
 from .explain import MissKind, MissReason
+from .function_identity import func_key, hash_callable_source
 
 if TYPE_CHECKING:
     from .reporting import Notices

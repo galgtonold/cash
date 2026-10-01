@@ -11,7 +11,7 @@ import logging
 import secrets
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
@@ -132,6 +132,25 @@ class StoreRequest:
     #: Why one of a manifest's chunks stayed in RAM, which leaves the entry
     #: RAM-only whatever happens to the manifest itself.
     chunks_not_persisted: str | None = None
+
+
+@dataclass
+class _ChunkStream:
+    """One iterator result's chunks while it streams (`ResultStore.stream_and_store`)."""
+
+    #: The stream's `chunk_prefix`, and the id in it the manifest records.
+    prefix: str
+    stream: str
+    #: The open chunk's items, and their estimated size.
+    buffer: list[Any] = field(default_factory=list)
+    buffer_bytes: int = 0
+    #: Chunks written so far, the ones to drop if the stream is abandoned.
+    written: int = 0
+    total_items: int = 0
+    #: The producer's time: only the spans inside `next()`.
+    produced_seconds: float = 0.0
+    #: Why a chunk written so far stayed in RAM, if one did.
+    not_persisted: str | None = None
 
 
 class ResultStore:
@@ -545,21 +564,10 @@ class ResultStore:
         manifest written last names a complete run of its own, and cleaning up
         touches only what this stream wrote.
         """
-        func_name, cache_if = spec.name, spec.cache_if
-        chunk_max_items, chunk_max_bytes = spec.chunk_max_items, spec.chunk_max_bytes
-        cache_key, ttl, args, kwargs = call.cache_key, call.ttl, call.args, call.kwargs
         tracker, observer = run.tracker, run.observer
-
-        buffer: list[Any] = []
-        buffer_bytes = 0
-        chunk_index = 0
-        total_items = 0
-        produced_seconds = 0.0
-        committed = False
         stream = secrets.token_hex(8)
-        prefix = chunk_prefix(cache_key, stream)
-        #: Why a chunk written so far stayed in RAM, if one did.
-        chunks_not_persisted: str | None = None
+        chunks = _ChunkStream(chunk_prefix(call.cache_key, stream), stream)
+        committed = False
         returned: Any = None
 
         try:
@@ -572,31 +580,13 @@ class ResultStore:
                     try:
                         item = next(source)
                     except StopIteration as stop:
-                        produced_seconds += _perf_counter() - started
+                        chunks.produced_seconds += _perf_counter() - started
                         # What `yield from` evaluates to: the caller gets it
                         # now, and a replay hands it back from the manifest.
                         returned = stop.value
                         break
-                    produced_seconds += _perf_counter() - started
-
-                    # The item as it is NOW, not a live reference pickled at
-                    # the chunk's end: by then the caller may have edited it
-                    # (`for row in rows(): row.append(...)`) or the producer
-                    # refilled it (a reused buffer), and every hit replayed
-                    # that edit. The caller still gets the object itself.
-                    snapshot = _snapshot(item)
-                    buffer.append(snapshot)
-                    buffer_bytes += estimate_object_size(snapshot)
-                    total_items += 1
-                    if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
-                        if chunk_index == 1 and cache_if is not None:
-                            self._warn_cache_if_bypassed(spec)
-                        chunks_not_persisted = chunks_not_persisted or self._write_one_chunk(
-                            prefix, chunk_index, buffer, func_name, ttl=ttl, execution_time=produced_seconds
-                        )
-                        buffer = []
-                        buffer_bytes = 0
-                        chunk_index += 1
+                    chunks.produced_seconds += _perf_counter() - started
+                    self._buffer_item(spec, call, chunks, item)
 
                     # The caller's own reads and effects are its own.
                     tracker_token = tracker.suspend()
@@ -607,56 +597,7 @@ class ResultStore:
                         observer.resume(observer_token)
                         tracker.resume(tracker_token)
 
-            self._purity.check_argument_mutation(func_name, args, kwargs, call.args_hash, observer)
-            self._purity.report_observed_effects(func_name, observer)
-            self._files.credit_remembered_reads(func_name, tracker, args, kwargs)
-            auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
-
-            if chunk_index == 0:
-                # Everything fit in one chunk, so cache_if can still see the
-                # whole result -- it gates STORAGE, never what the caller
-                # already received.
-                refusal = self.refusal(None, func_name, buffer, run.rng_new, cache_if, tracker, observer=observer)
-                if refusal is not None:
-                    self._misses.note_not_stored(cache_key, refusal)
-                else:
-                    if buffer:
-                        chunks_not_persisted = self._write_one_chunk(
-                            prefix, 0, buffer, func_name, ttl=ttl, execution_time=produced_seconds
-                        )
-                    # An empty iterator still gets a zero-chunk manifest, so a
-                    # hit returns empty instead of recomputing.
-                    self._store_chunked_manifest(
-                        StoreRequest(
-                            call,
-                            func_name,
-                            execution_time=produced_seconds,
-                            auto_file_deps=auto_file_deps,
-                            chunks_not_persisted=chunks_not_persisted,
-                        ),
-                        {"n_chunks": 1 if buffer else 0, "total_items": total_items, **_returned(returned)},
-                        stream,
-                    )
-            else:
-                if buffer:
-                    if chunk_index == 1 and cache_if is not None:
-                        self._warn_cache_if_bypassed(spec)
-                    chunks_not_persisted = chunks_not_persisted or self._write_one_chunk(
-                        prefix, chunk_index, buffer, func_name, ttl=ttl, execution_time=produced_seconds
-                    )
-                    chunk_index += 1
-                self._store_chunked_manifest(
-                    StoreRequest(
-                        call,
-                        func_name,
-                        execution_time=produced_seconds,
-                        auto_file_deps=auto_file_deps,
-                        chunks_not_persisted=chunks_not_persisted,
-                    ),
-                    {"n_chunks": chunk_index, "total_items": total_items, **_returned(returned)},
-                    stream,
-                )
-
+            self._finish_stream(spec, call, run, chunks, returned)
             committed = True
             return returned
         finally:
@@ -664,11 +605,87 @@ class ResultStore:
                 # Abandoned or failed: the chunks written so far are
                 # unreferenced (no manifest names them). Best effort -- a
                 # killed process can still leave some behind.
-                for index in range(chunk_index):
+                for index in range(chunks.written):
                     try:
-                        self._backend_slot.backend.delete(f"{prefix}:chunk_{index}")
+                        self._backend_slot.backend.delete(f"{chunks.prefix}:chunk_{index}")
                     except Exception:  # noqa: BLE001 - cleanup must not raise
                         logger.debug("[CORE] could not drop orphan chunk %d", index)
+
+    def _buffer_item(self, spec: CachedFunction, call: Call, chunks: _ChunkStream, item: Any) -> None:
+        """Add a streamed *item* to the open chunk, writing the chunk once it is full.
+
+        The item as it is NOW, not a live reference pickled at the chunk's
+        end: by then the caller may have edited it (`for row in rows():
+        row.append(...)`) or the producer refilled it (a reused buffer), and
+        every hit replayed that edit. The caller still gets the object itself.
+        """
+        snapshot = _snapshot(item)
+        chunks.buffer.append(snapshot)
+        chunks.buffer_bytes += estimate_object_size(snapshot)
+        chunks.total_items += 1
+        if len(chunks.buffer) >= spec.chunk_max_items or chunks.buffer_bytes >= spec.chunk_max_bytes:
+            self._flush_chunk(spec, call, chunks)
+
+    def _flush_chunk(self, spec: CachedFunction, call: Call, chunks: _ChunkStream) -> None:
+        """Write the open chunk as the stream's next one and start a new one."""
+        if chunks.written == 1 and spec.cache_if is not None:
+            self._warn_cache_if_bypassed(spec)
+        chunks.not_persisted = chunks.not_persisted or self._write_one_chunk(
+            chunks.prefix,
+            chunks.written,
+            chunks.buffer,
+            spec.name,
+            ttl=call.ttl,
+            execution_time=chunks.produced_seconds,
+        )
+        chunks.buffer = []
+        chunks.buffer_bytes = 0
+        chunks.written += 1
+
+    def _finish_stream(
+        self, spec: CachedFunction, call: Call, run: BodyRun, chunks: _ChunkStream, returned: Any
+    ) -> None:
+        """After the producer ran to exhaustion: the post-call checks, then the
+        last chunk and the manifest that names the stream's chunks."""
+        func_name = spec.name
+        tracker, observer = run.tracker, run.observer
+        self._purity.check_argument_mutation(func_name, call.args, call.kwargs, call.args_hash, observer)
+        self._purity.report_observed_effects(func_name, observer)
+        self._files.credit_remembered_reads(func_name, tracker, call.args, call.kwargs)
+        auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
+
+        if chunks.written == 0:
+            # Everything fit in one chunk, so cache_if can still see the
+            # whole result -- it gates STORAGE, never what the caller
+            # already received.
+            refusal = self.refusal(
+                None, func_name, chunks.buffer, run.rng_new, spec.cache_if, tracker, observer=observer
+            )
+            if refusal is not None:
+                self._misses.note_not_stored(call.cache_key, refusal)
+                return
+            if chunks.buffer:
+                chunks.not_persisted = self._write_one_chunk(
+                    chunks.prefix, 0, chunks.buffer, func_name, ttl=call.ttl, execution_time=chunks.produced_seconds
+                )
+            # An empty iterator still gets a zero-chunk manifest, so a
+            # hit returns empty instead of recomputing.
+            n_chunks = 1 if chunks.buffer else 0
+        else:
+            if chunks.buffer:
+                self._flush_chunk(spec, call, chunks)
+            n_chunks = chunks.written
+        self._store_chunked_manifest(
+            StoreRequest(
+                call,
+                func_name,
+                execution_time=chunks.produced_seconds,
+                auto_file_deps=auto_file_deps,
+                chunks_not_persisted=chunks.not_persisted,
+            ),
+            {"n_chunks": n_chunks, "total_items": chunks.total_items, **_returned(returned)},
+            chunks.stream,
+        )
 
     def _write_one_chunk(
         self,

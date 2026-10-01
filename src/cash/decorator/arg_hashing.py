@@ -686,6 +686,45 @@ def _raise_panic_as_unhashable(exc: BaseException) -> None:
         raise TypeError(f"hashing an argument panicked inside a native library: {exc}") from exc
 
 
+class _CostliestArg:
+    """The argument of one payload that took longest to hash: its label,
+    seconds, type name, the cached function that produced it, and whether
+    it is a pandas frame without copy-on-write (`ARG_COST`)."""
+
+    def __init__(self, frozen: FrozenResults) -> None:
+        self._frozen = frozen
+        self.costliest: tuple | None = None
+
+    def timed(self, label: str, value: Any, hash_one: Callable[[Any], Any]) -> Any:
+        """``hash_one(value)``, timed and kept when it is the costliest yet."""
+        t0 = _perf_counter()
+        digest = hash_one(value)
+        seconds = _perf_counter() - t0
+        if self.costliest is None or seconds > self.costliest[1]:
+            producer = own_tag(value, "_cash_lineage_producer")
+            if producer is None and self._frozen.arrays and id(value) in self._frozen.arrays:
+                producer = self._frozen.arrays[id(value)][1]
+            if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
+                producer = self._frozen.containers[id(value)][1]
+            old_pandas = (
+                type(value).__name__ in ("DataFrame", "Series")
+                and (type(value).__module__ or "").startswith("pandas")
+                and not is_cow_pandas(value)
+            )
+            self.costliest = (label, seconds, type(value).__name__, producer, old_pandas)
+        return digest
+
+    def charge_payload(self, raw: list[tuple[str, Any]], seconds: float) -> None:
+        """Charge the payload walk's *seconds* to the largest of the *raw*
+        arguments (those that went into the payload as they are)."""
+        if self.costliest is None or seconds > self.costliest[1]:
+            label, value = max(raw, key=_rough_size)
+            producer = own_tag(value, "_cash_lineage_producer")
+            if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
+                producer = self._frozen.containers[id(value)][1]
+            self.costliest = (label, seconds, type(value).__name__, producer, False)
+
+
 class ArgHasher:
     """Canonical arguments and their content hashes, with the memos that keep
     re-hashing an unchanged argument cheap."""
@@ -973,7 +1012,7 @@ class ArgHasher:
         name goes in, so two classes returning the same id key apart, and so
         does the method's code, so editing it invalidates what it keyed.
         """
-        from .code_identity import hash_callable_source
+        from .function_identity import hash_callable_source
 
         name = type_name(value)
         depth = getattr(_CASH_KEY_DEPTH, "n", 0)
@@ -1065,127 +1104,12 @@ class ArgHasher:
             if fast is not None:
                 ARG_COST.last = None
                 return hashlib.sha256(fast).hexdigest()
-
-        def get_arg_hash(arg):
-            """One argument's key part. The first step that answers wins:
-
-            1. The class's ``__cash_key__``, unless a registered hasher
-               covers the type: the user said what identifies the value,
-               and that holds across restarts.
-            2. A frozen array or container (``frozen=True`` results): its
-               audited digest, without reading the content again.
-            3. The content digest memoised for this very object, while its
-               statement or frozen lineage tag is unchanged (`_memo`): a
-               within-session speedup that returns the content digest, never
-               the tag. The decorator's own tags are not trusted here, since
-               nothing moves them when the object is mutated.
-            4. A pandas copy-on-write frame's memoised digest, checked
-               exactly (`_frame_memo_lookup`).
-            5. A hasher registered with ``override=True``: the user's
-               identity beats reading the content.
-            6. A builtin content hasher (pandas, numpy, polars, pyarrow,
-               ...): byte-stable across processes, so a persisted entry
-               survives a restart where a session tag would not.
-            7. The statement or frozen lineage tag, for a value with no
-               content hasher: cheap and current within the session.
-            8. A hasher registered for the type.
-            9. The value itself, which the payload walk pickles.
-            """
-            method = cash_key_method(arg)
-            if method is not None and not (
-                (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
-            ):
-                return self.cash_key_hash(arg, method)
-            # The instance's OWN tag: one inherited from a tagged class made
-            # every instance key alike (see cash.lineage_tag).
-            lineage = own_tag(arg)
-            if lineage is not None:
-                src = own_tag(arg, "_cash_lineage_src")
-                if src == LINEAGE_SRC_FROZEN:
-                    if not self._frozen.audit(arg):
-                        lineage = None
-                elif src != LINEAGE_SRC_STATEMENT:
-                    lineage = None
-            if self._frozen.arrays and id(arg) in self._frozen.arrays:
-                frozen_hash = self._frozen.array_hash(arg)
-                if frozen_hash is not None:
-                    return frozen_hash
-            if self._frozen.containers and id(arg) in self._frozen.containers:
-                frozen_hash = self._frozen.container_hash(arg)
-                if frozen_hash is not None:
-                    return frozen_hash
-            if lineage is not None:
-                entry = self._memo.get(id(arg))
-                if entry is not None:
-                    wref, memo_lineage, content_hash = entry
-                    if memo_lineage == lineage and wref() is arg:
-                        return content_hash
-            # pandas >= 3 copy-on-write: an exact "has this frame changed?"
-            # check instead of a trusted tag. See `_frame_memo_lookup`.
-            frame_memo = lineage is None and is_cow_pandas(arg)
-            if frame_memo:
-                content_hash = self._frame_memo_lookup(arg)
-                if content_hash is not None:
-                    return content_hash
-
-            # Overriding hashers, ahead of everything cash would do itself.
-            # The user has said their identity for this type beats content
-            # hashing, which is the only way to stop re-reading a 800MB array
-            # on every call. Guarded by the emptiness check so the ordinary
-            # case pays one dict truth test, not a loop.
-            if self.override_hashers:
-                for type_, (hasher_fn, src_hash) in self.override_hashers.items():
-                    if isinstance(arg, type_):
-                        return f"{src_hash}:{hasher_fn(arg)}"
-
-            content_digest = builtin_hash(arg)
-            if content_digest is not None:
-                if lineage is not None:
-                    self._memo_arg_hash(arg, lineage, content_digest)
-                elif frame_memo:
-                    self._frame_memo_store(arg, content_digest)
-                return content_digest
-            # Notebook lineage hash: the authoritative, cheap identity for
-            # values that carry NO content hasher (custom objects). Kept ahead
-            # of registered hashers so a lineage-carrying object short-circuits
-            # its (possibly expensive) registered hasher within a session
-            # (test_hasher_priority_cash_hash_first).
-            if lineage is not None:
-                return lineage
-            for type_, (hasher_fn, src_hash) in self.type_hashers.items():
-                if isinstance(arg, type_):
-                    # Embed the hasher source hash so that changing the
-                    # hasher's body invalidates dependent cache entries
-                    # even when the hasher's output coincidentally matches.
-                    return f"{src_hash}:{hasher_fn(arg)}"
-            return arg
-
         # Timed per argument -- two clock reads each -- so that a
         # CACHE-NET-LOSS verdict can name the argument that costs the time.
-        costliest: tuple | None = None
-
-        def timed(label: str, value: Any) -> Any:
-            nonlocal costliest
-            t0 = _perf_counter()
-            digest = get_arg_hash(value)
-            seconds = _perf_counter() - t0
-            if costliest is None or seconds > costliest[1]:
-                producer = own_tag(value, "_cash_lineage_producer")
-                if producer is None and self._frozen.arrays and id(value) in self._frozen.arrays:
-                    producer = self._frozen.arrays[id(value)][1]
-                if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
-                    producer = self._frozen.containers[id(value)][1]
-                old_pandas = (
-                    type(value).__name__ in ("DataFrame", "Series")
-                    and (type(value).__module__ or "").startswith("pandas")
-                    and not is_cow_pandas(value)
-                )
-                costliest = (label, seconds, type(value).__name__, producer, old_pandas)
-            return digest
-
+        cost = _CostliestArg(self._frozen)
         try:
-            hashed_args = tuple(timed(f"#{i}", a) for i, a in enumerate(args))
-            hashed_kwargs = {k: timed(k, v) for k, v in kwargs.items()}
+            hashed_args = tuple(cost.timed(f"#{i}", a, self.arg_hash) for i, a in enumerate(args))
+            hashed_kwargs = {k: cost.timed(k, v, self.arg_hash) for k, v in kwargs.items()}
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise
@@ -1203,12 +1127,20 @@ class ArgHasher:
             if digest is value and type(value) not in CODELESS_PRIMS
         ]
         payload_t0 = _perf_counter()
+        args_bytes = self._payload_bytes(args, kwargs, hashed_args, hashed_kwargs)
+        if raw:
+            cost.charge_payload(raw, _perf_counter() - payload_t0)
+        ARG_COST.last = cost.costliest
+        return hashlib.sha256(args_bytes).hexdigest()
 
-        # One canonical form (`canonical_bytes`): sets in a stable order,
-        # every container tagged with its type, a container met twice marked.
-        # Plain and JSON-like data is keyed by a digest of each argument on
-        # its own, so a container two arguments share is marked here
-        # (`shared_across`).
+    def _payload_bytes(self, args: tuple, kwargs: dict, hashed_args: tuple, hashed_kwargs: dict) -> bytes:
+        """The canonical bytes of the hashed arguments (`canonical_bytes`).
+
+        One canonical form: sets in a stable order, every container tagged
+        with its type, a container met twice marked. Plain and JSON-like data
+        is keyed by a digest of each argument on its own, so a container two
+        arguments share is marked here (`shared_across`).
+        """
         try:
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
             # it early, and the arguments after it would leave the key.
@@ -1224,16 +1156,116 @@ class ArgHasher:
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise
-        if raw:
-            payload_seconds = _perf_counter() - payload_t0
-            if costliest is None or payload_seconds > costliest[1]:
-                label, value = max(raw, key=_rough_size)
-                producer = own_tag(value, "_cash_lineage_producer")
-                if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
-                    producer = self._frozen.containers[id(value)][1]
-                costliest = (label, payload_seconds, type(value).__name__, producer, False)
-        ARG_COST.last = costliest
-        return hashlib.sha256(args_bytes).hexdigest()
+        return args_bytes
+
+    def arg_hash(self, arg: Any) -> Any:
+        """One argument's key part. The first step that answers wins:
+
+        1. The class's ``__cash_key__``, unless a registered hasher
+           covers the type: the user said what identifies the value,
+           and that holds across restarts.
+        2. A frozen array or container (``frozen=True`` results): its
+           audited digest, without reading the content again.
+        3. The content digest memoised for this very object, while its
+           statement or frozen lineage tag is unchanged (`_memo`): a
+           within-session speedup that returns the content digest, never
+           the tag. The decorator's own tags are not trusted here, since
+           nothing moves them when the object is mutated.
+        4. A pandas copy-on-write frame's memoised digest, checked
+           exactly (`_frame_memo_lookup`).
+        5. A hasher registered with ``override=True``: the user's
+           identity beats reading the content.
+        6. A builtin content hasher (pandas, numpy, polars, pyarrow,
+           ...): byte-stable across processes, so a persisted entry
+           survives a restart where a session tag would not.
+        7. The statement or frozen lineage tag, for a value with no
+           content hasher: cheap and current within the session.
+        8. A hasher registered for the type.
+        9. The value itself, which the payload walk pickles.
+        """
+        method = cash_key_method(arg)
+        if method is not None and not (
+            (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
+        ):
+            return self.cash_key_hash(arg, method)
+        lineage = self._trusted_lineage(arg)
+        frozen_hash = self._frozen_digest(arg)
+        if frozen_hash is not None:
+            return frozen_hash
+        if lineage is not None:
+            entry = self._memo.get(id(arg))
+            if entry is not None:
+                wref, memo_lineage, content_hash = entry
+                if memo_lineage == lineage and wref() is arg:
+                    return content_hash
+        # pandas >= 3 copy-on-write: an exact "has this frame changed?"
+        # check instead of a trusted tag. See `_frame_memo_lookup`.
+        frame_memo = lineage is None and is_cow_pandas(arg)
+        if frame_memo:
+            content_hash = self._frame_memo_lookup(arg)
+            if content_hash is not None:
+                return content_hash
+
+        # Overriding hashers, ahead of everything cash would do itself.
+        # The user has said their identity for this type beats content
+        # hashing, which is the only way to stop re-reading a 800MB array
+        # on every call. Guarded by the emptiness check so the ordinary
+        # case pays one dict truth test, not a loop.
+        if self.override_hashers:
+            for type_, (hasher_fn, src_hash) in self.override_hashers.items():
+                if isinstance(arg, type_):
+                    return f"{src_hash}:{hasher_fn(arg)}"
+
+        content_digest = builtin_hash(arg)
+        if content_digest is not None:
+            if lineage is not None:
+                self._memo_arg_hash(arg, lineage, content_digest)
+            elif frame_memo:
+                self._frame_memo_store(arg, content_digest)
+            return content_digest
+        # Notebook lineage hash: the authoritative, cheap identity for
+        # values that carry NO content hasher (custom objects). Kept ahead
+        # of registered hashers so a lineage-carrying object short-circuits
+        # its (possibly expensive) registered hasher within a session
+        # (test_hasher_priority_cash_hash_first).
+        if lineage is not None:
+            return lineage
+        for type_, (hasher_fn, src_hash) in self.type_hashers.items():
+            if isinstance(arg, type_):
+                # Embed the hasher source hash so that changing the
+                # hasher's body invalidates dependent cache entries
+                # even when the hasher's output coincidentally matches.
+                return f"{src_hash}:{hasher_fn(arg)}"
+        return arg
+
+    def _trusted_lineage(self, arg: Any) -> str | None:
+        """*arg*'s own lineage tag, when it is one the key may trust: a
+        statement's, or a frozen result's that still passes its audit.
+
+        The instance's OWN tag: one inherited from a tagged class made
+        every instance key alike (see cash.lineage_tag).
+        """
+        lineage = own_tag(arg)
+        if lineage is not None:
+            src = own_tag(arg, "_cash_lineage_src")
+            if src == LINEAGE_SRC_FROZEN:
+                if not self._frozen.audit(arg):
+                    lineage = None
+            elif src != LINEAGE_SRC_STATEMENT:
+                lineage = None
+        return lineage
+
+    def _frozen_digest(self, arg: Any) -> str | None:
+        """The audited digest of *arg* when it is a frozen array or container."""
+        if self._frozen.arrays and id(arg) in self._frozen.arrays:
+            frozen_hash = self._frozen.array_hash(arg)
+            if frozen_hash is not None:
+                return frozen_hash
+        if self._frozen.containers and id(arg) in self._frozen.containers:
+            frozen_hash = self._frozen.container_hash(arg)
+            if frozen_hash is not None:
+                return frozen_hash
+        return None
 
     def serialize_args(
         self, func_name: str, args: tuple, kwargs: dict, normalized: tuple[tuple, dict] | None = None

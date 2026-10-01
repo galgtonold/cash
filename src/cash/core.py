@@ -8,26 +8,19 @@ per-call events through `Cash.drain_decorator_calls`.
 from __future__ import annotations
 
 import atexit
-import dataclasses
 import datetime
-import functools
 import inspect
 import logging
 import os
 import sys
-import time
 import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log
-from ._active import ACTIVE_CONFIG
 from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
-from .backends._base import entry_expired
-from .backends._writes import in_multiprocessing_child
-from .backends.budget_notices import DiskBudget, cap_text
 from .backends.factory import build_tiered
 from .config.resolve import get_config
 from .config.schema import CashConfig
@@ -39,39 +32,37 @@ from .decorator.arg_hashing import (
     mark_opaque,
 )
 from .decorator.backend_slot import BackendSlot
-from .decorator.cache_metadata import CacheMetadata
-from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl, new_stats
-from .decorator.call_state import (
-    CACHE_MISS,
-    CALL_ENTRY,
-    enter_cached_call,
-    exit_cached_call,
-)
+from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl
 from .decorator.cash_key import KeyCheck
+from .decorator.class_data import ClassDataFold
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
 from .decorator.code_args import CodeArgs
-from .decorator.code_identity import (
-    CodeIdentity,
-    func_key,
-    hash_callable_source,
-)
+from .decorator.code_surface import CodeSurface
+from .decorator.environment_fold import EnvironmentFold
 from .decorator.explain import (
     CacheExplanation,
     Explainer,
     MissHistory,
-    MissKind,
 )
 from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
+from .decorator.function_identity import OwnSourcePins, func_key, hash_callable_source
+from .decorator.global_reads import GlobalReads
+from .decorator.global_values import GlobalValues
 from .decorator.globals_fold import GlobalsFold
+from .decorator.maintenance import Maintenance
+from .decorator.method_deps import MethodClassDeps
+from .decorator.module_attrs import ModuleAttrFold
 from .decorator.purity_checks import LearnedMutations, PurityChecks
 from .decorator.registry import FunctionRegistry, checked_depends_on, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngWatch
+from .decorator.run_summary import RunSummary
 from .decorator.runtime import CallRunner, KeyBuilder
-from .decorator.script_pickling import expose_script_function
+from .decorator.script_pickling import refuse_pickling_by_value
 from .decorator.store import ResultStore
 from .decorator.stored_keys import StoredKeyRecord
+from .decorator.wrappers import Wrappers
 from .dependency_state import (
     DependencyStateHasher,
     SysModulesHelperResolver,
@@ -82,7 +73,6 @@ from .diagnostics import (
 from .effectiveness import EffectivenessLedger
 from .exceptions import (
     CashCacheIneffectiveWarning,
-    CashCacheStoreFailedWarning,
 )
 from .graph import DependencyGraph
 from .reconfigure import apply_overrides
@@ -124,12 +114,6 @@ T = TypeVar("T")
 
 
 __all__ = ["Cash", "CacheExplanation"]
-
-
-def _backend_cache_dir(backend: CacheBackend | None) -> str | None:
-    """The directory *backend* keeps entries in -- its disk tier's, if tiered."""
-    directory = backend.local_dir if backend is not None else None
-    return os.path.abspath(directory) if directory else None
 
 
 def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str, str], ...]:
@@ -179,13 +163,49 @@ class _ExitWork:
             backend.shutdown()
 
 
+def _constructor_overrides(
+    backend: CacheBackend | str | None,
+    use_locking: bool,
+    config_overrides: dict[str, Any],
+    **convenience: Any,
+) -> tuple[CacheBackend | None, bool]:
+    """Check `Cash`'s arguments and fold the settings among them into
+    *config_overrides*; return the backend instance (if one was given) and
+    ``use_locking`` as a bool.
+
+    *convenience* is the named settings `Cash` takes as its own keywords
+    (``cache_dir``, ``compress``, ``debug``, ``verbose``).
+    """
+    # ``backend`` is also the name of a setting ("tiered", "file",
+    # "sqlite", ...), and a setting may be passed by name: a string is
+    # that setting, never a backend instance.
+    if isinstance(backend, str):
+        config_overrides.setdefault("backend", backend)
+        backend = None
+    elif backend is not None and not isinstance(backend, CacheBackend):
+        raise TypeError(
+            f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
+            f"not {type(backend).__name__}"
+        )
+    if not isinstance(use_locking, bool) and use_locking not in (0, 1):
+        raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
+    use_locking = bool(use_locking)
+    # Map the explicit convenience kwargs (cache_dir, compress, debug)
+    # into the overrides dict so the config layer treats them with the
+    # same priority as any other constructor-supplied override (highest).
+    for key, val in convenience.items():
+        if val is not None:
+            config_overrides.setdefault(key, val)
+    return backend, use_locking
+
+
 def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
     """Print the run summary if the ``summary`` setting is on NOW: read at
     exit, so ``cash.configure(summary=...)`` after the instance was built
     switches it either way."""
     cash = ref()
     if cash is not None and cash.config.summary:
-        cash._print_run_summary()
+        cash._summary.print_at_exit()
 
 
 def _in_kernel() -> bool:
@@ -245,26 +265,14 @@ class Cash:
 
     def __reduce__(self):
         """A Cash cannot be pickled -- it holds locks, threads and a backend.
-
-        Reached when something sends a cached function BY VALUE to another
-        process, which is what joblib's workers do with a function defined in
-        the script being run. Say what works instead of letting the pickler
-        report a lock (see `expose_script_function`).
-        """
-        raise TypeError(
-            "a Cash instance cannot be pickled, and something tried to send a "
-            "@cash.cache function to another process by value. A cached "
-            "function defined in the script you run can be sent to worker "
-            "processes (joblib, multiprocessing) when the script's work is "
-            'behind `if __name__ == "__main__":`; or define the function in a '
-            "module you import."
-        )
+        See `refuse_pickling_by_value`."""
+        refuse_pickling_by_value()
 
     @staticmethod
     def get_func_key(func: Callable) -> str:
         """Return a module-qualified key for a function (``module.qualname``).
 
-        See `cash.decorator.code_identity.func_key`.
+        See `cash.decorator.function_identity.func_key`.
         """
         return func_key(func)
 
@@ -296,30 +304,31 @@ class Cash:
         verbose: bool | None = None,
         **config_overrides: Any,
     ) -> None:
-        # ``backend`` is also the name of a setting ("tiered", "file",
-        # "sqlite", ...), and a setting may be passed by name: a string is
-        # that setting, never a backend instance.
-        if isinstance(backend, str):
-            config_overrides.setdefault("backend", backend)
-            backend = None
-        elif backend is not None and not isinstance(backend, CacheBackend):
-            raise TypeError(
-                f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
-                f"not {type(backend).__name__}"
-            )
-        if not isinstance(use_locking, bool) and use_locking not in (0, 1):
-            raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
-        use_locking = bool(use_locking)
-        # Map the explicit convenience kwargs (cache_dir, compress, debug)
-        # into the overrides dict so the config layer treats them with the
-        # same priority as any other constructor-supplied override (highest).
-        for key, val in (("cache_dir", cache_dir), ("compress", compress), ("debug", debug), ("verbose", verbose)):
-            if val is not None:
-                config_overrides.setdefault(key, val)
+        backend, use_locking = _constructor_overrides(
+            backend, use_locking, config_overrides, cache_dir=cache_dir, compress=compress, debug=debug, verbose=verbose
+        )
         self.config = get_config(config_path=config_path, overrides=config_overrides or None)
+        self._init_infrastructure(backend, backends)
+        self.use_locking = use_locking
+        # Asking for debug output has to produce some, also in a script that
+        # configured no logging.
+        debug, verbose = self.config.debug, self.config.verbose
+        if debug or verbose:
+            _log.enable(logging.DEBUG if debug else logging.INFO)
+        self._init_key_path()
+        self._init_call_path()
 
-        debug = self.config.debug
+        atexit.register(self._exit_work.run)
 
+        # register_magic=None (default) auto-detects: only register when an
+        # active IPython session exists.  True forces registration; False skips.
+        if register_magic is True or (register_magic is None and get_ipython() is not None):
+            self.register_magic()
+
+    def _init_infrastructure(self, backend: CacheBackend | None, backends: list[CacheBackend] | None) -> None:
+        """The backend slot, the registries, the record of stored keys and
+        what reports to the user: what both the key path and the call path
+        are built over."""
         # An explicit backend (or list of backends) wins over the config: those
         # are concrete objects, not settings, and the factory is skipped.
         if backend is None and backends:
@@ -347,23 +356,20 @@ class Cash:
         self._calls = CallLog(self.config, self._registry.cached, self._misses, effectiveness)
         self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)
         self._frozen = FrozenResults(self.config, self._notices)
+
+    def _init_key_path(self) -> None:
+        """The steps that turn a call into its cache key."""
         self._args = ArgHasher(
             self._registry.cached,
             self._frozen,
             self._notices,
             KeyCheck(self._backend_slot.local_dir, lambda: self.config.check_cash_keys),
         )
-        self._code = CodeIdentity(self._args)
+        self._code = CodeSurface(self._args)
+        self._pins = OwnSourcePins()
         self._captures = CaptureAnalysis()
         self._helpers = HelperIdentity(self._args, self._captures)
         self._mutations = LearnedMutations()
-        self.use_locking = use_locking
-        verbose = self.config.verbose
-        # Asking for debug output has to produce some, also in a script that
-        # configured no logging.
-        if debug or verbose:
-            _log.enable(logging.DEBUG if debug else logging.INFO)
-
         # Deep seam over the registries above: folds source/dependency/
         # helper state into the cache key's ``state_hash`` segment. Borrows
         # the registry dicts by reference so later registrations are seen.
@@ -378,31 +384,57 @@ class Cash:
             declared_dep_resolver=self._registry.resolve_declared_dep_hash,
             reached_callee=self._registry.reached_callee,
         )
+        self._reads = GlobalReads()
+        self._values = GlobalValues(self._args, self._helpers, self._notices)
+        self._classes = ClassDataFold(
+            self._args, self._reads, self._values, self._registry, self._mutations, self._notices
+        )
         self._globals = GlobalsFold(
-            self._args, self._code, self._helpers, self._registry, self._state_hasher, self._mutations, self._notices
+            self._reads,
+            self._values,
+            self._classes,
+            ModuleAttrFold(self._args, self._reads, self._values, self._classes),
+            self._code,
+            self._registry,
+            self._mutations,
+            self._notices,
         )
         self._closures = ClosureFold(
-            self._args, self._captures, self._helpers, self._globals, self._mutations, self._notices
+            self._args, self._captures, self._helpers, self._values, self._classes, self._mutations, self._notices
         )
-        self._code_args = CodeArgs(self._code, self._globals, self._frozen, self._args)
+        self._code_args = CodeArgs(self._code, self._globals, self._values, self._classes, self._frozen, self._args)
         self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
         self._files = FileDeps(self._registry, self._notices)
         self._purity = PurityChecks(
-            self.config, self._registry, self._args, self._frozen, self._globals, self._mutations, self._notices
+            self.config,
+            self._registry,
+            self._args,
+            self._frozen,
+            self._reads,
+            self._values,
+            self._classes,
+            self._mutations,
+            self._notices,
         )
         self._keys = KeyBuilder(
             self._registry,
             self._args,
-            self._code,
+            MethodClassDeps(self._args),
+            self._pins,
             self._files,
             self._closures,
             self._globals,
+            EnvironmentFold(self._registry),
             self._rng,
             self._code_args,
             self._state_hasher,
             self._misses,
             self._notices,
         )
+
+    def _init_call_path(self) -> None:
+        """The steps a call runs through: lookup, body, store, and the
+        wrappers ``cache`` hands back."""
         self._store = ResultStore(
             self._registry,
             self._backend_slot,
@@ -425,6 +457,8 @@ class Cash:
             self._misses,
             self._notices,
         )
+        self._maintenance = Maintenance(self._registry, self._backend_slot)
+        self._summary = RunSummary(lambda: self.config, self._registry, self._backend_slot)
         self._explainer = Explainer(
             self.config,
             self._registry,
@@ -436,12 +470,18 @@ class Cash:
             self._runner,
         )
 
-        atexit.register(self._exit_work.run)
-
-        # register_magic=None (default) auto-detects: only register when an
-        # active IPython session exists.  True forces registration; False skips.
-        if register_magic is True or (register_magic is None and get_ipython() is not None):
-            self.register_magic()
+        self._wrappers = Wrappers(
+            lambda: self.config,
+            lambda: self.use_locking,
+            self._registry,
+            self._backend_slot,
+            self._keys,
+            self._runner,
+            self._rng,
+            self._explainer,
+            self._maintenance,
+            self._notices,
+        )
 
     @property
     def backend(self) -> CacheBackend:
@@ -616,7 +656,7 @@ class Cash:
         func_name = cf.name
         for dep in self._registry.register(cf, depends_on):
             warn_inert_dependency(self._notices, func_name, dep)
-        self._code.pin_own_source(func, self.source_hashes[func_name])
+        self._pins.pin_own_source(func, self.source_hashes[func_name])
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):
@@ -651,268 +691,7 @@ class Cash:
             except Exception:  # the first miss installs them anyway
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
-        return self._wrap_with_stats(cf, self._make_wrapper(cf))
-
-    # -- why a call missed ---------------------------------------------------
-    #
-    # Why a call recomputed. The reasons below are decided where the lookup fails, from what that
-    # lookup saw plus what this process remembers about the key -- never by
-    # re-deriving the key, which would cost every call to explain a few.
-
-    def _make_wrapper(self, spec: CachedFunction) -> Callable:
-        """Build and return the caching wrapper for *func*, sync or async.
-
-        One wrapper for both: everything before and after the body is the
-        same sync code (`CallRunner.lookup`, `CallRunner.body_scope`,
-        `CallRunner.finish_miss`), and the two variants differ only in whether
-        they await the body, so they cannot drift apart.
-        """
-        func = spec.func
-        runner = self._runner
-
-        if inspect.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                call = runner.lookup(spec, args, kwargs, async_body=True)
-                if call.outcome is not CACHE_MISS:
-                    # A result the key path produced by calling `func` itself
-                    # (no key) is a coroutine here: await it before handing back.
-                    if inspect.iscoroutine(call.outcome):
-                        return await call.outcome
-                    return call.outcome
-
-                async def compute() -> Any:
-                    with runner.body_scope(spec, call) as run:
-                        run.res = await func(*args, **kwargs)
-                    return runner.finish_miss(spec, call, run)
-
-                if not self.use_locking:
-                    return await compute()
-                return await runner.single_flight(spec, call, compute)
-
-            return async_wrapper
-
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call = runner.lookup(spec, args, kwargs, async_body=False)
-            if call.outcome is not CACHE_MISS:
-                return call.outcome
-
-            def compute() -> Any:
-                with runner.body_scope(spec, call) as run:
-                    run.res = func(*args, **kwargs)
-                return runner.finish_miss(spec, call, run)
-
-            if self.use_locking:
-                return runner.compute_with_lock(spec, call, compute)
-            return compute()
-
-        return wrapper
-
-    def _delete_backend_entries(self, func_name: str) -> None:
-        """Delete all backend cache entries whose key starts with *func_name*,
-        tell running processes, and say which entries could not be removed.
-
-        Other processes (and other `Cash` instances on the folder) may hold
-        the deleted results in their RAM tiers. Moving the disk tier's
-        generation is what tells them to drop those, as ``cash clear
-        --function`` does; without it they went on serving what was cleared.
-        """
-        backend = self.backend
-        prefix = f"{func_name}:"
-        deleted = 0
-        survivors: list[str] = []
-        try:
-            keys = [
-                k
-                for k in (CacheMetadata.from_dict(e).key or "" for e in backend.list_entries())
-                if k.startswith(prefix)
-            ]
-        except (OSError, RuntimeError, KeyError):
-            logger.debug("Failed to list cache entries for %s", func_name, exc_info=True)
-            keys = []
-        for key in keys:
-            try:
-                backend.delete(key)
-                deleted += 1
-                # A file another process holds open cannot be removed on
-                # Windows; the delete says nothing, and the next call would
-                # be served the entry that was meant to be gone.
-                if backend.get_metadata(key) is not None:
-                    survivors.append(key)
-            except Exception:  # one entry must not stop the clear
-                logger.debug("Failed to clear cache entry %s", key, exc_info=True)
-                survivors.append(key)
-        if deleted:
-            try:
-                backend.bump_generation()
-            except Exception:  # the local clear is done either way
-                logger.debug("Could not tell other processes about the clear", exc_info=True)
-        if survivors:
-            warn_diagnostic(
-                CashCacheStoreFailedWarning,
-                "CACHE-CLEAR-INCOMPLETE",
-                f"{func_name}.cache_clear() could not remove {len(survivors)} of its "
-                f"{len(keys)} cache entr{'y' if len(keys) == 1 else 'ies'}; "
-                f"{'it is' if len(survivors) == 1 else 'they are'} still stored and "
-                f"will be served.",
-                "another process has the entry files open (on Windows: a reader, a "
-                "virus scanner, an indexer). Close it and clear again, or run "
-                "`cash clear --function` once it has let go.",
-            )
-
-    def _wrap_with_stats(self, cf: CachedFunction, wrapper: Callable) -> Callable:
-        """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
-
-        Dispatches on whether *func* is a coroutine function so the stats
-        update (from the entry `CallLog.log` left in this call's
-        `CALL_ENTRY` slot) happens AFTER the await for async, and
-        synchronously otherwise.
-
-        Attaches the introspection API:
-
-        * ``cache_info()`` - hit/miss stats plus a rolling list of recent
-          warnings emitted for this function.
-        * ``cache_clear()`` - drop backend entries, reset stats, drop the
-          warning log + dedup marks so re-warnings can fire.
-        * ``explain(*args, **kwargs)`` - return a `CacheExplanation`
-          for that specific call (sync, even on async wrappers).
-        """
-        func, func_name, allow_random = cf.func, cf.name, cf.allow_random
-        # Read through `cf` by the end-of-run summary too.
-        _stats = cf.stats
-        warn_unseeded = self._rng.warn_unseeded_estimator_result
-
-        def _count(slot: list) -> None:
-            # The entry THIS call logged, if it logged one: a call that raised
-            # before its lookup, or went through uncounted, leaves it empty.
-            call = slot[0]
-            if call is None:
-                return
-            if call["cache_hit"]:
-                _stats["hits"] += 1
-                _stats["total_time_saved"] += call.get("time_saved", 0.0)
-                _stats["lookup_seconds"] += call.get("execution_time", 0.0)
-            else:
-                _stats["misses"] += 1
-                _stats["miss_overhead_seconds"] += call.get("cash_seconds") or 0.0
-                missed = call["miss_reason"]
-                _stats["miss_reasons"][missed.kind] += 1
-                if missed.changed:
-                    _stats["changed"][missed.changed] += 1
-                if call.get("not_stored"):
-                    _stats["not_stored"][call["not_stored"]] += 1
-                elif call.get("not_persisted"):
-                    _stats["not_persisted"][call["not_persisted"]] += 1
-
-        if inspect.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
-                if self.config.disable:
-                    _stats["bypassed"] += 1
-                    return await func(*args, **kwargs)
-                token = ACTIVE_CONFIG.set(self.config)
-                slot: list = [None]
-                slot_token = CALL_ENTRY.set(slot)
-                enter_cached_call()
-                try:
-                    result = await wrapper(*args, **kwargs)
-                finally:
-                    exit_cached_call()
-                    CALL_ENTRY.reset(slot_token)
-                    ACTIVE_CONFIG.reset(token)
-                    _count(slot)
-                warn_unseeded(func_name, result, allow_random)
-                return result
-        else:
-
-            @functools.wraps(func)
-            def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
-                # Before anything else: disabled means the function, and
-                # nothing of cash's -- no key, no analysis, no lookup, no store.
-                if self.config.disable:
-                    _stats["bypassed"] += 1
-                    return func(*args, **kwargs)
-                # This instance's settings for the checks the call makes; see
-                # ACTIVE_CONFIG.
-                token = ACTIVE_CONFIG.set(self.config)
-                slot: list = [None]
-                slot_token = CALL_ENTRY.set(slot)
-                enter_cached_call()
-                try:
-                    result = wrapper(*args, **kwargs)
-                finally:
-                    exit_cached_call()
-                    CALL_ENTRY.reset(slot_token)
-                    ACTIVE_CONFIG.reset(token)
-                    _count(slot)
-                warn_unseeded(func_name, result, allow_random)
-                return result
-
-        def cache_info() -> dict[str, Any]:
-            """Return this function's hit and miss counts and recent warnings.
-
-            Returns:
-                A dict with ``hits``, ``misses``, ``hit_rate``,
-                ``total_time_saved`` (seconds), ``miss_reasons`` (count per
-                reason) and ``warnings`` (the last 20, each with
-                ``category``, ``code``, ``message`` and ``timestamp``).
-            """
-            total = _stats["hits"] + _stats["misses"]
-            hit_rate = _stats["hits"] / total if total > 0 else 0.0
-            warnings_log = self._notices.log_of(cf)
-            return {
-                "hits": _stats["hits"],
-                "misses": _stats["misses"],
-                "hit_rate": hit_rate,
-                "total_time_saved": _stats["total_time_saved"],
-                "miss_reasons": {str(kind): n for kind, n in _stats["miss_reasons"].items()},
-                "warnings": warnings_log,
-            }
-
-        def cache_clear() -> None:
-            """Delete this function's cache entries and reset its statistics
-            and warning log, so its warnings are shown again."""
-            _stats.update(new_stats())
-            self._delete_backend_entries(func_name)
-            self._notices.forget(cf)
-
-        def explain(*args: Any, **kwargs: Any) -> CacheExplanation:
-            """Return a `CacheExplanation` of whether a call with these
-            arguments would hit, and why. Runs nothing and changes nothing."""
-            token = ACTIVE_CONFIG.set(self.config)
-            try:
-                explanation = self._explainer.explain(cf, args, kwargs)
-            finally:
-                ACTIVE_CONFIG.reset(token)
-            return dataclasses.replace(explanation, cache_dir=_backend_cache_dir(self.backend))
-
-        stats_wrapper.cache_info = cache_info
-        stats_wrapper.cache_clear = cache_clear
-        stats_wrapper.explain = explain
-        stats_wrapper.__wrapped__ = func
-        # Marker so the purity analyzer treats a call to this wrapper as a
-        # dependency-graph edge rather than recursing into cash's own wrapper
-        # machinery. functools.wraps copies __module__, which would
-        # otherwise make the wrapper look like same-package user code.
-        stats_wrapper._cash_cached = True
-        # Declared TTL, exposed so the notebook statement cache can see it. A
-        # ``ttl=0`` function must recompute every call; without this the
-        # statement ``x = f()`` gets cached with no TTL under %cash_on and
-        # freezes the value the decorator promised to refresh.
-        stats_wrapper._cash_declared_ttl = cf.ttl
-        # What a call depends on besides its arguments, built by THIS instance
-        # for THIS function object, and the TTL it refreshes at: how a cached
-        # function reached without an edge in the caller's own registry (on
-        # another instance, passed in, held in a table, or still held after a
-        # reload) reaches the caller's key.
-        stats_wrapper._cash_state = lambda: self._keys.callee_state(func, func_name)
-        stats_wrapper._cash_effective_ttl = lambda: self._registry.effective_ttl(func_name, cf.ttl)
-        expose_script_function(func, stats_wrapper)
-        cf.wrapper = stats_wrapper
-        return stats_wrapper
+        return self._wrappers.wrap(cf)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.
@@ -1015,31 +794,7 @@ class Cash:
         Returns:
             The number of entries removed.
         """
-        now = time.time()
-        tier_default = self.backend.default_ttl
-
-        def current_ttl(func_name):
-            """The ``ttl=`` a call of *func_name* would judge its entries by
-            now, when that function is decorated in this process."""
-            cf = self._registry.cached.get(func_name) if func_name else None
-            return self._registry.effective_ttl(func_name, cf.ttl) if cf is not None else None
-
-        def is_expired(raw_metadata):
-            try:
-                metadata = CacheMetadata.from_dict(raw_metadata)
-                timestamp = metadata.timestamp or 0
-                age = now - timestamp
-
-                if max_age is not None and age > max_age:
-                    return True
-
-                # The rule a read applies, so cleanup removes exactly what
-                # would no longer be served.
-                return entry_expired(raw_metadata, tier_default, now, current=current_ttl(metadata.func_name))
-            except (AttributeError, TypeError, ValueError):
-                return True
-
-        return self.backend.cleanup_expired(is_expired)
+        return self._maintenance.cleanup(max_age)
 
     def explorer(self) -> CacheExplorer:
         """Return a `CacheExplorer` for browsing this instance's entries."""
@@ -1054,154 +809,7 @@ class Cash:
         Empty when no cached function was ever called, so a caller can print
         this unconditionally without emitting a header over nothing.
         """
-        stats = [(name, cf.stats) for name, cf in self._registry.cached.items()]
-        rows = [(name, s) for name, s in stats if s["hits"] or s["misses"]]
-        bypassed = sum(s.get("bypassed", 0) for _, s in stats)
-        disabled_line = (
-            f"cash: caching disabled (disable=True / CASH_DISABLE) -- {bypassed} "
-            f"call{'' if bypassed == 1 else 's'} ran uncached"
-            if bypassed
-            else ""
-        )
-        if not rows:
-            return disabled_line
-        rows.sort(key=lambda r: r[1]["total_time_saved"], reverse=True)
-
-        hits = sum(s["hits"] for _, s in rows)
-        calls = hits + sum(s["misses"] for _, s in rows)
-        saved = sum(s["total_time_saved"] for _, s in rows)
-        # What cash cost: the hits' lookups AND the misses' keys, checks and
-        # stores. Counting the lookups alone reported a 24 s loss as 14 s, and
-        # a function that never hit as costing nothing.
-        spent = sum(s.get("lookup_seconds", 0.0) + s.get("miss_overhead_seconds", 0.0) for _, s in rows)
-        width = min(44, max(len(name) for name, _ in rows))
-
-        def _fit(name: str) -> str:
-            # Keep the TAIL. A name is ``module.qualname``, so for anything
-            # nested -- a closure, a method, a test helper -- the part that
-            # identifies it is at the end, and truncating from the right threw
-            # away the function name and kept the package path.
-            return name if len(name) <= width else "..." + name[-(width - 3) :]
-
-        head = f"cash: {hits} of {calls} calls restored, {saved:.1f}s saved"
-        if spent >= 0.1 and spent >= 0.1 * saved:
-            # Saved is the compute the hits stood in for; cash itself cost
-            # this much. Left out, a run that got 9x SLOWER read as a win.
-            head += f" -- and {spent:.1f}s spent by cash on keys, lookups and stores"
-            if spent > saved:
-                head += f", a net loss of {spent - saved:.1f}s"
-        lines = [head]
-        where = self._summary_cache_dir()
-        if where:
-            # Which directory this ran against. A script user has no badge and
-            # no other place to see it, and every question that starts "why is
-            # nothing cached" is answered or excluded by this one line: a
-            # scheduled job's cwd-relative cache, a path typed with one
-            # backslash too few, a container volume that is not the one they
-            # meant.
-            lines.append(f"  cache: {where}{self._summary_budget()}")
-        for name, stat in rows:
-            # Pad the whole "N hits," token, not the word: padding the word
-            # puts the space before the comma ("1 hit ,").
-            hit_col = f"{stat['hits']} {'hit' if stat['hits'] == 1 else 'hits'},"
-            miss_col = f"{stat['misses']} {'miss' if stat['misses'] == 1 else 'misses'}"
-            saved_col = f"{stat['total_time_saved']:.1f}s saved" if stat["total_time_saved"] else "-"
-            cost = stat.get("lookup_seconds", 0.0) + stat.get("miss_overhead_seconds", 0.0)
-            if cost >= 0.1 and cost >= 0.1 * stat["total_time_saved"]:
-                saved_col += f", {cost:.1f}s spent by cash"
-            lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}{miss_col:<12}{saved_col}")
-            lines.extend(self._summary_reasons(stat))
-        if disabled_line:
-            lines.append("  " + disabled_line)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _summary_reasons(stat: dict[str, Any]) -> list[str]:
-        """The indented lines under a summary row: why it missed, what stayed.
-
-        A bare "1 miss" would hide the common surprise: a result computed in
-        0.05 s is never written to disk, so every new process misses it. The
-        run that CAUSES that is the one that can say so.
-        """
-        out = []
-        reasons = stat.get("miss_reasons") or {}
-        if reasons:
-            out.append(
-                "      missed: " + ", ".join(f"{n} {kind}" for kind, n in sorted(reasons.items(), key=lambda r: -r[1]))
-            )
-        for what, n in (stat.get("changed") or {}).items():
-            out.append(f"      {MissKind.CODE} ({n}x): {what}")
-        for why, n in (stat.get("not_stored") or {}).items():
-            out.append(f"      not stored ({n}x): {why}")
-        for why, n in (stat.get("not_persisted") or {}).items():
-            out.append(f"      kept in RAM only ({n}x): {why}; a new process recomputes it")
-        return out
-
-    def _summary_cache_dir(self) -> str | None:
-        """The cache directory this instance is using, for the summary header.
-
-        Reads the ALREADY-BUILT backend when there is one and falls back to the
-        configured path otherwise: the summary must never be the thing that
-        creates a cache directory, and it runs from an ``atexit`` handler where
-        building one is worse than saying nothing.
-        """
-        path = self._backend_slot.local_dir()
-        if path:
-            return path
-        configured = getattr(self.config, "cache_dir", None)
-        return configured if isinstance(configured, str) and configured else None
-
-    def _summary_budget(self) -> str:
-        """``", up to 26.0 GiB (a quarter of the free disk space)"`` for the
-        summary's cache line, or ``""``. From the built backend only."""
-        backend = self._backend_slot.built
-        try:
-            budget = backend.disk_budget() if backend is not None else None
-        except Exception:  # noqa: BLE001 - the summary runs at exit and must not fail
-            return ""
-        if not isinstance(budget, DiskBudget):
-            return ""
-        return f", up to {cap_text(budget.cap, budget.why is not None)} ({budget.why or 'set by max_cache_size'})"
-
-    def _print_run_summary(self) -> None:
-        """``atexit`` hook for ``summary=True``. Must never raise.
-
-        Interpreter shutdown tears modules down underneath handlers, so a
-        diagnostic that explodes here would turn a finished run into a
-        traceback the user cannot act on.
-        """
-        try:
-            text = self.run_summary()
-            if text:
-                if in_multiprocessing_child():
-                    # One table per worker process: say whose it is.
-                    text = text.replace("cash:", f"cash (pid {os.getpid()}):", 1)
-                # stderr: stdout is the program's output -- a report, a pipe, a
-                # JSON response -- and a summary landing in it broke all three.
-                # ONE write: pool workers exiting together
-                # interleaved print()'s separate writes mid-line.
-                # Into the application's log when it will print it: a service
-                # whose output goes through dictConfig never saw the summary.
-                # Otherwise to stderr -- once: both, with cash's own handler
-                # passing it on as well, printed it three times.
-                # Through the application's handlers whenever it has one that
-                # takes INFO -- past the level filters, as CASH_DEBUG's lines
-                # are: CASH_SUMMARY asked for it. Gated on the levels, the
-                # block came through the app's formatter at INFO and raw at
-                # WARNING, two shapes for a log shipper to parse.
-                cash_logger = logging.getLogger("cash")
-                if any(h.level <= logging.INFO for h in _log.application_handlers(cash_logger)):
-                    summary_logger = logging.getLogger("cash.summary")
-                    summary_logger.handle(
-                        summary_logger.makeRecord(
-                            summary_logger.name, logging.INFO, "(cash summary)", 0, "%s", (text,), None
-                        )
-                    )
-                else:
-                    sys.stderr.write(text + "\n")
-                    sys.stderr.flush()
-        except Exception:  # noqa: BLE001 - a summary must not fail a finished run
-            pass
+        return self._summary.text()
 
     def show_stats(self) -> None:
         """Show what caching has done in this process.

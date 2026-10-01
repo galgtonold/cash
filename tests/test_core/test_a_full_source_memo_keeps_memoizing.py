@@ -6,7 +6,7 @@ size, so in a long session every function defined after that paid the full
 cost on every call.
 """
 
-from cash.decorator import code_identity
+from cash.decorator import function_identity
 
 
 def _helpers():
@@ -26,17 +26,17 @@ def _helpers():
 
 
 def test_a_function_defined_after_the_memo_filled_is_memoized(monkeypatch):
-    monkeypatch.setattr(code_identity.SOURCE_HASH_MEMO, "maxsize", 2)
+    monkeypatch.setattr(function_identity.SOURCE_HASH_MEMO, "maxsize", 2)
     helpers = _helpers()
     for fn in helpers:
-        code_identity.hash_callable_source(fn)
+        function_identity.hash_callable_source(fn)
 
     reads = []
-    real = code_identity.source_digest
-    monkeypatch.setattr(code_identity, "source_digest", lambda fn: reads.append(fn) or real(fn))
+    real = function_identity.source_digest
+    monkeypatch.setattr(function_identity, "source_digest", lambda fn: reads.append(fn) or real(fn))
     newest = helpers[-1]
-    code_identity.hash_callable_source(newest)
+    function_identity.hash_callable_source(newest)
 
-    assert id(newest.__code__) in code_identity.SOURCE_HASH_MEMO
+    assert id(newest.__code__) in function_identity.SOURCE_HASH_MEMO
     assert reads == [], "the newest function's source was read again"
-    assert len(code_identity.SOURCE_HASH_MEMO) <= 2
+    assert len(function_identity.SOURCE_HASH_MEMO) <= 2

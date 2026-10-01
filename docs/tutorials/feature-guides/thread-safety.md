@@ -11,7 +11,7 @@ twice, which matters for a 30-second fit or a paid API call.
 
 ## `use_locking=True`: compute once
 
-<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @1973bcbe -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @9f4080df -->
 Turn on locking on the `Cash` instance. It is not a decorator parameter, and it
 applies to every function registered through that instance:
 
@@ -73,7 +73,7 @@ duplicate computation costs less than the lock.
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/_paths.py:resolve_main_module @fd6aef0f, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/_paths.py:resolve_main_module @fd6aef0f, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
 Worker processes use the cache folder of the process that started them, so what
 one worker computes is a hit for the other workers, for the parent, and for the
 next run.
@@ -135,7 +135,7 @@ Each process keeps some things to itself:
 - **Locking.** See the table above: only a bare `RedisBackend` locks across
   processes.
 
-<!-- claim: cash/decorator/script_pickling.py:expose_script_function @f20865df, cash/core.py:Cash.__reduce__ @98bbf40f -->
+<!-- claim: cash/decorator/script_pickling.py:expose_script_function @25904a09, cash/decorator/script_pickling.py:refuse_pickling_by_value @3a356e73 -->
 For **joblib**, keep the script's work behind `if __name__ == "__main__":`.
 cash sends a cached function from the running script to the workers by name,
 and each worker imports the script to find it. Without the guard, that import

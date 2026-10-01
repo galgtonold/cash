@@ -20,7 +20,7 @@ The fix for all three is to tell cash what identifies an instance.
 
 ## Give the class a `__cash_key__`
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @579078d7 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823 -->
 ```python
 from cash import Cash
 

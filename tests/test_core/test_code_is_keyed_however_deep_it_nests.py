@@ -25,7 +25,7 @@ import pytest
 import cash
 from cash import Cash
 from cash.code_digest import opaque_identity
-from cash.decorator.globals_fold import stabilize_for_global_hash
+from cash.decorator.key_values import stabilize_for_global_hash
 
 pytestmark = [pytest.mark.core]
 

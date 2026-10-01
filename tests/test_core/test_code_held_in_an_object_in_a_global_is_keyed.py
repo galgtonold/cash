@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 import cash
-from cash.decorator.globals_fold import stabilize_for_global_hash
+from cash.decorator.key_values import stabilize_for_global_hash
 
 pytestmark = [pytest.mark.core]
 

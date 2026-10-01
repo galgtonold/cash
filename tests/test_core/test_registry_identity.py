@@ -72,7 +72,7 @@ def test_a_lambda_pin_is_the_same_under_every_string_hash_seed():
     """A set literal compiles to a frozenset constant, whose repr follows the
     per-process string hash."""
     script = (
-        "from cash.decorator.code_identity import code_fingerprint\n"
+        "from cash.decorator.function_identity import code_fingerprint\n"
         "f = lambda x: x in {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'}\n"
         "print(code_fingerprint(f.__code__))\n"
     )

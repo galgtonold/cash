@@ -27,9 +27,9 @@ import pytest
 
 import cash
 from cash import _annotation_refs, canonical_form, content_hashers
-from cash.decorator import arg_hashing, cache_metadata, code_identity
+from cash.decorator import arg_hashing, cache_metadata, function_identity
 from cash.decorator.arg_hashing import ArgHasher
-from cash.decorator.globals_fold import GlobalsFold
+from cash.decorator.module_attrs import ModuleAttrFold
 from tests.test_core import _hit_work_fixture as fx
 
 pytestmark = pytest.mark.core
@@ -106,13 +106,13 @@ def test_a_hit_folds_each_method_once(c, monkeypatch):
     f = c.cache(fx.builds_classes)
     assert f(10) == pytest.approx(0.3)
     folded = []
-    real = GlobalsFold.module_attr_parts
+    real = ModuleAttrFold.module_attr_parts
 
     def spy(self, func, *args, **kwargs):
         folded.append(func.__qualname__)
         return real(self, func, *args, **kwargs)
 
-    monkeypatch.setattr(GlobalsFold, "module_attr_parts", spy)
+    monkeypatch.setattr(ModuleAttrFold, "module_attr_parts", spy)
     assert f(10) == pytest.approx(0.3)
     assert "Scaler.apply" in folded
     assert sorted(folded) == sorted(set(folded))
@@ -228,15 +228,15 @@ def test_a_generated_method_s_identity_is_read_once(monkeypatch):
 
     init = Point.__init__
     reads = []
-    real = code_identity.source_digest
+    real = function_identity.source_digest
 
     def spy(fn):
         reads.append(fn)
         return real(fn)
 
-    monkeypatch.setattr(code_identity, "source_digest", spy)
-    first = code_identity.hash_callable_source(init)
-    assert code_identity.hash_callable_source(init) == first
+    monkeypatch.setattr(function_identity, "source_digest", spy)
+    first = function_identity.hash_callable_source(init)
+    assert function_identity.hash_callable_source(init) == first
     assert len(reads) == 1
 
 

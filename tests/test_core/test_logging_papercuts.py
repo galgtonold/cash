@@ -128,9 +128,9 @@ def test_the_summary_reaches_an_application_log_in_one_write(tmp_path, monkeypat
     handler = Grab()
     logging.getLogger("cash").addHandler(handler)
     monkeypatch.setattr(logging.getLogger("cash"), "level", logging.INFO)
-    monkeypatch.setattr("cash.core.in_multiprocessing_child", lambda: True)
+    monkeypatch.setattr("cash.decorator.run_summary.in_multiprocessing_child", lambda: True)
     try:
-        c._print_run_summary()
+        c._summary.print_at_exit()
     finally:
         logging.getLogger("cash").removeHandler(handler)
     err = capsys.readouterr().err
@@ -191,7 +191,7 @@ def test_a_summary_the_apps_log_would_drop_goes_to_stderr(tmp_path, monkeypatch,
     logging.getLogger("cash").addHandler(handler)
     monkeypatch.setattr(logging.getLogger("cash"), "level", logging.WARNING)
     try:
-        c._print_run_summary()
+        c._summary.print_at_exit()
     finally:
         logging.getLogger("cash").removeHandler(handler)
     assert "calls restored" in capsys.readouterr().err

@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from typing import NoReturn
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..tracking.tracker_context import untracked
@@ -51,6 +52,24 @@ def _has_main_guard(path: str) -> bool:
     return found
 
 
+def refuse_pickling_by_value() -> NoReturn:
+    """Refuse to pickle a `Cash` or what its wrappers close over.
+
+    Reached when something sends a cached function BY VALUE to another
+    process, which is what joblib's workers do with a function defined in
+    the script being run. Say what works instead of letting the pickler
+    report a lock (see `expose_script_function`).
+    """
+    raise TypeError(
+        "a Cash instance cannot be pickled, and something tried to send a "
+        "@cash.cache function to another process by value. A cached "
+        "function defined in the script you run can be sent to worker "
+        "processes (joblib, multiprocessing) when the script's work is "
+        'behind `if __name__ == "__main__":`; or define the function in a '
+        "module you import."
+    )
+
+
 def expose_script_function(func: Callable, wrapper: Callable) -> None:
     """Let a cached function from the running script be pickled BY NAME.
 
@@ -72,7 +91,7 @@ def expose_script_function(func: Callable, wrapper: Callable) -> None:
     Only for a script whose work sits behind ``if __name__ == "__main__":``,
     because a worker that imports the script runs its top level. Without the
     guard nothing changes here, and pickling fails with a message that says
-    so (``Cash.__reduce__``). Also skipped when the name is a DIFFERENT module
+    so (`refuse_pickling_by_value`). Also skipped when the name is a DIFFERENT module
     already, or would import a different file: registering it would shadow
     that module.
     """

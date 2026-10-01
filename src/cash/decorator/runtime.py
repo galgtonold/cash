@@ -34,10 +34,11 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
-from .code_identity import func_key
+from .class_data import CLASSES_FOLDED
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
-from .globals_fold import CLASSES_FOLDED, READS_FOLDED
+from .function_identity import func_key
+from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
@@ -49,10 +50,12 @@ if TYPE_CHECKING:
     from .backend_slot import BackendSlot
     from .closure_fold import ClosureFold
     from .code_args import CodeArgs
-    from .code_identity import CodeIdentity
+    from .environment_fold import EnvironmentFold
     from .explain import MissHistory
     from .file_deps import FileDeps
+    from .function_identity import OwnSourcePins
     from .globals_fold import GlobalsFold
+    from .method_deps import MethodClassDeps
     from .purity_checks import PurityChecks
     from .registry import FunctionRegistry
     from .reporting import CallLog, Notices
@@ -92,10 +95,12 @@ class KeyBuilder:
         self,
         registry: FunctionRegistry,
         args: ArgHasher,
-        code: CodeIdentity,
+        method_deps: MethodClassDeps,
+        pins: OwnSourcePins,
         files: FileDeps,
         closures: ClosureFold,
         globals_fold: GlobalsFold,
+        environment: EnvironmentFold,
         rng: RngWatch,
         code_args: CodeArgs,
         state_hasher: DependencyStateHasher,
@@ -104,10 +109,12 @@ class KeyBuilder:
     ) -> None:
         self._registry = registry
         self._args = args
-        self._code = code
+        self._method_deps = method_deps
+        self._pins = pins
         self._files = files
         self._closures = closures
         self._globals = globals_fold
+        self._environment = environment
         self._rng = rng
         self._code_args = code_args
         self._state_hasher = state_hasher
@@ -170,7 +177,7 @@ class KeyBuilder:
         """
         state_hash = self._state_hasher.compute(
             func_name,
-            own_source_override=self._code.pin_own_source(func),
+            own_source_override=self._pins.pin_own_source(func),
             own_report=self._registry.report_for(func, func_name),
             note=note,
         )
@@ -192,7 +199,7 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
-        state_hash = self._globals.fold_environment(func, func_name, state_hash)
+        state_hash = self._environment.fold_environment(func, func_name, state_hash)
         chain.append(state_hash)
         return state_hash
 
@@ -267,7 +274,7 @@ class KeyBuilder:
         # (`plain_census`).
         previous = getattr(PLAIN_CENSUS, "memo", None)
         PLAIN_CENSUS.memo = {}
-        # Each class's data is folded once per key (`GlobalsFold.class_parts`).
+        # Each class's data is folded once per key (`ClassDataFold.class_parts`).
         classes_token = CLASSES_FOLDED.set(set())
         # Each function's globals are folded once per key (`READS_FOLDED`).
         reads_token = READS_FOLDED.set({})
@@ -278,7 +285,7 @@ class KeyBuilder:
             chain: list[str] = []
             ledger_note("@chain", chain)
             state_hash = self._code_state(func, func_name, chain, note=True)
-            state_hash = self._code.fold_method_class_deps(func, args, state_hash)
+            state_hash = self._method_deps.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `CodeArgs.fold_code_args` on the RAW arguments saw a class

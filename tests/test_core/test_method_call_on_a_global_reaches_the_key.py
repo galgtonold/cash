@@ -32,7 +32,7 @@ import warnings
 
 import pytest
 
-from cash.decorator.globals_fold import MACHINERY_DUNDERS
+from cash.decorator.global_reads import MACHINERY_DUNDERS
 
 from . import helper_registry
 
@@ -237,7 +237,7 @@ def test_the_machinery_dunders_are_still_skipped(cash_instance):
     def reads_machinery(x):
         return f"{__file__}|{__name__}|{__doc__}|{x}"
 
-    names = cash_instance._globals.read_global_data_names(reads_machinery)
+    names = cash_instance._reads.read_global_data_names(reads_machinery)
 
     assert "__file__" not in names
     assert "__name__" not in names
@@ -251,4 +251,4 @@ def test_a_user_dunder_is_a_candidate(cash_instance):
     def reads_version(x):
         return f"{__version__}|{x}"
 
-    assert "__version__" in cash_instance._globals.read_global_data_names(reads_version)
+    assert "__version__" in cash_instance._reads.read_global_data_names(reads_version)

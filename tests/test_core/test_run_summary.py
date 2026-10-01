@@ -212,8 +212,8 @@ def test_the_summary_never_breaks_a_finished_run(tmp_path, monkeypatch):
     """It runs during interpreter shutdown; a traceback there helps nobody."""
     c = _cash(tmp_path)
     _exercise(c)
-    monkeypatch.setattr(type(c), "run_summary", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
-    c._print_run_summary()  # must not raise
+    monkeypatch.setattr(type(c._summary), "text", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    c._summary.print_at_exit()  # must not raise
 
 
 # ---------------------------------------------------------------------------

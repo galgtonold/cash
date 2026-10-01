@@ -24,18 +24,14 @@ from ..source_reading import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
-from .code_identity import (
-    SYNC_TYPES,
-    code_fingerprint,
-    hash_callable_source,
-    is_cash_wrapper,
-    is_immutable_capture,
-    is_user_code_object,
-)
+from .function_identity import code_fingerprint, hash_callable_source
+from .key_values import SYNC_TYPES, is_immutable_capture
+from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
-    from .globals_fold import GlobalsFold
+    from .class_data import ClassDataFold
+    from .global_values import GlobalValues
     from .purity_checks import LearnedMutations
     from .reporting import Notices
 
@@ -353,7 +349,7 @@ class CaptureAnalysis:
             )
             suspected = unsafe_uses_of(tree, freevars) - result
             provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func, tree))
-            # Only on waived lines: as for globals (`GlobalsFold.read_global_data_names`).
+            # Only on waived lines: as for globals (`GlobalReads.read_global_data_names`).
             result = result | (suspected - provisional)
         self._use_cache[code] = (result, provisional)
         return result
@@ -564,14 +560,16 @@ class ClosureFold:
         args: ArgHasher,
         captures: CaptureAnalysis,
         helpers: HelperIdentity,
-        globals_fold: GlobalsFold,
+        values: GlobalValues,
+        classes: ClassDataFold,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
         self._args = args
         self._captures = captures
         self._helpers = helpers
-        self._globals = globals_fold
+        self._values = values
+        self._classes = classes
         self._mutations = mutations
         self._notices = notices
         # function object -> digest of its parameter defaults, for defaults that
@@ -637,12 +635,12 @@ class ClosureFold:
             if is_cash_wrapper(v):
                 # A captured CACHED function is what it computes: its
                 # dependency state, as a registry holding one counts it
-                # (`GlobalsFold.data_callable_identity`). Not cash's wrapper
+                # (`GlobalValues.data_callable_identity`). Not cash's wrapper
                 # around it, whose closure holds this Cash instance and the
                 # function's spec, backend and all: none of that is an
                 # input, and the backend's dicts change under the write
                 # thread while a key is built.
-                captures.append((name, self._globals.data_callable_identity(v)))
+                captures.append((name, self._values.data_callable_identity(v)))
                 continue
             # A captured FUNCTION is its code, so fold its source. Reaching
             # this before the `unsafe` check is the point: a capture the body
@@ -667,57 +665,74 @@ class ClosureFold:
             # holding different state.
             fingerprint = fingerprint_default(v)
             if fingerprint is not v:
-                # Source text alone collides for two lambdas sharing a line
-                # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
-                # `inspect.getsource` returns the same string for both).
-                # Their code objects differ.
-                inner_code = getattr(v, "__code__", None)
-                if inner_code is not None:
-                    fingerprint = f"{fingerprint}:{code_fingerprint(inner_code)}"
-                # Source alone is not enough: a factory-built helper has the
-                # SAME source for every parameter it was built with, so
-                # `outer(2)` and `outer(3)` fingerprint identically one level
-                # down. Recurse so the captured function's own captures fold
-                # under the same rules, however deep the factories nest.
-                # *_walked*, the closures on this path, ends a cycle: a
-                # recursive local function captures itself.
-                walked = _walked | {id(func)}
-                if id(v) in walked:
-                    fingerprint = f"{fingerprint}:cycle"
-                else:
-                    fingerprint = self.fold_closure(
-                        v,
-                        f"{func_name}.{name}",
-                        str(fingerprint),
-                        walked,
-                    )
-                captures.append((name, fingerprint))
+                captures.append((name, self._captured_function_part(func, func_name, name, v, fingerprint, _walked)))
                 continue
-
-            if is_immutable_capture(v):
-                captures.append((name, v))
-            elif isinstance(v, SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
-                # A lock holds no data. A class, an ``lru_cache`` wrapper or
-                # another callable is code, followed by the helper walk.
-                continue
-            elif name not in unsafe:
-                # Read-only mutable capture: fold its content hash. One that
-                # cannot be hashed runs the call uncached rather than being
-                # left out of the key.
-                try:
-                    h = self._args.hash_payload((v,), {})
-                except _UNHASHABLE_CAPTURE_ERRORS as e:
-                    raise unhashable_capture(func, name, v, e) from e
-                captures.append((name, h))
-                pending = CAPTURE_WATCH.get()
-                if pending is not None and (provisional is None or name in provisional):
-                    pending[name] = (h, "closure", None, func)
+            part = self._captured_value_part(func, name, v, name not in unsafe, provisional)
+            if part is not None:
+                captures.append(part)
         if not captures:
             return state_hash
         clo = self._args.serialize_args(func_name, tuple(captures), {})
         if not clo:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
+
+    def _captured_function_part(
+        self, func: Callable, func_name: str, name: str, v: Any, fingerprint: Any, _walked: frozenset[int]
+    ) -> str:
+        """The key part of a function *v* that *func* captures as *name*,
+        from its source *fingerprint*, its code, and its own captures."""
+        # Source text alone collides for two lambdas sharing a line
+        # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
+        # `inspect.getsource` returns the same string for both).
+        # Their code objects differ.
+        inner_code = getattr(v, "__code__", None)
+        if inner_code is not None:
+            fingerprint = f"{fingerprint}:{code_fingerprint(inner_code)}"
+        # Source alone is not enough: a factory-built helper has the
+        # SAME source for every parameter it was built with, so
+        # `outer(2)` and `outer(3)` fingerprint identically one level
+        # down. Recurse so the captured function's own captures fold
+        # under the same rules, however deep the factories nest.
+        # *_walked*, the closures on this path, ends a cycle: a
+        # recursive local function captures itself.
+        walked = _walked | {id(func)}
+        if id(v) in walked:
+            fingerprint = f"{fingerprint}:cycle"
+        else:
+            fingerprint = self.fold_closure(
+                v,
+                f"{func_name}.{name}",
+                str(fingerprint),
+                walked,
+            )
+        return fingerprint
+
+    def _captured_value_part(
+        self, func: Callable, name: str, v: Any, read_only: bool, provisional: Any
+    ) -> tuple[str, Any] | None:
+        """The key part of a captured value *v* that is not code or a module,
+        or ``None`` when it is not part of the key. *read_only*: the body
+        provably only reads it."""
+        if is_immutable_capture(v):
+            return (name, v)
+        if isinstance(v, SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
+            # A lock holds no data. A class, an ``lru_cache`` wrapper or
+            # another callable is code, followed by the helper walk.
+            return None
+        if read_only:
+            # Read-only mutable capture: fold its content hash. One that
+            # cannot be hashed runs the call uncached rather than being
+            # left out of the key.
+            try:
+                h = self._args.hash_payload((v,), {})
+            except _UNHASHABLE_CAPTURE_ERRORS as e:
+                raise unhashable_capture(func, name, v, e) from e
+            pending = CAPTURE_WATCH.get()
+            if pending is not None and (provisional is None or name in provisional):
+                pending[name] = (h, "closure", None, func)
+            return (name, h)
+        return None
 
     def fold_defaults(
         self,
@@ -898,9 +913,9 @@ class ClosureFold:
         if is_user_callable_instance(func):
             # `cash.cache(Scaler(2))`: the instance is its own `self`, and
             # what its code reads besides is the class's
-            # (`GlobalsFold.class_parts`). `sc.k = 5` served the result for 2.
+            # (`ClassDataFold.class_parts`). `sc.k = 5` served the result for 2.
             owner = func
-            parts = self._globals.class_parts(type(func), func_name)
+            parts = self._classes.class_parts(type(func), func_name)
             if parts:
                 payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
                 state_hash = hashlib.sha256(f"{state_hash}:classes:{payload}".encode("utf-8")).hexdigest()

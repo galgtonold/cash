@@ -132,7 +132,7 @@ def test_what_the_bytecode_plainly_writes_is_left_out():
     `G[k] = v` are kept out of the key (they would move it on every call),
     and a global only read, or stored as a value (`d[k] = G`), stays in.
     `G9[0] = v` has a constant key, which 3.14 loads with its own opcode."""
-    from cash.decorator.globals_fold import _bytecode_mutated_globals
+    from cash.decorator.global_reads import bytecode_mutated_globals
 
     ns: dict = {}
     src = (
@@ -141,4 +141,4 @@ def test_what_the_bytecode_plainly_writes_is_left_out():
     )
     exec(compile(src, "<stdin>", "exec"), ns)
     names = {f"G{i}" for i in range(1, 10)}
-    assert _bytecode_mutated_globals((ns["f"].__code__,), names) == {"G1", "G2", "G4", "G6", "G9"}
+    assert bytecode_mutated_globals((ns["f"].__code__,), names) == {"G1", "G2", "G4", "G6", "G9"}

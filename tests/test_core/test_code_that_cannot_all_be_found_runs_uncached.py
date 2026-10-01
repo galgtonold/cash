@@ -18,7 +18,7 @@ import warnings
 
 import pytest
 
-import cash.decorator.code_identity as code_identity
+import cash.decorator.code_refs as code_refs
 import cash.decorator.registry as registry
 from cash import Cash
 from cash.analysis.helper_code import callable_layers
@@ -114,7 +114,7 @@ def test_argument_code_whose_references_never_end_runs_uncached(tmp_path, monkey
     """Each lookup makes a new function that looks one up: the reference walk
     from an argument's code cannot finish, and a key of the part it saw
     (four references, before) is not a key of the code that runs."""
-    monkeypatch.setattr(code_identity, "MAX_CODE_REF_TARGETS", 40)  # the real bound only costs time
+    monkeypatch.setattr(code_refs, "MAX_CODE_REF_TARGETS", 40)  # the real bound only costs time
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_endless_refs_{tmp_path.name}"
     monkeypatch.delitem(sys.modules, name, raising=False)

@@ -1,7 +1,7 @@
 """Adversarial probes: decorator <-> notebook interplay.
 
 The decorator's arg hash prefers a ``_cash_lineage_hash`` attribute over
-content (core.py get_arg_hash). Inside a cash-enabled notebook the lineage
+content (`ArgHasher.arg_hash`). Inside a cash-enabled notebook the lineage
 store attaches that attribute to user objects — a shallow copy carries the
 attribute in ``__dict__`` while diverging in content, so a decorated call with
 the copy may key on the STALE inherited lineage.

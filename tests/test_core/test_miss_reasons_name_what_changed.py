@@ -176,7 +176,7 @@ def test_the_summary_goes_through_the_applications_handler_at_any_level(tmp_path
     root.setLevel(logging.WARNING)
     try:
         capsys.readouterr()
-        c._print_run_summary()
+        c._summary.print_at_exit()
     finally:
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)

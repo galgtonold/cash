@@ -27,7 +27,7 @@ for some functions.
 
 ## Signatures at a glance
 
-<!-- claim: cash/core.py:Cash.__init__ @1973bcbe, cash/core.py:Cash.cache @2d082328 -->
+<!-- claim: cash/core.py:Cash.__init__ @9f4080df, cash/core.py:Cash.cache @5c304b0c -->
 ```text
 Cash(
     backend=None, cache_dir=None, backends=None, compress=None,
