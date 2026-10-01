@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-from cash.notebook.ipython.cell_executor import PipelineSyntaxError, RunInstead
+from cash.notebook.ipython._types import PipelineSyntaxError, RunInstead
 
 __all__ = ["run_cash_cell"]
 

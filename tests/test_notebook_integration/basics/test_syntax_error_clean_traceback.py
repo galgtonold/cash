@@ -7,12 +7,12 @@ the user saw, plus a spurious "During handling of the above exception, another
 exception occurred" chain — making a typo look like cash crashed. Cash-off shows
 a clean ~4-line error.
 
-Root cause: ``CellExecutor._resolve_upstream_state`` dispatched IPython's real
+Root cause: the upstream phase (``UpstreamResolution.resolve``) dispatched IPython's real
 ``run_cell`` (to surface the user-facing error) from *inside* its own broad
 ``except`` block, so Python implicitly chained the fresh exception onto cash's
 internal one via ``__context__`` and IPython's ultratb rendered the whole chain.
 The fix moves the dispatch OUTSIDE the except (into
-``_handle_upstream_resolution_failure``), where ``sys.exc_info()`` is already
+``UpstreamResolution._step_aside``), where ``sys.exc_info()`` is already
 clear so no accidental chaining occurs.
 
 These tests assert on the rendered traceback text. The harness's
@@ -34,6 +34,7 @@ _CASH_INTERNAL_MARKERS = [
     "virtual_lineage.py",
     "analyze_code_block",
     "cell_executor.py",
+    "upstream_phase.py",
     "checker.py",
 ]
 

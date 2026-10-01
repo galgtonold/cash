@@ -24,7 +24,7 @@ import pytest
 pytest.importorskip("IPython")
 
 from cash import Cash
-from cash.notebook.ipython.cell_executor import PipelineSyntaxError
+from cash.notebook.ipython._types import PipelineSyntaxError
 from cash.notebook.ipython.magics import CashMagics
 from tests._cell_driver import run_cash_cell
 

@@ -54,3 +54,55 @@ class CellMetrics(TypedDict):
     total_computed_time: float
     upstream_metrics: list[ProcessResult]
     status: str | None
+
+
+class RunInstead:
+    """The executor stepped aside: the hook runs *source* through IPython's
+    original ``run_cell`` (or ``run_cell_async``) and returns its result.
+
+    *source* is the cell itself, run uncached, or a one-line ``raise`` that
+    surfaces an error cash found in the notebook as the cell's own. *error*
+    is what the upstream check raised.
+    """
+
+    __slots__ = ("source", "error")
+
+    def __init__(self, source: str, error: Exception) -> None:
+        self.source = source
+        self.error = error
+
+
+class PipelineSyntaxError:
+    """Sentinel returned by :meth:`CellExecutor.execute_cell` when the cell's
+    own AST fails to parse.  Caller decides how to react."""
+
+    __slots__ = ()
+
+
+class PipelineCompleted:
+    """Successful pipeline run: carries everything the finaliser needs."""
+
+    __slots__ = (
+        "all_metrics",
+        "buffered_outputs",
+        "badge_display_id",
+        "hook_start",
+        "timing_breakdown",
+        "badge_render_time",
+    )
+
+    def __init__(
+        self,
+        all_metrics: list,
+        buffered_outputs: list,
+        badge_display_id: str,
+        hook_start: float,
+        timing_breakdown: "TimingBreakdown",
+        badge_render_time: float,
+    ) -> None:
+        self.all_metrics = all_metrics
+        self.buffered_outputs = buffered_outputs
+        self.badge_display_id = badge_display_id
+        self.hook_start = hook_start
+        self.timing_breakdown = timing_breakdown
+        self.badge_render_time = badge_render_time

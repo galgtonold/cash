@@ -14,8 +14,7 @@ from pathlib import Path
 
 from cash.backends import CacheBackend
 from cash.notebook._protocols import CashInstanceProtocol
-from cash.notebook.ipython._types import TimingBreakdown
-from cash.notebook.ipython.cell_executor import PipelineCompleted
+from cash.notebook.ipython._types import PipelineCompleted, TimingBreakdown
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
