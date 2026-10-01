@@ -8,6 +8,7 @@ import pickle
 import sys
 import types
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..analysis.purity_analyzer import (
@@ -27,7 +28,6 @@ from .key_values import (
 from .user_code import is_user_class, own_package
 
 if TYPE_CHECKING:
-    from .arg_hashing import ArgHasher
     from .class_data import ClassDataFold
     from .code_args import CodeArgs
     from .code_surface import CodeSurface
@@ -49,14 +49,36 @@ if TYPE_CHECKING:
 READS_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_reads_folded", default=None)
 
 
+@dataclass
+class _ReadsFold:
+    """One function's globals fold in progress (`GlobalsFold._fold_read_globals`):
+    whose globals, the drift guard's state for it, and what it found."""
+
+    func: Callable
+    func_name: str
+    g: dict
+    own_pkg: str | None
+    #: The code the drift guard records under: the cached function's.
+    drift_owner: Any
+    provisional: frozenset | None
+    learned: frozenset
+    seen: set | None
+    parts: list[tuple[str, str]] = field(default_factory=list)
+    watch: dict[str, tuple] = field(default_factory=dict)
+    classes: list[type] = field(default_factory=list)
+
+
 class GlobalsFold:
-    """The module data a function and its helpers read, folded into the state
-    segment: globals, ``module.ATTR`` reads, data reached through local
-    bindings, what a library-made callable carries, and the environment."""
+    """The module data a function reads, and the functions it reaches read,
+    folded into the state segment: the cached function's own globals, its
+    helpers', its cached callees', and those of functions passed as data.
+
+    Each global's value is hashed by `GlobalValues`; a class's data by
+    `ClassDataFold`; ``module.ATTR`` reads and local bindings by
+    `ModuleAttrFold`. This class walks the functions and their names."""
 
     def __init__(
         self,
-        args: ArgHasher,
         reads: GlobalReads,
         values: GlobalValues,
         classes: ClassDataFold,
@@ -66,7 +88,6 @@ class GlobalsFold:
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
-        self._args = args
         self._reads = reads
         self._values = values
         self._classes = classes
@@ -163,148 +184,37 @@ class GlobalsFold:
         # reads are module attributes (``return conf.RATE``) has NO plain data
         # globals, so bailing here skipped the module-attribute channel in
         # exactly the case it exists for.
-        parts: list[tuple[str, str]] = []
-        own_pkg = own_package(func)
-        root_module = getattr(func, "__module__", None)
         code = getattr(func, "__code__", None)
-        # A missing provisional entry means "unknown", not "none" -- watch every
-        # folded name rather than fold one blind (see `GlobalReads.read_global_data_names`).
-        provisional = self._reads.provisional_names(code)
-        learned_mutating = self._mutations.of(owner_code if owner_code is not None else code, "global")
-        watch: dict[str, str] = {}
-        classes: list[type] = []
+        drift_owner = owner_code if owner_code is not None else code
+        fold = _ReadsFold(
+            func,
+            func_name,
+            g,
+            own_package(func),
+            drift_owner,
+            # A missing provisional entry means "unknown", not "none" -- watch every
+            # folded name rather than fold one blind (see `GlobalReads.read_global_data_names`).
+            self._reads.provisional_names(code),
+            self._mutations.of(drift_owner, "global"),
+            seen,
+        )
         for name in names:
-            if name not in g:
-                continue
-            if seen is not None:
-                pair = (id(g), name)
-                if pair in seen:
-                    continue
-                seen.add(pair)
-            if name in learned_mutating:
-                # Observed to drift as a result of calling this function. Folding
-                # it would key the entry on the function's own output and miss
-                # forever, and the decorator has no perpetual-miss guard to
-                # catch it.
-                continue
-            v = g[name]
-            # Skip modules, classes, and plain callables (helpers/deps handled
-            # elsewhere). Containers of callables (dispatch dicts) ARE folded.
-            if isinstance(v, type):
-                # A class's code is keyed as code; what it holds and what its
-                # methods read is data (`ClassDataFold.class_parts`).
-                if is_user_class(v, own_pkg):
-                    classes.append(v)
-                continue
-            if isinstance(v, types.ModuleType):
-                continue
-            if callable(v) and not isinstance(v, (dict, list, tuple, set)):
-                carried = self._values.carried_global_hash(v, root_module)
-                if carried is not None:
-                    parts.append((f"{name}#carried", carried))
-                    watch[name] = (carried, "carrier", (g, name), None)
-                    continue
-                # An instance of the user's own callable class is data as well
-                # as code: `x * SCALE.k` reads its attributes without calling
-                # it, so no helper binding keys them. Folded like any data
-                # global; plain callables are the helper walk's.
-                payload = carried_payload(v)
-                if payload is None or payload[0] != "instance":
-                    continue
-            plain = plain_data_kind(v)
-            try:
-                h = self._values.global_value_digest(v, plain)
-                parts.append((name, h))
-                # Free: this is the hash the key already needed. Keeping it is
-                # what makes the post-call check cost one hash instead of two.
-                if callable(v) and not isinstance(v, (dict, list, tuple, set)):
-                    # Calling it may move what it holds (a memo in `self`):
-                    # always watched, and dropped quietly, like a carrier.
-                    watch[name] = (h, "instance", g, func)
-                elif provisional is None or name in provisional:
-                    # `g`, not the decorated function's globals: this may be a
-                    # helper's module (see `GlobalsFold.fold_helper_read_globals`).
-                    watch[name] = (h, "global", g, func)
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                self._notices.warn_once(
-                    CashImpurityWarning,
-                    func_name,
-                    name,
-                    f"@cash.cache on {func_name}: reads module global '{name}' whose "
-                    f"value could not be hashed, so changes to it will NOT "
-                    f"invalidate the cache.",
-                    code="KEY-UNHASHABLE-GLOBAL",
-                    fix=UNHASHABLE_GLOBAL_FIX,
-                )
-                continue
-            if plain is not None:
-                # Numbers, strings, dates in builtin containers: no class, no
-                # instance and no code anywhere inside for the walks below.
-                continue
-            # A pre-built user-class INSTANCE (or a container of them) is only
-            # value-hashed above -- its class's method SOURCE is invisible to the
-            # pickle. Fold the class-graph source too (memoized per class; see
-            # instance_class_source_parts).
-            for item in iter_contained(v):
-                if is_user_class(type(item), own_pkg):
-                    for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
-                        parts.append((f"{name}#cls:{cname}", chash))
-                elif isinstance(item, type) and is_user_class(item, own_pkg):
-                    # The CLASS itself, not an instance of it: `TABLE = {"fast":
-                    # impl.Fast}` pickles by reference, so editing `Fast.run`
-                    # moved nothing while the same dict holding a FUNCTION was
-                    # followed.
-                    surface = self._code.code_surface_hash(item)
-                    if surface is not None:
-                        parts.append((f"{name}#cls:{item.__qualname__}", surface))
-            # Code deeper in: an instance held in a tuple in a list, a
-            # function an instance holds (`Runner(scale)`), a user transformer
-            # inside a library pipeline. The pickle above has them by name
-            # only, and the one-level look above does not reach them; the
-            # argument walk does, so a global goes through it too.
-            if self.code_args is not None:
-                code_parts = self.code_args.carrier_parts(
-                    v, func_name, owner_code=owner_code if owner_code is not None else code
-                )
-                if code_parts:
-                    digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
-                    parts.append((f"{name}#code", digest))
+            self._fold_global(fold, name)
+        parts = fold.parts
         parts.extend(
             self._attrs.module_attr_parts(
-                func,
-                func_name,
-                g,
-                learned=learned_mutating,
-                watch=watch,
-                owner_code=owner_code if owner_code is not None else code,
-                seen=seen,
+                func, func_name, g, learned=fold.learned, watch=fold.watch, owner_code=drift_owner, seen=seen
             )
         )
         pending = CAPTURE_WATCH.get()
         if pending is not None:
-            pending.update(watch)
+            pending.update(fold.watch)
         parts.extend(self._attrs.local_binding_parts(func))
         if code is not None and self._reads.reads_docstrings(code):
-            parts.extend(self._attrs.docstring_parts(code, g, own_pkg))
-        # A function default is evaluated where the `def` stands, so what a
-        # default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
-        # of *func*'s, so it is folded here or editing K would keep the key.
-        for default in self._reads.function_defaults(func):
-            if seen is not None:
-                if ("default", id(default)) in seen:
-                    continue
-                seen.add(("default", id(default)))
-            h = self.fold_read_globals(
-                default, func_name, "", owner_code=owner_code if owner_code is not None else code, seen=seen
-            )
-            if h:
-                parts.append((f"#default:{default.__qualname__}", h))
-        for cls in classes:
-            parts.extend(
-                self._classes.class_parts(
-                    cls, func_name, owner_code=owner_code if owner_code is not None else code, seen=seen, reader=func
-                )
-            )
+            parts.extend(self._attrs.docstring_parts(code, g, fold.own_pkg))
+        parts.extend(self._default_parts(fold))
+        for cls in fold.classes:
+            parts.extend(self._classes.class_parts(cls, func_name, owner_code=drift_owner, seen=seen, reader=func))
         # By name, for a miss that has to say which global moved. A helper's
         # or a called function's reads are labelled with the reader.
         ledger_note(("globals", None if owner_code is None else getattr(func, "__qualname__", None)), parts)
@@ -312,6 +222,139 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
+
+    def _fold_global(self, fold: _ReadsFold, name: str) -> None:
+        """Add to *fold* what the global *name* holds: its value's digest, the
+        data a library-made callable carries, the code an object holds; a
+        user class is kept for `ClassDataFold.class_parts`."""
+        g = fold.g
+        if name not in g:
+            return
+        if fold.seen is not None:
+            pair = (id(g), name)
+            if pair in fold.seen:
+                return
+            fold.seen.add(pair)
+        if name in fold.learned:
+            # Observed to drift as a result of calling this function. Folding
+            # it would key the entry on the function's own output and miss
+            # forever, and the decorator has no perpetual-miss guard to
+            # catch it.
+            return
+        v = g[name]
+        # Skip modules, classes, and plain callables (helpers/deps handled
+        # elsewhere). Containers of callables (dispatch dicts) ARE folded.
+        if isinstance(v, type):
+            # A class's code is keyed as code; what it holds and what its
+            # methods read is data (`ClassDataFold.class_parts`).
+            if is_user_class(v, fold.own_pkg):
+                fold.classes.append(v)
+            return
+        if isinstance(v, types.ModuleType):
+            return
+        if callable(v) and not isinstance(v, (dict, list, tuple, set)):
+            carried = self._values.carried_global_hash(v, getattr(fold.func, "__module__", None))
+            if carried is not None:
+                fold.parts.append((f"{name}#carried", carried))
+                fold.watch[name] = (carried, "carrier", (g, name), None)
+                return
+            # An instance of the user's own callable class is data as well
+            # as code: `x * SCALE.k` reads its attributes without calling
+            # it, so no helper binding keys them. Folded like any data
+            # global; plain callables are the helper walk's.
+            payload = carried_payload(v)
+            if payload is None or payload[0] != "instance":
+                return
+        plain = plain_data_kind(v)
+        if not self._fold_value(fold, name, v, plain):
+            return
+        if plain is not None:
+            # Numbers, strings, dates in builtin containers: no class, no
+            # instance and no code anywhere inside for the walks below.
+            return
+        fold.parts.extend(self._held_code_parts(fold, name, v))
+
+    def _fold_value(self, fold: _ReadsFold, name: str, v: Any, plain: str | None) -> bool:
+        """Add the digest of global *name*'s value *v* to *fold*, watched by
+        the drift guard; False, after warning once, when it cannot be hashed."""
+        try:
+            h = self._values.global_value_digest(v, plain)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            self._notices.warn_once(
+                CashImpurityWarning,
+                fold.func_name,
+                name,
+                f"@cash.cache on {fold.func_name}: reads module global '{name}' whose "
+                f"value could not be hashed, so changes to it will NOT "
+                f"invalidate the cache.",
+                code="KEY-UNHASHABLE-GLOBAL",
+                fix=UNHASHABLE_GLOBAL_FIX,
+            )
+            return False
+        fold.parts.append((name, h))
+        # Free: this is the hash the key already needed. Keeping it is
+        # what makes the post-call check cost one hash instead of two.
+        if callable(v) and not isinstance(v, (dict, list, tuple, set)):
+            # Calling it may move what it holds (a memo in `self`):
+            # always watched, and dropped quietly, like a carrier.
+            fold.watch[name] = (h, "instance", fold.g, fold.func)
+        elif fold.provisional is None or name in fold.provisional:
+            # `g`, not the decorated function's globals: this may be a
+            # helper's module (see `GlobalsFold.fold_helper_read_globals`).
+            fold.watch[name] = (h, "global", fold.g, fold.func)
+        return True
+
+    def _held_code_parts(self, fold: _ReadsFold, name: str, v: Any) -> list[tuple[str, str]]:
+        """Key parts for the user code the value *v* of global *name* holds,
+        which its pickle names only by reference."""
+        parts: list[tuple[str, str]] = []
+        own_pkg = fold.own_pkg
+        # A pre-built user-class INSTANCE (or a container of them) is only
+        # value-hashed -- its class's method SOURCE is invisible to the
+        # pickle. Fold the class-graph source too (memoized per class; see
+        # instance_class_source_parts).
+        for item in iter_contained(v):
+            if is_user_class(type(item), own_pkg):
+                for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
+                    parts.append((f"{name}#cls:{cname}", chash))
+            elif isinstance(item, type) and is_user_class(item, own_pkg):
+                # The CLASS itself, not an instance of it: `TABLE = {"fast":
+                # impl.Fast}` pickles by reference, so editing `Fast.run`
+                # moved nothing while the same dict holding a FUNCTION was
+                # followed.
+                surface = self._code.code_surface_hash(item)
+                if surface is not None:
+                    parts.append((f"{name}#cls:{item.__qualname__}", surface))
+        # Code deeper in: an instance held in a tuple in a list, a
+        # function an instance holds (`Runner(scale)`), a user transformer
+        # inside a library pipeline. The pickle has them by name
+        # only, and the one-level look above does not reach them; the
+        # argument walk does, so a global goes through it too.
+        if self.code_args is not None:
+            code_parts = self.code_args.carrier_parts(v, fold.func_name, owner_code=fold.drift_owner)
+            if code_parts:
+                digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
+                parts.append((f"{name}#code", digest))
+        return parts
+
+    def _default_parts(self, fold: _ReadsFold) -> list[tuple[str, str]]:
+        """Key parts for what *fold*'s function's default functions read.
+
+        A function default is evaluated where the `def` stands, so what a
+        default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
+        of the function's, so it is folded here or editing K would keep the key.
+        """
+        parts: list[tuple[str, str]] = []
+        seen = fold.seen
+        for default in self._reads.function_defaults(fold.func):
+            if seen is not None:
+                if ("default", id(default)) in seen:
+                    continue
+                seen.add(("default", id(default)))
+            h = self.fold_read_globals(default, fold.func_name, "", owner_code=fold.drift_owner, seen=seen)
+            if h:
+                parts.append((f"#default:{default.__qualname__}", h))
+        return parts
 
     def fold_helper_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold globals the transitive HELPERS read, not just *func*'s own.
@@ -409,6 +452,15 @@ class GlobalsFold:
         Shared by the two callers that need it: a cached function's own helpers
         and the helpers of the cached functions it calls.
         """
+        state_hash = self._fold_named_helpers(report, func, func_name, state_hash, owner_code, seen)
+        state_hash = self._fold_binding_data(report, func, state_hash, owner_code)
+        return self._fold_held_helpers(report, func, func_name, state_hash, owner_code, seen)
+
+    def _fold_named_helpers(
+        self, report: PurityReport, func: Callable, func_name: str, state_hash: str, owner_code: Any, seen: set
+    ) -> str:
+        """Fold what each helper *report* resolves by module path reads,
+        re-resolved from ``sys.modules`` now."""
         for qual in sorted(report.helper_resolution_paths):
             module_name, attr_chain = report.helper_resolution_paths[qual]
             target: Any = sys.modules.get(module_name)
@@ -428,10 +480,16 @@ class GlobalsFold:
             if getattr(target, "__globals__", None) is None:
                 continue
             state_hash = self.fold_read_globals(target, func_name, state_hash, owner_code=owner_code, seen=seen)
-        # A callable bound at a call site carries DATA besides its code: a
-        # partial's arguments, a bound method's instance, a callable
-        # instance's attributes. Its code is followed as a helper; this is the
-        # rest (`F = partial(base, k=2)` against `k=3`, `F = S(2).f`).
+        return state_hash
+
+    def _fold_binding_data(self, report: PurityReport, func: Callable, state_hash: str, owner_code: Any) -> str:
+        """Fold the data the callables bound at *report*'s call sites carry.
+
+        A callable bound at a call site carries DATA besides its code: a
+        partial's arguments, a bound method's instance, a callable
+        instance's attributes. Its code is followed as a helper; this is the
+        rest (`F = partial(base, k=2)` against `k=3`, `F = S(2).f`).
+        """
         carried: list[str] = []
         # A callable that changes what it carries when called -- an instance
         # memoising into its own dict -- would key each call on the last one's
@@ -456,10 +514,18 @@ class GlobalsFold:
             pending.update(watch)
         if carried:
             state_hash = hashlib.sha256(f"{state_hash}:carried:{':'.join(sorted(carried))}".encode("utf-8")).hexdigest()
-        # Helpers with no path of their own -- the function inside a decorator,
-        # a closure from a factory -- are held by reference. What THEY read
-        # counts as much: `@add1 def h(x): return x * K` computes with K, and
-        # the wrapper bound to the name `h` never mentions it.
+        return state_hash
+
+    def _fold_held_helpers(
+        self, report: PurityReport, func: Callable, func_name: str, state_hash: str, owner_code: Any, seen: set
+    ) -> str:
+        """Fold what the helpers *report* holds by reference read.
+
+        Helpers with no path of their own -- the function inside a decorator,
+        a closure from a factory -- are held by reference. What THEY read
+        counts as much: `@add1 def h(x): return x * K` computes with K, and
+        the wrapper bound to the name `h` never mentions it.
+        """
         for qual in sorted(report.helper_objects):
             if qual in report.helper_resolution_paths:
                 continue

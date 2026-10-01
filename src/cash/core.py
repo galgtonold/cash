@@ -387,7 +387,6 @@ class Cash:
             self._args, self._reads, self._values, self._registry, self._mutations, self._notices
         )
         self._globals = GlobalsFold(
-            self._args,
             self._reads,
             self._values,
             self._classes,
