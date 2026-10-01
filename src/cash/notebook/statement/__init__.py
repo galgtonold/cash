@@ -27,7 +27,8 @@ callers (the decorator path in ``src/cash/core.py``, ``Restorer``, and
 from __future__ import annotations
 
 from ._metadata import StatementCacheMetadata
-from .processor import StatementProcessor, is_control_body
+from .control_body import is_control_body
+from .processor import StatementProcessor
 from .results import DecoratorCallMetric, ProcessResult
 
 __all__ = [

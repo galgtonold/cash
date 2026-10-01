@@ -1,6 +1,6 @@
 """``input changed: x`` must not be reported when x did not change.
 
-``_attribute_input_change`` names the input whose change forced a
+``input_change_reason`` names the input whose change forced a
 statement to re-run. It works by comparing ``executed_input_lineages``
 (what the statement last RAN with) against the current lineage -- and
 that record is keyed by **output variable name only**.
@@ -30,20 +30,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from cash.notebook.statement.processor import StatementProcessor
+from cash.notebook.statement.input_change import input_change_reason
 
 
 def _attribute(*, variable_lineage, executed_input_lineages, inputs, outputs):
     """Run the attributor over a minimal tracking state, return miss_reason."""
-    stub = SimpleNamespace(
-        tracking_state=SimpleNamespace(
-            variable_lineage=dict(variable_lineage),
-            executed_input_lineages=dict(executed_input_lineages),
-        )
+    state = SimpleNamespace(
+        variable_lineage=dict(variable_lineage),
+        executed_input_lineages=dict(executed_input_lineages),
     )
-    metrics: dict = {}
-    StatementProcessor._attribute_input_change(stub, metrics, inputs, outputs)
-    return metrics.get("miss_reason")
+    return input_change_reason(state, inputs, outputs)
 
 
 def test_a_self_referential_statement_does_not_blame_its_own_output():

@@ -21,11 +21,11 @@ from cash.notebook.cache_key import (
     compute_cache_key,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
-from cash.notebook.call_key import changes_its_closure
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
+from cash.notebook.statement.control_body import is_control_body
 from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
@@ -36,9 +36,12 @@ from cash.notebook.statement.imports import (
     import_source_modules,
     redundant_import_names,
 )
+from cash.notebook.statement.input_change import input_change_reason
 from cash.notebook.statement.lineage import StatementLineageBuilder
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
+from cash.notebook.statement.mutation_routing import MutationRouting
 from cash.notebook.statement.mutations import MutationClassifier
+from cash.notebook.statement.output_refusals import unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
@@ -51,11 +54,10 @@ from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.ast_util import called_names, resolve_dotted_name
+from ...analysis.ast_util import resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     decide_cacheability,
-    identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import (
@@ -68,11 +70,9 @@ from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
-from ..consumables import is_consumable_unrestorable
 from ..lineage_formula import key_hidden_reads
 from ..run_memo import forget_file_state_this_run
 from ..write_observer import observe_writes
-from .derivation_edges import is_uncacheable_alias
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -89,25 +89,6 @@ _LOG_ANNOTATION = "[ANNOTATION]"
 
 
 logger = logging.getLogger(__name__)
-
-
-def is_control_body(code: str) -> bool:
-    """True when *code* is one statement out of a loop or branch BODY, not a
-    statement the user wrote at cell level.
-
-    ``for_handler`` / the control-structure processor dispatch a body statement
-    here individually, with an injected marker comment carrying the iteration
-    or branch context. The upstream simulation, in contrast, treats the whole
-    loop or branch as ONE unit -- so any per-statement bookkeeping that names a
-    variable (lineage bumps, mutation routing, callee-global capture) has to be
-    withheld here and owned by the control structure instead, or the two
-    engines disagree about who wrote what.
-
-    Named rather than repeated inline: the same test now gates three separate
-    decisions, and three copies of a marker string is three chances for one of
-    them to silently stop matching.
-    """
-    return has_marker(code)
 
 
 class StatementProcessor:
@@ -201,6 +182,7 @@ class StatementProcessor:
         # Stateless w.r.t. tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
+        self._mutation_routing = MutationRouting(shell, self.tracking_state, self._mutations, self._records)
 
         # Used to prevent the "redundant import" optimization from skipping
         # import statements for modules that need re-execution after source changes.
@@ -238,70 +220,6 @@ class StatementProcessor:
         if self.cash_instance is not None:
             return self.cash_instance
         return default_cash()
-
-    def _attribute_input_change(self, metrics: dict, inputs, outputs) -> None:
-        """Name the input whose change forced this statement to recompute.
-
-        An upstream input changing is the most common reason a notebook
-        statement re-runs, and it was the one reason the badge could not name:
-        the row rendered EXECUTED with no attribution. A user with a
-        reproducible slow re-run had nowhere to look but cash's source.
-
-        Cheap by construction, and it must stay that way. ``TrackingState``
-        already records, per output variable, the input lineages the statement
-        last RAN with -- so the comparison is that record against the current
-        lineages, an O(inputs) dict walk. It never touches the backend:
-        answering the same question by scanning the cache is O(N^2) in cache
-        size over a run and dominates cold-run wall time.
-
-        Ordering is load-bearing: ``executed_input_lineages`` is rewritten by
-        ``_post_execute``, which runs AFTER this. Reading it here therefore
-        sees the previous run's inputs, which is the whole point -- once the
-        statement has run, its inputs agree again and the reason is gone.
-
-        Silent when it has nothing to say: a first run has no prior record, a
-        statement whose inputs all match did not re-run because of them, and a
-        name the statement also WRITES is excluded outright -- see the comment
-        on ``wanted`` below for why that comparison cannot be trusted.
-
-        A wrong reason is worse than no reason here. The row rendered EXECUTED
-        with no attribution before this method existed, so failing closed to
-        silence costs a diagnostic; failing open sends the user to inspect a
-        variable that is not the problem.
-        """
-        try:
-            state = self.tracking_state
-            current = state.variable_lineage
-            # A name this statement WRITES is not evidence about what it read.
-            # ``executed_input_lineages`` is keyed by output variable name
-            # alone, so every statement writing the same variable shares one
-            # slot and reads back whichever of them ran last. For a chain of
-            # ``df = df[...]`` filters that is always a different statement,
-            # and the mismatch is guaranteed -- 17 of 21 attributions on
-            # 01_nyc_taxi_analysis named an input that was also the
-            # statement's own output, on a run whose cache keys and lineage
-            # sequence were byte-identical to the previous one.
-            #
-            # Dropping only the self-referential names keeps the reason for
-            # the half of the statement that is still sound:
-            # ``df = df.join(other)`` may honestly blame ``other``.
-            wanted = {v for v in (inputs or []) if isinstance(v, str) and v not in set(outputs or [])}
-            for out in outputs or []:
-                previous = state.executed_input_lineages.get(out)
-                if not previous:
-                    continue
-                stale = sorted(
-                    name
-                    for name, was in previous.items()
-                    if name in wanted and name in current and current[name] != was
-                )
-                if stale:
-                    names = ", ".join(stale[:3])
-                    more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
-                    metrics["miss_reason"] = f"input changed: {names}{more}"
-                    return
-        except (AttributeError, TypeError):  # pragma: no cover - defensive
-            return
 
     def forget_variable(self, name: str) -> None:
         """Drop everything recorded about how *name* was computed.
@@ -523,7 +441,7 @@ class StatementProcessor:
         # Computed once: used by the cacheability decision and (on the
         # cache-miss path) by _post_execute for in-place-mutation tracking.
         run.analysis = analyze_statement(run.code, run.tree, self.shell.user_ns)
-        self._route_mutations(run, effects)
+        self._mutation_routing.route(run, effects)
         self._decide_cacheability(run)
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -620,134 +538,6 @@ class StatementProcessor:
         # field: two runs of the same statement in the same slot or not.
         run.metrics["cache_key"] = run.cache_key
         return effects, analysis_time, hash_time
-
-    def _route_mutations(self, run: StatementRun, effects: StatementEffects) -> None:
-        """Add the receivers *run* mutates to its outputs, and skip-cache it
-        where the mutation must really happen on every run."""
-        code, tree, metrics = run.code, run.tree, run.metrics
-        # A standalone bare-Expr method call (``lst.append(x)``, ``bus.on(fn)``)
-        # has no Store target, so AST analysis never surfaces the receiver as an
-        # output and its lineage stays frozen -> a cached downstream consumer
-        # serves a stale value once the mutation is edited. The broad-precise
-        # classifier decides which receivers actually mutate (statically known,
-        # a prior runtime verdict, or assume-mutate); the rest are observed by
-        # content after execution (see _post_execute). Routed receivers go into
-        # the output set so capture_and_track bumps their lineage (source-based,
-        # matching the upstream simulation) and the statement is skip-cached so
-        # the mutated receiver is never round-tripped.
-        # Control-structure BODY statements are dispatched here individually with
-        # an injected marker comment, but the upstream simulation treats the whole
-        # loop/branch as one unit (its mutations flow through the loop-mutation
-        # lineage path, not per-body classification). Classifying a body statement
-        # here would bump the receiver with a per-statement source the simulation
-        # never reproduces -> cross-cell desync. Skip them; the control structure
-        # owns its body's mutation lineage.
-        if is_control_body(code):
-            mut_pre_route: set[str] = set()
-            # ...with ONE exception: a draw on a live Figure/Axes.
-            draw_only = self._mutations.identity_coupled_call_receivers(tree)
-            fit_only = self._mutations.fitted_receivers(tree)
-        else:
-            mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._mutations.classify(
-                tree,
-                run.source_hash,
-                run.outputs,
-            )
-            run.est_fit = self._mutations.estimator_fit_receivers(tree, run.outputs) if run.cache_fit else set()
-            draw_only = set()
-            fit_only = set()
-        est_fit = run.est_fit
-        # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
-        # mutates its receiver in place, so the classifier above routes it to
-        # skip-caching: the statement re-executes and is never serialised, which is
-        # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
-        #
-        # It does NOT make aliases safe. ``backup = clf`` is an ORDINARY
-        # ASSIGNMENT that cash caches on its own, and restoring it rebinds
-        # ``backup`` to a pre-fit deserialised copy -- the fit statement has no
-        # bearing on it either way.
-        #
-        # Caching a bare fit instead is the OPT-IN path, kept because it
-        # is a large win when it lands but not the default because its
-        # correctness surface exceeds what per-statement restore can guarantee:
-        #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
-        #     pre-fit object. Not fixable per-statement -- on a warm run-all the
-        #     CONSTRUCTOR statement's own hit-restore rebinds the receiver before
-        #     the fit's in-place transfer lands, so the alias graph is already
-        #     broken upstream; and
-        #   * the duck-type gate admits the whole sklearn-compatible universe
-        #     (xgboost/lightgbm/custom), each with its own ``__getstate__``
-        #     contract, and several never restore -- re-serialising every run for
-        #     a net LOSS.
-        # For reliable ML caching, wrap training in a returning function under
-        # ``@cash.cache`` instead (verified 9-11x, no identity caveat).
-        #
-        # When opted in: add the receiver to ``outputs`` (so its source-based
-        # lineage is bumped AND the fitted value is captured/saved) but do NOT
-        # skip-cache it, so the normal lookup runs (hit -> in-place restore; miss
-        # -> execute + save). A receiver that is BOTH an estimator fit AND another
-        # genuine skip receiver still skips (the skip wins for that receiver).
-        # ``est_fit`` also threads to the cache-hit path so its restore is IN
-        # PLACE. Without the directive ``est_fit`` is empty and every
-        # site below degrades to the skip-cache behaviour.
-        fam = effects.arg_mutations - run.outputs
-        skip_pre_route = mut_pre_route - est_fit
-        if mut_pre_route or est_fit or fam:
-            run.outputs = run.outputs | mut_pre_route | est_fit | fam
-        if skip_pre_route:
-            run.skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)" + self._mutations.cache_fit_hint(skip_pre_route)
-            )
-        # Deliberately the SAME treatment the inline spelling of the identical
-        # mutation gets immediately above: the statement re-executes so the
-        # callee's write to a global really happens.
-        #
-        # The expensive work is NOT lost. Call interception still serves the
-        # call inside this statement, keyed on the mutated global's own
-        # pre-call state, so what re-executes is the glue around it.
-        callee_globals = set(effects.callee_globals)
-        if callee_globals:
-            run.skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Callee mutates: {', '.join(sorted(callee_globals))} "
-                "(global lineage bumped; statement re-executes, call still cached)"
-            )
-        # The same for a callee that changes its closure: `add` appending to
-        # the list `make_log` gave it, `counter` bumping a `nonlocal`. The
-        # list is no variable of the notebook, so it is not an output and has
-        # no lineage; the statement only re-executes. Restored whole, it
-        # skipped the call inside, and the list stayed empty. In a loop or
-        # branch body too: without a lineage the body statement's key never
-        # moves, so nothing else sends it back to run.
-        closure_writers = self._callees_changing_their_closure(tree)
-        if closure_writers:
-            run.skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Callee changes its closure: {', '.join(sorted(closure_writers))} "
-                "(statement re-executes, call still cached)"
-            )
-        # a draw inside a loop/branch body. Skip the CACHE without
-        # touching ``outputs`` -- the statement must re-execute so the artists
-        # actually land on the Axes, but bumping its lineage from a per-statement
-        # source is precisely what the control-body skip above exists to avoid.
-        if draw_only:
-            run.skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Draws on: {', '.join(sorted(draw_only))} (live Figure/Axes; statement re-executes)"
-            )
-        if fit_only:
-            run.skip_cache = True
-            metrics["uncacheable_reasons"].append(
-                f"Fits: {', '.join(sorted(fit_only))} (estimator fitted in place; statement re-executes)"
-            )
-
-    def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
-        """The functions *tree* calls by name, outside loop and branch bodies,
-        that change their closure (:func:`changes_its_closure`)."""
-        user_ns = self.shell.user_ns
-        return {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
 
     def _decide_cacheability(self, run: StatementRun) -> None:
         """Skip-cache *run* when the static cacheability decision refuses it."""
@@ -928,7 +718,9 @@ class StatementProcessor:
         elif not run.skip_cache and not self._evicted.attribute(
             metrics, self.cash_instance.backend, run.cache_key, run.code, execution.cost
         ):
-            self._attribute_input_change(metrics, run.inputs, run.outputs)
+            reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
+            if reason is not None:
+                metrics["miss_reason"] = reason
 
         self._post_execute(run, execution)
         return metrics
@@ -1075,7 +867,7 @@ class StatementProcessor:
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
         """
-        self._observe_mutations(run)
+        self._mutation_routing.observe(run)
 
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
@@ -1132,97 +924,13 @@ class StatementProcessor:
             code_hash=run.cache_key,
         )
 
-    def _observe_mutations(self, run: StatementRun) -> None:
-        """Add the receivers execution was seen mutating to *run*'s outputs.
-
-        Broad-precise mutation observation: for a standalone method call whose
-        method is not statically known, compare each candidate receiver's
-        content after execution against its pre-statement hash. Runs BEFORE
-        capture_and_track so a newly-detected mutation is in the outputs (its
-        lineage gets bumped) and skip-caches the statement. The verdict is
-        recorded for the upstream simulation, which cannot observe execution.
-        """
-        if not run.mut_record:
-            return
-        metrics, source_hash = run.metrics, run.source_hash
-        newly_mutated = self._mutations.observed_mutations(run.mut_observe, source_hash)
-        if newly_mutated:
-            # ``run.est_fit`` is non-empty only under ``# @cash:cache-fit``.
-            # Those receivers still enter the outputs (source-based lineage
-            # bump + fitted value capture) and are still recorded in
-            # ``mutation_verdicts`` below (so the upstream simulation bumps
-            # downstream lineage on a data edit), but they are NOT
-            # skip-cached -- they cache + restore in place. Every
-            # other observed mutation -- including a bare fit WITHOUT the
-            # directive -- still skip-caches its receiver.
-            run.outputs = run.outputs | newly_mutated
-            # The metrics hold their own copy of the outputs: without this the
-            # badge row said "Produced -" for ``sc.pp.normalize_total(adata)``
-            # on its first run.
-            produced = metrics.setdefault("evaluated_vars", [])
-            produced.extend(n for n in sorted(newly_mutated) if n not in produced)
-            skip_observed = newly_mutated - run.est_fit
-            if skip_observed:
-                run.skip_cache = True
-                metrics.setdefault("uncacheable_reasons", []).append(
-                    f"In-place mutation on: {', '.join(sorted(skip_observed))} "
-                    "(observed; receiver lineage bumped; statement re-executes)"
-                    + self._mutations.cache_fit_hint(skip_observed)
-                )
-        self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
-        self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
-
-    def _alias_refusal(self, name: str, value: Any) -> str | None:
-        """A live-alias object (numpy view, pandas groupby/rolling ref-holder)
-        is not cached: pickling and restoring it decouples it from its live
-        base, so a later base mutation would be lost after restore. It is
-        re-derived from the live base instead. ``.copy()`` produces no alias
-        and stays cacheable."""
-        if is_uncacheable_alias(value, self.shell.user_ns):
-            return f"Live-alias object '{name}' (view/ref-holder); re-derived from live base, not cached."
-        return None
-
-    @staticmethod
-    def _consumable_refusal(name: str, value: Any) -> str | None:
-        """Nor a CONSUMABLE the cache cannot copy -- an open file handle, a
-        generator. The RAM tier keeps such a value by reference, so a "hit"
-        hands back the very object a reader already drained: on a second Run
-        All `fh = open(p)` was served, and the cell reading `fh` printed []
-        where Run All in plain Jupyter reads the file again
-        (test_a_consumed_iterator_is_rebuilt_for_its_reader)."""
-        if is_consumable_unrestorable(value):
-            return (
-                f"'{name}' is consumed as it is read (an open file or a "
-                f"generator) and cannot be restored: it is re-created "
-                f"every run"
-            )
-        return None
-
     def _refuse_unrestorable_outputs(self, run: StatementRun, captured_vars: dict[str, Any]) -> None:
         """Skip-cache *run* when one of its output values cannot be stored and
-        restored faithfully, giving the first refusal found as the reason.
-
-        Checked here, after execution, because the values do not exist when
-        the cacheability decision runs; and before ``StatementStore.save``,
-        because refusing then is what keeps the RAM tier from deep-copying
-        them. ``identity_coupled_reason`` refuses an object identity-coupled to
-        a library global: the RAM tier's deep copy of a matplotlib Figure
-        re-registers the COPY as pyplot's current figure, so ``plt.savefig()``
-        writes the cache's snapshot, a blank PNG on the first run.
-        """
-        refusals: tuple[Callable[[str, Any], str | None], ...] = (
-            self._alias_refusal,
-            identity_coupled_reason,
-            self._consumable_refusal,
-        )
-        for refusal in refusals:
-            for out in run.outputs:
-                value = captured_vars.get(out)
-                reason = refusal(out, value) if value is not None else None
-                if reason is not None:
-                    run.skip_cache = True
-                    run.metrics.setdefault("uncacheable_reasons", []).append(reason)
-                    return
+        restored faithfully (:func:`unrestorable_output_reason`)."""
+        reason = unrestorable_output_reason(run.outputs, captured_vars, self.shell.user_ns)
+        if reason is not None:
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(reason)
 
     def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:
         """Record the files *run* wrote and read, for the upstream simulation
