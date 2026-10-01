@@ -17,7 +17,7 @@ def test_total_time_saved_credits_avoided_compute(tmp_path):
 
     @c.cache
     def slow(x):
-        time.sleep(0.3)
+        time.sleep(0.3)  # measurable work: the test checks the time a hit saves
         return x * 2
 
     slow(1)  # miss (~0.3s compute, stored)
@@ -55,7 +55,7 @@ def test_time_saved_survives_cross_instance_restore(tmp_path):
 
     @c1.cache
     def slow(x):
-        time.sleep(0.25)
+        time.sleep(0.25)  # measurable work: the test checks the time a hit saves
         return x * 2
 
     slow(7)  # compute + persist
@@ -64,7 +64,7 @@ def test_time_saved_survives_cross_instance_restore(tmp_path):
 
     @c2.cache
     def slow(x):  # same source -> same key space
-        time.sleep(0.25)
+        time.sleep(0.25)  # measurable work: the test checks the time a hit saves
         return x * 2
 
     slow(7)  # warm-up (cold-key transition)

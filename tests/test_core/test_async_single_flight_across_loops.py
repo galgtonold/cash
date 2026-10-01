@@ -27,7 +27,7 @@ def counted(tmp_path):
     @cash.cache
     async def expensive(n):
         runs.append(n)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.3)  # the leader is still running when the follower arrives
         return n * 2
 
     return expensive, runs
@@ -66,9 +66,9 @@ def test_a_cancelled_follower_does_not_cancel_the_computation(counted):
 
     async def main():
         leader = asyncio.create_task(expensive(3))
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)  # let the task start before the next step
         follower = asyncio.create_task(expensive(3))
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)  # let the task start before the next step
         follower.cancel()
         return await leader
 

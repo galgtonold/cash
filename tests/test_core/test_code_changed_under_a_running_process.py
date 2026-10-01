@@ -42,7 +42,7 @@ def work(n):
 go = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 print("READY", flush=True)
 while go is not None and not go.exists():
-    time.sleep(0.02)
+    time.sleep(0.02)  # poll until the test says go
 print("ANSWER", work(5), flush=True)
 """
 

@@ -89,7 +89,7 @@ def test_the_first_item_arrives_before_the_last_is_produced(disk_cash):
     @disk_cash.cache
     def slow_stream():
         for i in range(4):
-            time.sleep(0.1)
+            time.sleep(0.1)  # work between items: the test measures when they arrive
             yield i
 
     with warnings.catch_warnings():

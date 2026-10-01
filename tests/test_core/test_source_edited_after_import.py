@@ -55,7 +55,7 @@ MAIN = textwrap.dedent("""
             for _ in range(400):
                 if os.path.exists("go"):
                     break
-                time.sleep(0.025)
+                time.sleep(0.025)  # poll interval of the handshake between the two processes
         print(compute(1))
 """)
 
@@ -100,7 +100,7 @@ def test_an_edit_between_import_and_first_call_is_not_served_to_the_restart(tmp_
     for _ in range(400):
         if (proj / "ready").exists():
             break
-        time.sleep(0.025)
+        time.sleep(0.025)  # poll interval of the handshake between the two processes
     assert (proj / "ready").exists(), "process A never reached its first call"
     _edit(proj / "helper.py", NEW)  # the deploy lands under A
     (proj / "go").write_text("", encoding="utf-8")
@@ -174,7 +174,7 @@ OWN_MAIN = textwrap.dedent("""
         for _ in range(400):
             if os.path.exists("go"):
                 break
-            time.sleep(0.025)
+            time.sleep(0.025)  # poll interval of the handshake between the two processes
     print(compute(3))
 """)
 
@@ -187,7 +187,7 @@ SCRIPT_OLD = OWN_OLD + textwrap.dedent("""
             for _ in range(400):
                 if os.path.exists("go"):
                     break
-                time.sleep(0.025)
+                time.sleep(0.025)  # poll interval of the handshake between the two processes
         print(compute(3))
 """)
 
@@ -216,7 +216,7 @@ def _edit_under_a(proj, env, edited, new_text):
     for _ in range(400):
         if (proj / "ready").exists():
             break
-        time.sleep(0.025)
+        time.sleep(0.025)  # poll interval of the handshake between the two processes
     assert (proj / "ready").exists(), "process A never reached its first call"
     _edit(edited, new_text)
     (proj / "go").write_text("", encoding="utf-8")
@@ -248,7 +248,7 @@ IMPORT_WINDOW = textwrap.dedent("""
         for _ in range(400):
             if os.path.exists("go"):
                 break
-            time.sleep(0.025)
+            time.sleep(0.025)  # poll interval of the handshake between the two processes
 
 
     @cash.cache
@@ -281,7 +281,7 @@ def test_an_edit_while_the_module_is_still_importing_is_not_served_to_the_restar
     for _ in range(400):
         if (proj / "ready").exists():
             break
-        time.sleep(0.025)
+        time.sleep(0.025)  # poll interval of the handshake between the two processes
     assert (proj / "ready").exists(), "process A never reached the window"
     _edit(app, IMPORT_WINDOW.replace("x * 14", "x * 3"))
     (proj / "go").write_text("", encoding="utf-8")

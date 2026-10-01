@@ -116,7 +116,7 @@ QUICK = textwrap.dedent("""
     @cash.cache
     def quick_but_bulky(n):
         import time
-        time.sleep(0.005)
+        time.sleep(0.005)  # quick, the subject: a quick call is stored too
         calls.append(n)
         return [{"i": i, "s": "x" * 16} for i in range(n)]
 

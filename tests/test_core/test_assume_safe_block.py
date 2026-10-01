@@ -472,7 +472,7 @@ def test_it_works_in_an_async_function(load):
         @c.cache
         async def waived(name):
             with cash.assume_safe():
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.2)  # keep the block open while the other call runs
                 with zipfile.ZipFile(str(tmp / name), "w") as z:
                     names = z.namelist()
             return str(names)

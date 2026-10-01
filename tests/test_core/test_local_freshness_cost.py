@@ -200,7 +200,7 @@ def test_expensive_local_validation_is_reported(disk_cash, tmp_path, monkeypatch
     real = file_dep_snapshot.file_dep_is_fresh
 
     def slow(*args, **kwargs):
-        time.sleep(0.4)
+        time.sleep(0.4)  # a freshness check slow enough to measure
         return real(*args, **kwargs)
 
     monkeypatch.setattr(file_dep_snapshot, "file_dep_is_fresh", slow)

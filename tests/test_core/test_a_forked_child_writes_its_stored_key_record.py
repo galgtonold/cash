@@ -37,7 +37,7 @@ def _in_child(body) -> int:
         done, status = os.waitpid(pid, os.WNOHANG)
         if done:
             return os.waitstatus_to_exitcode(status)
-        time.sleep(0.02)
+        time.sleep(0.02)  # poll for the child's exit
     os.kill(pid, 9)
     os.waitpid(pid, 0)
     return -1

@@ -240,7 +240,7 @@ def test_hits_on_several_threads_are_not_counted_as_serial_savings(tmp_path):
 
     @c.cache
     def slow(i):
-        time.sleep(0.2)
+        time.sleep(0.2)  # measurable work: the test checks the time a hit saves
         return i * i
 
     with ThreadPoolExecutor(8) as ex:

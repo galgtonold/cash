@@ -143,7 +143,7 @@ def test_a_clear_during_a_call_begun_inside_the_check_window_is_seen(tmp_path, m
             disk._writes.wait_all()
             c._stored_keys.flush()  # and the stored-key record's
             shutil.rmtree(cache_dir)  # the operator's clear, mid-call
-            time.sleep(0.15)
+            time.sleep(0.15)  # the clear lands while the call is still running
             return x
 
         rate(1)

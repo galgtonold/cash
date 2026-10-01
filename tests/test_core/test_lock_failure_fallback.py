@@ -108,7 +108,7 @@ def test_working_lock_collapses_concurrent_computes():
     def expensive(x):
         with guard:
             runs["n"] += 1
-        time.sleep(0.15)
+        time.sleep(0.15)  # long enough for all eight threads to arrive during the first call
         return x * x
 
     with ThreadPoolExecutor(max_workers=8) as ex:

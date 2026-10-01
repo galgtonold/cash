@@ -22,7 +22,7 @@ def test_async_single_flight_collapses_concurrent_awaits():
     @c.cache
     async def fetch(x):
         runs["n"] += 1
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)  # the first call is still running when the others arrive
         return x * x
 
     async def main():
@@ -40,7 +40,7 @@ def test_async_single_flight_distinct_keys_each_compute_once():
     @c.cache
     async def fetch(x):
         runs["n"] += 1
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)  # the first call is still running when the others arrive
         return x * x
 
     async def main():
@@ -59,7 +59,7 @@ def test_async_without_locking_still_fans_out():
     @c.cache
     async def fetch(x):
         runs["n"] += 1
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)  # the first call is still running when the others arrive
         return x * x
 
     async def main():
@@ -79,7 +79,7 @@ def test_async_single_flight_followers_get_result_when_leader_rejects_cache():
     @c.cache(cache_if=lambda v: False)  # never store
     async def fetch(x):
         runs["n"] += 1
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.02)  # the first call is still running when the others arrive
         return x * x
 
     async def main():
@@ -95,7 +95,7 @@ def test_async_single_flight_propagates_exception():
 
     @c.cache
     async def boom(x):
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.01)  # the first call is still running when the others arrive
         raise ValueError("nope")
 
     async def main():

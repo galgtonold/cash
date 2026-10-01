@@ -127,6 +127,6 @@ def test_an_expired_entry_still_recomputes_under_the_lock(tmp_path):
         return n * 2
 
     assert work(21) == 42
-    time.sleep(1.2)
+    time.sleep(1.2)  # let the 1 s TTL run out
     assert work(21) == 42
     assert len(runs) == 2, "the TTL stopped being honoured"

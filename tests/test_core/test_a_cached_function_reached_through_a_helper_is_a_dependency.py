@@ -129,7 +129,7 @@ def test_the_caller_refreshes_at_the_ttl_of_a_cached_function_behind_a_helper(tm
 
     first = report(1)
     assert report(1) == first, "the control failed: a second call should hit"
-    time.sleep(1.2)
+    time.sleep(1.2)  # let the 1 s TTL run out
     assert report(1) != first
 
 

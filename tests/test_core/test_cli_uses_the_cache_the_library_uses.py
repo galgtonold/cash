@@ -63,7 +63,7 @@ def a_cache_somewhere_else(tmp_path):
     for _ in range(20):  # the writer is a background thread
         if elsewhere.is_dir() and any(elsewhere.iterdir()):
             break
-        time.sleep(0.25)
+        time.sleep(0.25)  # poll for the background writer
     assert any(elsewhere.iterdir()), "test setup: nothing was cached"
     return elsewhere, workdir, env
 

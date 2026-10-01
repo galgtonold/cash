@@ -32,7 +32,7 @@ def _concurrent_calls(c: Cash, n_threads: int = 8):
     def expensive(x):
         with guard:
             runs["n"] += 1
-        time.sleep(0.2)
+        time.sleep(0.2)  # the first call is still running when the others arrive
         return x * x
 
     def call(_):
@@ -90,7 +90,7 @@ def test_distinct_keys_each_compute_once():
     def expensive(x):
         with guard:
             runs["n"] += 1
-        time.sleep(0.1)
+        time.sleep(0.1)  # the first call is still running when the others arrive
         return x * x
 
     with ThreadPoolExecutor(max_workers=8) as ex:

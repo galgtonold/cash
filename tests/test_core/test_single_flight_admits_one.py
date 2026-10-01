@@ -73,7 +73,7 @@ def _widen_the_analysis_window(c, seconds=0.5):
     real = c._runner._analyze_dependencies
 
     def slow(func):
-        time.sleep(seconds)
+        time.sleep(seconds)  # widen the race window the lock must close
         return real(func)
 
     c._runner._analyze_dependencies = slow
@@ -129,7 +129,7 @@ def test_without_locking_every_thread_computes(tmp_path):
     @c.cache(assume_safe=True)
     def heavy(k):
         runs.append(threading.current_thread().name)
-        time.sleep(0.4)
+        time.sleep(0.4)  # the first call is still running when the others arrive
         return _helper(k)
 
     _run_threads(lambda: heavy(21), 4)
@@ -150,7 +150,7 @@ def test_concurrent_first_calls_agree_on_one_cache_key(tmp_path):
 
     @c.cache(assume_safe=True)
     def heavy(k):
-        time.sleep(0.2)
+        time.sleep(0.2)  # the first call is still running when the others arrive
         return _helper(k)
 
     def call():
@@ -177,7 +177,7 @@ def test_no_orphan_entry_is_left_behind(tmp_path):
 
     @c.cache(assume_safe=True)
     def heavy(k):
-        time.sleep(0.3)
+        time.sleep(0.3)  # the first call is still running when the others arrive
         return _helper(k)
 
     _run_threads(lambda: heavy(21), 8)
@@ -196,7 +196,7 @@ def test_async_single_flight_admits_one_coroutine(tmp_path):
     @c.cache(assume_safe=True)
     async def heavy(k):
         runs.append(k)
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.3)  # the first call is still running when the others arrive
         return _helper(k)
 
     async def main():
@@ -220,7 +220,7 @@ def test_a_second_call_still_hits(tmp_path):
     @c.cache(assume_safe=True)
     def heavy(k):
         runs.append(k)
-        time.sleep(0.3)
+        time.sleep(0.3)  # the first call is still running when the others arrive
         return _helper(k)
 
     assert heavy(21) == 42

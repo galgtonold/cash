@@ -79,7 +79,7 @@ def test_a_ttl_expiry_is_named_in_the_next_process(tmp_path):
     alone sees "absent"."""
     _write(tmp_path, ttl=1)
     _run(tmp_path)
-    time.sleep(1.5)
+    time.sleep(1.5)  # let the 1 s TTL run out
     out = _run(tmp_path)
     assert out["reasons"] == {"ttl expired": 1}, out
     assert "ttl=1" in out["explain"]

@@ -99,8 +99,8 @@ def test_sleep_and_a_log_helper_are_not_discarded_calls(tmp_path, monkeypatch):
             print(msg, file=sys.stderr)
 
         def work(n):
-            time.sleep(0.001)
-            sleep(0.001)
+            time.sleep(0.001)  # the subject: a sleep is not a discarded result
+            sleep(0.001)  # the subject: a sleep is not a discarded result
             _log("step")
             return n
     """

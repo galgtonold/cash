@@ -171,7 +171,7 @@ def test_a_ttl_expiry_is_a_ttl_expiry(disk_cash):
         return x
 
     short(1)
-    time.sleep(1.2)
+    time.sleep(1.2)  # let the 1 s TTL run out
     assert short.explain(1).reason == "ttl_expired"
     short(1)
     assert short.cache_info()["miss_reasons"]["ttl expired"] == 1
@@ -189,7 +189,7 @@ def test_the_summary_does_not_report_a_cheap_result_as_ram_only(disk_cash):
 
     @disk_cash.cache(assume_safe=True)
     def slow(n):
-        time.sleep(0.25)
+        time.sleep(0.25)  # a costly call beside a cheap one; neither is RAM-only
         return n
 
     fast(1)
@@ -214,7 +214,7 @@ def test_cash_s_own_work_does_not_decide_where_a_result_lands(disk_cash, monkeyp
     real = type(disk_cash._args).serialize_args
 
     def slow_key(self, *args, **kwargs):
-        time.sleep(0.15)
+        time.sleep(0.15)  # key work slower than the body: the subject
         return real(self, *args, **kwargs)
 
     monkeypatch.setattr(type(disk_cash._args), "serialize_args", slow_key)
@@ -290,7 +290,7 @@ _MODE_JOB = textwrap.dedent("""
     @cash.cache(assume_safe=True)
     def step(mode):
         if mode == "slow":
-            time.sleep(0.2)
+            time.sleep(0.2)  # the slow mode is the one whose miss is reported
         return mode
 
     step(sys.argv[1] if len(sys.argv) > 1 else "fast")

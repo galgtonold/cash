@@ -20,6 +20,7 @@ import pytest
 
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
+from tests._files import rewrite
 
 pytestmark = pytest.mark.core
 
@@ -86,12 +87,9 @@ def test_an_edit_after_the_recheck_is_still_caught(tmp_path, monkeypatch):
     _later(monkeypatch, 3600)
     assert file_dep_is_fresh(path, stored) == (True, None)
     # Only this module's clock is an hour on: the edit really follows the
-    # first write at once, and Windows can stamp both with the same tick.
-    import time
-
-    time.sleep(0.1)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write("a,b\n9,9\n")  # same size
+    # first write at once, and rewrite() moves the mtime even if the file
+    # clock has not ticked since.
+    rewrite(path, "a,b\n9,9\n")  # same size
     assert file_dep_is_fresh(path, stored)[0] is False
 
 

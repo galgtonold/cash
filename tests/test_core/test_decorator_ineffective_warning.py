@@ -150,7 +150,7 @@ def test_a_slow_first_call_does_not_convict_a_function_worth_caching(tmp_path, m
     delay = 5 * (time.perf_counter() - t0)
 
     def slow_analyze(func):
-        time.sleep(delay)
+        time.sleep(delay)  # key work five times the body's: the subject
         return analyze(func)
 
     monkeypatch.setattr(cash._runner, "_analyze_dependencies", slow_analyze)

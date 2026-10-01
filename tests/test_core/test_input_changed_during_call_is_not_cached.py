@@ -112,7 +112,7 @@ def test_the_nested_form_is_not_cached_either(disk_cash, tmp_path):
             value = int(fh.read())
         if path.endswith("b.txt"):
             writer.after_read()
-        time.sleep(0.2)
+        time.sleep(0.2)  # the call is still running when the input changes
         return value
 
     @disk_cash.cache(assume_safe=True)
@@ -143,7 +143,7 @@ def test_an_unchanged_file_still_stores_and_hits(disk_cash, tmp_path):
         runs.append(1)
         with open(path, encoding="utf-8") as fh:
             value = sum(int(x) for x in fh.read().split())
-        time.sleep(0.2)
+        time.sleep(0.2)  # the call is still running when the input changes
         return value
 
     with warnings.catch_warnings(record=True) as rec:
@@ -174,7 +174,7 @@ def test_writing_into_a_listed_directory_still_caches(disk_cash, tmp_path):
     def summarise(path):
         runs.append(1)
         names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(path, "*.csv")))
-        time.sleep(0.2)
+        time.sleep(0.2)  # the call is still running when the input changes
         (folder / "summary.parquet").write_bytes(b"x")  # output into the same folder
         return names
 

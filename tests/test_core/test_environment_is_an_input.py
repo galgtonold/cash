@@ -214,6 +214,7 @@ def test_what_is_built_on_the_read_follows_the_value(magics, monkeypatch):
     output kept its lineage, so the statement below hit and returned the
     first tenant's answer."""
     m = magics
+    # Notebook statements: each sleeps past the persistence floor so it is stored.
     read = "import os, time\ntenant = (time.sleep(0.02), os.getenv('CASH_TEST_TENANT'))[1]"
     shout = "import time\nloud = (time.sleep(0.02), tenant.upper())[1]"
     for run, value in enumerate(("acme", "globex", "acme")):
