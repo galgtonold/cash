@@ -21,7 +21,7 @@ from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
-from .call_state import PROCESS_STARTED, KeyBuildFailed, UnhashableArgs, UnhashableDefault
+from .call_state import PROCESS_STARTED, BuiltKey, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 
 if TYPE_CHECKING:
     from ..config import CashConfig
@@ -679,6 +679,16 @@ def _method_hint(cf: CachedFunction) -> str:
     )
 
 
+def _uncomputable(func_name: str, details: dict[str, Any]) -> CacheExplanation:
+    """The explanation for a call that has no key: it would run uncached."""
+    return CacheExplanation(
+        would_hit=False,
+        reason=EXPLAIN_KEY_UNCOMPUTABLE,
+        func_name=func_name,
+        details=details,
+    )
+
+
 class Explainer:
     """``f.explain()``: why the next call with some arguments would hit or miss."""
 
@@ -714,8 +724,29 @@ class Explainer:
 
         See `CacheExplanation` for the return shape.
         """
-        func, func_name, dynamic_depends_on, ttl = cf.func, cf.name, cf.dynamic_depends_on, cf.ttl
         check_explain_arguments(cf, args, kwargs)
+        refused = self._refused_before_key(cf)
+        if refused is not None:
+            return refused
+        built = self._build_key(cf, args, kwargs)
+        if isinstance(built, CacheExplanation):
+            return built
+        cache_key = built.cache_key
+        frozen_args = self._frozen.arg_names(built.normalized_args)
+
+        # Looking, not reading: `get` would count this as a use (USES / LAST
+        # USED in `cash inspect`) and make the file backend rewrite the entry.
+        raw_metadata = self._backend_slot.backend.peek_metadata(cache_key)
+        if raw_metadata is not None and raw_metadata.get("metadata_only"):
+            raw_metadata = None  # nothing to restore: a real call misses
+        if raw_metadata is None:
+            return self._absent_entry(cf, cache_key, args, kwargs, frozen_args)
+        return self._stored_entry(cf, cache_key, CacheMetadata.from_dict(raw_metadata), frozen_args)
+
+    def _refused_before_key(self, cf: CachedFunction) -> CacheExplanation | None:
+        """The answer when no key is built at all: caching is disabled, or a
+        helper binding makes the call run uncached. None otherwise."""
+        func, func_name = cf.func, cf.name
         if self._config.disable:
             return CacheExplanation(
                 would_hit=False,
@@ -732,29 +763,28 @@ class Explainer:
         # Same binding check a real call makes first: a patched helper
         # changes the key, and a mock means the call would run uncached.
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
-        if unkeyable is not None:
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={
-                    "error": unkeyable.kind.value,
-                    "hint": unkeyable.detail.replace("so the call ran uncached", "so the call would run uncached")
-                    + ".",
-                },
-            )
+        if unkeyable is None:
+            return None
+        return _uncomputable(
+            func_name,
+            {
+                "error": unkeyable.kind.value,
+                "hint": unkeyable.detail.replace("so the call ran uncached", "so the call would run uncached") + ".",
+            },
+        )
 
-        # The key a real call builds, built the same way, with every warning
-        # a step would give held back: explain() must stay silent.
+    def _build_key(self, cf: CachedFunction, args: tuple, kwargs: dict) -> BuiltKey | CacheExplanation:
+        """The key a real call builds, built the same way, with every warning
+        a step would give held back: explain() must stay silent. When no key
+        can be built, the explanation of why."""
+        func_name = cf.name
         token = _EXPLAINING.set(True)
         try:
-            built = self._keys.build(func, func_name, dynamic_depends_on, args, kwargs)
+            return self._keys.build(cf.func, func_name, cf.dynamic_depends_on, args, kwargs)
         except UnhashableDefault:
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={
+            return _uncomputable(
+                func_name,
+                {
                     "error": "unhashable parameter default",
                     "hint": (
                         "A parameter default could not be hashed, so cash "
@@ -765,11 +795,9 @@ class Explainer:
             )
         except UnhashableArgs:
             arg_type_name = self._args.first_unhashable_arg_type(args, kwargs)
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={
+            return _uncomputable(
+                func_name,
+                {
                     "arg_type": arg_type_name,
                     "hint": (
                         unhashable_arg_fix(self._args.first_unhashable_arg(args, kwargs), arg_type_name)
@@ -779,76 +807,71 @@ class Explainer:
                 },
             )
         except KeyBuildFailed as e:
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={"error": e.code, "hint": f"{e.message} {e.fix}"},
-            )
+            return _uncomputable(func_name, {"error": e.code, "hint": f"{e.message} {e.fix}"})
         except Exception as e:  # noqa: BLE001 - explain() reports, never raises
-            return CacheExplanation(
-                would_hit=False,
-                reason=EXPLAIN_KEY_UNCOMPUTABLE,
-                func_name=func_name,
-                details={
+            return _uncomputable(
+                func_name,
+                {
                     "error": f"{type(e).__name__}: {e}",
                     "hint": "Building the cache key raised, so the call would run uncached.",
                 },
             )
         finally:
             _EXPLAINING.reset(token)
-        cache_key = built.cache_key
-        frozen_args = self._frozen.arg_names(built.normalized_args)
 
-        # Looking, not reading: `get` would count this as a use (USES / LAST
-        # USED in `cash inspect`) and make the file backend rewrite the entry.
-        raw_metadata = self._backend_slot.backend.peek_metadata(cache_key)
-        if raw_metadata is not None and raw_metadata.get("metadata_only"):
-            raw_metadata = None  # nothing to restore: a real call misses
-        if raw_metadata is None:
-            details = {
-                "hint": ("No matching cache entry. First call with these arguments, or the cache was cleared."),
-            }
-            # A tracked dynamic dependency that changed produces a NEW cache key,
-            # so the miss surfaces as no_entry rather than file_changed. Make the
-            # explanation say so and list what's tracked.
-            dyn_ids = describe_dynamic_dependencies(dynamic_depends_on, args, kwargs)
-            if dyn_ids:
-                details["dynamic_dependencies"] = dyn_ids
-                details["hint"] = (
-                    "No matching cache entry. Either the first call with these "
-                    "arguments, or a tracked dynamic dependency changed - a "
-                    "dynamic_depends_on change yields a new cache key, so it "
-                    "shows up here as no_entry, not file_changed. Tracked "
-                    "dynamic dependencies: " + ", ".join(dyn_ids) + "."
-                )
-            # What this process knows about the key says more than "first call
-            # or cleared": that it was never stored, why, or that it expired
-            # under the ttl it was WRITTEN with -- which a backend drops on
-            # read, so the entry looks absent.
-            missed = self._misses.absent_entry_reason(func_name, cache_key)
-            if missed.kind is MissKind.TTL:
-                return CacheExplanation(
-                    would_hit=False,
-                    reason=EXPLAIN_TTL_EXPIRED,
-                    func_name=func_name,
-                    cache_key=cache_key,
-                    details={"why": missed.text},
-                )
-            details["why"] = str(missed)
-            if missed.kind is not MissKind.FIRST and "dynamic_dependencies" not in details:
-                del details["hint"]  # the generic guess, now that we know
-            if frozen_args:
-                details["frozen_args"] = frozen_args
+    def _absent_entry(
+        self, cf: CachedFunction, cache_key: str, args: tuple, kwargs: dict, frozen_args: Any
+    ) -> CacheExplanation:
+        """The answer when nothing is stored under *cache_key*."""
+        func_name = cf.name
+        details = {
+            "hint": ("No matching cache entry. First call with these arguments, or the cache was cleared."),
+        }
+        # A tracked dynamic dependency that changed produces a NEW cache key,
+        # so the miss surfaces as no_entry rather than file_changed. Make the
+        # explanation say so and list what's tracked.
+        dyn_ids = describe_dynamic_dependencies(cf.dynamic_depends_on, args, kwargs)
+        if dyn_ids:
+            details["dynamic_dependencies"] = dyn_ids
+            details["hint"] = (
+                "No matching cache entry. Either the first call with these "
+                "arguments, or a tracked dynamic dependency changed - a "
+                "dynamic_depends_on change yields a new cache key, so it "
+                "shows up here as no_entry, not file_changed. Tracked "
+                "dynamic dependencies: " + ", ".join(dyn_ids) + "."
+            )
+        # What this process knows about the key says more than "first call
+        # or cleared": that it was never stored, why, or that it expired
+        # under the ttl it was WRITTEN with -- which a backend drops on
+        # read, so the entry looks absent.
+        missed = self._misses.absent_entry_reason(func_name, cache_key)
+        if missed.kind is MissKind.TTL:
             return CacheExplanation(
                 would_hit=False,
-                reason=EXPLAIN_NO_ENTRY,
+                reason=EXPLAIN_TTL_EXPIRED,
                 func_name=func_name,
                 cache_key=cache_key,
-                details=details,
+                details={"why": missed.text},
             )
+        details["why"] = str(missed)
+        if missed.kind is not MissKind.FIRST and "dynamic_dependencies" not in details:
+            del details["hint"]  # the generic guess, now that we know
+        if frozen_args:
+            details["frozen_args"] = frozen_args
+        return CacheExplanation(
+            would_hit=False,
+            reason=EXPLAIN_NO_ENTRY,
+            func_name=func_name,
+            cache_key=cache_key,
+            details=details,
+        )
 
-        metadata = CacheMetadata.from_dict(raw_metadata)
+    def _stored_entry(
+        self, cf: CachedFunction, cache_key: str, metadata: CacheMetadata, frozen_args: Any
+    ) -> CacheExplanation:
+        """The answer for the entry stored under *cache_key*: a hit, or why a
+        real lookup would not serve it."""
+        func_name, ttl = cf.name, cf.ttl
         # Whether the entry is served: the judgement a real lookup makes.
         try:
             verdict = self._runner.entry_verdict(cache_key, metadata, ttl, quiet=True)
