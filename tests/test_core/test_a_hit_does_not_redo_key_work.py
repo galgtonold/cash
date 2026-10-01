@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 
 import cash
-from cash import _annotation_refs, object_hashing
+from cash import _annotation_refs, canonical_form, content_hashers
 from cash.decorator import arg_hashing, cache_metadata, code_identity
 from cash.decorator.arg_hashing import ArgHasher
 from cash.decorator.globals_fold import GlobalsFold
@@ -164,7 +164,7 @@ def test_an_object_holding_small_arrays_is_pickled_whole(c, monkeypatch):
 def test_an_object_holding_a_big_array_is_keyed_part_by_part(c, monkeypatch):
     class Holder:
         def __init__(self):
-            self.big = np.zeros(object_hashing.OPEN_UP_BYTES // 8 + 1)
+            self.big = np.zeros(canonical_form.OPEN_UP_BYTES // 8 + 1)
 
     @c.cache
     def first(h):
@@ -244,11 +244,11 @@ def test_what_is_worth_keying_on_its_own_is_decided_by_size():
     sparse = pytest.importorskip("scipy.sparse")
 
     def worth(value):
-        return object_hashing._worth_opening(value, object_hashing.BUILTIN_CONTENT)
+        return canonical_form._worth_opening(value, content_hashers.BUILTIN_CONTENT)
 
     assert not worth(np.zeros(8))
-    assert worth(np.zeros(object_hashing.OPEN_UP_BYTES // 8))
+    assert worth(np.zeros(canonical_form.OPEN_UP_BYTES // 8))
     assert not worth(sparse.eye(10, format="csr"))
     assert worth(sparse.random(1000, 1000, density=0.2, format="csr", random_state=0))
     assert not worth(pd.DataFrame({"x": range(10)}))
-    assert worth(pd.DataFrame({"x": np.zeros(object_hashing.OPEN_UP_BYTES // 8)}))
+    assert worth(pd.DataFrame({"x": np.zeros(canonical_form.OPEN_UP_BYTES // 8)}))

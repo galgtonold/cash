@@ -60,7 +60,7 @@ def test_a_hasher_keys_values_inside_a_dict_and_a_subclass_state(tmp_path):
 
 def test_a_frame_in_a_list_keys_by_content(tmp_path, monkeypatch):
     pd = pytest.importorskip("pandas")
-    import cash.object_hashing as object_hashing
+    import cash.content_hashers as content_hashers
 
     c = _cash(tmp_path)
     frame = pd.DataFrame({"a": [1, 2]})
@@ -68,13 +68,13 @@ def test_a_frame_in_a_list_keys_by_content(tmp_path, monkeypatch):
     assert key == c._args.hash_payload(([frame.copy()],), {})
     assert key != c._args.hash_payload(([frame.rename(columns={"a": "b"})],), {})
     calls = []
-    real = object_hashing.hash_pandas
+    real = content_hashers.hash_pandas
 
     def counting(value):
         calls.append(1)
         return real(value)
 
-    monkeypatch.setattr(object_hashing, "hash_pandas", counting)
+    monkeypatch.setattr(content_hashers, "hash_pandas", counting)
     # A frame this ArgHasher has not seen: one it has may be answered by the
     # copy-on-write memo without being read again.
     c._args.hash_payload(([frame.copy()],), {})

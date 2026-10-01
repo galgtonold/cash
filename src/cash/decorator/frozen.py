@@ -12,10 +12,10 @@ from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
 from .._memo import FROZEN_RESULTS, LruMemo
+from ..content_hashers import builtin_hash
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..lineage_tag import own_tag, set_tags
-from ..object_hashing import builtin_hash
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 
 if TYPE_CHECKING:

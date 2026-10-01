@@ -146,7 +146,7 @@ the hasher return something that changes with it, or name it with
   identity only if it really identifies the value, such as a version you
   control.
 
-<!-- claim: cash/object_hashing.py:hash_numpy @f6df9c37 -->
+<!-- claim: cash/content_hashers.py:hash_numpy @f6df9c37 -->
 To check a hasher, call it on two equal but separately built instances. The
 strings must match. `evaluate.explain(model, data).cache_key` shows the key a
 call would use.
@@ -196,7 +196,7 @@ data changes.
 
 ## Overriding a built-in content hasher
 
-<!-- claim: cash/object_hashing.py:builtin_hash @dd82c01b broad="the list enumerates every type the builtin dispatcher recognises", cash/object_hashing.py:builtin_hash_family @b0c04a56 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @dd82c01b broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @b0c04a56 -->
 cash hashes these types by their full content, before it looks at your
 registrations:
 

@@ -17,20 +17,17 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
-from ..exceptions import CashCacheIneffectiveWarning
-from ..lineage_tag import own_tag
-from ..object_hashing import (
-    BUILTIN_CONTENT,
+from ..canonical_form import (
     NOT_HOOKED,
     ContentHashing,
-    builtin_family_of,
-    builtin_hash,
     canonical_bytes,
     canonical_call_bytes,
     canonical_marker_bytes,
-    is_native_panic,
     stable_key_repr,
 )
+from ..content_hashers import BUILTIN_CONTENT, builtin_family_of, builtin_hash, is_native_panic
+from ..exceptions import CashCacheIneffectiveWarning
+from ..lineage_tag import own_tag
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
 from .cash_key import cash_key_method, cash_key_method_of_type, type_name
 

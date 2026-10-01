@@ -75,7 +75,8 @@ src/cash/
 ├── purity.py           # @pure, @stateful and the known-pure registry
 ├── dependency_state.py # the state hash: own source, dependencies,
 │                       #   helpers
-├── object_hashing.py   # content hashes of values
+├── canonical_form.py   # the form a key pickles a value in
+├── content_hashers.py  # content hashes of frames, arrays, tables
 ├── sizing.py           # how big a frame, array or container is
 ├── value_hash.py       # the notebook's value hash (compute_hash)
 ├── mutation_fingerprint.py # a digest that moves on an in-place edit

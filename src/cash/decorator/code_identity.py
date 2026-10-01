@@ -24,10 +24,11 @@ from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
+from ..canonical_form import stable_key_repr
+from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package
-from ..object_hashing import BUILTIN_CONTENT, stable_key_repr
 from ..source_norm import (
     bytecode_identity,
     callable_identity,

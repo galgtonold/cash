@@ -51,8 +51,12 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.
 - **`src/cash/tracking/`** and **`src/cash/analysis/`**, plus `purity.py`,
-  `object_hashing.py` and `cost_model.py` at the top level: the layer that the
-  decorator and the notebook share. `tracking/` records what a computation depends
+  the value hashing modules and `cost_model.py` at the top level: the layer that
+  the decorator and the notebook share. `canonical_form.py` is the form a key
+  pickles a value in, `content_hashers.py` the per-library hashes of frames,
+  arrays and tables, `value_hash.py` the notebook's value hash (`compute_hash`),
+  `mutation_fingerprint.py` the in-place-edit digest and `sizing.py` how big a
+  value is. `tracking/` records what a computation depends
   on at run time (file reads and snapshots, function source, randomness);
   `analysis/` is static analysis (statement inputs and outputs, `# @cash:`
   annotations, cacheability, the purity analysis of a decorated function). `effects.py` names the calls that write files,

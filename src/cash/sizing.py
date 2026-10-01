@@ -26,6 +26,11 @@ from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
 logger = logging.getLogger(__name__)
 
 
+#: The arrays a scipy sparse matrix is, by format: everything its values
+#: and their positions are stored in.
+SPARSE_PARTS = ("data", "indices", "indptr", "offsets")
+
+
 # The in-memory size of a pandas frame or series, without ``memory_usage``.
 #
 # ``DataFrame.memory_usage()`` builds a result Series -- one per column, then

@@ -25,7 +25,8 @@ from cash import CashCacheIneffectiveWarning
 
 PROGRAM = textwrap.dedent("""
     import hashlib
-    from cash.object_hashing import BUILTIN_CONTENT, canonical_bytes
+    from cash.canonical_form import canonical_bytes
+    from cash.content_hashers import BUILTIN_CONTENT
 
     class Tagged(dict):
         pass

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from .object_hashing import builtin_hash
+from .content_hashers import builtin_hash
 from .value_hash import HASH_ERRORS, compute_hash, identity_hash
 
 

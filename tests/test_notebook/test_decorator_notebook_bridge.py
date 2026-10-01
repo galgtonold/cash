@@ -15,9 +15,9 @@ from unittest.mock import patch
 
 import pytest
 
+from cash.content_hashers import builtin_hash
 from cash.core import Cash
 from cash.lineage_tag import own_tag
-from cash.object_hashing import builtin_hash
 
 # ============================================================================
 # A1: Decorator Call Logging

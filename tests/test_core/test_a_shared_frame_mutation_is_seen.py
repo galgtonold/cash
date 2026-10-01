@@ -13,7 +13,7 @@ import pytest
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from cash import Cash, object_hashing
+from cash import Cash, content_hashers
 from cash.backends import InMemoryBackend
 from cash.decorator import arg_hashing
 
@@ -92,8 +92,8 @@ def seen(monkeypatch):
         return frame.to_csv()
 
     hashed: list[str] = []
-    real = object_hashing.hash_pandas
-    monkeypatch.setattr(object_hashing, "hash_pandas", lambda value: hashed.append(1) or real(value))
+    real = content_hashers.hash_pandas
+    monkeypatch.setattr(content_hashers, "hash_pandas", lambda value: hashed.append(1) or real(value))
     seen.hashed = hashed
     return seen
 

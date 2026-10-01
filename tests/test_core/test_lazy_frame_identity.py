@@ -127,7 +127,7 @@ def test_a_scan_backed_plan_notices_its_file_changing(tmp_path):
 def test_no_plan_digest_when_serialize_refuses(monkeypatch):
     """A plan ``serialize()`` refuses gets no built-in hash at all. It used to
     fall back to the ``explain()`` text, which is the collision above."""
-    from cash.object_hashing import builtin_hash
+    from cash.content_hashers import builtin_hash
 
     def refuse(self, *args, **kwargs):
         raise RuntimeError("serialize() unavailable")
@@ -138,7 +138,7 @@ def test_no_plan_digest_when_serialize_refuses(monkeypatch):
 
 def test_eager_frames_carry_their_schema():
     """Equal values under two dtypes, or two names, are different frames."""
-    from cash.object_hashing import builtin_hash
+    from cash.content_hashers import builtin_hash
 
     base = pl.DataFrame({"x": [1, 2, 3]})
     assert builtin_hash(base) != builtin_hash(base.cast({"x": pl.Int32}))

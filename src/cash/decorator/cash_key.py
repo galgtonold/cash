@@ -26,9 +26,10 @@ from collections.abc import Callable
 from typing import Any
 
 from ..backends.cache_dir import CASH_KEYS_FILENAME, create_temp_file
+from ..canonical_form import canonical_bytes, object_state
+from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
-from ..object_hashing import BUILTIN_CONTENT, canonical_bytes, object_state
 from ..tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)

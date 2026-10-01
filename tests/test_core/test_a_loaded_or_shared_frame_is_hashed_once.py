@@ -16,7 +16,7 @@ import pytest
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 
-from cash import Cash, object_hashing
+from cash import Cash, content_hashers
 from cash.backends import InMemoryBackend
 from cash.decorator import arg_hashing
 
@@ -31,13 +31,13 @@ N = 200
 def hashed(monkeypatch):
     """The frames whose content was hashed, by call."""
     calls: list[str] = []
-    real = object_hashing.hash_pandas
+    real = content_hashers.hash_pandas
 
     def counting(value):
         calls.append(type(value).__name__)
         return real(value)
 
-    monkeypatch.setattr(object_hashing, "hash_pandas", counting)
+    monkeypatch.setattr(content_hashers, "hash_pandas", counting)
     return calls
 
 

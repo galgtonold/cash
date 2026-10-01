@@ -13,7 +13,7 @@ import decimal
 
 import pytest
 
-from cash.object_hashing import hash_pandas
+from cash.content_hashers import hash_pandas
 
 pd = pytest.importorskip("pandas")
 

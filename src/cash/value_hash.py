@@ -17,7 +17,7 @@ import logging
 import pickle
 from typing import Any
 
-from .object_hashing import builtin_hash, builtin_hash_family, is_native_panic
+from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 
 logger = logging.getLogger(__name__)
 
