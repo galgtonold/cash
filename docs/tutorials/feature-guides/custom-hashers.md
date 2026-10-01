@@ -224,7 +224,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @99cd3791 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7af4e89b -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result.
 
