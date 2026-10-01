@@ -59,7 +59,7 @@ def test_a_script_calling_a_cached_function_imports_neither(tmp_path):
 def test_windows_reads_the_process_start_time_without_psutil_and_agrees_with_it():
     import psutil
 
-    from cash.source_norm import _windows_start_time
+    from cash.process_start import _windows_start_time
 
     assert abs(_windows_start_time() - psutil.Process().create_time()) < 0.1
 
@@ -101,6 +101,6 @@ def test_the_process_start_time_read_from_proc_is_psutils():
     edited after the process started is still told apart from one before."""
     import psutil
 
-    from cash import source_norm
+    from cash import process_start
 
-    assert source_norm._proc_start_time() == pytest.approx(psutil.Process().create_time(), abs=0.02)
+    assert process_start._proc_start_time() == pytest.approx(psutil.Process().create_time(), abs=0.02)
