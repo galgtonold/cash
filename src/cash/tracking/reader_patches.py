@@ -285,12 +285,9 @@ def _patch_attribute(owner: Any, name: str, make: Callable[[Any], Any]) -> None:
 def _track_regular_file(path: Any) -> None:
     """Record *path* as read when a tracker is active and it is a regular file.
 
-    For the metadata calls (``Path.stat``, ``os.path.getsize`` ...; ``os.stat``
-    records its own): what they
-    report is the file's, so the file is a dependency -- a directory has no
-    content to hash, and an absent path raised before this was reached.
-    ``os.stat``, not ``os.path.isfile``: that one is patched to record a
-    NEGATIVE answer as an absent dependency.
+    What a metadata call reports is the file's, so the file is a dependency;
+    a directory has no content to hash. ``os.stat``, not ``os.path.isfile``:
+    that one is patched to record a NEGATIVE answer as an absent dependency.
     """
     tracker = active_tracker.get()
     if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
@@ -324,20 +321,15 @@ def _patch_pathlib_stat() -> None:
             try:
                 result = original(self, *args, **kwargs)
             except (FileNotFoundError, NotADirectoryError):
-                # ``Path.exists()`` / ``is_file()`` answering False: the path
-                # was looked for and was not there.
-                tracker = active_tracker.get()
-                if tracker is not None:
-                    tracker.track_absent(self)
+                # ``Path.exists()`` / ``is_file()`` answering False.
+                _record_path_answer(self, None, sys._getframe(1))
                 raise
-            tracker = active_tracker.get()
-            if tracker is not None:
-                if stat.S_ISREG(result.st_mode):
-                    _track_regular_file(self)
-                elif stat.S_ISDIR(result.st_mode) and _asked_by_user_code(sys._getframe(1)):
-                    # ``Path("out").is_dir()``: a directory has no content to
-                    # depend on, but it being there is what the code asked.
-                    tracker.track_present(self, "dir")
+            if stat.S_ISREG(result.st_mode):
+                _record_path_answer(self, "content", sys._getframe(1))
+            elif stat.S_ISDIR(result.st_mode):
+                # ``Path("out").is_dir()``: a directory has no content to
+                # depend on, but it being there is what the code asked.
+                _record_path_answer(self, "dir", sys._getframe(1))
             return result
 
         return tracked_path_stat
@@ -390,15 +382,13 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
     @functools.wraps(original_func)
     def tracked_probe(path, *args, **kwargs):
         result = original_func(path, *args, **kwargs)
-        _tracker = active_tracker.get()
-        if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
+        if active_tracker.get() is not None:
             if result:
-                if _asked_by_user_code(sys._getframe(1)):
-                    _tracker.track_present(path, kind)
+                _record_path_answer(path, kind, sys._getframe(1))
             elif exact_negative:
-                _tracker.track_absent(path)
+                _record_path_answer(path, None, sys._getframe(1))
             else:
-                _record_negative_probe(_tracker, path)
+                _record_negative_probe(path, sys._getframe(1))
         return result
 
     return tracked_probe
@@ -409,31 +399,73 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
 _PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathlib", "pathlib._local", "pathlib._abc"})
 
 
-def _asked_by_user_code(frame: Any) -> bool:
-    """Did the user's own code ask this probe (through pathlib or ``os`` at most)?
+#: The pseudo-filename prefix of a notebook statement cash compiled
+#: (``cash.notebook.compiled_source.CASH_FILENAME_PREFIX``): code the user
+#: wrote in a cell, though it has no file.
+_NOTEBOOK_STATEMENT_PREFIX = "<cash-"
 
-    A path found THERE is recorded only then. Libraries and cash probe paths
-    for themselves all the time -- ``inspect`` checks that a function's source
-    file exists while cash keys a nested call -- and each would become a
-    dependency of whatever cached call was running. A path NOT there is
-    recorded whoever asked, as it always was.
-    """
+
+def _who_asked(frame: Any) -> str:
+    """`frame_kind` of the code that made the call *frame* made, looking
+    through pathlib and ``os``, which only pass a path question on. A
+    notebook statement is the user's code."""
     while frame is not None and frame.f_globals.get("__name__") in _PATH_MACHINERY:
         frame = frame.f_back
-    return frame is not None and frame_kind(frame.f_code.co_filename) == "user"
+    if frame is None:
+        return "other"
+    filename = frame.f_code.co_filename
+    if filename.startswith(_NOTEBOOK_STATEMENT_PREFIX):
+        return "user"
+    return frame_kind(filename)
 
 
-def _record_negative_probe(tracker: Any, path: Any) -> None:
+def _asked_by_user_code(frame: Any) -> bool:
+    """Did the user's own code make the call *frame* made?"""
+    return _who_asked(frame) == "user"
+
+
+def _record_path_answer(path: Any, answer: str | None, caller: Any) -> None:
+    """Record what a metadata or existence call on *path* answered.
+
+    This is the one rule every stat and probe wrapper applies. *caller* is
+    the frame that made the call; *answer* is None when nothing was there,
+    ``"content"`` when the call reported a file's size or times, and
+    otherwise the kind it found there (``file``, ``dir``, ``any``) when it
+    asked only whether something is there.
+
+    Nothing there is recorded whoever asked, except cash itself: the path
+    appearing changes the answer, and a path that never appears costs
+    nothing. Something there is recorded only when the user's own code
+    asked: libraries and cash stat and probe paths for themselves all the
+    time -- ``inspect`` checks that a function's source file exists while
+    cash keys a nested call -- and each would become a dependency of the
+    cached call around it. "content" makes a regular file a dependency by
+    its content, as a read does; a directory has none.
+    """
+    tracker = active_tracker.get()
+    if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    who = _who_asked(caller)
+    if answer is None:
+        if who not in ("cash", "wrapper"):
+            tracker.track_absent(path)
+    elif who != "user":
+        return
+    elif answer == "content":
+        _track_regular_file(path)
+    else:
+        tracker.track_present(path, answer)
+
+
+def _record_negative_probe(path: Any, caller: Any) -> None:
     """A probe said no: absent if nothing is there, else present as what is."""
     try:
         st = os.stat(path)
-    except (OSError, ValueError):
-        tracker.track_absent(path)
-        return
-    if not _asked_by_user_code(sys._getframe(2)):
+    except (OSError, ValueError, TypeError):
+        _record_path_answer(path, None, caller)
         return
     kind = "dir" if stat.S_ISDIR(st.st_mode) else "file" if stat.S_ISREG(st.st_mode) else "any"
-    tracker.track_present(path, kind)
+    _record_path_answer(path, kind, caller)
 
 
 def _dataset_member(name: str) -> bool:
@@ -1083,16 +1115,9 @@ class FileDependencyRegistry:
             except (FileNotFoundError, NotADirectoryError):
                 # `try: getsize(p) except OSError:` answers for a file that is
                 # not there yet, so its appearing is a change.
-                tracker = active_tracker.get()
-                if (
-                    tracker is not None
-                    and isinstance(path, (str, bytes, os.PathLike))
-                    and _asked_by_user_code(sys._getframe(1))
-                ):
-                    tracker.track_absent(path)
+                _record_path_answer(path, None, sys._getframe(1))
                 raise
-            if active_tracker.get() is not None and _asked_by_user_code(sys._getframe(1)):
-                _track_regular_file(path)
+            _record_path_answer(path, "content", sys._getframe(1))
             return result
 
         return tracked_metadata
@@ -1102,11 +1127,10 @@ class FileDependencyRegistry:
         """``os.stat(p).st_size`` in the user's own code: the regular file is a
         dependency, as through ``Path.stat``.
 
-        Only when the user's code called it DIRECTLY. ``os.stat`` is what the
-        rest of the standard library, every library and cash itself stat with
-        -- ``shutil`` stats the file it is about to overwrite, and
-        ``os.path.exists`` stats what it probes, which is a question about
-        being there, not about content (`_probe_handler`).
+        A call the path machinery makes (``os.path.exists`` stats what it
+        probes, ``getsize`` what it measures) is part of the question the
+        user asked through it, which that call's own wrapper records.
+        Otherwise `_record_path_answer` decides.
         """
 
         @functools.wraps(original_func)
@@ -1116,24 +1140,17 @@ class FileDependencyRegistry:
             except (FileNotFoundError, NotADirectoryError):
                 # `try: os.stat(p) except FileNotFoundError:` answers for a
                 # file that is not there yet, so its appearing is a change.
-                tracker = active_tracker.get()
-                if (
-                    tracker is not None
-                    and isinstance(path, (str, bytes, os.PathLike))
-                    and kwargs.get("dir_fd") is None
-                    and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
-                ):
-                    tracker.track_absent(path)
+                caller = sys._getframe(1)
+                if kwargs.get("dir_fd") is None and caller.f_globals.get("__name__") not in _PATH_MACHINERY:
+                    _record_path_answer(path, None, caller)
                 raise
-            tracker = active_tracker.get()
+            caller = sys._getframe(1)
             if (
-                tracker is not None
-                and stat.S_ISREG(result.st_mode)
-                and isinstance(path, (str, bytes, os.PathLike))
+                stat.S_ISREG(result.st_mode)
                 and kwargs.get("dir_fd") is None
-                and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
+                and caller.f_globals.get("__name__") not in _PATH_MACHINERY
             ):
-                tracker.track_path(path)
+                _record_path_answer(path, "content", caller)
             return result
 
         return tracked_os_stat
@@ -1148,7 +1165,10 @@ class FileDependencyRegistry:
         @functools.wraps(original_func)
         def tracked_scandir(*args, **kwargs):
             result = original_func(*args, **kwargs)
-            if active_tracker.get() is None or frame_kind(sys._getframe(1).f_code.co_filename) != "user":
+            caller = sys._getframe(1)
+            if active_tracker.get() is None or caller.f_globals.get("__name__") in _PATH_MACHINERY:
+                return result  # os.walk, pathlib: they never hand the user an entry's stat()
+            if not _asked_by_user_code(caller):
                 return result
             if args and isinstance(args[0], int):
                 return result  # a descriptor: entries have no usable path

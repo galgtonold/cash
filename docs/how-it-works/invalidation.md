@@ -65,8 +65,8 @@ cash records a file when your code reads it through one of these:
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
-| file metadata | `Path.stat`, and `os.stat`, `os.lstat`, `os.path.getsize`, `getmtime`, `getctime` and the `stat()` of an `os.scandir` entry called from your code: the file, by content |
-| existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`, and an `open`, `os.stat`, `os.lstat`, `getsize`, `getmtime`, `os.listdir` or `os.scandir` that fails because the path is not there: a path that was not there counts once it appears, and one your code found (a flag file, an output folder) counts once it is gone |
+| file metadata | `Path.stat`, `os.stat`, `os.lstat`, `os.path.getsize`, `getmtime`, `getctime` and the `stat()` of an `os.scandir` entry, called from your code rather than from a library's: the file, by content |
+| existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`, and an `open`, `os.stat`, `os.lstat`, `getsize`, `getmtime`, `os.listdir` or `os.scandir` that fails because the path is not there: a path that was not there counts once it appears, whoever looked for it, and one your code found (a flag file, an output folder) counts once it is gone |
 
 A reader counts however a script or a module of your code names it:
 `pq.read_table(...)`, `from pyarrow.parquet import read_table`, or an alias
