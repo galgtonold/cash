@@ -629,17 +629,15 @@ class CellExecutor:
         total_steps_unified = upstream_step_count + len(tree.body)
         stmt_occurrence_counts: dict[str, int] = {}
         written_later = written_later_in_cell(tree.body)
-        checker = self._upstream_checker
-        try:
-            jump_runs = jumpable_runs(tree.body, raw_cell, checker.cell_touches_rng) if checker is not None else {}
-        except Exception:  # noqa: BLE001 - no jump is the ordinary run
-            jump_runs = {}
+        jump_runs = self._jump_runs(tree.body, raw_cell)
         #: Statements a restore of a later version made unnecessary.
         planned: dict[int, ProcessResult] = {}
 
         for i, node in enumerate(tree.body):
             if i in jump_runs:
-                plan = checker.plan_cell_run(tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts))
+                plan = self._upstream_checker.plan_cell_run(
+                    tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
+                )
                 planned = {i + k: m for k, m in (plan or {}).items()}
             texts = statement_texts(raw_cell, node)
             if texts is None:
@@ -665,58 +663,88 @@ class CellExecutor:
             )
             badge_render_time += _perf_counter() - t_badge_pre
 
-            try:
-                try:
-                    if is_control_structure(node):
-                        buffered_result_outputs = yield from self._control_structure_steps(
-                            cell,
-                            i,
-                            stmt_code,
-                            is_last=is_last,
-                            buffered=buffered_result_outputs,
-                            awaitable=awaitable,
-                        )
-                    else:
-                        buffered_result_outputs = yield from self._statement_steps(
-                            cell,
-                            stmt_code,
-                            annotation=annotation,
-                            display_code=stmt_display,
-                            exec_source=stmt_exec_source,
-                            occurrence_index=occ,
-                            is_last=is_last,
-                            written_later=written_later[i],
-                            buffered=buffered_result_outputs,
-                        )
-
-                    self._badges.cancel_progress()
-                    t_badge = _perf_counter()
-                    # `unified_step`, NOT `unified_step + 1`: this fires when a
-                    # statement has FINISHED, and the next one has not started.
-                    # The number means "the furthest statement cash has reached",
-                    # which is what `arm_progress` publishes too.
-                    self._badges.maybe_progress(
-                        all_metrics,
-                        display_id=cell.badge_display_id,
-                        step=unified_step,
-                        total=total_steps_unified,
-                        code=None,
-                    )
-                    badge_render_time += _perf_counter() - t_badge
-
-                except Exception as e:  # intentionally broad: catches user code exceptions
-                    self._finalize_error_badge(e, cell, node)
-                    raise
-            finally:
-                # Cancel on EVERY exit from this statement, not just the two
-                # paths above. A BaseException that isn't an Exception --
-                # KeyboardInterrupt, or asyncio.CancelledError from an interrupted
-                # await -- skips the `except` above entirely. Left armed, that
-                # timer fires later, on whatever cell is running by then.
-                # Safe to call unconditionally: a no-op once already cancelled.
-                self._badges.cancel_progress()
+            if is_control_structure(node):
+                steps = self._control_structure_steps(
+                    cell,
+                    i,
+                    stmt_code,
+                    is_last=is_last,
+                    buffered=buffered_result_outputs,
+                    awaitable=awaitable,
+                )
+            else:
+                steps = self._statement_steps(
+                    cell,
+                    stmt_code,
+                    annotation=annotation,
+                    display_code=stmt_display,
+                    exec_source=stmt_exec_source,
+                    occurrence_index=occ,
+                    is_last=is_last,
+                    written_later=written_later[i],
+                    buffered=buffered_result_outputs,
+                )
+            buffered_result_outputs, render_time = yield from self._badged_steps(
+                cell, node, steps, step=unified_step, total=total_steps_unified
+            )
+            badge_render_time += render_time
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
+
+    def _jump_runs(self, body: list[ast.stmt], raw_cell: str) -> dict[int, int]:
+        """The runs of the cell a restore may jump (see ``jumpable_runs``);
+        none when there is no upstream checker or the analysis fails."""
+        checker = self._upstream_checker
+        try:
+            return jumpable_runs(body, raw_cell, checker.cell_touches_rng) if checker is not None else {}
+        except Exception:  # noqa: BLE001 - no jump is the ordinary run
+            return {}
+
+    def _badged_steps(
+        self,
+        cell: _CellRun,
+        node: ast.stmt,
+        steps: Generator[_Step, Any, list],
+        *,
+        step: int,
+        total: int,
+    ) -> Generator[_Step, Any, tuple[list, float]]:
+        """Run one top-level statement's *steps* under the badge.
+
+        Returns the buffered result outputs *steps* returned and the time
+        spent drawing the badge's progress. A statement that raises gets the
+        error display and the final badge before the error propagates.
+        """
+        try:
+            try:
+                buffered = yield from steps
+
+                self._badges.cancel_progress()
+                t_badge = _perf_counter()
+                # `step`, NOT `step + 1`: this fires when a statement has
+                # FINISHED, and the next one has not started. The number means
+                # "the furthest statement cash has reached", which is what
+                # `arm_progress` publishes too.
+                self._badges.maybe_progress(
+                    cell.all_metrics,
+                    display_id=cell.badge_display_id,
+                    step=step,
+                    total=total,
+                    code=None,
+                )
+                return buffered, _perf_counter() - t_badge
+
+            except Exception as e:  # intentionally broad: catches user code exceptions
+                self._finalize_error_badge(e, cell, node)
+                raise
+        finally:
+            # Cancel on EVERY exit from this statement, not just the two
+            # paths above. A BaseException that isn't an Exception --
+            # KeyboardInterrupt, or asyncio.CancelledError from an interrupted
+            # await -- skips the `except` above entirely. Left armed, that
+            # timer fires later, on whatever cell is running by then.
+            # Safe to call unconditionally: a no-op once already cancelled.
+            self._badges.cancel_progress()
 
     def _statement_steps(
         self,
