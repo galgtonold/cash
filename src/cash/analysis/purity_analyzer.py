@@ -56,54 +56,10 @@ class PurityAnalyzer:
         is not audited: ``@pure`` reports nothing, ``@stateful`` reports the
         function itself.
         """
-        owner: weakref.ref | None = None
-        target = getattr(func, "__func__", func)  # a bound method is made anew per access
-        closure = bool(getattr(func, "__closure__", None))
-        source_hash = _try_source_hash(func)
-        if source_hash is not None:
-            # Keyed by the namespace the names resolve in as well as the text:
-            # `def run(): return step()` written identically in two modules
-            # calls two different `step`s, and sharing one report handed the
-            # second module the first one's helpers -- editing its own `step`
-            # then changed nothing its key could see.
-            source_hash = f"{source_hash}:{id(getattr(func, '__globals__', None))}"
-            # An id outlives nothing: a module dropped from `sys.modules` frees
-            # its namespace, and a new module with the same text can be given
-            # the same address. Its function was then handed the dead one's
-            # report, bindings and all -- and a binding into a module that has
-            # gone proves nothing (`bindings_changed`), so a helper patched
-            # with a mock was never seen and the call was served from the
-            # cache. So an entry holds the function it was built from, and
-            # serves only while that function is alive in the same namespace.
-            try:
-                owner = weakref.ref(target)
-            except TypeError:
-                source_hash = None
-            else:
-                # A closure's names also resolve in its cells: two closures
-                # with the same text in one module (one factory called twice,
-                # or two factories) can capture different helpers, and sharing
-                # a report keyed the second by the first one's helpers. A
-                # report of a closure belongs to that function object alone.
-                if closure:
-                    source_hash = f"{source_hash}:{id(func)}"
-        if source_hash is not None:
-            with self._cache_lock:
-                entry = self._cache.get(source_hash)
-            cached = None
-            if entry is not None:
-                cached, cached_owner = entry
-                built_from = cached_owner() if cached_owner is not None else None
-                if built_from is None:
-                    cached = None
-                elif closure and built_from is not target:
-                    cached = None
-                elif getattr(built_from, "__globals__", None) is not getattr(func, "__globals__", None):
-                    cached = None
-            # The source is the same, but a name it calls through may hold a
-            # different object now (a patched helper, or a real one restored):
-            # the tree below that binding is not the one this report walked.
-            if cached is not None and not bindings_changed(cached):
+        memo_key, owner = _memo_key(func)
+        if memo_key is not None:
+            cached = self._cached_report(memo_key, func)
+            if cached is not None:
                 return cached
 
         report = HelperWalk(func).run()
@@ -128,10 +84,32 @@ class PurityAnalyzer:
                 ),
             )
 
-        if source_hash is not None:
+        if memo_key is not None:
             with self._cache_lock:
-                self._cache[source_hash] = (report, owner)
+                self._cache[memo_key] = (report, owner)
         return report
+
+    def _cached_report(self, memo_key: str, func: Callable[..., Any]) -> PurityReport | None:
+        """The memoised report for *func*, if it still describes it."""
+        with self._cache_lock:
+            entry = self._cache.get(memo_key)
+        if entry is None:
+            return None
+        cached, cached_owner = entry
+        target = getattr(func, "__func__", func)
+        built_from = cached_owner() if cached_owner is not None else None
+        if built_from is None:
+            return None
+        if getattr(func, "__closure__", None) and built_from is not target:
+            return None
+        if getattr(built_from, "__globals__", None) is not getattr(func, "__globals__", None):
+            return None
+        # The source is the same, but a name it calls through may hold a
+        # different object now (a patched helper, or a real one restored):
+        # the tree below that binding is not the one this report walked.
+        if bindings_changed(cached):
+            return None
+        return cached
 
 
 _global_analyzer: PurityAnalyzer | None = None
@@ -151,6 +129,41 @@ def get_analyzer() -> PurityAnalyzer:
         if _global_analyzer is None:
             _global_analyzer = PurityAnalyzer()
         return _global_analyzer
+
+
+def _memo_key(func: Callable[..., Any]) -> tuple[str | None, weakref.ref | None]:
+    """The key *func*'s report is memoised under, and a reference to the
+    function it is built from; ``(None, None)`` when it cannot be memoised."""
+    target = getattr(func, "__func__", func)  # a bound method is made anew per access
+    source_hash = _try_source_hash(func)
+    if source_hash is None:
+        return None, None
+    # Keyed by the namespace the names resolve in as well as the text:
+    # `def run(): return step()` written identically in two modules
+    # calls two different `step`s, and sharing one report handed the
+    # second module the first one's helpers -- editing its own `step`
+    # then changed nothing its key could see.
+    source_hash = f"{source_hash}:{id(getattr(func, '__globals__', None))}"
+    # An id outlives nothing: a module dropped from `sys.modules` frees
+    # its namespace, and a new module with the same text can be given
+    # the same address. Its function was then handed the dead one's
+    # report, bindings and all -- and a binding into a module that has
+    # gone proves nothing (`bindings_changed`), so a helper patched
+    # with a mock was never seen and the call was served from the
+    # cache. So an entry holds the function it was built from, and
+    # serves only while that function is alive in the same namespace.
+    try:
+        owner = weakref.ref(target)
+    except TypeError:
+        return None, None
+    # A closure's names also resolve in its cells: two closures
+    # with the same text in one module (one factory called twice,
+    # or two factories) can capture different helpers, and sharing
+    # a report keyed the second by the first one's helpers. A
+    # report of a closure belongs to that function object alone.
+    if getattr(func, "__closure__", None):
+        source_hash = f"{source_hash}:{id(func)}"
+    return source_hash, owner
 
 
 def _try_source_hash(func: Callable[..., Any]) -> str | None:
