@@ -20,10 +20,7 @@ from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...lineage_tag import clear_tags
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
-from ..cache_key import (
-    CacheKeyContext,
-    compute_cache_key,
-)
+from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
@@ -122,15 +119,7 @@ class CacheRestorer:
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
                 key_inputs(inputs, input_hashes),
-                ctx=CacheKeyContext(
-                    variable_lineage=self.virtual_lineage.tracking_state.variable_lineage,
-                    user_ns=self.virtual_lineage.shell.user_ns,
-                    function_tracker=self.virtual_lineage.function_tracker,
-                    virtual_lineage=key_lineages(input_hashes),
-                    virtual_modules=virtual_modules,
-                    compute_hash_fn=self.virtual_lineage.compute_hash_fn,
-                    virtual_callables=self.virtual_lineage.callables.by_lineage,
-                ),
+                ctx=self.virtual_lineage.statements.key_context(key_lineages(input_hashes), virtual_modules),
                 outputs=outputs,
             )
 
@@ -320,7 +309,7 @@ class CacheRestorer:
                 needed_first |= reads & broken_vars
                 continue
 
-            # The statement's key, built as ``_update_virtual_lineage`` builds
+            # The statement's key, built as ``StatementLineage.apply`` builds
             # it (and so as the runtime does): its text with an expression's
             # trailing ``;``, its occurrence in the cell, its reads with the
             # hidden ones (an RNG a draw reads), and its writes with the
@@ -332,7 +321,7 @@ class CacheRestorer:
             occurrence_index = occurrences.get(stmt_code, 0)
             occurrences[stmt_code] = occurrence_index + 1
 
-            effects, inputs, outputs = self.virtual_lineage._statement_reads_writes(
+            effects, inputs, outputs = self.virtual_lineage.statements.reads_writes(
                 stmt_code, parse_cached(stmt_code), virtual_modules
             )
             outputs |= effects.callee_globals
@@ -345,15 +334,7 @@ class CacheRestorer:
                 cache_key, _, _, _, _ = compute_cache_key(
                     stmt_code,
                     inputs | key_hidden_reads(stmt_code, self.virtual_lineage.tracking_state),
-                    ctx=CacheKeyContext(
-                        variable_lineage=self.virtual_lineage.tracking_state.variable_lineage,
-                        user_ns=self.virtual_lineage.shell.user_ns,
-                        function_tracker=self.virtual_lineage.function_tracker,
-                        virtual_lineage=virtual_lineage,
-                        virtual_modules=virtual_modules,
-                        compute_hash_fn=self.virtual_lineage.compute_hash_fn,
-                        virtual_callables=self.virtual_lineage.callables.by_lineage,
-                    ),
+                    ctx=self.virtual_lineage.statements.key_context(virtual_lineage, virtual_modules),
                     outputs=outputs,
                     occurrence_index=occurrence_index,
                 )
@@ -475,15 +456,7 @@ class CacheRestorer:
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
                 key_inputs(inputs, input_hashes),
-                ctx=CacheKeyContext(
-                    variable_lineage=self.virtual_lineage.tracking_state.variable_lineage,
-                    user_ns=self.virtual_lineage.shell.user_ns,
-                    function_tracker=self.virtual_lineage.function_tracker,
-                    virtual_lineage=key_lineages(input_hashes),
-                    virtual_modules=virtual_modules,
-                    compute_hash_fn=self.virtual_lineage.compute_hash_fn,
-                    virtual_callables=self.virtual_lineage.callables.by_lineage,
-                ),
+                ctx=self.virtual_lineage.statements.key_context(key_lineages(input_hashes), virtual_modules),
                 outputs=outputs,
             )
             metadata = self.virtual_lineage.probe.metadata(cache_key)

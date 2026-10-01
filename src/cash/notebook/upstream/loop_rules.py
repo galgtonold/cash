@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from cash.control_markers import iteration_digest, strip_markers
 
 from ...source_norm import exact_source_digest
+from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
     from .virtual_lineage import VirtualLineage
@@ -85,7 +86,9 @@ class LoopRules:
                 if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                     continue  # loop/control wrapper; iterable feeds via the loop
                 for inp in inputs:
-                    if inp in loop_target_vars or self.virtual_lineage._unbound_builtin(inp):
+                    if inp in loop_target_vars or unbound_builtin(
+                        inp, self.virtual_lineage.tracking_state.variable_lineage
+                    ):
                         continue
                     val = self.virtual_lineage.shell.user_ns.get(inp)
                     if val is not None and isinstance(val, types.ModuleType):
@@ -140,7 +143,7 @@ class LoopRules:
                     inp in outputs
                     or inp in loop_target_vars
                     or inp in vars_derived_from_loops
-                    or self.virtual_lineage._unbound_builtin(inp, input_hashes)
+                    or unbound_builtin(inp, self.virtual_lineage.tracking_state.variable_lineage, input_hashes)
                 ):
                     continue
                 if isinstance(self.virtual_lineage.shell.user_ns.get(inp), types.ModuleType):

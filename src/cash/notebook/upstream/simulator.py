@@ -185,7 +185,7 @@ class NotebookSimulator:
         if not user_ns:
             return
         runtime = self.tracking_state.variable_lineage
-        imported = self.virtual_lineage.propagated_imports
+        imported = self.virtual_lineage.statements.propagated_imports
         binder: dict[str, str] = {}
         for entry in simulation_trace or ():
             for out in entry.outputs or ():

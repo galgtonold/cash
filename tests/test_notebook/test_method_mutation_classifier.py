@@ -1,6 +1,6 @@
 """Receiver-mutation classifier: pin both directions.
 
-``MutationClassifier.classify`` (runtime) and ``_mutation_receivers`` (simulation)
+``MutationClassifier.classify`` (runtime) and ``StatementLineage._mutation_receivers`` (simulation)
 must agree, and must:
 
 * treat any method call on a live matplotlib Axes/Figure as an

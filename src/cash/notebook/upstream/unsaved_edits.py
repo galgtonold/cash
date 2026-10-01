@@ -19,6 +19,7 @@ from ..cache_key import (
     statement_source_hash,
 )
 from ._types import normalize_stmt
+from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
     from .virtual_lineage import VirtualLineage
@@ -144,7 +145,7 @@ class UnsavedEdits:
             # However, the lineage hash construction below sorts them anyway.
             sorted_inputs = sorted(inputs)
             for inp in sorted_inputs:
-                if self.virtual_lineage._unbound_builtin(inp, virtual_lineage):
+                if unbound_builtin(inp, self.virtual_lineage.tracking_state.variable_lineage, virtual_lineage):
                     continue
 
                 if inp in virtual_lineage:
@@ -163,7 +164,7 @@ class UnsavedEdits:
             # function-source component. A hand-rolled sha256(code)+input_lineages
             # omitted it, so any function-routed edit always projected != recorded
             # and was wrongly discarded. [layer 1]
-            projected = self.virtual_lineage._compute_virtual_output_lineages(
+            projected = self.virtual_lineage.statements.output_lineages(
                 source_hash, input_lineages, "", inputs, outputs, code
             )
 
