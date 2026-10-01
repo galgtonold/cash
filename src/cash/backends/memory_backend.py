@@ -8,6 +8,7 @@ import ctypes
 import logging
 import pickle
 import sys
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -64,6 +65,12 @@ class InMemoryBackend(CacheBackend):
                 4 GiB); ``cash info`` shows it.
         """
         self._store: dict[str, tuple[MetadataDict, Any]] = {}  # Stores (metadata, value)
+        #: Guards the store and its bookkeeping: every method reads or changes
+        #: several of these together, and eviction walks the whole store, so
+        #: two threads using one tier would otherwise see it half-updated. A
+        #: hit's copy and a write's copy run outside it: they touch only the
+        #: value, which a stored entry never changes.
+        self._lock = threading.RLock()
         self.max_memory_percent = max_memory_percent
         self.check_interval = check_interval
         self.max_entries = max_entries
@@ -93,8 +100,7 @@ class InMemoryBackend(CacheBackend):
         self._gdsf_clock = 0.0
         self._gdsf_base: dict[str, float] = {}
         #: Access order, for ties. ``last_access`` is wall-clock and collides
-        #: within one timer tick, which is how the disk tier's LRU once
-        #: degenerated into directory order.
+        #: within one timer tick, so it cannot order entries written together.
         self._access_seq = 0
         self._seq_by_key: dict[str, int] = {}
 
@@ -108,10 +114,9 @@ class InMemoryBackend(CacheBackend):
     #: while the pressure lasts. A share is at most a fifth of the tier (the
     #: overshoot over the memory in use, with the target at 81%), so below
     #: this it would free at most ~3 MiB, which relieves no machine, while
-    #: every entry it drops is recomputed. Holding the tier at a smaller
-    #: footprint was worse than the share: a session that began on a full
-    #: machine kept the few entries it had at the first check, and a loop of
-    #: 100 calls of 5 ms re-ran all 100 on an identical re-run.
+    #: every entry it drops is recomputed. And a session that starts on a full
+    #: machine must still be able to hold a working set, not only the few
+    #: entries it had at the first check.
     _PRESSURE_KEEPS_BYTES = 16 * 1024**2
 
     @staticmethod
@@ -222,7 +227,7 @@ class InMemoryBackend(CacheBackend):
         if mutable:
             try:
                 copied = pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
-            except Exception:  # noqa: BLE001 - cells that cannot be copied are shared, as before
+            except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                 logger.debug("could not copy the cells of a %s", type(frame).__name__)
         if copied is None:
             copied = frame.copy(deep=not _pandas_copy_on_write())
@@ -252,8 +257,9 @@ class InMemoryBackend(CacheBackend):
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
-        entry = self._store.get(key)
-        return dict(entry[0]) if entry is not None else None
+        with self._lock:
+            entry = self._store.get(key)
+            return dict(entry[0]) if entry is not None else None
 
     def peek_entry(self, key: str) -> tuple[MetadataDict, Any] | None:
         """The stored metadata and value themselves: not copied, not counted.
@@ -264,7 +270,8 @@ class InMemoryBackend(CacheBackend):
         the value; where the entry is stored (``storage``, ``persist_skipped``)
         is all the caller may update in the metadata, once it is stored elsewhere too.
         """
-        return self._store.get(key)
+        with self._lock:
+            return self._store.get(key)
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
@@ -272,31 +279,37 @@ class InMemoryBackend(CacheBackend):
         Not through ``get()``, which deep-copies the value only to drop it --
         the upstream simulation reads many entries' metadata.
         """
-        entry = self._store.get(key)
-        if entry is None:
-            return None
-        metadata = entry[0]
-        metadata["last_access"] = time.time()
-        metadata["access_count"] = metadata.get("access_count", 0) + 1
-        metadata.setdefault("source", self.source_label)
-        return metadata
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            metadata = entry[0]
+            metadata["last_access"] = time.time()
+            metadata["access_count"] = metadata.get("access_count", 0) + 1
+            metadata.setdefault("source", self.source_label)
+            return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
-        if key in self._store:
-            metadata, value = self._store[key]
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return None, None
+            metadata, value = entry
 
             metadata["last_access"] = time.time()
             metadata["access_count"] = metadata.get("access_count", 0) + 1
             metadata.setdefault("source", self.source_label)
             self._touch(key)
+            immutable_below = key in self._immutable_below
+            dict_rows = key in self._dict_rows
+            known_cells = self._frame_cells.get(key)
 
-            if key in self._immutable_below:
-                # Checked when it was stored; the stored value is private.
-                return metadata, (list(value) if type(value) is list else value)
-            if key in self._dict_rows:
-                return metadata, list(map(dict, value))
-            return metadata, self._safe_deep_copy(value, key, known_cells=self._frame_cells.get(key))
-        return None, None
+        if immutable_below:
+            # Checked when it was stored; the stored value is private.
+            return metadata, (list(value) if type(value) is list else value)
+        if dict_rows:
+            return metadata, list(map(dict, value))
+        return metadata, self._safe_deep_copy(value, key, known_cells=known_cells)
 
     def set(
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
@@ -323,12 +336,12 @@ class InMemoryBackend(CacheBackend):
         # gigabytes only to throw it away is its own cost. The previous value
         # for the key goes too, or a later read would serve it as current.
         if self._max_size_bytes is not None and size > self._max_size_bytes * 0.9:
-            if key in self._store:
+            with self._lock:
                 self._drop(key)
             return False
 
         if "storage" not in metadata:
-            metadata["storage"] = ["RAM"]
+            metadata["storage"] = [self.source_label]
 
         frame_cells: dict[int, bool] = {}
         if dict_rows_size is not None:
@@ -351,41 +364,44 @@ class InMemoryBackend(CacheBackend):
             stored = _plain_data.copy_plain(value, immutable, levels)[1]
         metadata["size"] = size
 
-        # Byte-cap bookkeeping: on replacement, discount the old entry's size
-        # before recording the new one so the running total stays accurate.
-        if key in self._store:
-            self._current_size_bytes -= self._store[key][0].get("size", 0)
-        self._store[key] = (metadata, stored)
-        self._touch(key)
-        if immutable:
-            self._immutable_below.add(key)
-        else:
-            self._immutable_below.discard(key)
-        if dict_rows_size is not None:
-            self._dict_rows.add(key)
-        else:
-            self._dict_rows.discard(key)
-        if frame_cells:
-            self._frame_cells[key] = frame_cells
-        else:
-            self._frame_cells.pop(key, None)
-        self._current_size_bytes += size
+        with self._lock:
+            # Byte-cap bookkeeping: on replacement, discount the old entry's size
+            # before recording the new one so the running total stays accurate.
+            previous = self._store.get(key)
+            if previous is not None:
+                self._current_size_bytes -= previous[0].get("size", 0)
+            self._store[key] = (metadata, stored)
+            self._touch(key)
+            if immutable:
+                self._immutable_below.add(key)
+            else:
+                self._immutable_below.discard(key)
+            if dict_rows_size is not None:
+                self._dict_rows.add(key)
+            else:
+                self._dict_rows.discard(key)
+            if frame_cells:
+                self._frame_cells[key] = frame_cells
+            else:
+                self._frame_cells.pop(key, None)
+            self._current_size_bytes += size
 
-        # Check max_entries limit
-        if self.max_entries is not None and len(self._store) > self.max_entries:
-            self._evict_lru(len(self._store) - self.max_entries)
+            # Check max_entries limit
+            if self.max_entries is not None and len(self._store) > self.max_entries:
+                self._evict_lru(len(self._store) - self.max_entries)
 
-        # Enforce the soft byte cap (adaptive RAM cap; None = unbounded).
-        if self._max_size_bytes is not None and self._current_size_bytes > self._max_size_bytes:
-            self._evict_to_byte_cap()
+            # Enforce the soft byte cap (adaptive RAM cap; None = unbounded).
+            if self._max_size_bytes is not None and self._current_size_bytes > self._max_size_bytes:
+                self._evict_to_byte_cap()
 
-        # Check memory pressure periodically
-        self._set_count += 1
-        if self._set_count % self.check_interval == 0:
-            self._check_and_evict()
+            # Check memory pressure periodically
+            self._set_count += 1
+            if self._set_count % self.check_interval == 0:
+                self._check_and_evict()
 
     def _drop(self, key: str) -> None:
-        """Remove *key*, keeping the byte-cap running total in sync."""
+        """Remove *key*, keeping the byte-cap running total in sync. Called
+        with the lock held."""
         self._immutable_below.discard(key)
         self._dict_rows.discard(key)
         self._frame_cells.pop(key, None)
@@ -396,35 +412,35 @@ class InMemoryBackend(CacheBackend):
             self._current_size_bytes -= entry[0].get("size", 0)
 
     def delete(self, key: str) -> None:
-        self._drop(key)
+        with self._lock:
+            self._drop(key)
 
     def clear(self) -> None:
-        self._store.clear()
-        self._immutable_below.clear()
-        self._dict_rows.clear()
-        self._frame_cells.clear()
-        self._gdsf_base.clear()
-        self._seq_by_key.clear()
-        self._current_size_bytes = 0
-        self._pressure_floor = None
-        self._pressure_percent = None
+        with self._lock:
+            self._store.clear()
+            self._immutable_below.clear()
+            self._dict_rows.clear()
+            self._frame_cells.clear()
+            self._gdsf_base.clear()
+            self._seq_by_key.clear()
+            self._current_size_bytes = 0
+            self._pressure_floor = None
+            self._pressure_percent = None
         # Also try to free memory back to OS
         self._try_malloc_trim()
 
     def list_entries(self) -> list[dict[str, Any]]:
-        return [meta for meta, _ in self._store.values()]
+        with self._lock:
+            return [meta for meta, _ in self._store.values()]
 
     def entry_count(self) -> int:
         return len(self._store)
 
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
-        keys_to_delete = []
-        for key, (meta, _) in self._store.items():
-            if is_expired(meta):
-                keys_to_delete.append(key)
-
-        for key in keys_to_delete:
-            self._drop(key)
+        with self._lock:
+            keys_to_delete = [key for key, (meta, _) in self._store.items() if is_expired(meta)]
+            for key in keys_to_delete:
+                self._drop(key)
 
         if keys_to_delete:
             self._try_malloc_trim()
@@ -443,7 +459,7 @@ class InMemoryBackend(CacheBackend):
             self._pressure_floor = None
             self._pressure_percent = None
 
-    def _evict(self, mem: Any = None) -> None:
+    def _evict(self, mem: Any) -> None:
         """Give back this tier's SHARE of the machine's memory pressure.
 
         Same order as the byte cap (`_evict_to_byte_cap`): least value per
@@ -455,8 +471,8 @@ class InMemoryBackend(CacheBackend):
         check would empty the tier -- costing its user everything and the
         machine nothing. It sheds its share: ``overshoot * own / in_use`` bytes, where
         ``own`` is this tier's footprint. A tier that IS most of the memory in
-        use sheds nearly the whole overshoot, as before; one that holds a
-        sliver of it sheds a sliver.
+        use sheds nearly the whole overshoot; one that holds a sliver of it
+        sheds a sliver.
 
         **Once per episode.** Under pressure that never relents, taking the
         share again on every check (one per ``check_interval`` writes) is the
@@ -466,49 +482,18 @@ class InMemoryBackend(CacheBackend):
         episode only hold the tier at that level: new entries displace the
         least valuable old ones rather than the tier shrinking again. The
         episode ends at the first check that finds no pressure.
-
-        Falls back to the old drain-to-target when the reading carries no
-        ``total`` -- psutil always provides it, so that is only ever a test
-        double -- because the share cannot be computed without it.
         """
-        target_percent = self.max_memory_percent * 0.9
-        share = self._pressure_share(mem, target_percent)
-        if share is not None:
-            self._shed(share)
-            return
+        self._shed(self._pressure_share(mem, self.max_memory_percent * 0.9))
 
-        items = [
-            (self._gdsf_priority(key, meta), self._seq_by_key.get(key, 0), key)
-            for key, (meta, _val) in self._store.items()
-        ]
-        items.sort()
-
-        evicted_count = 0
-
-        for priority, _seq, key in items:
-            if key in self._store:
-                self._drop(key)
-                self._gdsf_clock = max(self._gdsf_clock, priority)
-                evicted_count += 1
-
-                mem = _memory_reading()
-                if mem is None or mem.percent / 100.0 <= target_percent:
-                    break
-
-        if evicted_count > 0:
-            self._try_malloc_trim()
-
-    def _pressure_share(self, mem: Any, target_percent: float) -> float | None:
-        """Bytes this tier should give back now, or None when it cannot tell.
+    def _pressure_share(self, mem: Any, target_percent: float) -> float:
+        """Bytes this tier should give back now.
 
         The first check of a pressure episode: its proportional share of the
         overshoot. Every later one: whatever it has grown past the level the
         first one left. Neither goes below `_PRESSURE_KEEPS_BYTES`.
         """
-        total = getattr(mem, "total", None)
-        percent = getattr(mem, "percent", None)
-        if not isinstance(total, (int, float)) or not isinstance(percent, (int, float)) or total <= 0:
-            return None
+        total = mem.total
+        percent = mem.percent
         own = self._current_size_bytes
         worsening = (
             self._pressure_percent is not None and percent > self._pressure_percent + self._PRESSURE_WORSENED_POINTS
@@ -519,8 +504,7 @@ class InMemoryBackend(CacheBackend):
         # WORSE since the last one. Holding flat is right while the pressure is
         # steady; if it keeps climbing, something -- possibly this tier, if the
         # memory it freed has not gone back to the OS yet -- is still growing,
-        # and refusing to shed again would let the machine swap. The old loop
-        # erred towards emptying the cache; this must not err the other way.
+        # and refusing to shed again would let the machine swap.
         self._pressure_percent = percent
         in_use = total * percent / 100.0
         overshoot = in_use - total * target_percent
@@ -624,11 +608,9 @@ def _memory_reading() -> Any | None:
     The pressure check is advice about memory, never part of a store: the
     value is already in the tier when it runs, on every ``check_interval``-th
     write. So a reading that fails -- whatever it raises -- skips the check
-    rather than failing that write. It raised only ``OSError`` and
-    ``AttributeError`` before, and a psutil left patched by a test, whose
-    stand-in read a name that was gone, made every tenth write raise
-    ``NameError``. Logged once per process: a check that cannot run stays
-    that way, and a line per ten writes would say nothing new.
+    rather than failing that write. A reading without a numeric percentage
+    and total counts as none. Logged once per process: a check that cannot
+    run stays that way, and a line per ten writes would say nothing new.
     """
     try:
         mem = psutil.virtual_memory()
@@ -642,9 +624,11 @@ def _memory_reading() -> Any | None:
                 exc,
             )
         return None
-    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
-        return None
-    return mem
+    total = getattr(mem, "total", None)
+    for number in (percent, total):
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            return None
+    return mem if total > 0 else None
 
 
 _COW: list[bool] = []
@@ -699,7 +683,7 @@ def _holds_mutable_cells(frame: Any) -> bool:
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
         return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
-    except Exception:  # noqa: BLE001 - cannot tell: copy as before
+    except Exception:  # noqa: BLE001 - cannot tell: the shallow copy
         return False
 
 

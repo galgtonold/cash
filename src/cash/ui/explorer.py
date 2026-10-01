@@ -62,7 +62,10 @@ class CacheExplorer:
         """
         List all entries in the cache with metadata.
         """
-        entries = self.app.backend.list_entries()
+        # Copies: a backend may hand out the dicts it stores (the RAM tier
+        # does), and the display fields added here must not end up in what
+        # every later hit returns, or be written to disk with the entry.
+        entries = [dict(entry) for entry in self.app.backend.list_entries()]
 
         # Enrich with human readable info
         for entry in entries:
@@ -158,8 +161,9 @@ class CacheExplorer:
                 module_node["children"].append(func_node)
             tree_data.append(module_node)
 
-        # Prepare data for JS
-        data = json.dumps(tree_data, default=str)
+        # Prepare data for JS. Every "<" escaped, so a "</script>" inside
+        # cached source code cannot end the script it is embedded in.
+        data = json.dumps(tree_data, default=str).replace("<", "\\u003c")
 
         html_content = f"""
         <!DOCTYPE html>
@@ -283,7 +287,7 @@ class CacheExplorer:
                     // Render Overview
                     const overview = document.getElementById('overview-tab');
                     overview.innerHTML = `
-                        <h2>${{func.name}}</h2>
+                        <h2>${{escapeHtml(func.name)}}</h2>
                         <div class="stat-card">
                             <div class="stat-title">Cached Entries</div>
                             <div class="stat-value">${{func.stats.count}}</div>
@@ -301,8 +305,8 @@ class CacheExplorer:
                         const tr = document.createElement('tr');
                         tr.onclick = () => selectEntryItem(entry, tr);
                         tr.innerHTML = `
-                            <td>${{entry.key.substring(0, 20)}}...</td>
-                            <td>${{entry.timestamp_human || 'N/A'}}</td>
+                            <td>${{escapeHtml(entry.key.substring(0, 20))}}...</td>
+                            <td>${{escapeHtml(entry.timestamp_human || 'N/A')}}</td>
                             <td>${{formatBytes(entry.size || 0)}}</td>
                         `;
                         tbody.appendChild(tr);
@@ -325,16 +329,16 @@ class CacheExplorer:
                         <h3>Entry Details</h3>
                         <div class="meta-grid">
                             <div class="meta-label">Key</div>
-                            <div class="meta-value">${{entry.key}}</div>
+                            <div class="meta-value">${{escapeHtml(entry.key)}}</div>
 
                             <div class="meta-label">Timestamp</div>
-                            <div class="meta-value">${{entry.timestamp_human}}</div>
+                            <div class="meta-value">${{escapeHtml(entry.timestamp_human || 'N/A')}}</div>
 
                             <div class="meta-label">Size</div>
                             <div class="meta-value">${{formatBytes(entry.size || 0)}}</div>
 
                             <div class="meta-label">Args Hash</div>
-                            <div class="meta-value">${{entry.args_hash || 'N/A'}}</div>
+                            <div class="meta-value">${{escapeHtml(entry.args_hash || 'N/A')}}</div>
                         </div>
                         <h4>Source Code</h4>
                         <div class="source-code">${{escapeHtml(entry.source_code || 'No source available')}}</div>
@@ -367,7 +371,7 @@ class CacheExplorer:
                         '"': '&quot;',
                         "'": '&#039;'
                     }};
-                    return text.replace(/[&<>"']/g, function(m) {{ return map[m]; }});
+                    return String(text).replace(/[&<>"']/g, function(m) {{ return map[m]; }});
                 }}
 
                 renderTree();

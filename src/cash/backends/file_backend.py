@@ -21,13 +21,12 @@ from typing import Any, NamedTuple
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
-from ..diagnostics import warn_diagnostic
-from ..exceptions import CashCacheStoreFailedWarning
+from ..config import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
-from ._base import CacheBackend, MetadataDict, ttl_expired
+from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
-from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, write_all
+from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, warn_unusable, write_all
 from .entry_format import (
     ENTRY_SUFFIX,
     CorruptEntry,
@@ -42,7 +41,7 @@ from .entry_format import (
     update_metadata_in_place,
 )
 from .file_eviction import FileEvictor
-from .serialization import PickleSerializer, Serializer
+from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
 from .touched_entries import TouchedEntries, stat_signature
 from .versions import VersionIndex, superseded_to_drop
 
@@ -159,7 +158,7 @@ class FileBackend(CacheBackend):
         cache_dir: str,
         compress: bool = False,
         max_size_bytes: int | None = None,
-        flush_interval: int = 5,
+        flush_interval: int = CashConfig.flush_interval,
         default_ttl: int | None = None,
         adaptive_cap: bool = False,
     ) -> None:
@@ -266,21 +265,7 @@ class FileBackend(CacheBackend):
         """Turn this tier off for the rest of the process, and say why once."""
         self._unusable = True
         self._initialized = True  # never retried; the answer will not change
-
-        try:
-            warn_diagnostic(
-                CashCacheStoreFailedWarning,
-                "CACHE-DIR-UNWRITABLE",
-                f"cash cannot use its cache directory {self.cache_dir} "
-                f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
-                f"this run, so every call recomputes -- but the run itself "
-                f"continues normally.",
-                "point cash somewhere it can write -- cash.configure(cache_dir=...), "
-                "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
-                "user write permission on that path.",
-            )
-        except Exception:  # noqa: BLE001 - a diagnostic must not become the failure
-            logger.warning("Cash disabled its file tier at %s: %s", self.cache_dir, exc)
+        warn_unusable(self.cache_dir, exc)
 
     def generation_token(self) -> tuple | None:
         """The format stamp's identity: it moves when the directory is cleared
@@ -414,7 +399,7 @@ class FileBackend(CacheBackend):
                     metadata = on_disk
                     self._remember(key, metadata, checksum, st if cached_meta is not None else None)
 
-            if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
+            if entry_expired(metadata, self._default_ttl):
                 return None
 
             return metadata
@@ -467,7 +452,7 @@ class FileBackend(CacheBackend):
             if metadata.get("metadata_only"):
                 return None, None
 
-            if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
+            if entry_expired(metadata, self._default_ttl):
                 self.delete(key)
                 return None, None
 
@@ -483,24 +468,19 @@ class FileBackend(CacheBackend):
                 try:
                     payload = gzip.decompress(payload)
                 except (OSError, gzip.BadGzipFile, EOFError):
-                    # Flag says compressed but the bytes are not. Fall through
-                    # with the raw bytes, as the two-file path did.
+                    # Flag says compressed but the bytes are not: the raw
+                    # bytes are the payload.
                     logger.debug("Entry for %r flagged compressed but is not", key)
 
             if isinstance(payload, SplitPayload):
                 # Written only for a PickleSerializer value (`set`).
                 value = PickleSerializer().deserialize_split(payload.stream, payload.buffers)
             else:
-                serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-                value = serializer_cls().deserialize(payload)
+                value = restore_value(metadata, payload)
 
             metadata.setdefault("source", self.source_label)
             return metadata, value
-        except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError, EOFError) as exc:
-            # Unrestorable here, so absent: AttributeError/ImportError for a
-            # value naming a binding this process lacks (a __main__ class from
-            # an earlier kernel), EOFError for a file truncated by a killed
-            # process or a full disk.
+        except (OSError, *RESTORE_ERRORS) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 
@@ -529,11 +509,6 @@ class FileBackend(CacheBackend):
             except Exception:
                 logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
-    @staticmethod
-    def _replace_with_retry(tmp_path: str, path: str) -> None:
-        """`cash._paths.replace_with_retry`, as a method so tests can stub it."""
-        replace_with_retry(tmp_path, path)
-
     def _atomic_write(self, path: str, payload: bytes | list) -> None:
         """Write *payload* (bytes, or a list of pieces to write in order) to
         *path* so no reader can observe a partial file.
@@ -557,7 +532,7 @@ class FileBackend(CacheBackend):
                     write_all(fd, chunk)
             finally:
                 os.close(fd)
-            self._replace_with_retry(tmp_path, path)
+            replace_with_retry(tmp_path, path)
         except BaseException:
             try:
                 os.remove(tmp_path)
@@ -868,11 +843,11 @@ class FileBackend(CacheBackend):
     def promotion_size_cap(self) -> int | None:
         """Refuse (skip) only an object larger than this tier's WHOLE cap.
 
-        "Keep at most N bytes" reads as: store what fits and evict the rest. A
-        lower threshold (it was half the cap) refused values that fit
-        comfortably, and a job whose working set was half its cap cached
-        nothing. A write-and-evict treadmill is reported when it happens
-        (``CACHE-THRASH``) rather than pre-empted. Uncapped, the class-level
+        "Keep at most N bytes" reads as: store what fits and evict the rest.
+        Any lower threshold refuses values that fit, and a job whose working
+        set is a large part of its cap would cache nothing. A write-and-evict
+        treadmill is reported when it happens (``CACHE-THRASH``) rather than
+        pre-empted. Uncapped, the class-level
         hint applies.
         """
         if self.evictor.max_size_bytes:

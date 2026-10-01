@@ -63,7 +63,7 @@ combination at the same moment, unless the backend is Redis with
 
 ## Disk space
 
-<!-- claim: cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2, cash/__main__.py:cmd_clear @3e1c3aca -->
+<!-- claim: cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2, cash/__main__.py:cmd_clear @fd92c8a3 -->
 A sweep writes one entry per combination, and every entry goes to disk. By
 default cash lets the cache use a quarter of the free room on its volume,
 between 8 GiB and 100 GiB. When it is full, cash evicts the entries that are
@@ -75,7 +75,7 @@ cheapest to recompute per byte.
     ```text title="Output"
     Cache dir:  /home/me/study/.cash
     Holds:      120 entries, 3.2 GiB
-    Max size:   auto -- disk 26.0 GiB, RAM 3.1 GiB
+    Max size:   RAM 3.1 GiB (auto), disk 26.0 GiB (auto)
     ```
 
 - **Pin it.** Set `max_cache_size`, for the whole project in

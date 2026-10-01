@@ -300,7 +300,7 @@ class TestEdgeCases:
 
     def test_backend_failure_on_set(self, memory_backend):
         """If a tier fails on set, others should still work."""
-        failing = MagicMock()
+        failing = MagicMock(cost_kind="disk", **{"promotion_size_cap.return_value": None})
         failing.set.side_effect = Exception("disk error")
         tiered = TieredBackend([memory_backend, failing])
         tiered.set("k", "v", {"execution_time": 5.0, "size": 1})

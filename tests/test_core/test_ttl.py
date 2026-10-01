@@ -6,6 +6,7 @@ import pytest
 
 from cash.backends import FileBackend
 from cash.core import Cash
+from tests._cli_args import cli_args
 
 
 @pytest.fixture
@@ -209,14 +210,13 @@ def test_an_entry_expired_under_the_tier_default_says_so(temp_cache_dir, monkeyp
 
 
 def test_cash_info_shows_a_tier_s_default_ttl(monkeypatch, capsys):
-    from types import SimpleNamespace
 
     from cash.__main__ import cmd_info
 
     monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")
     monkeypatch.setenv("CASH_TIER_1_TYPE", "file")
     monkeypatch.setenv("CASH_TIER_1_DEFAULT_TTL", "5")
-    cmd_info(SimpleNamespace())
+    cmd_info(cli_args("info"))
     assert "file (default_ttl=5s)" in capsys.readouterr().out
 
 

@@ -229,7 +229,7 @@ def analysis_failed(check: str, exc: BaseException) -> str:
                 f"{reason}.",
                 "nothing to change in your code; please report the error so the check can handle it.",
             )
-        except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+        except Exception:
             logger.debug("could not warn about a failed analysis", exc_info=True)
     return reason
 

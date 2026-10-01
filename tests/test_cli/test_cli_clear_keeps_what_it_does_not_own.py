@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import os
 import sys
-from types import SimpleNamespace
 
 import pytest
 
 from cash.__main__ import cmd_clear, main
 from cash.backends.entry_format import ENTRY_SUFFIX
+from tests._cli_args import cli_args
 
 
 def _cache_with(tmp_path, *foreign):
@@ -33,7 +33,9 @@ def _cache_with(tmp_path, *foreign):
 
 def _clear(cache, monkeypatch, tmp_path, **kwargs):
     monkeypatch.chdir(tmp_path)
-    args = SimpleNamespace(path=str(cache), all=False, force=False, tool=None, entry=None, function=None, expired=False)
+    args = cli_args(
+        "clear", path=str(cache), all=False, force=False, tool=None, entry=None, function=None, expired=False
+    )
     for key, value in kwargs.items():
         setattr(args, key, value)
     cmd_clear(args)

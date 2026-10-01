@@ -264,9 +264,9 @@ def test_a_folder_beside_the_cache_dir_is_the_users(tmp_path):
     exports.mkdir()
     observer = EffectObserver(exclude_under=str(cache_dir))
     with observer:
-        with open(cache_dir / "entry.pkl", "w") as f:
+        with open(cache_dir / "entry.pkl", "w", encoding="utf-8") as f:
             f.write("cash's own")
-        with open(exports / "report.csv", "w") as f:
+        with open(exports / "report.csv", "w", encoding="utf-8") as f:
             f.write("a,b\n")
     written = [detail.split(", at ")[0] for kind, detail in observer.effects if kind == "file write"]
     assert written == [str(exports / "report.csv")], observer.effects

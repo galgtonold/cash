@@ -39,8 +39,8 @@ from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of
 from .code_identity import (
     SYNC_TYPES,
     cash_wrapped,
-    is_cash_wrapper,
     hash_callable_source,
+    is_cash_wrapper,
     is_user_class,
     is_user_code_object,
     is_user_module,

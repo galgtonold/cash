@@ -22,7 +22,8 @@ import json
 
 import pytest
 
-from cash.backends._writes import _DISCARDED_WRITES, discarded_writes, reset_discarded_writes
+from cash.backends._writes import _DISCARDED_WRITES, discarded_writes
+from tests._discarded_writes import reset_discarded_writes
 
 
 @pytest.fixture(autouse=True)
