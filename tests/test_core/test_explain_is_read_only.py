@@ -44,6 +44,7 @@ def test_explain_leaves_the_entry_and_its_use_count_alone(tmp_path, make):
 
     f(3)
     c.backend.flush() if hasattr(c.backend, "flush") else None
+    c.backend.list_entries()  # waits for the background write, so the entry file is final
     key = f.explain(3).cache_key
     # A number, not the dict: a backend may hand back its cached metadata
     # object itself, and comparing that with itself proves nothing.
