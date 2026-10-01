@@ -62,7 +62,6 @@ from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
     ENVIRON_KEYED_METHODS,
     ENVIRON_NAMES,
-    METHOD_VERBS,
     MODULE_CALLS,
     MUTATOR_METHODS,
     STDIN_NAMES,
@@ -104,6 +103,7 @@ from .purity_flow import (
     is_log_line,
     receiver_is_fresh,
 )
+from .purity_policy import AMBIENT_KINDS, DECORATOR_POLICY, REPORTED_METHODS
 from .purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -119,11 +119,7 @@ from .purity_report import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "DECORATOR_POLICY",
-    "REPORTED_METHODS",
-    "PurityAnalyzer",
-]
+__all__ = ["PurityAnalyzer"]
 
 #: What a `network_read` finding names as the source of the answer.
 _SOURCE: dict[EffectKind, str] = {EffectKind.NETWORK_READ: "server", EffectKind.DB_READ: "database"}
@@ -154,39 +150,6 @@ def _opens_tracked_database(func: ast.expr, namespace: dict[str, Any] | None) ->
 #: dispatch rule (which only fires on a NON-constant name).
 _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 
-#: What a ``@cash.cache`` function's first call does about each kind of effect
-#: its body has. What a kind IS lives in :mod:`cash.effects`, shared with the
-#: notebook, whose own table is ``cash.analysis.file_effects.NOTEBOOK_POLICY``.
-#: A decorated function is always cached -- refusing would cost the user the
-#: compute and prevent nothing, since the body has run -- so the choice here is
-#: only what to say. A test keeps this covering every kind.
-DECORATOR_POLICY: dict[EffectKind, Action] = {
-    EffectKind.FILE_WRITE: Action.WARN,
-    EffectKind.FILE_READ: Action.CACHE_AS_INPUT,
-    # What the server returns is an input the key cannot see: advise `ttl=`,
-    # which silences it (KEY-NETWORK-READ). A database is a server too.
-    EffectKind.NETWORK_READ: Action.SUGGEST_TTL,
-    EffectKind.NETWORK_WRITE: Action.WARN,
-    EffectKind.NETWORK: Action.WARN,
-    EffectKind.DB_READ: Action.SUGGEST_TTL,
-    EffectKind.DB_WRITE: Action.WARN,
-    EffectKind.SUBPROCESS: Action.WARN,
-    # These two are reported as ambient reads (KEY-AMBIENT-READ), not as
-    # side effects: a hidden input is frozen, nothing is skipped.
-    EffectKind.CLOCK: Action.WARN,
-    # A read whose name is written out is folded into the key by value
-    # (`GlobalsFold.fold_environment`); one whose name is only known at run time
-    # still warns, as an ambient read.
-    EffectKind.ENVIRONMENT: Action.CACHE_AS_INPUT,
-    # A hit drops what the first call printed. A log line (`is_log_line`) is
-    # exempt: a hit skipping it is what caching means.
-    EffectKind.CONSOLE: Action.WARN,
-    EffectKind.DISPLAY: Action.WARN,
-    EffectKind.INTERACTIVE: Action.WARN,
-}
-
-#: Kinds reported as ambient reads rather than as side effects.
-_AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 
 #: Bare builtins whose discarded result is not worth a word: each is reported
 #: by another rule already (an effect, or explicit dynamic execution).
@@ -196,14 +159,6 @@ _DISCARD_REPORTED_BUILTINS = frozenset(name for name in MODULE_CALLS if "." not 
     "eval",
     "compile",
 }
-
-
-#: Method names the decorator reports on any receiver: a mutator, or a verb
-#: whose kind it warns about. The discarded-call rule skips these (the call is
-#: already reported), and "does this change a global?" reads them.
-REPORTED_METHODS: frozenset[str] = MUTATOR_METHODS | frozenset(
-    name for name, kind in METHOD_VERBS.items() if DECORATOR_POLICY[kind] is Action.WARN
-)
 
 
 #: Methods that set up or train the object they are called on, in place,
@@ -786,7 +741,7 @@ class _PurityVisitor(ast.NodeVisitor):
                 return
             if (
                 effect is not None
-                and effect.kind not in _AMBIENT_KINDS
+                and effect.kind not in AMBIENT_KINDS
                 and DECORATOR_POLICY[effect.kind] is Action.WARN
                 and not effect.method
             ):
@@ -1538,7 +1493,7 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
     ``pd.Timestamp("now")``.
     """
     effect = classify_call(node, namespace)
-    if effect is not None and effect.kind in _AMBIENT_KINDS:
+    if effect is not None and effect.kind in AMBIENT_KINDS:
         if effect.name in CLOCK_WHEN_ARG_CALLS:
             return f"{effect.name}({node.args[0].value!r})"  # type: ignore[attr-defined]
         return effect.name
