@@ -553,6 +553,18 @@ def _bytecode_mutated_globals(scopes: tuple, names: set[str]) -> set[str]:
 _NO_PLAN = object()
 
 
+def _resolve_dotted(g: dict, path: str) -> Any:
+    """The object ``pkg.conf`` names in globals *g*: the global, then each
+    attribute through modules only. None when a link is missing."""
+    head, _, rest = path.partition(".")
+    value = g.get(head)
+    for attr in rest.split(".") if rest else ():
+        if not isinstance(value, types.ModuleType):
+            return None
+        value = vars(value).get(attr)
+    return value
+
+
 def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
     """Whether the decorator expression *deco* is cash's own ``@app.cache``.
 
@@ -575,6 +587,8 @@ def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
 #: The opcodes that read a module global by name (``LOAD_NAME`` in a class
 #: body or at module level; ``LOAD_FROM_DICT_OR_GLOBALS`` in 3.12+ class bodies).
 _GLOBAL_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS"})
+#: The opcodes that read an attribute (``LOAD_METHOD`` before 3.12).
+_ATTR_OPS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
 
 
 class GlobalsFold:
@@ -1754,17 +1768,25 @@ class GlobalsFold:
         return state_hash
 
     def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
-        """``(module_global, attribute)`` pairs the body reads, from bytecode.
+        """``(module_path, attribute)`` pairs the body reads, from bytecode.
 
-         ``import conf; conf.RATE`` compiles to ``LOAD_GLOBAL conf`` followed by
-         ``LOAD_ATTR RATE``. Only the *module* reaches ``GlobalsFold.read_global_data_names``,
-         and modules are filtered out at fold time, so the attribute was never
-         keyed on: ``conf.RATE`` went permanently stale while the equivalent
-         ``from conf import RATE`` invalidated correctly. Two spellings of one
-         dependency, one of them silently wrong.
+        ``conf.RATE``, ``pkg.conf.RATE`` and ``m = pkg.conf; m.RATE`` are
+        three spellings of one dependency, and the global the body names is
+        a module in each: none of them reaches
+        `GlobalsFold.read_global_data_names`, so the attribute is keyed here.
 
-         Walks nested scopes for the same reason the sibling channel does
-        : a read that happens only inside a genexp still counts.
+        * A global followed by a chain of attribute loads
+          (``LOAD_GLOBAL pkg; LOAD_ATTR conf; LOAD_ATTR RATE``) gives one
+          pair per link: ``("pkg", "conf")`` and ``("pkg.conf", "RATE")``.
+          `GlobalsFold.module_attr_parts` resolves the dotted path and folds
+          the pairs whose path is a user module.
+        * A module the code takes whole (bound to a local, passed on, or read
+          with ``vars(conf)["K"]`` / ``getattr(conf, "K")``) is paired with
+          every attribute name and identifier-shaped string constant in the
+          code. A pair that names nothing is dropped at fold time; one that
+          names an attribute the code does not read only adds a part.
+
+        Nested scopes count: a read inside a genexp is a read of the body.
         """
         code = getattr(func, "__code__", None)
         if code is None:
@@ -1773,32 +1795,35 @@ class GlobalsFold:
         if cached is not None:
             return cached
 
-        pairs: set[tuple[str, str]] = set()
-        # `vars(conf)["K"]` / `getattr(conf, "K")`: the attribute is a string
-        # constant rather than a LOAD_ATTR, so the pair below never formed and
-        # the constant was not keyed on. Every module read in this scope is
-        # paired with every identifier-shaped constant in it; a pair that does
-        # not exist is dropped at fold time by the getattr below.
         g = getattr(func, "__globals__", None) or {}
-        for scope in iter_code_scopes(code):
-            modules = [n for n in (scope.co_names or ()) if isinstance(g.get(n), types.ModuleType)]
-            if modules:
-                for const in scope.co_consts or ():
-                    if isinstance(const, str) and const.isidentifier():
-                        pairs.update((m, const) for m in modules)
-        for scope in iter_code_scopes(code):
-            instrs = list(dis.get_instructions(scope))
-            for prev, nxt in zip(instrs, instrs[1:]):
-                if prev.opname != "LOAD_GLOBAL":
+        pairs: set[tuple[str, str]] = set()
+        whole: set[str] = set()
+        names: set[str] = set()
+        scopes = list(iter_code_scopes(code))
+        for scope in scopes:
+            names.update(c for c in scope.co_consts or () if isinstance(c, str) and c.isidentifier())
+            instrs = [i for i in dis.get_instructions(scope) if i.opname != "EXTENDED_ARG"]
+            for i, ins in enumerate(instrs):
+                if ins.opname in _ATTR_OPS and isinstance(ins.argval, str):
+                    names.add(ins.argval)
+                if ins.opname != "LOAD_GLOBAL" or not isinstance(ins.argval, str):
                     continue
-                if nxt.opname not in ("LOAD_ATTR", "LOAD_METHOD"):
-                    continue
-                name, attr = prev.argval, nxt.argval
-                if not isinstance(name, str) or not isinstance(attr, str):
-                    continue
-                if attr.startswith("__"):
-                    continue
-                pairs.add((name, attr))
+                path = ins.argval
+                value = g.get(path)
+                j = i + 1
+                while j < len(instrs) and instrs[j].opname in _ATTR_OPS and isinstance(instrs[j].argval, str):
+                    attr = instrs[j].argval
+                    if attr.startswith("__"):
+                        break
+                    pairs.add((path, attr))
+                    path = f"{path}.{attr}"
+                    value = getattr(value, attr, None) if isinstance(value, types.ModuleType) else None
+                    j += 1
+                else:
+                    if isinstance(value, types.ModuleType):
+                        whole.add(path)
+        for path in whole:
+            pairs.update((path, n) for n in names if not n.startswith("__"))
         result = tuple(sorted(pairs))
         self._module_attr_cache[code] = result
         return result
@@ -1945,7 +1970,7 @@ class GlobalsFold:
         parts: list[tuple[str, str]] = []
         own_pkg = own_package(func)
         for mod_name, attr in self._read_module_attr_pairs(func):
-            obj = g.get(mod_name)
+            obj = _resolve_dotted(g, mod_name)
             is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
             # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
             # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
