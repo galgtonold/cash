@@ -22,6 +22,7 @@ import pytest
 
 from cash import Cash, FileBackend
 from cash.backends.clear_watch import ClearWatcher
+from tests._cli_args import cli_args
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
@@ -84,13 +85,11 @@ def test_a_clear_under_a_running_process_empties_its_ram_tier(tmp_path, monkeypa
         c._stored_keys.flush()  # and the stored-key record's
         shutil.rmtree(cache_dir)  # what `cash clear --all` does
     else:
-        from types import SimpleNamespace
-
         from cash.__main__ import cmd_clear
 
         c.backend.backends[-1]._writes.wait_all()
         c._stored_keys.flush()  # and the stored-key record's
-        cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
+        cmd_clear(cli_args("clear", path=str(cache_dir), all=False, function="f"))
     f(1)
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"
 
@@ -121,11 +120,9 @@ def test_a_clear_reaches_a_process_that_started_with_no_cache(tmp_path, monkeypa
     if how == "all":
         shutil.rmtree(cache_dir)
     else:
-        from types import SimpleNamespace
-
         from cash.__main__ import cmd_clear
 
-        cmd_clear(SimpleNamespace(path=str(cache_dir), all=False, function="f"))
+        cmd_clear(cli_args("clear", path=str(cache_dir), all=False, function="f"))
     monkeypatch.setattr(ClearWatcher, "CHECK_EVERY", 0.0)  # the second has passed
     f(1)
     assert calls == [1, 1], "the RAM tier served a result cleared from disk"

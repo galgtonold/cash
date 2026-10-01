@@ -10,14 +10,13 @@ from .notebook.ipython.magics import CashMagics
 try:
     from nbconvert.preprocessors import Preprocessor
     from traitlets import Bool
-
-    HAS_NBCONVERT = True
 except ImportError:
-    # Provide a dummy base class when nbconvert isn't installed
-    HAS_NBCONVERT = False
+    # Without nbconvert the preprocessor still runs on a notebook read with
+    # nbformat (``CashStripPreprocessor(...).preprocess(nb, {})``): these
+    # stand in for the two pieces of nbconvert and traitlets it uses.
 
     class Preprocessor:
-        """Dummy base class when nbconvert is not installed."""
+        """The part of nbconvert's ``Preprocessor`` the class below relies on."""
 
         def __init__(self, **options):
             for name, value in options.items():

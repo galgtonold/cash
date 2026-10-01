@@ -451,12 +451,12 @@ smaller values, or move `cache_dir` to a bigger volume.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/file_backend.py:FileBackend.promotion_size_cap @ef38a34e -->
+<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/file_backend.py:FileBackend.promotion_size_cap @db165d55 -->
 **What happened.** One value, serialized, is bigger than every disk tier's
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @e6eface9 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @0145fcb5 -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 
@@ -529,7 +529,7 @@ before passing it.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @f94a029d, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @afa4a855 -->
+<!-- claim: cash/config.py:_validated_layer @31e81d57, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @f94a029d, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @02c67b7c -->
 **What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -556,7 +556,7 @@ the line.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @0460d759, cash/config.py:_unknown_key @87165926 -->
+<!-- claim: cash/config.py:_validated_layer @31e81d57, cash/config.py:_unknown_key @87165926 -->
 **What happened.** A `[tool.cash]` table, a `[cash]` table or a
 `CASH_TIER_<N>_*` variable sets a key that is not a cash setting. The message
 names the closest real setting:

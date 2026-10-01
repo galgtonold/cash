@@ -58,9 +58,9 @@ default_ttl = 3600          # seconds
 
 <!-- claim: cash/backends/factory.py:tier_specs @428b03c6 -->
 From the environment: `CASH_TIER_0_TYPE=memory`, `CASH_TIER_1_TYPE=file`,
-`CASH_TIER_1_DEFAULT_TTL=3600`. A decorator's own `ttl=` takes precedence, and
-as with `ttl=`, the shorter of the value an entry was written with and the
-current one wins. `cash clear --expired` (or `cash.cleanup()`) frees the disk
+`CASH_TIER_1_DEFAULT_TTL=3600`. A decorator's own `ttl=` takes precedence.
+Otherwise the shorter of the value an entry was written with and the current
+`default_ttl` wins, so lowering it shortens entries already written. `cash clear --expired` (or `cash.cleanup()`) frees the disk
 that expired entries still hold.
 
 ## Services and worker processes
@@ -89,7 +89,7 @@ extra setup. Across hosts, point every host at a Redis or S3 backend; see
 [Sharing a cache](sharing-caches.md) for what makes keys match on two machines,
 and [Choosing a backend](choosing-a-backend.md) for the options.
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @dcc9c1b1 -->
 **Locking across processes needs Redis as the backend itself.**
 `use_locking=True` gives one computation per key within a process on every
 backend. Only a bare `RedisBackend` also locks across processes and hosts:
@@ -116,7 +116,7 @@ call with the same arguments at once, use a bare `RedisBackend`.
   `with cash.assume_safe():` on lines you have checked, so it works as a
   standing gate that fails only on new findings. See
   [Side effects](../../decorator.md#side-effects).
-- <!-- claim: cash/__main__.py:cmd_clear @3e1c3aca -->
+- <!-- claim: cash/__main__.py:cmd_clear @fd92c8a3 -->
   **Decide whether the cache survives between runs.** A fresh runner starts
   cold, which is correct but slow. To keep it warm, point `CASH_CACHE_DIR` at a
   folder your CI caches between runs, or share a Redis or S3 backend. To start

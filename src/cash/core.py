@@ -1017,6 +1017,12 @@ class Cash:
         now = time.time()
         tier_default = self.backend.default_ttl
 
+        def current_ttl(func_name):
+            """The ``ttl=`` a call of *func_name* would judge its entries by
+            now, when that function is decorated in this process."""
+            cf = self._registry.cached.get(func_name) if func_name else None
+            return self._registry.effective_ttl(func_name, cf.ttl) if cf is not None else None
+
         def is_expired(raw_metadata):
             try:
                 metadata = CacheMetadata.from_dict(raw_metadata)
@@ -1026,9 +1032,9 @@ class Cash:
                 if max_age is not None and age > max_age:
                     return True
 
-                # The rule a read applies (`TieredBackend.get`), so cleanup
-                # removes exactly what would no longer be served.
-                return entry_expired(raw_metadata, tier_default, now)
+                # The rule a read applies, so cleanup removes exactly what
+                # would no longer be served.
+                return entry_expired(raw_metadata, tier_default, now, current=current_ttl(metadata.func_name))
             except (AttributeError, TypeError, ValueError):
                 return True
 

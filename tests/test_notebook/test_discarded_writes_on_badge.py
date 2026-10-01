@@ -19,13 +19,14 @@ import pytest
 from cash.backends import _writes as _backend_base
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.ipython.cell_executor import discarded_writes_notification
+from tests._discarded_writes import reset_discarded_writes
 
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
-    _backend_base.reset_discarded_writes()
+    reset_discarded_writes()
     yield
-    _backend_base.reset_discarded_writes()
+    reset_discarded_writes()
 
 
 def _record(key: str, message: str) -> None:

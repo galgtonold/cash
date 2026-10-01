@@ -68,7 +68,7 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5, cash/backends/tiered_backend.py:TieredBackend.set @4e1a354c -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5, cash/backends/tiered_backend.py:TieredBackend.set @66b71f6c -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
 The one exception is a value too big for every disk tier's size cap: it stays in
@@ -112,7 +112,7 @@ the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
 memory. `cash info` prints both numbers:
 
 ```text title="Output"
-Max size:   auto -- disk 8.0 GiB, RAM 3.1 GiB
+Max size:   RAM 3.1 GiB (auto), disk 8.0 GiB (auto)
 ```
 
 When the disk tier is full, cash evicts the entries worth least per byte
@@ -131,7 +131,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @3e1c3aca, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e137c19, cash/__main__.py:cmd_clear @fd92c8a3, cash/core.py:Cash._delete_backend_entries @b7c16174 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -322,12 +322,13 @@ def rates():
     return requests.get("https://api.example.com/rates").json()
 ```
 
-<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @672c5d75, cash/core.py:Cash.cleanup @b561dc3e -->
+<!-- claim: cash/decorator/backend_slot.py:BackendSlot.entry_ttl @4d5b2997, cash/core.py:Cash.cleanup @df64c5c1 -->
 After the ttl, the next call recomputes and replaces the entry.
 
-- **The shorter ttl wins.** An entry keeps the ttl it was written with, and
-  the decorator's current ttl applies too. So lengthening `ttl=60` to
-  `ttl=3600` does not rescue entries written under 60 seconds.
+- **The current ttl applies.** An entry is judged by the decorator's `ttl=`
+  as it stands now: shortening it expires older entries at once, and
+  lengthening it keeps them longer. `cash.cleanup()` judges them the same way
+  while the function is decorated in that process.
 - **A default for every function** comes from configuration: set
   `default_ttl` on the disk tier; see
   [Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).
@@ -550,7 +551,7 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @c3c6d39c -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @4a73b796 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 

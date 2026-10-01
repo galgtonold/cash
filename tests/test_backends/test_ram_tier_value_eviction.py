@@ -117,18 +117,19 @@ def test_pressure_eviction_ranks_an_unread_costly_result_above_a_cheap_read_one(
     """Break caught: pressure eviction scores by ``exec * access_count / size``,
     so every entry not yet read scores zero, whatever it cost to compute.
 
-    Host memory reads 95% once, then 50% after the first drop, so exactly
-    one entry goes. 'costly' (30 s, never read) must outrank 'cheap' (1 ms,
-    read once), since a hit on it saves 30,000 times as much per byte.
+    Host memory reads 95% of 100 MB, so this tier's share of the overshoot
+    is under one entry and exactly one goes. 'costly' (30 s, never read) must
+    outrank 'cheap' (1 ms, read once), since a hit on it saves 30,000 times
+    as much per byte.
     """
     from types import SimpleNamespace
 
     from cash.backends import memory_backend
 
-    readings = iter([95.0])
-    fake = SimpleNamespace(virtual_memory=lambda: SimpleNamespace(percent=next(readings, 50.0)))
+    fake = SimpleNamespace(virtual_memory=lambda: SimpleNamespace(percent=95.0, total=100 * MB))
     b = InMemoryBackend(check_interval=3)
     monkeypatch.setattr(memory_backend, "psutil", fake)
+    monkeypatch.setattr(InMemoryBackend, "_PRESSURE_KEEPS_BYTES", 0)
     _put(b, "costly", MB, 30.0)
     _put(b, "cheap", MB, 0.001)
     b.get("cheap")

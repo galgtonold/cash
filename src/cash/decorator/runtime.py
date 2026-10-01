@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._clock import perf_counter as _perf_counter
 from ..analysis.purity_analyzer import PurityReport
-from ..backends._base import ttl_expired
+from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
@@ -40,8 +40,8 @@ from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_d
 from .globals_fold import CLASSES_FOLDED, READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
-from .store import StoreRequest
 from .rng import capture_rng_pre_state, replay_rng_state
+from .store import StoreRequest
 
 if TYPE_CHECKING:
     from ..dependency_state import DependencyStateHasher
@@ -77,12 +77,6 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
-
-
-def entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
-    """Is the entry older than *ttl* (``ttl=0``: always)? The one TTL rule
-    every cache path shares, `ttl_expired`."""
-    return ttl_expired(metadata.timestamp, ttl)
 
 
 def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -443,8 +437,8 @@ class CallRunner:
         does not validate.
         """
         ttl = self._backend_slot.entry_ttl(ttl, metadata)
-        if entry_expired(metadata, ttl):
-            age = time.time() - (metadata.timestamp or 0)
+        if ttl_expired(written_at(metadata), ttl):
+            age = time.time() - (written_at(metadata) or 0)
             return MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
         if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
             return MissReason(MissKind.FILE, describe_stale_files(metadata))
@@ -572,7 +566,7 @@ class CallRunner:
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
 
-        raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
+        raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
         hit = self._try_get_cached(
             call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
@@ -597,7 +591,7 @@ class CallRunner:
         (``CallRunner._chunks_are_intact``, ``FileDeps.auto_file_deps_fresh``) as they are added.
         One function decides whether an entry may be served.
         """
-        raw_metadata, cached_data = self._backend_slot.backend.get(call.cache_key)
+        raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         if raw_metadata is None:
             return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)

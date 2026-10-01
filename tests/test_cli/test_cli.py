@@ -18,6 +18,7 @@ from cash.__main__ import (
 )
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
 from cash.config import human_bytes
+from tests._cli_args import cli_args
 
 
 def _autoload_on(*, mode="active", profile="default", force=False):
@@ -62,9 +63,8 @@ class TestCLIInfo:
     """Test info command."""
 
     def test_info_shows_config(self, capsys):
-        from types import SimpleNamespace
 
-        cmd_info(SimpleNamespace())
+        cmd_info(cli_args("info"))
         captured = capsys.readouterr()
         assert "Backend" in captured.out
         assert "Cache dir" in captured.out
@@ -81,7 +81,7 @@ class TestCLIInfo:
         config = get_config()
         monkeypatch.setattr(config, "cache_dir", str(cache_dir))
         monkeypatch.setattr("cash.__main__.get_config", lambda **_: config)
-        cmd_info(SimpleNamespace())
+        cmd_info(cli_args("info"))
         out = capsys.readouterr().out
         line = next(l for l in out.splitlines() if l.strip().startswith("Holds:"))
         assert "3 entries" in line and "6.0 KiB" in line, out
@@ -100,9 +100,7 @@ class TestCLIInspect:
         meta = {"key": "test_key", "created_at": time.time(), "outputs": ["x", "y"]}
         (cache_dir / f"abc123{ENTRY_SUFFIX}").write_bytes(pack_entry(meta, b"fake data"))
 
-        from types import SimpleNamespace
-
-        cmd_inspect(SimpleNamespace(path=str(cache_dir)))
+        cmd_inspect(cli_args("inspect", path=str(cache_dir)))
         captured = capsys.readouterr()
         assert "Total size:" in captured.out
         assert "Entries:" in captured.out
@@ -116,10 +114,9 @@ class TestCLIInspect:
         """
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / "no-such-cache"))
-        from types import SimpleNamespace
 
         with pytest.raises(SystemExit):
-            cmd_inspect(SimpleNamespace(path=None))
+            cmd_inspect(cli_args("inspect", path=None))
 
 
 class TestCLIClear:
@@ -137,9 +134,7 @@ class TestCLIClear:
         (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
         (cache_dir / f"file{ENTRY_SUFFIX}").write_bytes(b"data")
 
-        from types import SimpleNamespace
-
-        cmd_clear(SimpleNamespace(path=str(cache_dir), all=False))
+        cmd_clear(cli_args("clear", path=str(cache_dir), all=False))
         assert not cache_dir.exists()
         captured = capsys.readouterr()
         assert "Cleared" in captured.out
@@ -153,17 +148,14 @@ class TestCLIClear:
         (cache_dir / f"file{ENTRY_SUFFIX}").write_bytes(b"data")
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache_dir))
 
-        from types import SimpleNamespace
-
-        cmd_clear(SimpleNamespace(path=None, all=True))
+        cmd_clear(cli_args("clear", path=None, all=True))
         assert not cache_dir.exists()
 
     def test_clear_no_args(self, capsys):
         """Clear without args should fail."""
-        from types import SimpleNamespace
 
         with pytest.raises(SystemExit):
-            cmd_clear(SimpleNamespace(path=None, all=False))
+            cmd_clear(cli_args("clear", path=None, all=False))
 
     def test_clear_all_no_cache(self, tmp_path, capsys, monkeypatch):
         """Clear --all when the resolved cache directory does not exist.
@@ -174,9 +166,8 @@ class TestCLIClear:
         """
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
-        from types import SimpleNamespace
 
-        cmd_clear(SimpleNamespace(path=None, all=True))
+        cmd_clear(cli_args("clear", path=None, all=True))
         captured = capsys.readouterr()
         assert "Nothing cleared: no cache at" in captured.out
         assert str(tmp_path) in captured.out
@@ -185,10 +176,9 @@ class TestCLIClear:
 
     def test_clear_nonexistent_path(self, capsys):
         """Clear nonexistent path should fail."""
-        from types import SimpleNamespace
 
         with pytest.raises(SystemExit):
-            cmd_clear(SimpleNamespace(path="/nonexistent/path", all=False))
+            cmd_clear(cli_args("clear", path="/nonexistent/path", all=False))
 
     def test_clear_notebook_with_cache(self, tmp_path, capsys, monkeypatch):
         """Clear using a notebook path clears its .cash directory."""
@@ -201,9 +191,7 @@ class TestCLIClear:
         (cache_dir / "CACHE_VERSION").write_text("1", encoding="utf-8")
         (cache_dir / f"data{ENTRY_SUFFIX}").write_bytes(b"data")
 
-        from types import SimpleNamespace
-
-        cmd_clear(SimpleNamespace(path=str(nb_path), all=False))
+        cmd_clear(cli_args("clear", path=str(nb_path), all=False))
         assert not cache_dir.exists()
         captured = capsys.readouterr()
         assert "Cleared" in captured.out
@@ -213,9 +201,7 @@ class TestCLIClear:
         nb_path = tmp_path / "test.ipynb"
         nb_path.write_text('{"cells":[]}', encoding="utf-8")
 
-        from types import SimpleNamespace
-
-        cmd_clear(SimpleNamespace(path=str(nb_path), all=False))
+        cmd_clear(cli_args("clear", path=str(nb_path), all=False))
         captured = capsys.readouterr()
         assert "No cache found" in captured.out
 
@@ -511,7 +497,7 @@ class TestInspectNamesWhatItWasGiven:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache))
         with pytest.raises(SystemExit) as exit_info:
-            cmd_inspect(SimpleNamespace(path="./nope", function=None, tool=None))
+            cmd_inspect(cli_args("inspect", path="./nope", function=None, tool=None))
         assert exit_info.value.code == 1
         out = capsys.readouterr().out
         assert "nope" in out, out
@@ -522,7 +508,7 @@ class TestInspectNamesWhatItWasGiven:
         cache.mkdir()
         (cache / f"abc{ENTRY_SUFFIX}").write_bytes(pack_entry({"key": "k"}, b"v"))
         monkeypatch.chdir(tmp_path)
-        cmd_inspect(SimpleNamespace(path=str(cache), function=None, tool=None))
+        cmd_inspect(cli_args("inspect", path=str(cache), function=None, tool=None))
         assert "Entries:" in capsys.readouterr().out
 
 
@@ -558,13 +544,13 @@ class TestTheCliSeesASqliteCache:
         cache = self._db(tmp_path)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache))
-        cmd_info(SimpleNamespace())
+        cmd_info(cli_args("info"))
         line = next(l for l in capsys.readouterr().out.splitlines() if l.strip().startswith("Holds:"))
         assert "3 entries" in line, line
 
     def test_inspect_reports_the_database(self, tmp_path, monkeypatch, capsys):
         cache = self._db(tmp_path)
         monkeypatch.chdir(tmp_path)
-        cmd_inspect(SimpleNamespace(path=str(cache), function=None, tool=None))
+        cmd_inspect(cli_args("inspect", path=str(cache), function=None, tool=None))
         out = capsys.readouterr().out
         assert "Entries: 3" in out.replace("    ", " ").replace("  ", " "), out

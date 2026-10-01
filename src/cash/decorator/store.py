@@ -3,6 +3,7 @@ lineage tag it carries."""
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import hashlib
 import inspect
@@ -10,7 +11,6 @@ import logging
 import secrets
 import time
 from collections.abc import Callable, Iterator
-import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 

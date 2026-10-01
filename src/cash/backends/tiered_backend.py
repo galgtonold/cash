@@ -189,6 +189,13 @@ class TieredBackend(CacheBackend):
                     total += 1
         return total
 
+    def _persisted(self, storage: list[str] | None) -> bool:
+        """Did a write reach a tier that outlives the process? Decided by
+        what each tier is (`CacheBackend.cost_kind`), not by its label: the
+        first tier need not be the RAM tier."""
+        volatile = {b.source_label for b in self.backends if b.cost_kind == "ram"}
+        return any(label not in volatile for label in storage or ())
+
     def _promotion_backend_kind(self) -> str:
         """The cost-model kind of the first tier past RAM, which a persisted
         value is restored from."""
@@ -198,9 +205,8 @@ class TieredBackend(CacheBackend):
     def _serialized_size(value: Any, serializer: Serializer | None) -> int | None:
         """Bytes this value takes once serialized, or None if it cannot be.
 
-        The number a disk cap is actually about, and the one ``cash inspect``
-        reports -- unlike the in-memory footprint the RAM tier measures, which
-        is what the size gate had been comparing.
+        The number a disk cap is about, and the one ``cash inspect`` reports,
+        unlike the in-memory footprint the RAM tier measures.
 
         Called only on the refusal path (see the caller), so the cost lands on
         values that were about to be thrown away. Returns None when the value
@@ -284,7 +290,14 @@ class TieredBackend(CacheBackend):
         self._drop_ram_if_cleared()
         tier_default = self.default_ttl
         for i, backend in enumerate(self.backends):
-            metadata, value = backend.get(key)
+            try:
+                metadata, value = backend.get(key)
+            except Exception as e:  # noqa: BLE001 - a tier that cannot read is a miss there
+                # As with a write: one tier down (a server unreachable, a
+                # broken entry) must not fail the caller's program while the
+                # value can still come from another tier or be recomputed.
+                logger.warning("Failed to read key '%s' from tier %d (%s): %s", key, i, type(backend).__name__, e)
+                continue
             # Key-presence test: metadata is None when the child backend
             # reports "key absent" (per its API contract). A non-None
             # metadata dict with a None value means the user genuinely
@@ -341,10 +354,6 @@ class TieredBackend(CacheBackend):
         for i in range(1, len(self.backends)):
             backend = self.backends[i]
             cap = backend.promotion_size_cap()
-            # Guard against non-numeric caps (e.g. a MagicMock tier in
-            # tests) — treat anything that isn't a real number as no cap.
-            if isinstance(cap, bool) or not isinstance(cap, (int, float)):
-                cap = None
             if cap is not None and cap_size and cap_size > cap:
                 # About to refuse. `cap_size` is the value's IN-MEMORY
                 # footprint (the RAM tier measures it on the way past), and
@@ -400,7 +409,7 @@ class TieredBackend(CacheBackend):
         if entry is None:
             return False
         stored_metadata, value = entry
-        if any(d != "RAM" for d in stored_metadata.get("storage") or ()):
+        if self._persisted(stored_metadata.get("storage")):
             return False  # on disk already
         decision = self.policy.decide_rebuild(
             stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
@@ -423,7 +432,7 @@ class TieredBackend(CacheBackend):
             if writes.size_refused:
                 self.notices.too_big(key, writes.refused_size, writes.refusing_caps)
             return False
-        stored_metadata["storage"] = ["RAM", *writes.stored]
+        stored_metadata["storage"] = [self.backends[0].source_label, *writes.stored]
         stored_metadata.pop("persist_skipped", None)
         return True
 
@@ -445,12 +454,12 @@ class TieredBackend(CacheBackend):
         if metadata.get("ttl") is None and self.default_ttl is not None:
             metadata["ttl"] = self.default_ttl
 
-        # Always write to Tier 0 (Memory). It may refuse a value its cap could
+        # Always write to the first tier. The RAM tier may refuse a value its cap could
         # never hold (`InMemoryBackend.set` returns False); then it is not a
         # destination, and the badge and the miss explanation must not say so.
         try:
             if self.backends[0].set(key, value, metadata, serializer) is not False:
-                stored_destinations.append("RAM")
+                stored_destinations.append(self.backends[0].source_label)
         except Exception as e:  # noqa: BLE001 - backend errors must not propagate
             logger.warning(
                 "Failed to write key '%s' to tier 0 (%s): %s",
@@ -492,7 +501,7 @@ class TieredBackend(CacheBackend):
             size_refused = writes.size_refused
             # Worth persisting, but too big for every persistent tier's cap: it
             # lives in RAM only, and the user should know why and what to do.
-            if size_refused and not any(d != "RAM" for d in stored_destinations):
+            if size_refused and not self._persisted(stored_destinations):
                 self.notices.too_big(key, writes.refused_size, writes.refusing_caps)
 
         # Update metadata with storage info so UI can see it immediately
@@ -506,7 +515,7 @@ class TieredBackend(CacheBackend):
                 original_metadata["store_errors"] = store_errors
             # And why it went no further, so "why did the next process miss?"
             # has an answer: the compute floor / cost model, or a size cap.
-            if decision is not None and not any(d != "RAM" for d in stored_destinations):
+            if decision is not None and not self._persisted(stored_destinations):
                 if decision.skipped == "bytes":
                     original_metadata["persist_skipped"] = "bytes"
                 elif size_refused:

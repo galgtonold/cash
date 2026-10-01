@@ -108,7 +108,10 @@ app = Cash(backend=SQLiteBackend(
 
 One database file holds every entry, in WAL mode so several processes can read
 at once. Eviction is least recently used, once the total passes
-`max_size_bytes`. Which of the two disk backends is faster depends on value
+`max_size_bytes`. It is the simpler of the two disk backends: unlike the file
+backend it does not rank entries by what they save per byte, gives no notice
+when its cap evicts an entry, and a running process does not notice `cash
+clear` emptying the database under it. Which of the two disk backends is faster depends on value
 size (measured at 100,000 entries):
 
 | Value size | Faster write | Faster read |
@@ -133,7 +136,7 @@ from cash import Cash, InMemoryBackend
 app = Cash(backend=InMemoryBackend(max_size_bytes=512 * 1024**2))
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict @2bbbead9, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict @33eac6fb, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e -->
 A dictionary in this process: everything is gone when the process ends. It
 evicts on three triggers: `max_entries` (least recently used first),
 `max_size_bytes`, and system memory above `max_memory_percent` (default 90%).
@@ -165,7 +168,7 @@ Each entry is two Redis keys, written together. A ttl becomes a Redis
 `EXPIRE`. Give each project its own `prefix`: it is the only thing that keeps
 two projects in one Redis apart.
 
-<!-- claim: cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/redis_backend.py:RedisBackend.lock @dcc9c1b1 -->
 - It also needs `pip install redis`. Without it the backend raises
   `DependencyNotFoundError`.
 - Inside a tier stack, a single value over 10 MiB skips Redis.

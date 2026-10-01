@@ -18,10 +18,10 @@ import os
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from ..config import TierConfig
+from ..config import TIER_TYPES, TierConfig
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
-from .adaptive_caps import resolve_disk_cap, resolve_ram_cap
+from .adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
 from .cache_dir import DB_FILENAME
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
@@ -39,6 +39,7 @@ __all__ = [
     "build_backend_from_config",
     "build_tiered",
     "built_from_config",
+    "tier_cap",
     "tier_specs",
 ]
 
@@ -136,22 +137,38 @@ def _settings(tier: TierConfig, config: CashConfig) -> dict[str, Any]:
             "region": tier.region or config.s3_region,
             "prefix": tier.prefix or config.s3_prefix,
         }
-    raise ValueError(f"Unknown tier type {t!r}: one of memory, file, sqlite, redis, s3.")
+    raise ValueError(f"Unknown tier type {t!r}: one of {', '.join(sorted(TIER_TYPES))}.")
+
+
+def tier_cap(kind: str, settings: dict[str, Any], held_bytes: int = 0) -> int | None:
+    """The byte cap a tier of *kind* built from *settings* enforces.
+
+    A size that was set is kept exactly. One left unset is sized to the
+    machine: the RAM tier to the memory this process may use, a disk tier to
+    the room on its volume, counting what it already holds (*held_bytes*) as
+    room, as the file tier re-derives it while it runs. None for a tier with
+    no byte cap (Redis, S3). `_build` and ``cash info`` both ask this, so the
+    cap shown is the cap built.
+    """
+    cap = settings.get("max_size_bytes")
+    if cap is not None:
+        return cap
+    if kind == "memory":
+        return resolve_ram_cap()
+    if kind in ("file", "sqlite"):
+        return adaptive_disk_cap_for(settings["cache_dir"], held_bytes)
+    return None
 
 
 def _build(kind: str, s: dict[str, Any]) -> CacheBackend:
-    """One backend from its resolved settings.
+    """One backend from its resolved settings, capped by `tier_cap`.
 
-    A size left unset is sized to the machine: the RAM tier to system memory,
-    a disk tier to the free space on its volume, re-derived as the cache grows
-    (``adaptive_cap``). A size that was set is kept exactly.
+    A file tier whose size was left unset re-derives its cap as the cache
+    grows (``adaptive_cap``).
     """
+    cap = tier_cap(kind, s)
     if kind == "memory":
-        cap = s["max_size_bytes"]
-        return InMemoryBackend(max_entries=s["max_entries"], max_size_bytes=resolve_ram_cap() if cap is None else cap)
-    cap = s.get("max_size_bytes")
-    if kind in ("file", "sqlite") and cap is None:
-        cap = resolve_disk_cap(s["cache_dir"])
+        return InMemoryBackend(max_entries=s["max_entries"], max_size_bytes=cap)
     if kind == "file":
         return FileBackend(
             cache_dir=s["cache_dir"],

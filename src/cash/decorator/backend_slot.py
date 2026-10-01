@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
-from ..backends._base import stored_ttl
+from ..backends._base import effective_ttl
 from ..backends.factory import build_backend_from_config
+from ..exceptions import CacheBackendError
 
 if TYPE_CHECKING:
     from ..backends import CacheBackend
     from ..config import CashConfig
+
+logger = logging.getLogger(__name__)
 
 
 class BackendSlot:
@@ -42,6 +46,16 @@ class BackendSlot:
     def backend(self, value: CacheBackend) -> None:
         self._backend = value
 
+    def read(self, key: str) -> tuple[Any, Any]:
+        """``backend.get(key)``, with a backend that cannot read (a server
+        down, a disk gone) answering as a miss: like a failed store, a failed
+        lookup must not fail the call, which can still compute its result."""
+        try:
+            return self.backend.get(key)
+        except CacheBackendError as exc:
+            logger.warning("cash: could not read %r from the cache, computing it instead: %s", key, exc)
+            return None, None
+
     @property
     def built(self) -> CacheBackend | None:
         """The backend if one has been built or given, else ``None``; never builds one."""
@@ -58,16 +72,7 @@ class BackendSlot:
         return backend.default_ttl if backend is not None else None
 
     def entry_ttl(self, ttl: int | None, metadata: Any) -> int | None:
-        """The ttl a stored entry is judged by.
-
-        The decorator's ``ttl=`` when it has one -- a per-function setting,
-        applied as it stands now, in both directions. Otherwise the SHORTER of
-        the ttl the entry was written with and the tier's ``default_ttl`` as
-        configured now: lowering a tier's default from a day to 5 seconds left
-        every entry written under the day being served,
-        while lowering a decorator's ttl took effect at once.
-        """
-        if ttl is not None:
-            return ttl
-        found = [t for t in (stored_ttl(getattr(metadata, "ttl", None)), self.tier_default_ttl()) if t is not None]
-        return min(found) if found else None
+        """The ttl a stored entry is judged by: `effective_ttl`, with the
+        decorator's ``ttl=`` as it stands now (*ttl*) and the tiers'
+        ``default_ttl`` as configured now."""
+        return effective_ttl(metadata, self.tier_default_ttl(), current=ttl)

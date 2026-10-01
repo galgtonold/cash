@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import STATE_LEDGERS, LruMemo
-from ..backends._base import ttl_expired
+from ..backends._base import ttl_expired, written_at
 from ..data_source import DataSource
 from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
@@ -855,7 +855,7 @@ class Explainer:
         except (TypeError, KeyError):
             verdict = MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
         if verdict is not None and verdict.kind is MissKind.TTL:
-            timestamp = metadata.timestamp or 0
+            timestamp = written_at(metadata) or 0
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_TTL_EXPIRED,
@@ -888,7 +888,7 @@ class Explainer:
                 details={"why": str(verdict)},
             )
 
-        timestamp = metadata.timestamp or 0
+        timestamp = written_at(metadata) or 0
         details = {
             "cached_at": timestamp,
             "cache_age_seconds": time.time() - timestamp if timestamp else None,

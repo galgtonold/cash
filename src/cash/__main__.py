@@ -17,11 +17,10 @@ from pathlib import Path
 from cash import __version__
 from cash._console import survive_narrow_streams
 from cash._location import per_user_cache_root
-from cash.backends._base import effective_ttl
-from cash.backends.adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
+from cash.backends._base import effective_ttl, written_at
 from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
-from cash.backends.factory import tier_specs
+from cash.backends.factory import tier_cap, tier_specs
 from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.config import (
@@ -105,8 +104,7 @@ def notebook_cache_dir(notebook_path: str) -> str:
 
 def _target_dir(args: argparse.Namespace) -> str:
     """The directory a subcommand acts on when no path was given."""
-    tool = getattr(args, "tool", None)
-    return tool_cache_dir(tool) if tool else resolved_cache_dir()
+    return tool_cache_dir(args.tool) if args.tool else resolved_cache_dir()
 
 
 def _sqlite_cache(cache_dir: str) -> tuple[int, int] | None:
@@ -149,7 +147,7 @@ def cmd_version(args: argparse.Namespace) -> None:
 def cmd_info(args: argparse.Namespace) -> None:
     """Show cash configuration."""
 
-    config = get_config(config_path=getattr(args, "config", None))
+    config = get_config(config_path=args.config)
 
     source, origins, files = config_provenance(config)
 
@@ -174,22 +172,9 @@ def cmd_info(args: argparse.Namespace) -> None:
     if config.disable:
         print(f"  Disabled:   yes -- every cached function runs uncached ({origins.get('disable', 'disable = true')})")
     # Resolved, not just configured: a user asking what their cache may hold
-    # needs the two numbers "auto" resolves to, and the RAM one appears
-    # nowhere else (a growing RSS is easily read as a leak).
-    if config.max_cache_size is None:
-        # Sized the way the BACKEND sizes it: from free space plus what the
-        # cache already holds. Free space alone (`resolve_disk_cap`) excludes
-        # the cache's own bytes and would show a cap lower than the one
-        # enforced, next to a "Holds" that seems to exceed it.
-        own = held[1] if held is not None else 0
-        disk = human_bytes(adaptive_disk_cap_for(cache_dir, own))
-        print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
-    else:
-        print(
-            f"  Max size:   {format_size(config.max_cache_size)} "
-            f"({config.max_cache_size:,} bytes) on disk, "
-            f"RAM {human_bytes(resolve_ram_cap())}"
-        )
+    # needs the numbers "auto" resolves to, and the RAM one appears nowhere
+    # else (a growing RSS is easily read as a leak).
+    print(f"  Max size:   {_caps_text(config)}")
     print(f"  Persist:    {PersistencePolicy.from_config(config).describe()}")
     if config.tiers:
         print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
@@ -220,6 +205,37 @@ def cmd_info(args: argparse.Namespace) -> None:
         print("  Tool caches (reach one with --tool NAME):")
         for name, path, entries, size in tools:
             print(f"    {name:<20} {entries:>5} entries  {human_bytes(size):>10}  {path}")
+
+
+#: What ``cash info`` calls each kind of tier where it lists their caps.
+_TIER_NAMES = {"memory": "RAM", "file": "disk", "sqlite": "sqlite", "redis": "redis", "s3": "s3"}
+
+
+def _caps_text(config) -> str:
+    """Each tier's byte cap, as the backend *config* describes builds it.
+
+    ``RAM 3.1 GiB (auto), disk 2 GB (2,000,000,000 bytes)``: one entry per tier, in
+    order, from the same `tier_cap` the factory builds with. A disk tier's
+    automatic cap counts what it already holds as room, as the running tier
+    does.
+    """
+    parts = []
+    for kind, settings in tier_specs(config):
+        resolved = dict(settings)
+        held = 0
+        if kind == "file":
+            totals = entry_totals(str(resolved["cache_dir"]))
+            held = totals[1] if totals is not None else 0
+        cap = tier_cap(kind, resolved, held)
+        name = _TIER_NAMES.get(kind, kind)
+        if cap is None:
+            parts.append(f"{name} no cap")
+        elif resolved.get("max_size_bytes") is None:
+            parts.append(f"{name} {human_bytes(cap)} (auto)")
+        else:
+            # Set by the user: shown as they wrote it, and exactly.
+            parts.append(f"{name} {format_size(cap)} ({cap:,} bytes)")
+    return ", ".join(parts)
 
 
 def _tier_text(tier) -> str:
@@ -301,11 +317,13 @@ def _function_of(key: str, metadata: dict | None = None) -> str:
 
 
 def _tier_default_ttl() -> int | None:
-    """The ``default_ttl`` of the first configured tier that has one, now."""
+    """The ``default_ttl`` of the first tier that has one, as the backend the
+    library builds here would apply it."""
     try:
-        for tier in get_config().tiers or ():
-            if getattr(tier, "default_ttl", None) is not None:
-                return int(tier.default_ttl)
+        for _kind, settings in tier_specs(get_config()):
+            ttl = dict(settings).get("default_ttl")
+            if ttl is not None:
+                return int(ttl)
     except Exception:  # a listing must not fail over config
         logger.debug("Could not read the tiers' default_ttl", exc_info=True)
     return None
@@ -344,7 +362,7 @@ def _entry_of(stored: StoredEntry, tier_default: int | None) -> _Entry:
         uses=int(metadata.get("access_count") or 0),
         outputs=tuple(str(o) for o in metadata.get("outputs") or ()),
         reads=tuple(str(p) for p in (metadata.get("auto_file_deps") or {})),
-        expires=None if ttl is None else float(metadata.get("created_at") or stored.mtime) + float(ttl),
+        expires=None if ttl is None else float(written_at(metadata) or stored.mtime) + float(ttl),
     )
 
 
@@ -441,10 +459,8 @@ def _resolve_function(entries: list[_Entry], wanted: str) -> str | None:
 def cmd_inspect(args: argparse.Namespace) -> None:
     """Inspect cache for a notebook or cache directory."""
     target = args.path
-    # getattr, not attribute access: a flag added here must not break a
-    # caller that builds its own Namespace without it.
-    only_function = getattr(args, "function", None)
-    if target and getattr(args, "tool", None):
+    only_function = args.function
+    if target and args.tool:
         print("cash inspect: --tool and a path are mutually exclusive.")
         sys.exit(2)
 
@@ -511,10 +527,12 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
 
     The default view is a per-function table sorted by SIZE, because the
     question that sends anyone here is "what is filling my disk, and what can
-    I afford to drop?".
+    I afford to drop?". The total is the entries' bytes, as ``cash info``
+    reports them and the disk cap counts them (`entry_totals`).
     """
     cache_path = Path(cache_dir)
-    total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
+    totals = entry_totals(cache_dir)
+    total_size = totals[1] if totals is not None else 0
     entries = _scan_entries(cache_path)
 
     print(f"Cache directory: {cache_path.resolve()}")
@@ -697,10 +715,9 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
         sys.exit(1)
     if not force:
         # Looking like a cache is not enough: cash writes its stamp into
-        # whatever directory it is pointed at, so a `cache_dir` beside the
-        # user's data made this a recursive delete of that data -- a project
-        # with `cache_dir = "../shared_data"` lost `shared_data/precious.csv`
-        # to `cash clear --all`, exit 0. Nothing cash did not write is removed.
+        # whatever directory it is pointed at, so a `cache_dir` set to a
+        # folder of the user's data looks like a cache too. Nothing cash did
+        # not write is removed.
         foreign = _not_cash_files(resolved)
         if foreign:
             shown = ", ".join(foreign[:3]) + (", ..." if len(foreign) > 3 else "")
@@ -794,7 +811,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
         print(f"  To clear the cache in use: cash clear --all   ({os.path.abspath(resolved_cache_dir())})")
         sys.exit(2)
 
-    tool = getattr(args, "tool", None)
+    tool = args.tool
     if tool is not None and not tool.strip():
         # Same as --entry below: an empty name selects no tool, and falling
         # through would clear the path instead.
@@ -804,16 +821,15 @@ def cmd_clear(args: argparse.Namespace) -> None:
         print("cash clear: --tool and a path are mutually exclusive.")
         sys.exit(2)
 
-    only_entry = getattr(args, "entry", None)
-    only_function = getattr(args, "function", None)
+    only_entry = args.entry
+    only_function = args.function
     for flag, value in (("--entry", only_entry), ("--function", only_function)):
-        # `--entry "$ID"` with $ID unset arrives as "": falsy, so it fell
-        # through to clearing the whole path. A selector that selects nothing
-        # must never widen to everything.
+        # An empty value (`--entry "$ID"` with $ID unset) selects nothing,
+        # and a selector that selects nothing must never widen to everything.
         if value is not None and not value.strip():
             print(f"cash clear: {flag} needs a non-empty value; nothing was cleared.")
             sys.exit(2)
-    if getattr(args, "expired", False):
+    if args.expired:
         if only_entry or only_function:
             # --function would otherwise win and delete the live entries too.
             print(
@@ -837,7 +853,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
         _clear_function(target, only_function)
         return
 
-    force = bool(getattr(args, "force", False))
+    force = args.force
     if args.all or tool:
         cache_dir = _target_dir(args)
         if os.path.isdir(cache_dir):
@@ -860,13 +876,8 @@ def cmd_clear(args: argparse.Namespace) -> None:
 
     target = args.path
     if not target:
-        # The one-liner this replaces named two of the three options and
-        # left the user to guess the rest; the help text is the list.
-        parser = getattr(args, "clear_parser", None)
-        if parser is not None:
-            parser.print_help()
-        else:
-            print("Specify a path, --function NAME, or --all.")
+        # The help text lists every way to say what to clear.
+        args.clear_parser.print_help()
         sys.exit(2)
 
     if os.path.isdir(target):
@@ -985,11 +996,8 @@ def cmd_autoload(args: argparse.Namespace) -> None:
         raise AssertionError(f"unexpected state {args.state!r}")
 
 
-def main() -> None:
-    # A function or folder name outside the console's code page (cp1252 on a
-    # Windows pipe) raised UnicodeEncodeError from print -- after `clear` had
-    # already deleted, so it reported failure for work it had done.
-    survive_narrow_streams()
+def build_parser() -> argparse.ArgumentParser:
+    """The ``cash`` command line: every subcommand and its options."""
     parser = argparse.ArgumentParser(
         prog="cash",
         description="A Python cache that re-runs only what changed.",
@@ -1115,7 +1123,15 @@ def main() -> None:
         help="(on) overwrite a different file at this path. (off) remove a file lacking the cash marker.",
     )
     sub_autoload.set_defaults(func=cmd_autoload)
+    return parser
 
+
+def main() -> None:
+    # A function or folder name outside the console's code page (cp1252 on a
+    # Windows pipe) raised UnicodeEncodeError from print -- after `clear` had
+    # already deleted, so it reported failure for work it had done.
+    survive_narrow_streams()
+    parser = build_parser()
     args = parser.parse_args()
 
     if not args.command:
