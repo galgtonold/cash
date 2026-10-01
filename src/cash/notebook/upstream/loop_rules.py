@@ -8,13 +8,14 @@ the classifier and the planner alike.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import types
 from typing import TYPE_CHECKING
 
 from cash.control_markers import iteration_digest, strip_markers
+
+from ...source_norm import exact_source_digest
 
 if TYPE_CHECKING:
     from .virtual_lineage import VirtualLineage
@@ -131,7 +132,7 @@ class LoopRules:
             accs = outputs & vars_mutated_by_loops
             if not accs or not stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                 continue
-            recorded = outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
+            recorded = outcomes.get(exact_source_digest(stmt_code))
             if recorded is None:
                 continue
             for inp in inputs:

@@ -575,6 +575,22 @@ def source_identity_digest(source: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def exact_source_digest(source: str) -> str:
+    """Digest *source* exactly as given, as the key of a session ledger.
+
+    The notebook's in-memory ledgers are written where a cell or statement
+    runs and read where another part of cash (the upstream simulation, the
+    RNG rewind, the randomness lineage) meets the same text: which cells ran
+    (``executed_cell_source_hashes``), their RNG positions and draws
+    (``rng_pre_states``, ``rng_post_states``, ``observed_rng_cells``,
+    ``observed_rng_statement_draws``), what a loop left behind
+    (``control_outcomes``), and the simulation's per-cell snapshots. Every
+    writer and reader keys them through here, so a change to how the text
+    is spelled reaches both sides at once.
+    """
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
 _CO_OPTIMIZED = 0x0001
 # Python 3.14 flags a code object whose ``co_consts[0]`` is its docstring.
 _CO_HAS_DOCSTRING = 0x4000000

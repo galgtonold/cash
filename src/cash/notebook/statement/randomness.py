@@ -30,6 +30,8 @@ from cash.tracking.randomness import (
     warn_unseeded_estimator_fit,
 )
 
+from ...source_norm import exact_source_digest
+
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
     from cash.notebook.statement.results import ProcessResult
@@ -93,7 +95,7 @@ class StatementRandomness:
             modules = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        digest = exact_source_digest(code)
         modules |= self.tracking_state.observed_rng_statement_draws.get(digest, set())
         modules -= set(self.seed_epochs)
         if "torch" in modules:
@@ -487,7 +489,7 @@ class StatementRandomness:
         hidden = set(drew) - set(visible)
         if not hidden:
             return
-        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        digest = exact_source_digest(code)
         ledger = self.tracking_state.observed_rng_statement_draws
         known = ledger.get(digest, set())
         if hidden - known:

@@ -10,12 +10,12 @@ top-to-bottom run gives just before the cell.
 from __future__ import annotations
 
 import ast
-import hashlib
 import logging
 
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
+from ...source_norm import exact_source_digest
 from ...tracking.randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
@@ -302,7 +302,7 @@ class RngRewind:
         an indirect draw is treated like a direct one on re-run.
         """
         modules = set(get_drawing_rng_modules(cell_code))
-        digest = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
+        digest = exact_source_digest(cell_code)
         modules |= self.tracking_state.observed_rng_cells.get(digest, set())
         return modules
 
@@ -336,7 +336,7 @@ class RngRewind:
         """True if *src* seeds or draws — statically or by prior observation."""
         if get_seeding_rng_modules(src) or get_drawing_rng_modules(src):
             return True
-        digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        digest = exact_source_digest(src)
         return bool(self.tracking_state.observed_rng_cells.get(digest))
 
     def restore_position_rng_state(
@@ -376,7 +376,7 @@ class RngRewind:
             # Safe to prefer because the fingerprint expires it as soon as the
             # seed behind it changes, the same lineage check that invalidates any
             # other value.
-            own = self.tracking_state.rng_pre_states.get(hashlib.sha256(cell_code.encode("utf-8")).hexdigest())
+            own = self.tracking_state.rng_pre_states.get(exact_source_digest(cell_code))
             if own is not None:
                 own_state, own_fingerprint = own
                 if own_fingerprint == rng_lineage_fingerprint(
@@ -396,7 +396,7 @@ class RngRewind:
                 src = notebook_cells[idx]
                 if not self.cell_touches_rng(src):
                     continue
-                digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
+                digest = exact_source_digest(src)
                 state = post_states.get(digest)
                 if state is not None:
                     restore_rng_state(state, self.tracking_state.rng_live_states)

@@ -11,6 +11,7 @@ import secrets
 import sys
 from collections.abc import Iterable, Mapping
 
+from ...source_norm import exact_source_digest
 from .detect import get_drawing_rng_modules, get_seeding_rng_modules
 
 # -----------------------------------------------------------------------------
@@ -208,7 +209,7 @@ def observed_rng_reads(tracking_state, code: str) -> set[str]:
     if not ledger or not code:
         return set()
     try:
-        digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        digest = exact_source_digest(code)
     except (AttributeError, UnicodeEncodeError):
         return set()
     modules = ledger.get(digest)
@@ -295,7 +296,7 @@ def seed_cells_not_yet_run(
         seeded = get_seeding_rng_modules(src) & drawing_modules
         if not seeded:
             continue
-        digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        digest = exact_source_digest(src)
         if digest in executed_cell_hashes:
             continue  # this exact seed cell source has run — not stale
         for module in sorted(seeded):

@@ -12,7 +12,6 @@ from __future__ import annotations
 import ast
 import base64
 import builtins
-import hashlib
 import importlib.util
 import logging
 import marshal
@@ -38,7 +37,7 @@ from ...analysis.mutation_effects import (
     statement_effects,
 )
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
-from ...source_norm import source_identity_digest
+from ...source_norm import exact_source_digest, source_identity_digest
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ...tracking.randomness import (
     hidden_lineage_writes,
@@ -370,7 +369,7 @@ class VirtualLineage:
         cache_had_hash_mismatch = False
         for idx in range(min(current_cell_idx, len(self.cache.entries))):
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
-            cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
+            cell_hash = exact_source_digest(cell_code)
             cached = self.cache.entries[idx]
             if cached.cell_code_hash != cell_hash:
                 cache_had_hash_mismatch = True
@@ -418,7 +417,7 @@ class VirtualLineage:
             if idx not in self.cache.cell_hashes:
                 continue
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
-            cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
+            cell_hash = exact_source_digest(cell_code)
             if self.cache.cell_hashes[idx] != cell_hash:
                 logger.debug(
                     "[UPSTREAM_DEBUG] Hash mismatch in cell %d "
@@ -690,7 +689,7 @@ class VirtualLineage:
         *new_cache_entries* when given."""
         if new_cache_entries is None:
             new_cache_entries = []
-        cell_hash = hashlib.sha256(cell_code.encode("utf-8")).hexdigest()
+        cell_hash = exact_source_digest(cell_code)
         simulation_trace = sim.trace
         virtual_lineage = sim.virtual_lineage
         virtual_modules = sim.virtual_modules
@@ -836,7 +835,7 @@ class VirtualLineage:
         # from a previous run_all().
         if current_cell_idx < len(notebook_cells):
             current_cell_code = notebook_cells[current_cell_idx].replace("\r\n", "\n")
-            self.cache.cell_hashes[current_cell_idx] = hashlib.sha256(current_cell_code.encode("utf-8")).hexdigest()
+            self.cache.cell_hashes[current_cell_idx] = exact_source_digest(current_cell_code)
 
     def _collect_loop_mutation_info(
         self,
@@ -1089,7 +1088,7 @@ class VirtualLineage:
     ) -> tuple[dict[str, str], dict[str, str], frozenset[str], str] | None:
         """The outcome the runtime recorded for *stmt_code*: this session's,
         else an earlier kernel's that may still be trusted."""
-        recorded = self.tracking_state.control_outcomes.get(hashlib.sha256(stmt_code.encode("utf-8")).hexdigest())
+        recorded = self.tracking_state.control_outcomes.get(exact_source_digest(stmt_code))
         if recorded is None:
             recorded = self._persisted_control_outcome(stmt_code, virtual_lineage)
         return recorded

@@ -19,7 +19,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash.notebook.lineage_store import resolve_lineage
-from cash.source_norm import unparse_without_docstrings
+from cash.source_norm import exact_source_digest, unparse_without_docstrings
 
 from .lineage_formula import (
     is_cash_instrumentation,
@@ -121,7 +121,7 @@ def control_outcome_key(code: str) -> str:
     for a loop that cannot have done anything else (see
     ``ControlStructureProcessor._persistable_callees``).
     """
-    return "ctrlout:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return "ctrlout:" + exact_source_digest(code)
 
 
 class VirtualCallable(NamedTuple):

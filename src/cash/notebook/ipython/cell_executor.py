@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import hashlib
 import sys
 import time
 import uuid
@@ -61,6 +60,7 @@ from ...exceptions import (
     UpstreamStateError,
 )
 from ...remote_source import measured_validation as _measured_validation
+from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from .._protocols import ShellProtocol
@@ -911,7 +911,7 @@ class CellExecutor:
         cell's own start position instead."""
         try:
             state = self._statement_processor.tracking_state
-            digest = hashlib.sha256(raw_cell.encode("utf-8")).hexdigest()
+            digest = exact_source_digest(raw_cell)
             state.executed_cell_source_hashes.add(digest)
             changed, pre, post = self._statement_processor.cell_rng_observation()
             if changed and post is not None:

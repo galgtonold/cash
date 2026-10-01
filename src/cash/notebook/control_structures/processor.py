@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import hashlib
 import logging
 import types
 from typing import TYPE_CHECKING, Any
@@ -40,6 +39,7 @@ from ...analysis.cacheability import statement_writes_files
 from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.namespace_effects import statement_calls_user_writer
+from ...source_norm import exact_source_digest
 from ...tracking.randomness import capture_rng_state, rng_carrier_kind, rng_modules_changed
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
@@ -203,7 +203,7 @@ class ControlStructureProcessor:
                     files.update(local)
 
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
-            state.control_outcomes[hashlib.sha256(code.encode("utf-8")).hexdigest()] = outcome
+            state.control_outcomes[exact_source_digest(code)] = outcome
             # Judged only on a run that restored nothing: a restored statement
             # puts back the RNG state it was stored with, so a loop that draws
             # nothing still moves the generators when it hits in a new kernel.
