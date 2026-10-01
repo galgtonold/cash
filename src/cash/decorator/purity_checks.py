@@ -46,10 +46,10 @@ from .user_code import own_package
 if TYPE_CHECKING:
     from ..config import CashConfig
     from .arg_hashing import ArgHasher
+    from .class_data import ClassDataFold
     from .frozen import FrozenResults
     from .global_reads import GlobalReads
     from .global_values import GlobalValues
-    from .globals_fold import GlobalsFold
     from .registry import FunctionRegistry
     from .reporting import Notices
 
@@ -252,9 +252,9 @@ class PurityChecks:
         registry: FunctionRegistry,
         args: ArgHasher,
         frozen: FrozenResults,
-        globals_fold: GlobalsFold,
         reads: GlobalReads,
         values: GlobalValues,
+        classes: ClassDataFold,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
@@ -262,9 +262,9 @@ class PurityChecks:
         self._registry = registry
         self._args = args
         self._frozen = frozen
-        self._globals = globals_fold
         self._reads = reads
         self._values = values
+        self._classes = classes
         self._mutations = mutations
         self._notices = notices
         # Functions the STATIC pass already reported on. The runtime effect
@@ -408,7 +408,7 @@ class PurityChecks:
                 elif scope == "binding":
                     after = self._values.carried_state_digest(resolve_binding(*owner))
                 elif scope == "classdata":
-                    after = self._globals.class_data_digest(*owner)[0]
+                    after = self._classes.class_data_digest(*owner)[0]
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.

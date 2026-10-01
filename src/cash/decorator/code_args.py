@@ -22,11 +22,12 @@ from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
-from .globals_fold import class_surface_functions
+from .class_data import class_surface_functions
 from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
+    from .class_data import ClassDataFold
     from .code_surface import CodeSurface
     from .frozen import FrozenResults
     from .global_values import GlobalValues
@@ -126,6 +127,7 @@ class CodeArgs:
         code: CodeSurface,
         globals_fold: GlobalsFold,
         values: GlobalValues,
+        classes: ClassDataFold,
         frozen: FrozenResults,
         args: ArgHasher,
     ) -> None:
@@ -138,6 +140,7 @@ class CodeArgs:
         self._registries = (args.override_hashers, args.type_hashers)
         self._globals = globals_fold
         self._values = values
+        self._classes = classes
         self._frozen = frozen
         # A data global carries code the same way an argument does
         # (`GlobalsFold.fold_read_globals`), and folds it through this walk.
@@ -615,7 +618,7 @@ class CodeArgs:
         if isinstance(carrier, type):
             parts = [
                 f"argclass:{label}:{h}"
-                for label, h in self._globals.class_parts(carrier, func_name, owner_code=owner_code)
+                for label, h in self._classes.class_parts(carrier, func_name, owner_code=owner_code)
             ]
             seen: set = set()
             helpers = ""

@@ -46,6 +46,7 @@ from .decorator.call_state import (
     exit_cached_call,
 )
 from .decorator.cash_key import KeyCheck
+from .decorator.class_data import ClassDataFold
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
 from .decorator.code_args import CodeArgs
 from .decorator.code_surface import CodeSurface
@@ -380,13 +381,23 @@ class Cash:
         )
         self._reads = GlobalReads()
         self._values = GlobalValues(self._args, self._helpers, self._notices)
+        self._classes = ClassDataFold(
+            self._args, self._reads, self._values, self._registry, self._mutations, self._notices
+        )
         self._globals = GlobalsFold(
-            self._args, self._reads, self._values, self._code, self._registry, self._mutations, self._notices
+            self._args,
+            self._reads,
+            self._values,
+            self._classes,
+            self._code,
+            self._registry,
+            self._mutations,
+            self._notices,
         )
         self._closures = ClosureFold(
-            self._args, self._captures, self._helpers, self._globals, self._values, self._mutations, self._notices
+            self._args, self._captures, self._helpers, self._values, self._classes, self._mutations, self._notices
         )
-        self._code_args = CodeArgs(self._code, self._globals, self._values, self._frozen, self._args)
+        self._code_args = CodeArgs(self._code, self._globals, self._values, self._classes, self._frozen, self._args)
         self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
         self._files = FileDeps(self._registry, self._notices)
         self._purity = PurityChecks(
@@ -394,9 +405,9 @@ class Cash:
             self._registry,
             self._args,
             self._frozen,
-            self._globals,
             self._reads,
             self._values,
+            self._classes,
             self._mutations,
             self._notices,
         )

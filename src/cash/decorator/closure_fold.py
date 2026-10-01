@@ -30,8 +30,8 @@ from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
+    from .class_data import ClassDataFold
     from .global_values import GlobalValues
-    from .globals_fold import GlobalsFold
     from .purity_checks import LearnedMutations
     from .reporting import Notices
 
@@ -560,16 +560,16 @@ class ClosureFold:
         args: ArgHasher,
         captures: CaptureAnalysis,
         helpers: HelperIdentity,
-        globals_fold: GlobalsFold,
         values: GlobalValues,
+        classes: ClassDataFold,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
         self._args = args
         self._captures = captures
         self._helpers = helpers
-        self._globals = globals_fold
         self._values = values
+        self._classes = classes
         self._mutations = mutations
         self._notices = notices
         # function object -> digest of its parameter defaults, for defaults that
@@ -896,9 +896,9 @@ class ClosureFold:
         if is_user_callable_instance(func):
             # `cash.cache(Scaler(2))`: the instance is its own `self`, and
             # what its code reads besides is the class's
-            # (`GlobalsFold.class_parts`). `sc.k = 5` served the result for 2.
+            # (`ClassDataFold.class_parts`). `sc.k = 5` served the result for 2.
             owner = func
-            parts = self._globals.class_parts(type(func), func_name)
+            parts = self._classes.class_parts(type(func), func_name)
             if parts:
                 payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
                 state_hash = hashlib.sha256(f"{state_hash}:classes:{payload}".encode("utf-8")).hexdigest()

@@ -34,10 +34,11 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
+from .class_data import CLASSES_FOLDED
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
 from .function_identity import func_key
-from .globals_fold import CLASSES_FOLDED, READS_FOLDED
+from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
@@ -270,7 +271,7 @@ class KeyBuilder:
         # (`plain_census`).
         previous = getattr(PLAIN_CENSUS, "memo", None)
         PLAIN_CENSUS.memo = {}
-        # Each class's data is folded once per key (`GlobalsFold.class_parts`).
+        # Each class's data is folded once per key (`ClassDataFold.class_parts`).
         classes_token = CLASSES_FOLDED.set(set())
         # Each function's globals are folded once per key (`READS_FOLDED`).
         reads_token = READS_FOLDED.set({})
