@@ -81,7 +81,9 @@ src/cash/
 ├── value_hash.py       # the notebook's value hash (compute_hash)
 ├── mutation_fingerprint.py # a digest that moves on an in-place edit
 ├── source_norm.py      # normalises source before hashing (comments,
-│                       #   blank lines)
+│                       #   blank lines, docstrings)
+├── code_digest.py      # the digest that stands for a callable's or a
+│                       #   module's code
 ├── source_reading.py   # reads source files and source lines, memoised
 │                       #   per file version
 ├── process_start.py    # when this process started (no psutil import)

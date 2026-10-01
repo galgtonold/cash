@@ -15,11 +15,12 @@ from typing import TYPE_CHECKING, Any
 
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.purity_analyzer import PurityReport, bindings_changed, get_analyzer, resolve_binding
+from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ..graph import DependencyGraph
-from ..source_norm import bytecode_identity, callable_identity, compiled_identity, extension_file_digest
+from ..source_norm import bytecode_identity
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .code_identity import func_key, hash_callable_source

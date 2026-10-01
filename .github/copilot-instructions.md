@@ -56,8 +56,12 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
   pickles a value in, `content_hashers.py` the per-library hashes of frames,
   arrays and tables, `value_hash.py` the notebook's value hash (`compute_hash`),
   `mutation_fingerprint.py` the in-place-edit digest and `sizing.py` how big a
-  value is. `tracking/` records what a computation depends
-  on at run time (file reads and snapshots, function source, randomness);
+  value is. Code identity is split the same way: `source_norm.py` reduces source
+  text to its canonical form, `source_reading.py` reads source files (memoised
+  per settled file version), `code_digest.py` builds `callable_identity` and
+  `module_identity` from the two, `loaded_code.py` checks the running code
+  against disk and `process_start.py` says when the process started.
+  `tracking/` records what a computation depends on at run time (file reads and snapshots, function source, randomness);
   `analysis/` is static analysis (statement inputs and outputs, `# @cash:`
   annotations, cacheability, the purity analysis of a decorated function). `effects.py` names the calls that write files,
   send requests, read the clock or the environment; the decorator warns on

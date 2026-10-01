@@ -1,7 +1,7 @@
 import pytest
 
 from cash import Cash
-from cash.source_norm import callable_identity
+from cash.code_digest import callable_identity
 
 from ..dummy_lib import lib_func
 

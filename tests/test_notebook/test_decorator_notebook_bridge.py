@@ -525,7 +525,7 @@ class TestSourceAwareCacheInvalidation:
 
     def test_bytecode_fallback_when_source_unavailable(self):
         """callable_identity should use bytecode when inspect.getsource fails."""
-        from cash.source_norm import callable_identity
+        from cash.code_digest import callable_identity
 
         def my_func(x):
             return x + 1
@@ -573,7 +573,7 @@ class TestSourceAwareCacheInvalidation:
         wraps shares the wrapper's code."""
         import functools
 
-        from cash.source_norm import callable_identity
+        from cash.code_digest import callable_identity
 
         def deco(fn):
             @functools.wraps(fn)

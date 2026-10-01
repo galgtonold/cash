@@ -16,9 +16,10 @@ import types
 from typing import Any
 
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
+from ..code_digest import callable_identity, source_digest
 from ..install_paths import is_user_module
 from ..loaded_code import loaded_module_matches_disk
-from ..source_norm import bytecode_identity, callable_identity, source_digest
+from ..source_norm import bytecode_identity
 from ..source_reading import read_code_text
 from .module_symbols import analysis_for
 

@@ -58,6 +58,7 @@ from typing import Any
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, MODULE_ANALYSES, PURITY_REPORTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..diagnostics import warn_diagnostic
 from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
@@ -81,7 +82,6 @@ from ..purity import (
     is_pure,
     is_stateful,
 )
-from ..source_norm import callable_identity, compiled_identity, extension_file_digest
 from ..source_reading import getsource, getsourcelines, own_source, settled_source_version, source_version_unchanged
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES

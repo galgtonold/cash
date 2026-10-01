@@ -25,20 +25,13 @@ from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..canonical_form import stable_key_repr
+from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
 from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package
 from ..loaded_code import loaded_class_identity, loaded_code_matches_disk
-from ..source_norm import (
-    bytecode_identity,
-    callable_identity,
-    code_consts_without_docstring,
-    compiled_identity,
-    own_source_digest,
-    source_digest,
-    unwrap_partials,
-)
+from ..source_norm import bytecode_identity, code_consts_without_docstring
 from ..source_reading import getsource
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
@@ -194,7 +187,7 @@ def hash_callable_source(fn: Callable) -> str:
     HELPER -- so what this returns decides whether editing a helper
     recomputes its callers.
 
-    This is `cash.source_norm.callable_identity`, plus a memo per code
+    This is `cash.code_digest.callable_identity`, plus a memo per code
     object and a check that the file still holds the code that runs.
 
     Resolution order:
