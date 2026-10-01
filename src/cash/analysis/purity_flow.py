@@ -45,6 +45,10 @@ _FRESH_CONSTRUCTOR_NAMES = frozenset(
         "tuple",
     }
 )
+#: Converters that return their argument itself when it already has the
+#: target type (``np.asarray(a)`` of an ndarray is ``a``), so the result is
+#: fresh only when the argument is.
+_PASS_THROUGH_CONVERTERS = frozenset({"asarray", "asanyarray", "ascontiguousarray", "asfortranarray"})
 _FRESH_CONSTRUCTOR_ATTRS = frozenset(
     {
         "zeros",
@@ -52,7 +56,6 @@ _FRESH_CONSTRUCTOR_ATTRS = frozenset(
         "ones",
         "full",
         "array",
-        "asarray",
         "zeros_like",
         "empty_like",
         "ones_like",
@@ -380,6 +383,8 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
                 return False
             if _module_factory(f):
                 return True
+            if f.attr in _PASS_THROUGH_CONVERTERS:
+                return bool(node.args) and _fresh(node.args[0], name_is_fresh, name_is_deep)
             if f.attr in _FRESH_CONSTRUCTOR_ATTRS or f.attr in _FRESH_READER_ATTRS or f.attr in _NEW_OBJECT_METHODS:
                 return True
             if f.attr in _ELEMENT_METHODS:
