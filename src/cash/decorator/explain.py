@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .backend_slot import BackendSlot
     from .frozen import FrozenResults
     from .registry import FunctionRegistry
-    from .runtime import KeyBuilder
+    from .runtime import CallRunner, KeyBuilder
     from .stored_keys import StoredKeyRecord
 
 # Reason codes returned by `Explainer.explain` / ``f.explain(...)``.
@@ -699,7 +699,9 @@ class Explainer:
         frozen: FrozenResults,
         backend_slot: BackendSlot,
         misses: MissHistory,
+        runner: CallRunner,
     ) -> None:
+        self._runner = runner
         self._config = config
         self._registry = registry
         self._keys = keys
@@ -714,9 +716,9 @@ class Explainer:
         Pure introspection - does NOT call ``func``, does NOT touch
         `Cash` stats, does NOT emit warnings, and does NOT
         mutate the backend. The key comes from `KeyBuilder.build`, the same
-        build a real call uses, and the entry is judged by the rules
-        `CallRunner._try_get_cached` applies, so the answer reflects what would
-        actually happen on the next real call.
+        build a real call uses, and the entry is judged by
+        `CallRunner.entry_verdict`, which a real lookup applies, so the answer
+        reflects what would actually happen on the next real call.
 
         See `CacheExplanation` for the return shape.
         """
@@ -855,39 +857,44 @@ class Explainer:
             )
 
         metadata = CacheMetadata.from_dict(raw_metadata)
-
-        # TTL check - the same rule `CallRunner._try_get_cached` applies.
-        ttl = self._backend_slot.entry_ttl(ttl, metadata)
-        if ttl_expired(metadata.timestamp, ttl):
+        # Whether the entry is served: the judgement a real lookup makes.
+        try:
+            verdict = self._runner.entry_verdict(cache_key, metadata, ttl, quiet=True)
+        except (TypeError, KeyError):
+            verdict = MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
+        if verdict is not None and verdict.kind is MissKind.TTL:
             timestamp = metadata.timestamp or 0
-            age = time.time() - timestamp
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_TTL_EXPIRED,
                 func_name=func_name,
                 cache_key=cache_key,
                 details={
-                    "ttl_seconds": ttl,
-                    "age_seconds": age,
+                    "ttl_seconds": self._backend_slot.entry_ttl(ttl, metadata),
+                    "age_seconds": time.time() - timestamp,
                     "cached_at": timestamp,
                 },
             )
-
-        # Auto-tracked file deps freshness. Routed through the SAME
-        # content-authoritative helper a real lookup uses - comparing
-        # raw mtime/size here made explain() report file_changed / 'mtime
-        # changed' after a touch while the actual call hit. A diagnostic that
-        # contradicts the behavior it describes is worse than none.
-        if metadata.auto_file_deps:
-            stale = stale_file_deps(metadata)
-            if stale:
-                return CacheExplanation(
-                    would_hit=False,
-                    reason=EXPLAIN_FILE_CHANGED,
-                    func_name=func_name,
-                    cache_key=cache_key,
-                    details={"changed_files": stale, "file_deps": describe_file_deps(metadata.auto_file_deps)},
-                )
+        if verdict is not None and verdict.kind is MissKind.FILE:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_FILE_CHANGED,
+                func_name=func_name,
+                cache_key=cache_key,
+                details={
+                    "changed_files": stale_file_deps(metadata),
+                    "file_deps": describe_file_deps(metadata.auto_file_deps),
+                },
+            )
+        if verdict is not None:
+            # Present but not servable: a real call misses as on no entry.
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_NO_ENTRY,
+                func_name=func_name,
+                cache_key=cache_key,
+                details={"why": str(verdict)},
+            )
 
         timestamp = metadata.timestamp or 0
         details = {

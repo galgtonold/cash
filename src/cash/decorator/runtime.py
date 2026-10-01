@@ -383,30 +383,17 @@ class CallRunner:
         so a non-None metadata view with a ``None`` data value still
         counts as a hit (a function that legitimately returned ``None``).
 
-        Auto-tracked file dependencies stored in
-        ``metadata.auto_file_deps`` are re-checked here; any file whose
-        content differs from what was recorded forces a miss so the
-        function re-reads the changed file.
+        Whether a found entry is served is `CallRunner.entry_verdict`.
         """
         if metadata is None:
             self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
-        ttl = self._backend_slot.entry_ttl(ttl, metadata)
         try:
-            if entry_expired(metadata, ttl):
-                age = time.time() - (metadata.timestamp or 0)
-                self._misses.note_miss(
-                    func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
-                )
+            verdict = self.entry_verdict(cache_key, metadata, ttl)
+            if verdict is not None:
+                self._misses.note_miss(func_name, cache_key, verdict)
                 return CACHE_MISS
-            if not self._files.auto_file_deps_fresh(metadata):
-                self._misses.note_miss(func_name, cache_key, MissReason(MissKind.FILE, describe_stale_files(metadata)))
-                return CACHE_MISS
-            if not self._chunks_are_intact(cache_key, metadata):
-                self._misses.note_miss(
-                    func_name, cache_key, MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
-                )
-                return CACHE_MISS
+            ttl = self._backend_slot.entry_ttl(ttl, metadata)
             # If this hit happens *inside* another cached function's
             # computation, replay the files this entry depends on into the
             # enclosing tracker, so the outer function records them too.
@@ -441,6 +428,28 @@ class CallRunner:
                 func_name, cache_key, MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
             )
         return CACHE_MISS
+
+    def entry_verdict(
+        self, cache_key: str, metadata: CacheMetadata, ttl: int | None, *, quiet: bool = False
+    ) -> MissReason | None:
+        """Why the entry found under *cache_key* is not served, or None to
+        serve it: its age against the ttl, its recorded files, its chunks.
+
+        The one judgement a lookup (`CallRunner._try_get_cached`) and
+        ``explain()`` both apply, so a check added here holds for both.
+        *quiet* leaves out the warnings the file check gives, for
+        ``explain()``. Raises ``TypeError``/``KeyError`` on metadata that
+        does not validate.
+        """
+        ttl = self._backend_slot.entry_ttl(ttl, metadata)
+        if entry_expired(metadata, ttl):
+            age = time.time() - (metadata.timestamp or 0)
+            return MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
+        if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
+            return MissReason(MissKind.FILE, describe_stale_files(metadata))
+        if not self._chunks_are_intact(cache_key, metadata):
+            return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
+        return None
 
     def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
         """True unless this is a chunked manifest missing some of its chunks.

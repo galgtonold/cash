@@ -432,7 +432,14 @@ class Cash:
             self._notices,
         )
         self._explainer = Explainer(
-            self.config, self._registry, self._keys, self._args, self._frozen, self._backend_slot, self._misses
+            self.config,
+            self._registry,
+            self._keys,
+            self._args,
+            self._frozen,
+            self._backend_slot,
+            self._misses,
+            self._runner,
         )
         # Called by name from the wrapper `_make_wrapper` builds, whose code is
         # part of the key of any cached function it is passed to: the names

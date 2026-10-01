@@ -231,7 +231,7 @@ class FileDeps:
             else:
                 tracker.add_tracked_absent(normalize_path(path))
 
-    def auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
+    def auto_file_deps_fresh(self, metadata: CacheMetadata, *, quiet: bool = False) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
         still matches on disk.
 
@@ -249,10 +249,14 @@ class FileDeps:
         recomputed needlessly, and a same-size edit under an indistinguishable
         mtime was missed and served stale. The helper checks the cheap size
         first and only hashes when the size matches.
+
+        *quiet* checks without saying that checking was expensive.
         """
         snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
+        if quiet:
+            return snapshot_is_fresh(snap)[0]
 
         # Remote entries cost a network round trip each to check, so the check
         # itself is worth measuring - see warn_if_validation_is_expensive.
