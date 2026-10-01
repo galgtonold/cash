@@ -9,7 +9,7 @@ terminal.
 
 ## Asking a decorated function
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @657dd3dc -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @c3c6d39c -->
 `func.explain(*args, **kwargs)` answers "would a call with these arguments hit,
 and why?" without calling the function, changing its counters or writing
 anything:

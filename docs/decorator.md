@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/store.py:ResultStore.store @7d10460b, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/store.py:ResultStore.store @860f12a7, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -161,7 +161,7 @@ and to answer "why did it miss?" when a call ran that you expected to be a
 cache hit. Each miss names its reason: new arguments, a changed file, a
 helper you edited, an expired `ttl`.
 
-<!-- claim: cash/core.py:Cash.run_summary @1b06ce83, cash/core.py:Cash._summary_reasons @30c139d9, cash/core.py:Cash._print_run_summary @f2a46f9f -->
+<!-- claim: cash/core.py:Cash.run_summary @1b06ce83, cash/core.py:Cash._summary_reasons @a0f367d6, cash/core.py:Cash._print_run_summary @f2a46f9f -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
 process ends: hits and misses per function, the time saved, and why calls
 missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
@@ -223,7 +223,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99, cash/decorator/code_args.py:CodeArgs.fold_code_args @196f393c -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @3c898b99, cash/decorator/code_args.py:CodeArgs.fold_code_args @61607ad9 -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -550,7 +550,7 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @657dd3dc -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @c3c6d39c -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 

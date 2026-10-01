@@ -25,7 +25,7 @@ build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:decorator_key @fe76bcca, cash/decorator/code_identity.py:func_key @88a3b5fb -->
+<!-- claim: cash/decorator/runtime.py:decorator_key @58733f82, cash/decorator/code_identity.py:func_key @88a3b5fb -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @916718e1, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @1c273577, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -67,7 +67,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c5c13b57, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @99cd3791, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -171,7 +171,7 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @7d10460b -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @860f12a7 -->
 A result is written to the RAM tier and to disk, however cheap it was, unless
 a tier's size cap refuses it; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the

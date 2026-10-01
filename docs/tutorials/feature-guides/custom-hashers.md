@@ -125,7 +125,7 @@ and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
   cover every function passed to any cached call. Pass what a closure captures
   as a plain argument instead.
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @68bbf619, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @6cecb0bf -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.iter_code_carriers @5789f237, cash/decorator/arg_hashing.py:ArgHasher.keys_by_registration @6cecb0bf -->
 The hasher is the value's whole identity. The code of the value's class still
 counts when the class is yours, but cash does not search the value for code it
 holds: a function stored on an instance, or the handlers and streams a
@@ -224,7 +224,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @c5c13b57 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @99cd3791 -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result.
 

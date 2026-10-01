@@ -26,7 +26,7 @@ To write a backend of your own, see [Internals](backend_internals.md).
 
 ## Security
 
-<!-- claim: cash/backends/serialization.py:PickleSerializer @85bf928a broad="the pickle-executes-code warning is about the serializer as a whole", cash/decorator/store.py:ResultStore.store @7d10460b -->
+<!-- claim: cash/backends/serialization.py:PickleSerializer @85bf928a broad="the pickle-executes-code warning is about the serializer as a whole", cash/decorator/store.py:ResultStore.store @860f12a7 -->
 !!! danger "Loading a cache runs code"
     `FileBackend`, `SQLiteBackend`, `RedisBackend` and `S3Backend` store
     values with `pickle`. Loading a
