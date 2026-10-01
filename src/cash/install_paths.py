@@ -39,6 +39,7 @@ __all__ = [
     "installed_roots",
     "interpreter_roots",
     "is_installed_path",
+    "is_cash_path",
     "is_user_code_file",
     "is_user_code_module",
     "is_user_module",
@@ -190,6 +191,14 @@ def is_user_path(path: str | os.PathLike[str] | None) -> bool:
         verdict = not _is_installed(path_nc) and not path_nc.startswith(_CASH_DIR)
     _USER_PATH[path] = verdict
     return verdict
+
+
+def is_cash_path(path: str | os.PathLike[str] | None) -> bool:
+    """Is *path* a file of cash itself (an editable install included)?"""
+    if not path:
+        return False
+    path = os.fspath(path)
+    return not path.startswith("<") and normcase_path(os.path.abspath(path)).startswith(_CASH_DIR)
 
 
 def is_user_code_file(filename: str | None) -> bool:

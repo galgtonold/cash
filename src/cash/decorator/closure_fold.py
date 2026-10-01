@@ -28,6 +28,7 @@ from .code_identity import (
     SYNC_TYPES,
     code_fingerprint,
     hash_callable_source,
+    is_cash_wrapper,
     is_immutable_capture,
     is_user_code_object,
 )
@@ -52,7 +53,7 @@ _CODE_CALLABLES = (
 def is_user_callable_instance(value: Any) -> bool:
     """Is *value* an instance of the user's own class with a ``__call__``,
     rather than a function, method, class or partial?"""
-    if isinstance(value, _CODE_CALLABLES) or getattr(value, "_cash_cached", False):
+    if isinstance(value, _CODE_CALLABLES) or is_cash_wrapper(value):
         return False
     cls = type(value)
     return is_user_code_object(cls) and not is_opaque(value)
@@ -635,7 +636,7 @@ class ClosureFold:
                 attrs = self._captures.attr_reads(code).get(name, frozenset())
                 captures.append((name, module_capture_identity(v, attrs)))
                 continue
-            if getattr(v, "_cash_cached", False):
+            if is_cash_wrapper(v):
                 # A captured CACHED function is what it computes: its
                 # dependency state, as a registry holding one counts it
                 # (`GlobalsFold.data_callable_identity`). Not cash's wrapper around

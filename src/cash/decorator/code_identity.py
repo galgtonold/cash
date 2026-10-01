@@ -26,7 +26,7 @@ from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
-from ..install_paths import in_own_package, is_user_code_module, is_user_module, top_package
+from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package
 from ..object_hashing import stable_key_repr
 from ..source_norm import (
     bytecode_identity,
@@ -349,6 +349,31 @@ def iter_contained(obj: Any):
         yield obj
 
 
+def is_cash_wrapper(value: Any) -> bool:
+    """Is *value* the wrapper ``@cash.cache`` returns, or a method bound
+    from one? A mock answers every attribute, never with True."""
+    try:
+        return getattr(value, "_cash_cached", False) is True
+    except Exception:  # noqa: BLE001 - an object's __getattr__ may raise anything
+        return False
+
+
+def cached_function_in(value: Any) -> Any:
+    """The ``@cash.cache`` wrapper *value* is, or a partial wraps; else None."""
+    value = unwrap_partials(value)
+    return value if is_cash_wrapper(value) else None
+
+
+def cash_wrapped(value: Any) -> Any:
+    """The user function under a ``@cash.cache`` wrapper, else *value*.
+
+    A wrapper's code is cash's, never part of a key: a code channel that
+    meets one keys the function it wraps, and a data channel keys its state
+    (`GlobalsFold.data_callable_identity`).
+    """
+    return getattr(value, "__wrapped__", value) if is_cash_wrapper(value) else value
+
+
 def own_package(func: Any) -> str | None:
     """The top-level package of the module that defines *func*."""
     return top_package(getattr(func, "__module__", None))
@@ -482,6 +507,11 @@ def is_user_code_object(obj: Any) -> bool:
     user code (mirroring ``is_user_code_module``'s fileless-module
     handling) -- unless it is C code (`_c_code_verdict`).
     """
+    code = getattr(obj, "__code__", None)
+    if isinstance(code, types.CodeType) and is_cash_path(code.co_filename):
+        # cash's own code -- the wrapper `@cash.cache` returns, whose
+        # ``__module__`` and ``__qualname__`` are the user function's.
+        return False
     mod_name = getattr(obj, "__module__", None)
     mod = sys.modules.get(mod_name) if mod_name else None
     if mod is None or not qualname_resolves_in(mod, obj):
@@ -1018,7 +1048,7 @@ class CodeIdentity:
         # the wrapped function's, which pickle names only by reference -- so an
         # edit to that function's body kept the key, and the partial was
         # reported as uncomputable code instead (KEY-OPAQUE-CALLABLE).
-        obj = unwrap_partials(obj)
+        obj = cash_wrapped(unwrap_partials(obj))
         # Dispatch FIRST, memo read second. Every argument to a cached
         # function passes through here (Task 4), and most are not a
         # class or callable at all -- a list, dict, set, numpy array,
@@ -1137,6 +1167,7 @@ class CodeIdentity:
         seen_names: set[str] = set()
 
         def consider(value: Any) -> None:
+            value = cash_wrapped(value)
             if value is None or value is obj:
                 return
             if not (isinstance(value, type) or callable(value)):

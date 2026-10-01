@@ -392,10 +392,6 @@ class Cash:
         self._purity = PurityChecks(
             self.config, self._registry, self._args, self._frozen, self._globals, self._mutations, self._notices
         )
-        # Called by name from each cached function's `stats_wrapper`, whose
-        # code is part of the key of any cached function it is passed to: the
-        # name stays, and it is the RNG watch's method.
-        self._warn_unseeded_estimator_result = self._rng.warn_unseeded_estimator_result
         self._keys = KeyBuilder(
             self._registry,
             self._args,
@@ -441,14 +437,6 @@ class Cash:
             self._misses,
             self._runner,
         )
-        # Called by name from the wrapper `_make_wrapper` builds, whose code is
-        # part of the key of any cached function it is passed to: the names
-        # stay, and they are the call runner's steps.
-        self._lookup = self._runner.lookup
-        self._body_scope = self._runner.body_scope
-        self._finish_miss = self._runner.finish_miss
-        self._single_flight = self._runner.single_flight
-        self._compute_with_lock = self._runner.compute_with_lock
 
         atexit.register(self._exit_work.run)
 
@@ -682,12 +670,13 @@ class Cash:
         they await the body, so they cannot drift apart.
         """
         func = spec.func
+        runner = self._runner
 
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                call = self._lookup(spec, args, kwargs, async_body=True)
+                call = runner.lookup(spec, args, kwargs, async_body=True)
                 if call.outcome is not CACHE_MISS:
                     # A result the key path produced by calling `func` itself
                     # (no key) is a coroutine here: await it before handing back.
@@ -696,29 +685,29 @@ class Cash:
                     return call.outcome
 
                 async def compute() -> Any:
-                    with self._body_scope(spec, call) as run:
+                    with runner.body_scope(spec, call) as run:
                         run.res = await func(*args, **kwargs)
-                    return self._finish_miss(spec, call, run)
+                    return runner.finish_miss(spec, call, run)
 
                 if not self.use_locking:
                     return await compute()
-                return await self._single_flight(spec, call, compute)
+                return await runner.single_flight(spec, call, compute)
 
             return async_wrapper
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call = self._lookup(spec, args, kwargs, async_body=False)
+            call = runner.lookup(spec, args, kwargs, async_body=False)
             if call.outcome is not CACHE_MISS:
                 return call.outcome
 
             def compute() -> Any:
-                with self._body_scope(spec, call) as run:
+                with runner.body_scope(spec, call) as run:
                     run.res = func(*args, **kwargs)
-                return self._finish_miss(spec, call, run)
+                return runner.finish_miss(spec, call, run)
 
             if self.use_locking:
-                return self._compute_with_lock(spec, call, compute)
+                return runner.compute_with_lock(spec, call, compute)
             return compute()
 
         return wrapper
@@ -793,9 +782,9 @@ class Cash:
           for that specific call (sync, even on async wrappers).
         """
         func, func_name, allow_random = cf.func, cf.name, cf.allow_random
-        # Read through `cf` by the end-of-run summary too. Not captured by
-        # `stats_wrapper` itself: see `_bypass`.
+        # Read through `cf` by the end-of-run summary too.
         _stats = cf.stats
+        warn_unseeded = self._rng.warn_unseeded_estimator_result
 
         def _count(slot: list) -> None:
             # The entry THIS call logged, if it logged one: a call that raised
@@ -819,20 +808,13 @@ class Cash:
                 elif call.get("not_persisted"):
                     _stats["not_persisted"][call["not_persisted"]] += 1
 
-        def _bypass(args: tuple, kwargs: dict) -> Any:
-            # A helper, not inline: a caller that captures this wrapper in a
-            # closure has the wrapper's own captures folded into ITS key, and
-            # `_stats` read directly there is content-hashed -- so every call
-            # moved the caller's key (tests/test_core/test_cold_process_key_stability).
-            _stats["bypassed"] += 1
-            return func(*args, **kwargs)
-
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
                 if self.config.disable:
-                    return await _bypass(args, kwargs)
+                    _stats["bypassed"] += 1
+                    return await func(*args, **kwargs)
                 token = ACTIVE_CONFIG.set(self.config)
                 slot: list = [None]
                 slot_token = CALL_ENTRY.set(slot)
@@ -844,7 +826,7 @@ class Cash:
                     CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
                     _count(slot)
-                self._warn_unseeded_estimator_result(func_name, result, allow_random)
+                warn_unseeded(func_name, result, allow_random)
                 return result
         else:
 
@@ -853,7 +835,8 @@ class Cash:
                 # Before anything else: disabled means the function, and
                 # nothing of cash's -- no key, no analysis, no lookup, no store.
                 if self.config.disable:
-                    return _bypass(args, kwargs)
+                    _stats["bypassed"] += 1
+                    return func(*args, **kwargs)
                 # This instance's settings for the checks the call makes; see
                 # ACTIVE_CONFIG.
                 token = ACTIVE_CONFIG.set(self.config)
@@ -867,7 +850,7 @@ class Cash:
                     CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
                     _count(slot)
-                self._warn_unseeded_estimator_result(func_name, result, allow_random)
+                warn_unseeded(func_name, result, allow_random)
                 return result
 
         def cache_info() -> dict[str, Any]:

@@ -38,6 +38,8 @@ from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
 from .code_identity import (
     SYNC_TYPES,
+    cash_wrapped,
+    is_cash_wrapper,
     hash_callable_source,
     is_user_class,
     is_user_code_object,
@@ -367,7 +369,7 @@ def _function_layers(fn: Any) -> list[types.FunctionType]:
     walked: set[int] = set()
     while fn is not None and id(fn) not in walked:  # every layer; a cycle ends
         walked.add(id(fn))
-        if isinstance(fn, types.FunctionType) and not getattr(fn, "_cash_cached", False):
+        if isinstance(fn, types.FunctionType) and not is_cash_wrapper(fn):
             layers.append(fn)
         fn = getattr(fn, "__wrapped__", None)
     return layers
@@ -448,7 +450,7 @@ def class_data_items(
                 continue
             if isinstance(value, (types.FunctionType, type, types.ModuleType)) or wraps_code(value):
                 continue
-            if getattr(value, "_cash_cached", False):
+            if is_cash_wrapper(value):
                 continue
             items.append((f"{prefix}.{name}", value))
     return items
@@ -778,7 +780,7 @@ class GlobalsFold:
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
         """
-        if getattr(fn, "_cash_cached", False) and not is_mock(fn):
+        if is_cash_wrapper(fn) and not is_mock(fn):
             state = getattr(fn, "_cash_state", None)
             if state is not None:
                 # Its whole state, globals and environment included, built by
@@ -1096,7 +1098,7 @@ class GlobalsFold:
             if isinstance(value, types.ModuleType):
                 if not is_user_module(value, own_pkg):
                     return
-            elif getattr(value, "_cash_cached", False):
+            elif is_cash_wrapper(value):
                 pass
             elif not isinstance(value, (types.FunctionType, type)) or not is_user_code_object(value):
                 return
@@ -1620,7 +1622,7 @@ class GlobalsFold:
         if verdict is not None and verdict[0] is value and not verdict[1]:
             return None
         try:
-            if getattr(value, "_cash_cached", False):
+            if is_cash_wrapper(value):
                 return None
             if isinstance(value, functools.partial):
                 payload: Any = ("partial", value.func, value.args, dict(value.keywords))
@@ -2046,12 +2048,9 @@ class GlobalsFold:
                 # One level only: fold the constants the helper itself reads.
                 # Deeper recursion would drag in whole transitive namespaces for
                 # a diminishing chance of catching a real edit.
-                if getattr(value, "_cash_cached", False):
-                    # A cached helper is cash's wrapper, whose globals are
-                    # cash's own: it warned KEY-UNHASHABLE-GLOBAL for
-                    # 'rates.fetch.ACTIVE_CONFIG' on every run (the class-method
-                    # twin is handled in source_norm).
-                    value = getattr(value, "__wrapped__", value)
+                # A cached helper's globals are those of the function it
+                # wraps, not of cash's wrapper.
+                value = cash_wrapped(value)
                 helper_globals = getattr(value, "__globals__", None)
                 if not isinstance(helper_globals, dict):
                     continue
