@@ -23,7 +23,7 @@ from cash.notebook.stateful_carriers import stateful_carrier_kind
 from cash.notebook.upstream.statement_lineage import unbound_builtin
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
-SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
+SRC = Path(__file__).resolve().parents[3] / "src" / "cash"
 
 
 def test_every_builtin_and_the_ipython_names_are_in_it():

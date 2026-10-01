@@ -95,7 +95,7 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
 - **Layering:** `notebook/` imports `core` and the shared layer, never the reverse.
   Outside `notebook/`, only the magics loaders (`Cash.register_magic`,
   `load_ipython_extension`, `nbconvert`) import it, so `@cash.cache` runs without
-  the notebook package (`tests/test_core/test_decorator_without_notebook.py`).
+  the notebook package (`tests/test_core/project/test_decorator_without_notebook.py`).
 
 ### JupyterLab extension (`labextension/`)
 
@@ -108,7 +108,7 @@ committed under `src/cash/labextension/`. Only after changing
 `labextension/src/index.ts`, run `cd labextension && npm install && npm run build`
 and commit the regenerated bundle. `comm.commsOverSubshells = 'disabled'` in that
 file is load-bearing and guarded by a build script and
-`tests/test_notebook/test_labextension_packaging.py`; read `labextension/README.md`
+`tests/test_notebook/session/test_labextension_packaging.py`; read `labextension/README.md`
 before touching it.
 
 ## Critical conventions
@@ -127,7 +127,7 @@ during upstream simulation and virtual restore (`StatementLineage.apply` in
 `upstream/cache_restore.py`) and for call units (`call_key.py`). If two of these disagree, a kernel restart turns into cache
 misses or stale values; that has caused critical bugs more than once. To change
 the key, change only `compute_cache_key()`, and add tests next to
-`tests/test_notebook/test_virtual_restore_modules.py`.
+`tests/test_notebook/upstream/test_virtual_restore_modules.py`.
 
 A key is `{namespace}:{sha256(...)}`, where the namespace is `stmt` for statements
 and `call` for call units, and the hash covers the statement's source hash, the
@@ -173,6 +173,9 @@ format is cleared on first open.
   `test_notebook/`, `test_ui/`, `test_cli/`, `test_tooling/` (CI, test selection,
   hygiene), plus `tests/docs/`. Each is a package; put a new file in the folder
   of the feature it pins, named after the behaviour, not at the top of `tests/`.
+  `test_core/` and `test_notebook/` are split once more by feature
+  (`test_core/code_identity/`, `test_core/reads/`, `test_notebook/upstream/`,
+  ...); a new file goes in one of those sub-folders, never at their top.
 - Notebook unit tests use a real IPython with the one `MockShell` in
   `tests/conftest.py`, through its fixtures: `mock_shell`, `clean_backend`,
   `cash_instance`, `cash_magics` (as `%load_ext cash` leaves it) and
@@ -415,7 +418,7 @@ before it is committed.**
 
 Edit only `__version__ = "..."` in `src/cash/__init__.py`. `pyproject.toml` reads it
 (`dynamic = ["version"]`, `[tool.hatch.version]`); never add a `version =` line there.
-`tests/test_core/test_docs_version_currency.py` fails if a user-facing page names
+`tests/test_core/project/test_docs_version_currency.py` fails if a user-facing page names
 another version.
 
 Then move the try-it notebooks to the new version: run

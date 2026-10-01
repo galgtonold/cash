@@ -103,7 +103,7 @@ def installed_tool(tmp_path_factory):
     bindir = venv / ("Scripts" if os.name == "nt" else "bin")
     python = bindir / ("python.exe" if os.name == "nt" else "python")
 
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     dist = _write_distribution(base / "dist")
     install = subprocess.run(
         [str(python), "-m", "pip", "install", "-q", repo_root, str(dist)],

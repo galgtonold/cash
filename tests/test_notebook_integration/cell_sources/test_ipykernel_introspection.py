@@ -1,6 +1,6 @@
 """Introspection in a real kernel: cash must not lie to ipykernel's introspection.
 
-Companion to ``tests/test_notebook/test_ipykernel_signature_introspection.py``.
+Companion to ``tests/test_notebook/session/test_ipykernel_signature_introspection.py``.
 That one proves the property against stubs in-process; this one proves it inside
 a **real ipykernel process**, where the real ``do_execute`` really does call
 ``_accepts_parameters(shell.run_cell_async, ["cell_id"])`` before dispatching.

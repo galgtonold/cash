@@ -146,7 +146,7 @@ core set after large changes, see `tools/test_selection/`.
 **Show that a new test fails without your fix:**
 
 ```bash
-python scripts/fails_first.py tests/test_core/test_your_change.py
+python scripts/fails_first.py tests/test_core/reads/test_new_rule.py
 ```
 
 It runs your tests against the last commit's `src/` in a temporary
@@ -176,9 +176,9 @@ explains claim anchors, skipped examples and derived numbers.
 
 | Folder | What goes there |
 |---|---|
-| `tests/test_core/` | the decorator, keys, hashing, configuration |
+| `tests/test_core/<feature>/` | the decorator: `code_identity`, `globals_and_closures`, `arguments`, `reads`, `purity`, `results`, `reporting`, `config`, `project` |
 | `tests/test_backends/` | storage backends |
-| `tests/test_notebook/` | notebook unit tests, with a real IPython shell |
+| `tests/test_notebook/<feature>/` | notebook unit tests, with a real IPython shell: `session`, `statement`, `calls`, `control_structures`, `upstream`, `lineage`, `files`, `modules`, `restore`, `analysis`, `values`, `randomness`, `badges` |
 | `tests/test_ui/`, `tests/test_cli/` | the dashboard and explorer; the `cash` command |
 | `tests/test_tooling/` | CI workflows, test selection, repository hygiene |
 | `tests/test_notebook_integration/<feature>/` | real kernels over real notebooks, one folder per feature |

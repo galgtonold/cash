@@ -14,7 +14,7 @@ from cash import CashImpurityWarning
 from cash.analysis.mutable_globals import module_modified_globals
 from cash.analysis.purity_analyzer import get_analyzer
 from cash.analysis.purity_report import ISSUE_MUTABLE_GLOBAL
-from tests.test_core import _global_read_fixture as gf
+from tests.test_core.globals_and_closures import _global_read_fixture as gf
 
 
 def _global_flags(func):

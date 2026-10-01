@@ -8,7 +8,7 @@ Measured on this notebook, 2026-09-21: adding one comment re-executed the
 1.2 s call, for ``import lib`` and ``import lib as x`` alike. A real notebook
 hit it at scale -- editing one helper re-read all 10,000 of its ticket
 files, 48.7 s against a 17.3 s control, later 9.1x. The unit twin is
-``tests/test_notebook/test_a_module_is_its_code_not_its_formatting.py`` and
+``tests/test_notebook/modules/test_a_module_is_its_code_not_its_formatting.py`` and
 pins what still counts: ``@cash:`` directives. Docstrings do not.
 """
 

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Substrings that mean "this is somebody's environment or build output, not the
 # project". Matched against every archive member path, case-insensitively.

@@ -1,7 +1,7 @@
 """The compact cash guide for coding agents.
 
 Single source of truth for ``cash.help()`` and ``docs/for-coding-agents.md``.
-A test (``tests/test_core/test_agent_guide_sync.py``) keeps the two byte-for-byte
+A test (``tests/test_core/project/test_agent_guide_sync.py``) keeps the two byte-for-byte
 identical, so editing one without the other fails CI. Ships inside the package so
 ``cash.help()`` works for an installed user, where the ``docs/`` tree is absent.
 """

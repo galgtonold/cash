@@ -23,7 +23,7 @@ class TestFileTrackingExtensibility:
         # Test helpers
         with tempfile.NamedTemporaryFile(encoding="utf-8", delete=False, mode="w+") as tf:
             tf.write("data")
-            # Canonical form — see the note in test_notebook/test_statement_file_tracking.py: the CI
+            # Canonical form — see the note in test_notebook/files/test_statement_file_tracking.py: the CI
             # runners' temp dirs are spelled non-canonically (macOS /var
             # symlink, Windows 8.3 short name) and cash records the resolved
             # path, so the raw name never matches there.

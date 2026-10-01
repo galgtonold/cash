@@ -468,7 +468,7 @@ class CallRunner:
         ``CallRunner._try_get_cached`` for the default one, and the double-checked re-read
         inside ``CallRunner.compute_with_lock`` for ``use_locking=True``, since both go
         through `CallRunner._try_get_cached`. Both paths are pinned by
-        ``tests/test_core/test_iterator_caching.py``.
+        ``tests/test_core/results/test_iterator_caching.py``.
         """
         if getattr(metadata, "iterator_storage", None) != "chunked":
             return True

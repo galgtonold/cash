@@ -3,7 +3,7 @@
 ``%cash_on`` names the cache folder and its cap; the cell whose writes first
 take the cache over the cap says what was removed, and later evictions stay
 quiet. The unit arms are ``tests/test_backends/test_the_disk_cap_is_said_out_loud.py``
-and ``tests/test_notebook/test_cash_on_shows_the_disk_cap.py``.
+and ``tests/test_notebook/session/test_cash_on_shows_the_disk_cap.py``.
 
 The cache folder is a fresh one set in the first cell: the kernel's own
 start-up ``%cash_on`` has already shown the cap of its default folder.

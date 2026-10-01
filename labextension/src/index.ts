@@ -43,7 +43,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   // running while `jupyter labextension list` reported it disabled: a kill
   // switch that lied in both directions.
   //
-  // Pinned by tests/test_notebook/test_labextension_packaging.py::
+  // Pinned by tests/test_notebook/session/test_labextension_packaging.py::
   // test_the_plugin_id_is_namespaced_by_the_package_name, over BOTH this
   // source and the shipped bundle.
   id: 'cash-live-cells:plugin',
@@ -98,7 +98,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
           //
           // Removing it is caught by scripts/check-comms-over-subshells.js
           // (run by `npm run build`, over BOTH this source and the built
-          // bundle) and by tests/test_notebook/test_labextension_packaging.py.
+          // bundle) and by tests/test_notebook/session/test_labextension_packaging.py.
           // Do not delete those guards to "fix" a failure here.
           comm.commsOverSubshells = 'disabled';
           // Without this the extension is MUTE for the life of any kernel that

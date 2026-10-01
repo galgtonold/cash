@@ -15,8 +15,7 @@ import hashlib
 from cash.analysis.purity_report import PurityReport
 from cash.dependency_state import DependencyStateHasher, SysModulesHelperResolver
 from cash.graph import DependencyGraph
-
-from . import _purity_helper_module as hm
+from tests.test_core import _purity_helper_module as hm
 
 
 def _sha(s: str) -> str:

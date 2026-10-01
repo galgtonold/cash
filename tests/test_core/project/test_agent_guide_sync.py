@@ -14,7 +14,7 @@ from cash._agent_guide import AGENT_GUIDE
 
 
 def _docs_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "docs" / "for-coding-agents.md"
+    return Path(__file__).resolve().parents[3] / "docs" / "for-coding-agents.md"
 
 
 def test_agent_guide_matches_docs_page():

@@ -11,7 +11,7 @@ import ast
 from unittest.mock import MagicMock
 
 from cash.notebook.control_structures import ControlStructureProcessor
-from tests.test_notebook._control_fakes import fake_statement_processor
+from tests.test_notebook.control_structures._control_fakes import fake_statement_processor
 
 
 class TestLoopCodeCapture:

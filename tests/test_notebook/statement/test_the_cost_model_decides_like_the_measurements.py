@@ -35,7 +35,7 @@ SAVINGS_PCT = 0.20
 #: Five decades of body time, which is the range a decision is asked over.
 BODY_SECONDS = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0]
 
-MATRIX = Path(__file__).resolve().parents[2] / "benchmarks" / "results" / "ser_deser_matrix.frozen.csv"
+MATRIX = Path(__file__).resolve().parents[3] / "benchmarks" / "results" / "ser_deser_matrix.frozen.csv"
 
 
 def _persists(restore_seconds: float, body_seconds: float) -> bool:

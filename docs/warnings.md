@@ -1532,7 +1532,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._chunks_are_intact @49566c4c -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2 -->
 **What happened.** A chunk of a large iterator result failed to write. The
 message names the chunk, the backend and the exception.

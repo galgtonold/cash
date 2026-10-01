@@ -17,7 +17,7 @@ import pytest
 
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.control_structures.for_handler import ForLoopHandler
-from tests.test_notebook._control_fakes import fake_statement_processor
+from tests.test_notebook.control_structures._control_fakes import fake_statement_processor
 
 # ---------------------------------------------------------------------------
 # Fixtures

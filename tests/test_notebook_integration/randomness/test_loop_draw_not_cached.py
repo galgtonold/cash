@@ -6,7 +6,7 @@ suite drives ``NotebookClient``, which does not reproduce it. A test written
 here passes with and without the fix and would be pure decoration. The bug's
 oracle is the real-jupyter-server reproducer (`repro_blank_charts_min3.py`);
 the mechanism is pinned by unit tests in
-``tests/test_notebook/test_loop_draw_receiver_routing.py``.
+``tests/test_notebook/control_structures/test_loop_draw_receiver_routing.py``.
 
 What this file DOES cover is the other side of the fix. The defect is repaired by
 routing in-loop method calls to skip-cache when the receiver is a live

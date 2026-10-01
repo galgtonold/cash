@@ -21,7 +21,7 @@
  *   node scripts/check-comms-over-subshells.js                 (after build)
  *
  * The same invariant is asserted from Python, without Node, by
- * tests/test_notebook/test_labextension_packaging.py.
+ * tests/test_notebook/session/test_labextension_packaging.py.
  */
 'use strict';
 
@@ -49,7 +49,7 @@ const EXPLANATION = [
   '',
   '  If you removed it on purpose, you are changing the design: update',
   '  labextension/src/index.ts, live_cells.py\'s thread-safety note, this script,',
-  '  and tests/test_notebook/test_labextension_packaging.py together.',
+  '  and tests/test_notebook/session/test_labextension_packaging.py together.',
   ''
 ].join('\n');
 

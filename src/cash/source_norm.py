@@ -409,7 +409,7 @@ def _normalize_tokens(source: str) -> str:
 # Every keyword ``Cash.cache`` accepts. A decorator call only counts as
 # cash's own when every keyword it passes appears here, which is what keeps
 # an unrelated third-party ``@something.cache(expire_after=60)`` out of the
-# rule below. ``tests/test_core/test_decorator_arg_identity.py`` pins this
+# rule below. ``tests/test_core/code_identity/test_decorator_arg_identity.py`` pins this
 # against the real signature; a parameter added there and forgotten here
 # merely reverts that parameter to the old over-invalidating behaviour,
 # which is the safe direction to fail in.

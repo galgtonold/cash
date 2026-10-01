@@ -196,7 +196,7 @@ class StatementRow:
     # Deliberately NOT populated: the first run of a statement. Proving the
     # absence of an entry is what made the old fallback expensive, and "first
     # time" is self-evident to someone running a cell for the first time.
-    # ``tests/test_notebook/test_miss_reason.py`` pins that absence on purpose.
+    # ``tests/test_notebook/statement/test_miss_reason.py`` pins that absence on purpose.
     miss_reason: str | None = None
     # RNG role, surfaced as a chip: 'seed' sets a global seed, 'draw' consumes
     # randomness, None for an ordinary statement. ``random_unseeded`` marks a

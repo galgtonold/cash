@@ -2,8 +2,7 @@ import pytest
 
 from cash import Cash
 from cash.code_digest import callable_identity
-
-from ..dummy_lib import lib_func
+from tests.dummy_lib import lib_func
 
 # Module-level app and test functions for dependency testing
 app = Cash(register_magic=False)

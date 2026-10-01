@@ -8,7 +8,7 @@ This backend expects concurrent readers by design (``_atomic_write``'s own
 docstring says so) and performs writes on a background thread, so writer and
 reader collide routinely rather than exceptionally. Measured before the fix: a
 WinError 5 on ~every Windows CI job, and on 10 of 12 consecutive local runs of
-``tests/test_core/test_file_dep_propagation.py``. Each one silently discarded
+``tests/test_core/reads/test_file_dep_propagation.py``. Each one silently discarded
 the entry and forced a recompute -- a cache that quietly stops caching, on the
 platform where the failure is invisible because it degrades gracefully.
 

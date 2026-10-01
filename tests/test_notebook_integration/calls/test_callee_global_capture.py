@@ -352,7 +352,7 @@ def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):
     hidden `counter` must not keep advancing.
 
     This is the cross-run half of the loop_vars wiring covered at unit level in
-    `test_notebook/test_call_unit_loop_vars_wiring.py`, and it lives here
+    `test_notebook/calls/test_call_unit_loop_vars_wiring.py`, and it lives here
     because it cannot be established there: what holds a rerun to its first
     run's values is the checker's idempotent-rerun self-write restoration, and
     the `MockShell` fixture has no notebook file, so the checker is inert. The

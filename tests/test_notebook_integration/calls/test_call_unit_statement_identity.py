@@ -21,8 +21,8 @@ enclosing statement's identity (``ast.unparse`` of the statement, not its raw
 source text -- see ``CallSite.stmt_identity``'s docstring for why the raw text
 is a trap) into the call's key.
 
-This file is the real-kernel arm. ``tests/test_notebook/test_call_unit_key.py``
-and ``tests/test_notebook/test_call_interception_rewrite.py`` cover the same
+This file is the real-kernel arm. ``tests/test_notebook/calls/test_call_unit_key.py``
+and ``tests/test_notebook/calls/test_call_interception_rewrite.py`` cover the same
 property at the unit level (a unit test handing ``call_cache_key`` two
 different ``stmt_identity`` values proves only that the parameter is read, not
 that the production pipeline ever supplies two different ones for two real
@@ -221,5 +221,5 @@ def test_reorder_re_runs_a_stateful_callee_and_matches_the_oracle(nb_runner, tmp
 # EVERY item and was confirmed (by hand) to catch the mutation -- it is the
 # real-kernel evidence for this property. The direct, unit-level proof that
 # two independent derivations of one statement's identity agree lives in
-# `tests/test_notebook/test_call_interception_rewrite.py::
+# `tests/test_notebook/calls/test_call_interception_rewrite.py::
 # test_same_statement_reparsed_twice_gets_the_same_stmt_identity`.

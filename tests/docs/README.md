@@ -6,7 +6,7 @@ what the prose says, and its claims about Cash still match the source.
 ## Running locally
 
 ```bash
-pytest tests/docs/ tests/test_core/test_agent_guide_sync.py -n0 -o addopts=""
+pytest tests/docs/ tests/test_core/project/test_agent_guide_sync.py -n0 -o addopts=""
 ```
 
 `test_agent_guide_sync.py` belongs in the run because it also reads a page
@@ -190,5 +190,5 @@ its count changes on purpose, update its entry. The library lives in
 
 `docs/for-coding-agents.md` must be identical to
 `cash._agent_guide.AGENT_GUIDE`, which `cash.help()` returns;
-`tests/test_core/test_agent_guide_sync.py` checks this. It cannot carry an
+`tests/test_core/project/test_agent_guide_sync.py` checks this. It cannot carry an
 HTML comment, so it has no claim anchors.

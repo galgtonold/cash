@@ -16,7 +16,7 @@ called it BLOCKING. And the other way: `for x in sorted(g):` over a 400-item
 generator ran zero times, because the check for one-shot iterators looked
 only at the header's RESULT, and `sorted` returns a list.
 
-The unit twin is ``tests/test_notebook/test_a_loop_header_is_safe_to_evaluate_twice.py``.
+The unit twin is ``tests/test_notebook/control_structures/test_a_loop_header_is_safe_to_evaluate_twice.py``.
 """
 
 import pytest

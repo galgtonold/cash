@@ -1,2 +1,1 @@
-"""Restoring values from the cache into the namespace.
-"""
+"""Restoring values from the cache into the namespace."""

@@ -1,6 +1,6 @@
 """A removed ``# @cash:`` spelling is reported in the cell that uses it.
 
-The unit tests in ``tests/test_notebook/test_unknown_directive_warns.py`` pin
+The unit tests in ``tests/test_notebook/analysis/test_unknown_directive_warns.py`` pin
 the message and the once-per-name ledger; this checks the warning actually
 reaches the notebook's output, where the person who wrote the comment looks.
 """

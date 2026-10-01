@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
-from tests.test_notebook._control_fakes import fake_statement_processor
+from tests.test_notebook.control_structures._control_fakes import fake_statement_processor
 
 
 class TestControlStructureProcessor:

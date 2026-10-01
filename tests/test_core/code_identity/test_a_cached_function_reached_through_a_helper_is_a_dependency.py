@@ -15,7 +15,7 @@ import time
 import pytest
 
 import cash
-from tests.test_core._edited_project import edited_runs
+from tests.test_core.code_identity._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
 

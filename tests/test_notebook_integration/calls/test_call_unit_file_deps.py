@@ -50,7 +50,7 @@ observes), so at this end-to-end level the freshness re-check's own side
 effect already re-registers the dependency whenever one was recorded at
 store time -- ``call_effects.replay_deps`` in isolation is verified directly,
 and for the un-masked remote channel, in
-``tests/test_notebook/test_call_unit_ambient_capture.py``.
+``tests/test_notebook/calls/test_call_unit_ambient_capture.py``.
 """
 
 from __future__ import annotations

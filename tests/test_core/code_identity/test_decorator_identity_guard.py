@@ -16,7 +16,7 @@ Measured before the fix, three arms in one process:
 
 ``statement/processor.py`` and ``call_unit.py`` had gated on
 ``identity_coupled_reason`` for a while; the decorator was the remaining hole.
-See ``tests/test_notebook/test_call_interception_identity_guard.py`` for the
+See ``tests/test_notebook/calls/test_call_interception_identity_guard.py`` for the
 call-interception half.
 
 **Why these tests do not assert object identity between two calls.** The RAM

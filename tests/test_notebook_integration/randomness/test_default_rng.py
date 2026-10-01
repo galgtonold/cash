@@ -7,7 +7,7 @@ told everyone to use since 1.17, and what cash already replays state for — was
 invisible. An unseeded Monte Carlo written against the modern API got cached and
 replayed bit-identical forever with no warning of any kind.
 
-The unit twin (``tests/test_notebook/test_randomness.py``) asserts on the
+The unit twin (``tests/test_notebook/randomness/test_randomness.py``) asserts on the
 detector's call list. This file asserts the thing a user actually experiences:
 that the warning reaches the notebook's cell output through a real kernel.
 """

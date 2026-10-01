@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.test_core._edited_project import edited_runs
+from tests.test_core.code_identity._edited_project import edited_runs
 
 pytestmark = pytest.mark.core
 

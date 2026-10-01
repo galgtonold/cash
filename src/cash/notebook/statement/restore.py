@@ -22,7 +22,7 @@ Replayed output goes through :func:`~cash.notebook.statement.capture.replay_outp
 which imports ``IPython.display`` only when there is rich output to show.
 The decorator does not need IPython and this module is on the ``import cash``
 chain, so it must import without IPython; a genuine display attempt without it raises rather than rendering
-nothing. Both are pinned by ``tests/test_notebook/test_display_without_ipython.py``.
+nothing. Both are pinned by ``tests/test_notebook/session/test_display_without_ipython.py``.
 """
 
 from __future__ import annotations

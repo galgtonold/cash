@@ -18,7 +18,7 @@ from cash.notebook.ipython._types import PipelineCompleted, TimingBreakdown
 from cash.notebook.statement.results import DecoratorCallMetric, ProcessResult
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
-NOTEBOOK = Path(__file__).resolve().parents[2] / "src" / "cash" / "notebook"
+NOTEBOOK = Path(__file__).resolve().parents[3] / "src" / "cash" / "notebook"
 
 CELLS = [
     f"import time\ndef slow(k):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    return k * 2",

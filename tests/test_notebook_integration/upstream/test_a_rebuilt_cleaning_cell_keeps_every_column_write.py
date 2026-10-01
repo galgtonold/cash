@@ -10,7 +10,7 @@ The planner gave each scheduled statement a producer of its inputs, and took
 ANY earlier scheduled producer as enough: ``sales['timestamp'] = ...`` stood in
 for the ``sales['refund'] = ...`` between it and the statement reading ``sales``.
 This shape did not reach that state here (the user's 3-million-row data did);
-it guards the rebuild, and ``test_notebook/test_latest_producer_is_scheduled.py``
+it guards the rebuild, and ``test_notebook/upstream/test_latest_producer_is_scheduled.py``
 pins the planner step.
 """
 

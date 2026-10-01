@@ -479,7 +479,8 @@ def test_chunked_storage_persists_manifest_metadata(tmp_path):
     manifest_keys = [
         k
         for k in all_keys
-        if k.startswith("tests.test_core.test_iterator_caching") and not k.rsplit(":", 1)[-1].startswith("chunk_")
+        if k.startswith("tests.test_core.results.test_iterator_caching")
+        and not k.rsplit(":", 1)[-1].startswith("chunk_")
     ]
     assert len(manifest_keys) == 1, f"expected exactly one manifest, got {manifest_keys}"
     canonical_key = manifest_keys[0]

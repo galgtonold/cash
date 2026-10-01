@@ -46,7 +46,7 @@ things make its removal fail loudly instead:
 | Guard | Needs Node? | Catches |
 | --- | --- | --- |
 | `labextension/scripts/check-comms-over-subshells.js` (run by `npm run build`, before *and* after the bundle is produced) | yes | removal in the source, and a bundle built without it |
-| `tests/test_notebook/test_labextension_packaging.py` | no | the same two, from the ordinary `pytest` run |
+| `tests/test_notebook/session/test_labextension_packaging.py` | no | the same two, from the ordinary `pytest` run |
 | the comment block around the line in `src/index.ts` | — | a reader about to delete it |
 
 If you genuinely intend to change this, change all of them together, plus the

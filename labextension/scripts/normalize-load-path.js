@@ -12,7 +12,7 @@
  * the build decides whether the shipped wheel works. Normalising here removes
  * that from chance.
  *
- * tests/test_notebook/test_labextension_packaging.py asserts the committed
+ * tests/test_notebook/session/test_labextension_packaging.py asserts the committed
  * output is normalised, so a rebuild that skips this step is caught by the
  * ordinary pytest run.
  */

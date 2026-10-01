@@ -16,8 +16,7 @@ from __future__ import annotations
 import pytest
 
 from cash import Cash
-
-from . import _purity_helper_module as hm
+from tests.test_core import _purity_helper_module as hm
 
 
 @pytest.fixture(autouse=True)

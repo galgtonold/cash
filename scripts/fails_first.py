@@ -1,6 +1,6 @@
 """Prove a new test can actually fail: run it against the UNFIXED source.
 
-    python scripts/fails_first.py tests/test_core/test_module_attr_dependencies.py
+    python scripts/fails_first.py tests/test_core/globals_and_closures/test_module_attr_dependencies.py
 
 Checks out ``HEAD`` into a temporary git worktree, copies over your uncommitted
 changes OUTSIDE ``src/`` (the new tests, conftest edits, test data), and runs the

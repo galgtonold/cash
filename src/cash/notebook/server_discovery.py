@@ -627,7 +627,7 @@ def _try_extension_cells() -> tuple[NotebookCell, ...] | None:
 
 #: Where a prebuilt labextension lives, relative to an environment's data root.
 #: Fixed by the wheel's ``shared-data`` mapping in pyproject.toml, which
-#: tests/test_notebook/test_labextension_packaging.py pins to this same name.
+#: tests/test_notebook/session/test_labextension_packaging.py pins to this same name.
 _LABEXT_RELPATH = ("share", "jupyter", "labextensions", "cash-live-cells")
 
 

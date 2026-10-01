@@ -5,7 +5,7 @@ other. The disk tier notes what its cap evicts, so the miss is attributed to
 the eviction, and a recompute that takes seconds warns once
 (``CACHE-EVICTED-RECOMPUTE``) with the cap and how to raise it. The unit arms
 are ``tests/test_backends/test_evicted_results_are_noted.py`` and
-``tests/test_notebook/test_evicted_statement_is_attributed.py``.
+``tests/test_notebook/lineage/test_evicted_statement_is_attributed.py``.
 """
 
 import pytest

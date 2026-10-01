@@ -75,7 +75,7 @@ The replay supports `iter()`, `next()` and `close()`. Generator methods
 running generator. A generator's `return` value, what `yield from` evaluates
 to, is stored with the entry and comes back on a replay too.
 
-<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @2b060a05, cash/decorator/runtime.py:CallRunner._chunks_are_intact @898490ec -->
+<!-- claim: cash/decorator/iterators.py:ChunkedCachedIterator.__next__ @2b060a05, cash/decorator/runtime.py:CallRunner._chunks_are_intact @49566c4c -->
 **A missing chunk is recomputed, never skipped.** A stored result is only
 served when all its chunks are present; otherwise the call runs the function
 again.

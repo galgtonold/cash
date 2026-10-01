@@ -7,7 +7,7 @@ current iteration's loop vars onto ``StatementProcessor``'s stack
 actually invoked. Every other test of this feature either drives
 ``call_cache_key`` directly (proves the discrimination logic, not that the
 values ever arrive) or runs in-process with the real IPython shell mocked out
-(``tests/test_notebook/test_call_unit_loop_vars_wiring.py``). This file is
+(``tests/test_notebook/calls/test_call_unit_loop_vars_wiring.py``). This file is
 the one arm that goes through an actual Jupyter kernel end to end -- the
 closest thing to what a user's notebook does.
 

@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 LABEXT_SRC = REPO_ROOT / "labextension"
 INDEX_TS = LABEXT_SRC / "src" / "index.ts"
 BUILT = REPO_ROOT / "src" / "cash" / "labextension"

@@ -129,7 +129,7 @@ def test_getattr_with_constant_name_not_flagged(analyzer):
 def test_calling_a_parameter_is_not_flagged(analyzer):
     """Callables passed as arguments are hashed by source, so calling one is
     not a dynamic-dispatch hazard. See the control arm in
-    tests/test_core/test_purity_decorator.py for the case cash cannot hash."""
+    tests/test_core/purity/test_purity_decorator.py for the case cash cannot hash."""
 
     def f(cb, x):
         return cb(x)
