@@ -666,12 +666,8 @@ def file_dep_is_fresh(
     (the file could not be read when it was taken) is fresh only while its
     mtime is unchanged to the nanosecond.
 
-    A snapshot marked ``sampled`` holds a digest of three regions of the file,
-    which no whole-file digest equals: it is stale (``'hash-mode'``) without
-    reading the file.
-
     ``stale_reason`` is ``None`` when fresh, else one of
-    ``'unreadable' | 'size' | 'content' | 'hash-mode' | 'mtime' |
+    ``'unreadable' | 'size' | 'content' | 'mtime' |
     'appeared' | 'vanished' | 'unresolved' | 'remote-changed' |
     'remote-unresolved'`` for debug attribution.
 
@@ -699,8 +695,6 @@ def file_dep_is_fresh(
             return False, "vanished"
     if stored.get(_UNRESOLVED_MARKER):
         return False, "unresolved"
-    if stored.get("sampled"):
-        return False, "hash-mode"
     stored_size = stored.get("size")
     stored_hash = stored.get("hash")
     # A listed stat (``stats_from_listings``) stands in for one where content

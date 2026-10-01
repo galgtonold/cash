@@ -100,7 +100,6 @@ What happens on an error depends on where the value was set:
 | `max_cache_size` | `null` (auto) | Disk cap in bytes or a size such as `"5GB"`. At the cap, the entries worth least per byte (compute time per byte, raised by hits) are evicted first. A single value bigger than the cap is not written ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)). Each process enforces the cap on its own writes. cash shows the cap, and where it comes from, when caching starts ([Where your cache lives](../how-it-works/storage.md#where-the-cache-folder-is)). |
 | `max_memory_entries` | `null` | Entry-count cap for the RAM tier, evicting least recently used. `null` means no count limit; the RAM tier is still capped in bytes. |
 | `flush_interval` | `5` | Seconds between the disk tier's metadata flushes. `0` flushes after every write. |
-| `file_hash_full_max_bytes` | `268435456` (256 MiB) | Has no effect: every tracked file is hashed in full to check freshness, whatever its size. A config that sets it still loads. |
 | `shutdown_write_timeout` | `60.0` | Seconds a finishing process waits for its background writes before exiting without them ([`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned)). `0` does not wait, and does not warn. |
 
 <!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @b30940d8 -->

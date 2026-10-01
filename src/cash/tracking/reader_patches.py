@@ -56,13 +56,12 @@ _PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file", "pa
 
 
 def _dispatch_track(path: Any) -> None:
-    """Module-level tracker-dispatching shim. Custom handler factories
-    registered via :meth:`Cash.register_file_handler` receive this as
-    their ``tracker_callback`` argument. The shim consults
-    ``active_tracker`` at *call* time, so old-signature factories
-    (whose wrappers do ``tracker_callback(path)``) transparently route
-    to whichever tracker is active on the current asyncio task or
-    thread — same isolation guarantees as the built-in handlers.
+    """The ``tracker_callback`` every handler factory receives, including
+    those registered with :meth:`Cash.register_file_handler`.
+
+    It looks up ``active_tracker`` at *call* time, so a wrapper calling
+    ``tracker_callback(path)`` records into whichever tracker is active on
+    the current asyncio task or thread, as the built-in handlers do.
     """
     _tracker = active_tracker.get()
     if _tracker is not None:
@@ -346,15 +345,14 @@ def _patch_thread_pool_submit() -> None:
     pre-edit result while the serial loop beside it invalidated.
 
     With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
-    call in ``copy_context().run``; with none, it is the original. A pool can
-    opt out with ``_cash_internal = True``. Threads started directly with
+    call in ``copy_context().run``; with none, it is the original. Threads started directly with
     ``threading.Thread`` still begin empty -- documented, not patched.
     """
 
     def make(original):
         @functools.wraps(original)
         def submit(self, fn, /, *args, **kwargs):
-            if active_tracker.get() is None or getattr(self, "_cash_internal", False):
+            if active_tracker.get() is None:
                 return original(self, fn, *args, **kwargs)
             return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
 
@@ -702,7 +700,7 @@ def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(original)
     def submit(self, fn, /, *args, **kwargs):
         tracker = active_tracker.get()
-        if tracker is None or getattr(self, "_cash_internal", False):
+        if tracker is None:
             return original(self, fn, *args, **kwargs)
         inner = original(self, _ReadsInWorker(fn, type(tracker)), *args, **kwargs)
         outer = _RelayFuture(inner)

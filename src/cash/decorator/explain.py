@@ -192,10 +192,6 @@ STALE_REASON_TEXT = {
     "size": "size changed",
     "content": "content changed",
     "mtime": "mtime changed",
-    "hash-mode": (
-        "fingerprinted from a sample of the file, which a whole-file hash "
-        "cannot be compared with -- the file itself may be unchanged"
-    ),
     "appeared": "a file the call looked for and did not find now exists",
     "vanished": "a file or folder the call checked for is no longer there",
     "unresolved": "the file was read but could not be stat'ed, so it is never proven fresh",
@@ -244,11 +240,7 @@ def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
         parts = ["remote"] if rec.get("remote") else []
         if rec.get("size") is not None:
             parts.append(f"{rec['size']} bytes")
-        if rec.get("hash") and rec.get("sampled") is True:
-            # Printed like a full hash, it read as proof of content that it is
-            # not.
-            parts.append(f"sampled hash {str(rec['hash'])[:12]} (never fresh: re-read in full on the next call)")
-        elif rec.get("hash"):
+        if rec.get("hash"):
             parts.append(f"hash {str(rec['hash'])[:12]}")
         out[path] = ", ".join(parts) or "recorded"
     return out

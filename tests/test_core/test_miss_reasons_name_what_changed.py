@@ -124,18 +124,6 @@ def test_new_arguments_under_unchanged_code_stay_new_arguments(tmp_path):
 # -- in-process ---------------------------------------------------------------
 
 
-def test_a_sampled_fingerprint_is_not_called_a_content_change(tmp_path):
-    """A snapshot recorded from a sample of the file cannot be compared with a
-    whole-file hash: stale, and said to be the fingerprint, not the data."""
-    from cash.tracking.file_dep_snapshot import file_dep_is_fresh
-
-    data = tmp_path / "data.bin"
-    data.write_bytes(b"x" * 2000)
-    st = os.stat(data)
-    stored = {"mtime": st.st_mtime, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "hash": "ab" * 32, "sampled": True}
-    assert file_dep_is_fresh(str(data), stored) == (False, "hash-mode")
-
-
 def test_a_real_edit_is_still_a_content_change(tmp_path):
     from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 
@@ -144,13 +132,6 @@ def test_a_real_edit_is_still_a_content_change(tmp_path):
     stored = snapshot_file_deps({str(data)})[str(data)]
     data.write_bytes(b"y" * 2000)
     assert file_dep_is_fresh(str(data), stored) == (False, "content")
-
-
-def test_a_sampled_fingerprint_is_labelled():
-    from cash.decorator.explain import describe_file_deps
-
-    shown = describe_file_deps({"big.npy": {"size": 3 << 28, "hash": "ab" * 32, "ctime_ns": 1, "sampled": True}})
-    assert "sampled hash" in shown["big.npy"], shown
 
 
 def test_an_untaggable_result_is_not_logged_on_every_call(tmp_path, caplog):

@@ -82,7 +82,6 @@ _RANGES: dict[str, tuple[float, float | None]] = {
     "max_size_bytes": (1, None),
     "max_memory_entries": (1, None),
     "max_entries": (1, None),
-    "file_hash_full_max_bytes": (0, None),
     "flush_interval": (0, None),
     "shutdown_write_timeout": (0, None),
     "default_ttl": (0, None),
@@ -253,13 +252,6 @@ class CashConfig:
     """Seconds between the disk tier's metadata flushes. ``0`` flushes after
     every write."""
 
-    file_hash_full_max_bytes: int = 256 * 1024 * 1024
-    """Has no effect: every tracked file is hashed in full, whatever its
-    size, since a hash of a few regions misses an edit between them. Only
-    the first check of a file in a process pays for the hash; later checks
-    of an unchanged file cost a ``stat``. Accepted so a config that sets it
-    still loads."""
-
     shutdown_write_timeout: float = 60.0
     """Seconds a finishing process waits for its background writes before
     exiting without them, warning ``CACHE-WRITE-ABANDONED``. Bounded so a
@@ -418,7 +410,7 @@ _FALSY = {"0", "false", "no", "off"}
 #: ``"512MiB"``. People write sizes that way (``CASH_MAX_CACHE_SIZE=500MB``),
 #: and a bare integer of bytes is the one spelling nobody reads correctly at a
 #: glance.
-SIZE_FIELDS = frozenset({"max_cache_size", "file_hash_full_max_bytes", "max_size_bytes"})
+SIZE_FIELDS = frozenset({"max_cache_size", "max_size_bytes"})
 
 _SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]i?b|b)?\s*$", re.IGNORECASE)
 _SIZE_UNITS = {

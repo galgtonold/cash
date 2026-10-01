@@ -244,9 +244,9 @@ def restore_object_rng_states(
     else is skipped rather than forced.
 
     Args:
-        states: Mapping produced by :func:`capture_object_rng_states`.  Cache
-            entries written before this field existed pass ``None`` here and
-            restore unchanged.
+        states: Mapping produced by :func:`capture_object_rng_states`;
+            ``None`` or empty when nothing was captured, which restores
+            nothing.
         user_ns: The shell namespace to resolve names against.
     """
     if not states:
