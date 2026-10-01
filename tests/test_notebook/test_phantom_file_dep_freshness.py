@@ -13,10 +13,9 @@ Importing sklearn makes ``importlib.metadata`` probe for optional metadata
 that legitimately does not exist (``direct_url.json``, ``entry_points.txt``,
 ``pythonXY.zip`` on ``sys.path``). Those probes are how a phantom gets in.
 
-The bug: ``_input_file_changed`` judged the path missing BEFORE consulting the
-producer's snapshot, so every consumer of such a variable missed on every run,
-forever (seen on a ``make_classification`` chain). A path that never existed
-cannot have *changed*.
+Judging such a path missing before consulting the producer's snapshot would
+make every consumer of the variable miss on every run. A path that never
+existed cannot have *changed*.
 """
 
 import types
@@ -90,10 +89,7 @@ def test_phantom_input_dep_does_not_invalidate(real_file):
 
     # Repeated across runs: the verdict must be a stable "not changed".
     for _ in range(3):
-        assert checker._input_file_changed(state, "X", PHANTOM) is False
-        assert checker._input_file_changed(state, "X", real_file) is False
-
-    assert checker._invalidate_if_input_file_changed(state, {"X"}, "payload") == "payload"
+        assert checker._invalidate_if_input_file_changed(state, {"X"}, "payload") == "payload"
 
 
 def test_snapshotted_file_that_disappears_still_invalidates(real_file, tmp_path):
@@ -110,9 +106,8 @@ def test_snapshotted_file_that_disappears_still_invalidates(real_file, tmp_path)
 
     os.remove(real_file)
 
-    assert checker._input_file_changed(state, "X", real_file) is True
-    assert "missing" in (checker.last_miss_reason or "")
     assert checker._invalidate_if_input_file_changed(state, {"X"}, "payload") is None
+    assert "missing" in (checker.last_miss_reason or "")
 
 
 def test_snapshotted_file_that_changes_still_invalidates(real_file):
@@ -127,5 +122,4 @@ def test_snapshotted_file_that_changes_still_invalidates(real_file):
     with open(real_file, "w", encoding="utf-8") as fh:
         fh.write("a,b\n9,9\n")  # same size, different content
 
-    assert checker._input_file_changed(state, "X", real_file) is True
     assert checker._invalidate_if_input_file_changed(state, {"X"}, "payload") is None

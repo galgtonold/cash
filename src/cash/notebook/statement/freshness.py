@@ -39,10 +39,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: "Look the producer's file deps up yourself" (``None`` means it has none).
-_UNSET = object()
-
-
 #: How long a cell's statements may share the answer for a file (``forget_file_answers``).
 _ANSWERS_LAST_S = 2.0
 
@@ -231,38 +227,6 @@ class CacheFreshnessChecker:
             return None
         return StatementCacheMetadata.from_dict(raw_source_meta).file_dependencies or {}
 
-    def _input_file_changed(
-        self,
-        tracking_state: "TrackingState",
-        input_var: str,
-        fpath: str,
-        source_file_deps: dict | None | object = _UNSET,
-    ) -> bool:
-        """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached.
-
-        The producer's PERSISTED snapshot is the authority on what actually
-        counts as a dependency, and it must be consulted before *fpath* is
-        judged missing. ``tracking_state.executed_file_deps`` is a
-        strict superset of that snapshot: it records every path the tracker saw
-        an access *attempt* for, including reads that raised (``tracked_open``
-        records before it calls through), while ``snapshot_file_deps`` silently
-        drops paths that could not be stat'd. Importing sklearn makes
-        ``importlib.metadata`` probe for optional metadata that legitimately
-        does not exist (``direct_url.json``, ``entry_points.txt``,
-        ``pythonXY.zip`` on ``sys.path``); those land in the in-memory set and
-        never in the snapshot. Judging them missing first invalidated the
-        consumer of every such variable on every run, forever — a path that
-        never existed cannot have *changed*.
-
-        A dep that WAS snapshotted and has since been deleted is still caught:
-        it is present in ``source_file_deps``, so it reaches the check below.
-        """
-        if source_file_deps is _UNSET:
-            source_file_deps = self._source_file_deps(tracking_state, input_var)
-        if not source_file_deps or fpath not in source_file_deps:
-            return False
-        return self._inherited_deps_changed(input_var, {fpath: source_file_deps[fpath]})
-
     def _inherited_deps_changed(self, input_var: str, deps: dict) -> bool:
         """True, with the miss reason set, when one of *deps* (inherited through
         *input_var*) is no longer as its producer recorded it. Same
@@ -281,7 +245,24 @@ class CacheFreshnessChecker:
     def _invalidate_if_input_file_changed(
         self, tracking_state: "TrackingState", inputs: set[str], cached_data: Any
     ) -> Any:
-        """Return None if any file dep of an input variable has changed since it was computed."""
+        """Return None if any file dep of an input variable has changed since it was computed.
+
+        The producer's PERSISTED snapshot is the authority on what counts as a
+        dependency, and it is consulted before a path is judged missing.
+        ``tracking_state.executed_file_deps`` is a strict superset of that
+        snapshot: it records every path the tracker saw an access *attempt*
+        for, including reads that raised (``tracked_open`` records before it
+        calls through), while ``snapshot_file_deps`` drops paths that could not
+        be stat'd. Importing sklearn makes ``importlib.metadata`` probe for
+        optional metadata that does not exist (``direct_url.json``,
+        ``entry_points.txt``, ``pythonXY.zip`` on ``sys.path``); those land in
+        the in-memory set and never in the snapshot. A path that never existed
+        cannot have *changed*, so judging it missing would invalidate every
+        consumer of such a variable on every run.
+
+        A dep that WAS snapshotted and has since been deleted is still caught:
+        it is in the snapshot, so it reaches the check.
+        """
         for input_var in inputs:
             paths = tracking_state.executed_file_deps.get(input_var, ())
             if not paths:
@@ -289,7 +270,7 @@ class CacheFreshnessChecker:
             source_file_deps = self._source_file_deps(tracking_state, input_var)
             if not source_file_deps or self._known_fresh(source_file_deps):
                 continue
-            # Only what the producer's snapshot recorded counts: see _input_file_changed.
+            # Only what the producer's snapshot recorded counts (see above).
             deps = {p: source_file_deps[p] for p in paths if p in source_file_deps}
             if self._inherited_deps_changed(input_var, deps):
                 return None
