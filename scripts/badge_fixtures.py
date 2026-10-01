@@ -93,7 +93,7 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
-    # The row cell_executor.staleness_notification emits when the saved
+    # The row notifications.staleness_notification emits when the saved
     # notebook is provably behind what the kernel ran; text copied from it.
     "status_warning": [
         {

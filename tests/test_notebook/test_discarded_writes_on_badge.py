@@ -18,7 +18,7 @@ import pytest
 
 from cash.backends import _writes as _backend_base
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.cell_executor import discarded_writes_notification
+from cash.notebook.ipython.notifications import discarded_writes_notification
 from tests._discarded_writes import reset_discarded_writes
 
 
@@ -114,7 +114,7 @@ def test_a_broken_backend_registry_cannot_break_the_cell(monkeypatch):
     def boom():
         raise RuntimeError("registry exploded")
 
-    monkeypatch.setattr("cash.notebook.ipython.cell_executor.discarded_writes", boom)
+    monkeypatch.setattr("cash.notebook.ipython.notifications.discarded_writes", boom)
     row, seen = discarded_writes_notification(7)
     assert row is None
     assert seen == 7, "watermark must survive a failed read unchanged"

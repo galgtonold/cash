@@ -47,14 +47,9 @@ from ._args import parse_mode, strip_inline_comment
 from ._help import help_text
 from ._types import CellMetrics
 from .badges import BadgePresenter
-from .cell_executor import (
-    CellExecutor,
-    PipelineCompleted,
-    PipelineSyntaxError,
-    RunInstead,
-    discarded_writes_notification,
-)
+from .cell_executor import CellExecutor, PipelineCompleted, PipelineSyntaxError, RunInstead
 from .inspection import show_provenance, show_stats
+from .notifications import discarded_writes_notification
 from .session import CashSession
 
 __all__ = ["CashMagics"]

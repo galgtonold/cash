@@ -12,7 +12,8 @@ from __future__ import annotations
 import types
 
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.ipython.cell_executor import CellExecutor, staleness_notification
+from cash.notebook.ipython.cell_executor import CellExecutor
+from cash.notebook.ipython.notifications import staleness_notification
 from cash.notebook.staleness import StalenessTracker
 
 
@@ -128,7 +129,7 @@ def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
     Nothing in StalenessTracker raises today, but a future break in it must
     degrade to "no warning" -- never take the user's cell execution down over
     what is, at worst, a missed notification. Unlike its guarded siblings
-    (`_make_function_change_metrics`, `_make_opaque_warning_metrics`), which
+    (`function_change_rows`, `opaque_call_rows`), which
     catch a short, specific exception tuple, this one has no particular
     failure mode to anticipate, so it must be unconditional: this test raises
     something outside either sibling's tuple to prove the guard is not
