@@ -20,7 +20,7 @@ import functools
 import inspect
 import types
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -28,7 +28,7 @@ from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .annotations import extract_annotations_for_statements
 from .ast_util import called_names
-from .cacheability import alias_mutation_sources, analyze_statement
+from .cacheability import analyze_statement
 from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
     callee_global_mutations,
@@ -298,18 +298,20 @@ class CellEffects:
     hidden_inputs: frozenset[str] = frozenset()
 
 
-def nocache_written_vars(cell_code: str) -> frozenset[str]:
+def nocache_written_vars(cell_code: str, tree: ast.Module | None = None) -> frozenset[str]:
     """Variables written by a ``# @cash: no-cache`` statement in *cell_code*.
 
     ``no-cache`` means "always run fresh", so a self-modifying variable under
     it (``counter = counter + 1``) is meant to accumulate on a re-run, not be
-    restored to its input.
+    restored to its input. *tree* is ``ast.parse(cell_code)`` when the caller
+    has it.
     """
     try:
         annotations = extract_annotations_for_statements(cell_code)
         if not annotations:
             return frozenset()
-        tree = ast.parse(cell_code)
+        if tree is None:
+            tree = ast.parse(cell_code)
     except (SyntaxError, ValueError):
         return frozenset()
 
@@ -396,114 +398,174 @@ def cell_effects(cell_code: str, sources: NotebookSources, namespace: Mapping[st
     this can see.
     """
     try:
-        return _cell_effects(cell_code, sources, namespace)
+        facts = _CellFacts(cell_code, ast.parse(cell_code))
+        writes = _CellWrites.of(facts, sources)
+        writes.add_argument_mutations(facts, sources)
+        writes.add_callee_state(facts, sources)
+        writes.add_object_protocol(facts, sources)
+        writes.add_aliases_and_views(facts, namespace)
+        return writes.effects(facts)
     except (SyntaxError, ValueError):
         return CellEffects()
 
 
-def _cell_effects(cell_code: str, sources: NotebookSources, namespace: Mapping[str, Any]) -> CellEffects:
-    _, outputs = CodeAnalyzer.analyze_code_block(cell_code)
-    reassigned = CodeAnalyzer.reassigned_names(cell_code)
-    tree = ast.parse(cell_code)
-    calls_something = bool(called_names(tree))
-    # Globals a callee mutates count as mutated here, exactly like an inline
-    # mutation, so the reset covers them. They are deliberately NOT outputs:
-    # the checker reads `outputs` as "written by the cell, not an input to
-    # restore", which would disable the very reset that makes the statement's
-    # key converge.
-    mutated = set(
-        analyze_statement(
-            cell_code, None, resolve_source=sources.functions.get if calls_something else None
-        ).all_mutated_vars
-    )
-    nocache = nocache_written_vars(cell_code)
-    reassigned -= nocache
-    mutated -= nocache
-    # Receivers of a bare method call (``b.items.append``): such no-output
-    # statements skip the per-statement cache, so a lineage-carrying receiver
-    # would accumulate on an isolated re-run. Method receivers only, so
-    # ``df['col'] = ...`` keeps its per-statement cache.
-    method_receivers = set(standalone_method_mutation_receivers(tree)) - nocache
-    # Self-referential subscript/attr writes (``df['a'] = df['a'] * 2``,
-    # ``df.iloc[i, j] += x``) are not idempotent. A new column read from
-    # other columns is not self-referential and keeps its cache.
-    selfref = set(selfref_inplace_write_vars(tree)) - nocache
-    stateful: set[str] = set()
-    hidden: set[str] = set()
+class _CellFacts:
+    """One cell, parsed once, and what the analyses read from it, each worked
+    out once on first use."""
 
-    # A variable passed to a helper that mutates that parameter
-    # (``def add(d): d.append(x)`` + ``add(data)``) is reset like a receiver.
-    if standalone_call_arg_targets(tree):
-        arg_muts = function_arg_mutations(tree, sources.functions.get) - nocache
-        mutated |= arg_muts
-        method_receivers |= arg_muts
+    def __init__(self, code: str, tree: ast.Module) -> None:
+        self.code = code
+        self.tree = tree
 
-    if calls_something:
-        functions = sources.functions.get
+    @functools.cached_property
+    def _flow_tree(self) -> ast.Module | None:
+        """The tree the flow analysis would parse itself: the same one, unless
+        stripping magics changes the text."""
+        return self.tree if CodeAnalyzer.strip_magics(self.code) == self.code else None
+
+    @functools.cached_property
+    def outputs(self) -> set[str]:
+        return CodeAnalyzer.analyze_code_block(self.code, tree=self._flow_tree)[1]
+
+    @functools.cached_property
+    def reassigned(self) -> set[str]:
+        return CodeAnalyzer.reassigned_names(self.code, self._flow_tree)
+
+    @functools.cached_property
+    def calls_something(self) -> bool:
+        return bool(called_names(self.tree))
+
+    @functools.cached_property
+    def own_mutated(self) -> frozenset[str]:
+        """Names the cell's own text changes in place."""
+        return analyze_statement(self.code, self.tree).all_mutated_vars
+
+    @functools.cached_property
+    def nocache(self) -> frozenset[str]:
+        return nocache_written_vars(self.code, self.tree)
+
+
+@dataclass
+class _CellWrites:
+    """The sets `CellEffects` is built from, filled one channel at a time.
+    Every step leaves out what a ``# @cash: no-cache`` statement writes."""
+
+    mutated: set[str]
+    method_receivers: set[str]
+    selfref: set[str]
+    #: The globals a called function mutates (empty when the cell calls nothing).
+    callee_globals: frozenset[str]
+    stateful: set[str] = field(default_factory=set)
+    hidden: set[str] = field(default_factory=set)
+
+    @classmethod
+    def of(cls, facts: _CellFacts, sources: NotebookSources) -> _CellWrites:
+        # Globals a callee mutates count as mutated here, exactly like an
+        # inline mutation, so the reset covers them. They are deliberately NOT
+        # outputs: the checker reads `outputs` as "written by the cell, not an
+        # input to restore", which would disable the very reset that makes the
+        # statement's key converge.
+        callee_globals = (
+            callee_global_mutations(facts.tree, sources.functions.get) if facts.calls_something else frozenset()
+        )
+        nocache = facts.nocache
+        return cls(
+            mutated=set(facts.own_mutated | callee_globals) - nocache,
+            # Receivers of a bare method call (``b.items.append``): such
+            # no-output statements skip the per-statement cache, so a
+            # lineage-carrying receiver would accumulate on an isolated
+            # re-run. Method receivers only, so ``df['col'] = ...`` keeps its
+            # per-statement cache.
+            method_receivers=set(standalone_method_mutation_receivers(facts.tree)) - nocache,
+            # Self-referential subscript/attr writes (``df['a'] = df['a'] * 2``,
+            # ``df.iloc[i, j] += x``) are not idempotent. A new column read
+            # from other columns is not self-referential and keeps its cache.
+            selfref=set(selfref_inplace_write_vars(facts.tree)) - nocache,
+            callee_globals=callee_globals,
+        )
+
+    def add_argument_mutations(self, facts: _CellFacts, sources: NotebookSources) -> None:
+        """A variable passed to a helper that mutates that parameter
+        (``def add(d): d.append(x)`` + ``add(data)``) is reset like a receiver."""
+        if standalone_call_arg_targets(facts.tree):
+            arg_muts = function_arg_mutations(facts.tree, sources.functions.get) - facts.nocache
+            self.mutated |= arg_muts
+            self.method_receivers |= arg_muts
+
+    def add_callee_state(self, facts: _CellFacts, sources: NotebookSources) -> None:
+        """State a called function changes without the cell naming it."""
+        if not facts.calls_something:
+            return
+        tree, nocache, functions = facts.tree, facts.nocache, sources.functions.get
         # A global a called function mutates (``def bump(): global g; g += 1``)
         # joins the inputs so its producer's base is restored. Every call
         # counts, not only a bare-``Expr`` one: the statement keys on the
         # global's pre-state, so without the reset the value it produced would
         # be the next run's key -- a cell that re-executes and accumulates
         # forever.
-        global_muts = callee_global_mutations(tree, functions) - nocache
-        mutated |= global_muts
-        hidden |= global_muts
+        global_muts = self.callee_globals - nocache
+        self.mutated |= global_muts
+        self.hidden |= global_muts
         # State on the function object itself (a mutated mutable default, a
         # function attribute, a memoizer): re-run its ``def``.
-        stateful |= set(stateful_self_functions(tree, functions)) - nocache
+        self.stateful |= set(stateful_self_functions(tree, functions)) - nocache
         # A closure (``c = make_counter()``) whose factory's inner function
         # mutates factory-local state: re-run the factory call.
-        stateful |= set(stateful_closure_vars(tree, sources.factory_def)) - nocache
+        self.stateful |= set(stateful_closure_vars(tree, sources.factory_def)) - nocache
         # Mutation through functools.partial or a functools.reduce callback.
         partials = sources.partial_bindings.get
         partial_muts = (
             partial_arg_mutations(tree, partials, functions) | reduce_free_mutations(tree, functions)
         ) - nocache
-        mutated |= partial_muts
-        hidden |= partial_muts
+        self.mutated |= partial_muts
+        self.hidden |= partial_muts
         # A partial that bound a mutated argument holds the argument's object:
         # re-bind it too.
-        stateful |= set(mutating_partials(tree, partials, functions)) - nocache
+        self.stateful |= set(mutating_partials(tree, partials, functions)) - nocache
 
-    op = _object_protocol_effects(cell_code, tree, sources, nocache)
-    if op is not None:
+    def add_object_protocol(self, facts: _CellFacts, sources: NotebookSources) -> None:
+        op = _object_protocol_effects(facts.code, facts.tree, sources, facts.nocache)
+        if op is None:
+            return
         op_free, op_receivers, op_class_defs, op_init_free = op
-        mutated |= op_free | op_receivers | op_init_free
-        hidden |= op_free | op_init_free
-        method_receivers |= op_receivers
-        stateful |= op_class_defs
+        self.mutated |= op_free | op_receivers | op_init_free
+        self.hidden |= op_free | op_init_free
+        self.method_receivers |= op_receivers
+        self.stateful |= op_class_defs
 
-    # ``y = x`` shares x's object, so ``y.append`` also mutates x. The selfref
-    # set is column-scoped, so an aliased NEW-column write keeps its cache.
-    mutated |= alias_mutation_sources(tree) - nocache
-    selfref |= aliased_sources(tree, selfref) - nocache
-    method_receivers |= aliased_sources(tree, method_receivers) - nocache
-    # ``v = arr[slice]`` on a numpy array is a view: mutating v mutates arr.
-    # A list slice is a copy, hence the live-value check.
-    view_bindings = subscript_view_bindings(tree)
-    if view_bindings:
-        mutated_here = analyze_statement(cell_code, None).all_mutated_vars
-        mutated |= {
-            base
-            for alias, base in view_bindings.items()
-            if alias in mutated_here and _is_live_ndarray(namespace.get(base))
-        } - nocache
-    # ``a, b = b, a`` reads its own pre-cell value but, re-run alone, holds the
-    # swapped output: lineage-invisible, so reset it by rule.
-    crossref = crossref_reassigned_vars(tree) - nocache
+    def add_aliases_and_views(self, facts: _CellFacts, namespace: Mapping[str, Any]) -> None:
+        tree, nocache = facts.tree, facts.nocache
+        # ``y = x`` shares x's object, so ``y.append`` also mutates x. The
+        # selfref set is column-scoped, so an aliased NEW-column write keeps
+        # its cache.
+        self.mutated |= aliased_sources(tree, facts.own_mutated) - nocache
+        self.selfref |= aliased_sources(tree, self.selfref) - nocache
+        self.method_receivers |= aliased_sources(tree, self.method_receivers) - nocache
+        # ``v = arr[slice]`` on a numpy array is a view: mutating v mutates
+        # arr. A list slice is a copy, hence the live-value check.
+        view_bindings = subscript_view_bindings(tree)
+        if view_bindings:
+            self.mutated |= {
+                base
+                for alias, base in view_bindings.items()
+                if alias in facts.own_mutated and _is_live_ndarray(namespace.get(base))
+            } - nocache
 
-    return CellEffects(
-        outputs=frozenset(outputs),
-        reassigned=frozenset(reassigned),
-        mutated=frozenset(mutated),
-        method_receivers=frozenset(method_receivers),
-        selfref=frozenset(selfref),
-        crossref_reassigned=frozenset(crossref),
-        stateful_funcs=frozenset(stateful),
-        nocache=nocache,
-        hidden_inputs=frozenset(hidden),
-    )
+    def effects(self, facts: _CellFacts) -> CellEffects:
+        nocache = facts.nocache
+        return CellEffects(
+            outputs=frozenset(facts.outputs),
+            reassigned=frozenset(facts.reassigned - nocache),
+            mutated=frozenset(self.mutated),
+            method_receivers=frozenset(self.method_receivers),
+            selfref=frozenset(self.selfref),
+            # ``a, b = b, a`` reads its own pre-cell value but, re-run alone,
+            # holds the swapped output: lineage-invisible, so reset it by rule.
+            crossref_reassigned=frozenset(crossref_reassigned_vars(facts.tree) - nocache),
+            stateful_funcs=frozenset(self.stateful),
+            nocache=nocache,
+            hidden_inputs=frozenset(self.hidden),
+        )
 
 
 def _object_protocol_effects(
