@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._clock import perf_counter as _perf_counter
 from ..analysis.purity_analyzer import PurityReport
-from ..backends._base import ttl_expired
+from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
@@ -76,12 +76,6 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
-
-
-def entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
-    """Is the entry older than *ttl* (``ttl=0``: always)? The one TTL rule
-    every cache path shares, `ttl_expired`."""
-    return ttl_expired(metadata.timestamp, ttl)
 
 
 def compute_cache_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -391,8 +385,8 @@ class CallRunner:
             return CACHE_MISS
         ttl = self._backend_slot.entry_ttl(ttl, metadata)
         try:
-            if entry_expired(metadata, ttl):
-                age = time.time() - (metadata.timestamp or 0)
+            if ttl_expired(written_at(metadata), ttl):
+                age = time.time() - (written_at(metadata) or 0)
                 self._misses.note_miss(
                     func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
                 )

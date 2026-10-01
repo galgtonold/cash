@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import STATE_LEDGERS, LruMemo
-from ..backends._base import ttl_expired
+from ..backends._base import ttl_expired, written_at
 from ..data_source import DataSource
 from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
@@ -858,8 +858,8 @@ class Explainer:
 
         # TTL check - the same rule `CallRunner._try_get_cached` applies.
         ttl = self._backend_slot.entry_ttl(ttl, metadata)
-        if ttl_expired(metadata.timestamp, ttl):
-            timestamp = metadata.timestamp or 0
+        if ttl_expired(written_at(metadata), ttl):
+            timestamp = written_at(metadata) or 0
             age = time.time() - timestamp
             return CacheExplanation(
                 would_hit=False,

@@ -23,6 +23,7 @@ __all__ = [
     "entry_expired",
     "stored_ttl",
     "ttl_expired",
+    "written_at",
 ]
 
 #: Cost assumed for an entry whose execution time is unknown -- written without
@@ -188,28 +189,46 @@ def ttl_expired(timestamp: float | None, ttl: float | None, now: float | None = 
     return (time.time() if now is None else now) - (timestamp or 0) > ttl
 
 
-def effective_ttl(metadata: Mapping[str, Any], tier_default: float | None) -> float | None:
-    """The ttl a stored entry is served under.
+def _field(metadata: Any, name: str) -> Any:
+    """*name* from an entry's metadata, as the backends' plain dict or as the
+    decorator's `CacheMetadata`."""
+    if isinstance(metadata, Mapping):
+        return metadata.get(name)
+    return getattr(metadata, name, None)
 
-    A ttl the decorator declared (``ttl=``, marked ``ttl_declared``) as
-    written. Otherwise the SHORTER of the ttl the entry was written with and
-    the tier's ``default_ttl`` as configured now, so lowering a tier's default
-    shortens entries already written. `TieredBackend.get`, `Cash.cleanup` and
-    ``cash clear --expired`` all apply this.
+
+def effective_ttl(metadata: Any, tier_default: float | None, current: float | None = None) -> float | None:
+    """The ttl a stored entry is served under: the one TTL rule.
+
+    *current* is the decorator's ``ttl=`` as it stands now, which only a call
+    of that function knows; when given it wins, in both directions, so
+    lowering a function's ttl takes effect at once. Otherwise a ttl the
+    decorator declared (marked ``ttl_declared``) as written. Otherwise the
+    SHORTER of the ttl the entry was written with and the tier's
+    ``default_ttl`` as configured now, so lowering a tier's default shortens
+    entries already written. Every tier, the decorator's lookup and
+    ``explain()``, `Cash.cleanup` and ``cash clear --expired`` apply this.
     """
-    written = stored_ttl(metadata.get("ttl"))
-    if metadata.get("ttl_declared") or tier_default is None:
+    if current is not None:
+        return stored_ttl(current)
+    written = stored_ttl(_field(metadata, "ttl"))
+    if _field(metadata, "ttl_declared") or tier_default is None:
         return written
     return tier_default if written is None else min(written, tier_default)
 
 
-def entry_expired(metadata: Mapping[str, Any], tier_default: float | None, now: float | None = None) -> bool:
-    """Has this stored entry outlived `effective_ttl`? Aged from the backend's
+def written_at(metadata: Any) -> float | None:
+    """When an entry was written, which its ttl counts from: the backend's
     ``created_at``, or the decorator's ``timestamp`` when there is none."""
-    written_at = metadata.get("created_at")
-    if written_at is None:
-        written_at = metadata.get("timestamp")
-    return ttl_expired(written_at, effective_ttl(metadata, tier_default), now)
+    created_at = _field(metadata, "created_at")
+    return created_at if created_at is not None else _field(metadata, "timestamp")
+
+
+def entry_expired(
+    metadata: Any, tier_default: float | None, now: float | None = None, current: float | None = None
+) -> bool:
+    """Has this stored entry outlived `effective_ttl`, counted from `written_at`?"""
+    return ttl_expired(written_at(metadata), effective_ttl(metadata, tier_default, current), now)
 
 
 class CacheBackend(ABC):

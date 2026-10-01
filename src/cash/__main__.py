@@ -17,7 +17,7 @@ from pathlib import Path
 from cash import __version__
 from cash._console import survive_narrow_streams
 from cash._location import per_user_cache_root
-from cash.backends._base import effective_ttl
+from cash.backends._base import effective_ttl, written_at
 from cash.backends.adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
 from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
 from cash.backends.entry_format import ENTRY_SUFFIX
@@ -344,7 +344,7 @@ def _entry_of(stored: StoredEntry, tier_default: int | None) -> _Entry:
         uses=int(metadata.get("access_count") or 0),
         outputs=tuple(str(o) for o in metadata.get("outputs") or ()),
         reads=tuple(str(p) for p in (metadata.get("auto_file_deps") or {})),
-        expires=None if ttl is None else float(metadata.get("created_at") or stored.mtime) + float(ttl),
+        expires=None if ttl is None else float(written_at(metadata) or stored.mtime) + float(ttl),
     )
 
 

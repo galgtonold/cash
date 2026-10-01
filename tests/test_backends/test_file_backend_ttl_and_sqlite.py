@@ -1,5 +1,6 @@
 """Tests for backend enhancements: FileBackend TTL, SQLite backend."""
 
+import pickle
 import time
 
 from cash.backends import FileBackend
@@ -9,26 +10,22 @@ from cash.backends.sqlite_backend import SQLiteBackend
 def _backdate_sqlite_entry(db: SQLiteBackend, key: str, seconds: float) -> None:
     """Age an entry by ``seconds`` without sleeping.
 
-    Expiry is ``time.time() - created_at > ttl``, so moving ``created_at`` into
-    the past exercises the real branch while staying independent of wall clock
-    and machine load.
-
-    SQLite needs the row edited directly: unlike the file backend, which honours
-    a caller-supplied ``created_at`` via ``setdefault``, ``SQLiteBackend.set``
-    assigns ``metadata['created_at'] = now`` unconditionally and checks expiry
-    against the column, so there is no seam to pass a timestamp through.
+    Expiry counts from the entry's ``created_at``, so moving it into the past
+    exercises the real branch while staying independent of wall clock and
+    machine load. The row keeps it twice, in its metadata and in a column;
+    both move.
 
     ``set()`` INSERTs in the background, so drain the pending write first --
     ``get()`` waits for it -- or the UPDATE can run before the row exists and
-    silently match nothing, leaving the entry un-aged and the test asserting
-    the opposite of what it means to. That raced at ``-n 16`` while passing at
-    ``-n0``, hence the rowcount check: a future race fails loudly here rather
-    than as a confusing expiry assertion further down.
+    silently match nothing; the rowcount check makes that fail loudly here.
     """
     db.get(key)
+    (blob,) = db._conn.execute("SELECT metadata FROM cache_entries WHERE key = ?", (key,)).fetchone()
+    metadata = pickle.loads(blob)
+    metadata["created_at"] -= seconds
     cur = db._conn.execute(
-        "UPDATE cache_entries SET created_at = created_at - ? WHERE key = ?",
-        (seconds, key),
+        "UPDATE cache_entries SET created_at = ?, metadata = ? WHERE key = ?",
+        (metadata["created_at"], pickle.dumps(metadata), key),
     )
     db._conn.commit()
     assert cur.rowcount == 1, f"no row to backdate for {key!r}"

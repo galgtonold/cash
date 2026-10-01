@@ -84,7 +84,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @06dea40d -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -96,11 +96,12 @@ for the next read, unless it would take more than 90% of the memory cap.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @231ca6c0, cash/backends/_base.py:effective_ttl @90a9b7b8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @06dea40d, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
-copy expires with the disk copy. The ttl is the decorator's `ttl=`, or else
-the shorter of the ttl the entry was written with and the tier's current
-`default_ttl`. `cash.cleanup()` and `cash clear --expired` use the same rule.
+copy expires with the disk copy, and a backend used on its own applies the
+same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
+the entry was written with and the tier's current `default_ttl`.
+`cash.cleanup()` and `cash clear --expired` use the same rule.
 
 ## What's worth persisting
 
@@ -120,7 +121,7 @@ the shorter of the ttl the entry was written with and the tier's current
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @4e1a354c -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @66b71f6c -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -207,7 +208,7 @@ that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @ae905171 -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @cdbe9167 -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

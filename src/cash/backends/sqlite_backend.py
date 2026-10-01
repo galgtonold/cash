@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ._base import CacheBackend, MetadataDict, ttl_expired
+from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import warn_unusable
 from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
@@ -151,48 +151,33 @@ class SQLiteBackend(CacheBackend):
         if conn is None:
             return None, None
         with self._lock:
-            cursor = conn.execute(
-                "SELECT data, metadata, created_at, ttl, access_count FROM cache_entries WHERE key = ?", (key,)
-            )
+            cursor = conn.execute("SELECT data, metadata, access_count FROM cache_entries WHERE key = ?", (key,))
             row = cursor.fetchone()
 
             if row is None:
                 return None, None
 
-            data_bytes = row["data"]
-            meta_bytes = row["metadata"]
-            created_at = row["created_at"]
-            ttl = row["ttl"]
-            current_access_count = row["access_count"]
-
-            # Check TTL
-            effective_ttl = ttl if ttl is not None else self._default_ttl
-            if ttl_expired(created_at, effective_ttl):
-                # Expired - delete and return None
+            try:
+                metadata = pickle.loads(row["metadata"])
+                expired = entry_expired(metadata, self._default_ttl)
+                value = None if expired else restore_value(metadata, row["data"])
+            except RESTORE_ERRORS as e:
+                # Unrestorable, so absent; dropped, so the recomputed value
+                # replaces it instead of failing every later read the same way.
+                logger.debug("Unrestorable cache entry %s, dropped: %s", key, e)
+                expired = True
+            if expired:
                 conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
                 conn.commit()
                 return None, None
 
-            # Update access stats
             now = time.time()
             conn.execute(
                 "UPDATE cache_entries SET last_access = ?, access_count = access_count + 1 WHERE key = ?", (now, key)
             )
             conn.commit()
-
-            try:
-                metadata = pickle.loads(meta_bytes)
-                metadata["last_access"] = now
-                metadata["access_count"] = current_access_count + 1
-                value = restore_value(metadata, data_bytes)
-            except RESTORE_ERRORS as e:
-                # Unrestorable, so absent; dropped, so the recomputed value
-                # replaces it instead of failing every later read the same way.
-                logger.debug("Unrestorable cache entry %s, dropped: %s", key, e)
-                conn.execute("DELETE FROM cache_entries WHERE key = ?", (key,))
-                conn.commit()
-                return None, None
-
+            metadata["last_access"] = now
+            metadata["access_count"] = row["access_count"] + 1
             metadata.setdefault("source", self.source_label)
             return metadata, value
 
@@ -215,20 +200,18 @@ class SQLiteBackend(CacheBackend):
         if conn is None:
             return None
         with self._lock:
-            cursor = conn.execute("SELECT metadata, created_at, ttl FROM cache_entries WHERE key = ?", (key,))
+            cursor = conn.execute("SELECT metadata FROM cache_entries WHERE key = ?", (key,))
             row = cursor.fetchone()
 
         if row is None:
-            return None
-
-        effective_ttl = row["ttl"] if row["ttl"] is not None else self._default_ttl
-        if ttl_expired(row["created_at"], effective_ttl):
             return None
 
         try:
             metadata = pickle.loads(row["metadata"])
         except RESTORE_ERRORS as e:
             logger.debug("Error deserializing metadata for %s: %s", key, e)
+            return None
+        if entry_expired(metadata, self._default_ttl):
             return None
 
         metadata.setdefault("source", self.source_label)
@@ -344,21 +327,14 @@ class SQLiteBackend(CacheBackend):
         if conn is None:
             return count
         with self._lock:
-            # First, clean up TTL-expired entries
+            # This tier's own ttl, as a read applies it, then the caller's predicate.
             now = time.time()
-            if self._default_ttl is not None:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE ttl IS NOT NULL AND (? - created_at) > ttl", (now,)
-                )
-                count += cursor.rowcount
-
-            # Then check custom predicate
             cursor = conn.execute("SELECT key, metadata FROM cache_entries")
             keys_to_delete = []
             for row in cursor:
                 try:
                     meta = pickle.loads(row["metadata"])
-                    if is_expired(meta):
+                    if entry_expired(meta, self._default_ttl, now) or is_expired(meta):
                         keys_to_delete.append(row["key"])
                 except RESTORE_ERRORS:
                     logger.debug("Failed to deserialize metadata during cleanup for key %s", row["key"])

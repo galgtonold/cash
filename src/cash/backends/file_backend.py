@@ -23,7 +23,7 @@ from cash.exceptions import CacheBackendError
 
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
-from ._base import CacheBackend, MetadataDict, ttl_expired
+from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, warn_unusable, write_all
 from .entry_format import (
@@ -398,7 +398,7 @@ class FileBackend(CacheBackend):
                     metadata = on_disk
                     self._remember(key, metadata, checksum, st if cached_meta is not None else None)
 
-            if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
+            if entry_expired(metadata, self._default_ttl):
                 return None
 
             return metadata
@@ -451,7 +451,7 @@ class FileBackend(CacheBackend):
             if metadata.get("metadata_only"):
                 return None, None
 
-            if ttl_expired(metadata.get("created_at", 0), metadata.get("ttl", self._default_ttl)):
+            if entry_expired(metadata, self._default_ttl):
                 self.delete(key)
                 return None, None
 
