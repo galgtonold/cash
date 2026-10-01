@@ -145,7 +145,6 @@ def test_explain_file_changed(tmp_path):
     assert e.would_hit is True
 
     # Touch the file with new content + new mtime.
-    time.sleep(0.05)
     data_file.write_text("v2-with-more-chars", encoding="utf-8")
     os.utime(data_file, None)
 

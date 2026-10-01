@@ -9,7 +9,6 @@ that editing a declared plain-callable dep on disk (+ reload) invalidates.
 import importlib
 import os
 import sys
-import time
 import warnings
 
 from cash import Cash
@@ -38,7 +37,6 @@ class TestDependsOnPlainFunction:
             assert f(2) == 4
             assert f.explain(2).reason == "hit"  # warm
 
-            time.sleep(0.02)
             _write_mod(str(tmp_path), "proxy_dep_mod", "def g_proxy(x):\n    return x + 999\n")
             importlib.reload(mod)
 

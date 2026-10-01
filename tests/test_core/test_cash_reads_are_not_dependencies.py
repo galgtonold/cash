@@ -21,12 +21,12 @@ made the first read in a process, never a later one.
 from __future__ import annotations
 
 import os
-import time
 
 import pytest
 
 from cash import Cash, FileBackend
 from cash.tracking import read_classification
+from tests._files import rewrite
 
 pytestmark = pytest.mark.core
 
@@ -122,6 +122,5 @@ def test_a_real_nested_read_still_propagates(project):
     c = Cash(backend=FileBackend(cache_dir=str(project / "cache")), register_magic=False)
     _, upper = _nested(c, str(data))
     assert upper() == "HELLO"
-    time.sleep(0.02)
-    data.write_text("world", encoding="utf-8")
+    rewrite(data, "world")
     assert upper() == "WORLD"

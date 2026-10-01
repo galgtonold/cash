@@ -13,8 +13,6 @@ the files the producer read.
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from cash import Cash, FileBackend
@@ -40,7 +38,6 @@ def test_downstream_recomputes_after_upstream_file_change(tmp_path):
     pd.DataFrame({"v": [1, 2, 3]}).to_csv(csv, index=False)
     assert summarize(load(str(csv))) == 6
 
-    time.sleep(0.02)
     pd.DataFrame({"v": [10, 20, 30]}).to_csv(csv, index=False)  # upstream file changed
 
     # load recomputes (file dep); summarize must see the NEW data, not stale 6.

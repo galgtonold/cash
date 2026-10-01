@@ -2,10 +2,11 @@
 
 import json
 import os
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from tests._files import rewrite
 
 
 @pytest.fixture(autouse=True)
@@ -213,8 +214,7 @@ class TestFileDataSource:
         ds = FileDataSource(str(f))
         before = ds.state_token()
 
-        time.sleep(0.1)
-        f.write_text("world", encoding="utf-8")
+        rewrite(f, "world")
         assert ds.state_token() != before
 
     def test_nonexistent_file(self, tmp_path):

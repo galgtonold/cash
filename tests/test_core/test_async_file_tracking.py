@@ -63,7 +63,6 @@ async def test_async_gather_isolated_file_deps(tmp_path):
     assert a == "a" and b == "b"
 
     # Now mutate only path_a. load_a should miss; load_b should hit.
-    time.sleep(0.05)
     path_a.write_text("aa", encoding="utf-8")
     import os
 

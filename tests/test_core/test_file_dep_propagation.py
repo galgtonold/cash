@@ -11,8 +11,6 @@ of the order the functions were first computed in.
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from cash import Cash, FileBackend
@@ -42,7 +40,6 @@ def test_file_change_propagates_through_depends_on(tmp_path, compute_inner_first
         load()  # inner cached first -> inner is a HIT inside upper
     assert upper() == "HELLO"
 
-    time.sleep(0.02)
     data.write_text("world-changed", encoding="utf-8")
 
     # The outer function must notice the change, not return the stale value.

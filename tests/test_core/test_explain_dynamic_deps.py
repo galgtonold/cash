@@ -8,8 +8,6 @@ only "first call with these arguments".
 
 from __future__ import annotations
 
-import time
-
 from cash import Cash, FileBackend, FileDataSource
 
 
@@ -33,7 +31,6 @@ def test_dynamic_dep_change_is_explained(tmp_path):
     load("AAA")
     assert load.explain("AAA").reason == "hit"
 
-    time.sleep(0.02)
     (tmp_path / "AAA.parquet").write_text("v2-changed", encoding="utf-8")
 
     e = load.explain("AAA")

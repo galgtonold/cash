@@ -10,7 +10,6 @@ now asks `peek_metadata`, which every backend answers without recording a use.
 from __future__ import annotations
 
 import os
-import time
 
 import pytest
 
@@ -45,7 +44,6 @@ def test_explain_leaves_the_entry_and_its_use_count_alone(tmp_path, make):
 
     f(3)
     c.backend.flush() if hasattr(c.backend, "flush") else None
-    time.sleep(0.05)
     key = f.explain(3).cache_key
     # A number, not the dict: a backend may hand back its cached metadata
     # object itself, and comparing that with itself proves nothing.

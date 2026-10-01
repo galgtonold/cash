@@ -16,6 +16,7 @@ import pytest
 
 from cash import Cash, FileBackend, InMemoryBackend
 from cash.lineage_tag import own_tag
+from tests._files import rewrite
 
 
 def test_cached_generator_invalidates_on_file_change(tmp_path):
@@ -32,8 +33,7 @@ def test_cached_generator_invalidates_on_file_change(tmp_path):
     assert list(stream(str(data))) == ["a", "b", "c"]
     assert list(stream(str(data))) == ["a", "b", "c"]  # replay from chunks
 
-    time.sleep(0.02)
-    data.write_text("x\ny\nz\n", encoding="utf-8")
+    rewrite(data, "x\ny\nz\n")
     assert list(stream(str(data))) == ["x", "y", "z"], "stale cached generator"
 
 
