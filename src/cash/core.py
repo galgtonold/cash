@@ -48,7 +48,7 @@ from .decorator.call_state import (
 from .decorator.cash_key import KeyCheck
 from .decorator.closure_fold import CaptureAnalysis, ClosureFold, HelperIdentity
 from .decorator.code_args import CodeArgs
-from .decorator.code_identity import CodeIdentity
+from .decorator.code_surface import CodeSurface
 from .decorator.explain import (
     CacheExplanation,
     Explainer,
@@ -350,7 +350,7 @@ class Cash:
             self._notices,
             KeyCheck(self._backend_slot.local_dir, lambda: self.config.check_cash_keys),
         )
-        self._code = CodeIdentity(self._args)
+        self._code = CodeSurface(self._args)
         self._pins = OwnSourcePins()
         self._captures = CaptureAnalysis()
         self._helpers = HelperIdentity(self._args, self._captures)

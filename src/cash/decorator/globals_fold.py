@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
     from .closure_fold import HelperIdentity
     from .code_args import CodeArgs
-    from .code_identity import CodeIdentity
+    from .code_surface import CodeSurface
     from .purity_checks import LearnedMutations
     from .registry import FunctionRegistry
     from .reporting import Notices
@@ -361,7 +361,7 @@ class GlobalsFold:
     def __init__(
         self,
         args: ArgHasher,
-        code: CodeIdentity,
+        code: CodeSurface,
         helpers: HelperIdentity,
         registry: FunctionRegistry,
         state_hasher: DependencyStateHasher,

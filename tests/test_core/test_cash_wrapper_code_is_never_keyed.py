@@ -15,7 +15,7 @@ import warnings
 import cash
 from cash import Cash
 from cash.backends import InMemoryBackend
-from cash.decorator.code_identity import CodeIdentity
+from cash.decorator.code_surface import CodeSurface
 
 CASH_DIR = os.path.dirname(os.path.abspath(cash.__file__))
 
@@ -54,7 +54,7 @@ def by_default(x, fn=f):
 
 def test_no_key_channel_identifies_cash_code(monkeypatch):
     identified: list[str] = []
-    real = CodeIdentity._code_identity
+    real = CodeSurface._code_identity
 
     def spy(self, fn):
         code = getattr(fn, "__code__", None)
@@ -62,7 +62,7 @@ def test_no_key_channel_identifies_cash_code(monkeypatch):
             identified.append(code.co_filename)
         return real(self, fn)
 
-    monkeypatch.setattr(CodeIdentity, "_code_identity", spy)
+    monkeypatch.setattr(CodeSurface, "_code_identity", spy)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         explained = [

@@ -27,7 +27,7 @@ from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
-    from .code_identity import CodeIdentity
+    from .code_surface import CodeSurface
     from .frozen import FrozenResults
     from .globals_fold import GlobalsFold
 
@@ -84,7 +84,7 @@ def is_user_code_carrier(carrier: Any) -> bool:
     is not un-hashable user code for that.
 
     Judge such an object by what it WRAPS (``.func``, the same attribute
-    ``CodeIdentity.class_surface_parts`` already follows for ``singledispatchmethod``
+    ``CodeSurface.class_surface_parts`` already follows for ``singledispatchmethod``
     and ``cached_property``), else by its TYPE:
     ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` do not warn,
     while ``functools.partial(<a user function>)`` does, because the
@@ -120,7 +120,7 @@ class CodeArgs:
     """The user code an argument carries -- a class, a function, an instance
     of the user's own class -- folded into the state segment."""
 
-    def __init__(self, code: CodeIdentity, globals_fold: GlobalsFold, frozen: FrozenResults, args: ArgHasher) -> None:
+    def __init__(self, code: CodeSurface, globals_fold: GlobalsFold, frozen: FrozenResults, args: ArgHasher) -> None:
         self._code = code
         # A value a registered hasher keys (`ArgHasher.keys_by_registration`)
         # is not searched: the user has said what identifies it. The two
@@ -552,7 +552,7 @@ class CodeArgs:
 
         *seen_carriers* dedups across several values of one call:
         `f(a, b, c)` with three instances of one class reaches `is_opaque` +
-        `CodeIdentity.code_surface_hash` once instead of three times. Safe by
+        `CodeSurface.code_surface_hash` once instead of three times. Safe by
         identity because every carrier stays reachable from the values for
         the whole key build, so no id can be recycled underneath us.
         *owner_code* is the cached function's code, for the drift guard.

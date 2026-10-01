@@ -1,5 +1,6 @@
-"""The identity of code: a function's own source, the classes and
-callables it reaches, and which code counts as the user's."""
+"""The code surface of what a call reaches: the bytecode-level identity
+of a class's members, a callable's code and the user code it runs, and
+the user classes behind an instance."""
 
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 #: Pydantic v2 compiles these onto every model class. They are derived from the
 #: field declarations and their digest differs in every process, so folding them
-#: made a pydantic spec un-cacheable across runs. `CodeIdentity._pydantic_field_parts`
+#: made a pydantic spec un-cacheable across runs. `CodeSurface._pydantic_field_parts`
 #: folds the declarations they were standing in for.
 PYDANTIC_COMPILED = frozenset(
     {
@@ -60,10 +61,10 @@ def _defaults_pin(functions: list[Any]) -> tuple | None:
 _ADDRESS_REPR = re.compile(r"\bat 0x[0-9a-fA-F]+")
 
 
-class CodeIdentity:
-    """What identifies code for the key: a function's own pinned source, and
-    the code surface of classes, instances and functions reached through
-    arguments and globals."""
+class CodeSurface:
+    """What identifies code reached through arguments and globals: the code
+    surface of classes, instances and functions, and of the user code that
+    code references (`CodeRefs`)."""
 
     def __init__(self, args: ArgHasher) -> None:
         self._args = args
@@ -145,7 +146,7 @@ class CodeIdentity:
         defaults (``key=lambda r: r``, ``lock=threading.Lock()``), different
         in every process, so the entry would never hit after a restart.
 
-        ``CodeIdentity.class_surface_parts`` already refuses a ``repr()`` fallback, on the
+        ``CodeSurface.class_surface_parts`` already refuses a ``repr()`` fallback, on the
         grounds that it "would reintroduce the address leak this member-content
         fold exists to avoid". This makes the two agree.
         """
@@ -232,7 +233,7 @@ class CodeIdentity:
         """A digest of the user code *obj* itself carries, or ``None``.
 
         Its OWN surface only -- code merely referenced by that code is folded
-        by :meth:`CodeIdentity.code_surface_hash`, which combines these per-object digests.
+        by :meth:`CodeSurface.code_surface_hash`, which combines these per-object digests.
         The split is what keeps the memo below honest: memoizing a digest that
         included a referenced class would serve a stale answer when only that
         OTHER class is redefined (a notebook cell re-run), because *obj* is
@@ -434,171 +435,202 @@ class CodeIdentity:
             if not is_user_code_object(base):
                 continue
             for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
-                # __firstlineno__ (class attribute since Python 3.13, absent on
-                # 3.10/3.11) records the class's first source line, which shifts
-                # when a comment or blank line is added above it -- with no
-                # code change at all. Skipping it is what keeps "comments do
-                # not invalidate" (see _code_identity) true on 3.13+ too.
-                if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
-                    continue
-                # The class docstring is documentation, the same as a method's
-                # (masked in `_code_object_identity`), so it is folded as if
-                # there were none -- the member itself stays, because for a
-                # type whose surface is nothing else (a C type like
-                # `_thread.lock`) dropping it left no surface at all and the
-                # type was reported as unhashable code. Except on a pydantic
-                # model: its docstring is the schema's `description`, which
-                # structured-output libraries send to the model as the prompt.
-                if name == "__doc__" and not self._pydantic_field_parts(base):
-                    member = None
-                # Pydantic v2 compiles three Rust objects onto every model.
-                # They are DERIVED from the field declarations, and their
-                # digest differs in every process. `model_fields` below carries the same
-                # declarations and is stable, so this loses nothing.
-                if name in PYDANTIC_COMPILED:
-                    continue
-                if name == "__dataclass_fields__" and isinstance(member, dict):
-                    parts.extend(self._dataclass_field_parts(base, member))
-                    continue
-                target = member
-                if isinstance(member, (classmethod, staticmethod)):
-                    target = member.__func__
-                elif isinstance(member, property):
-                    for tag, accessor in (("get", member.fget), ("set", member.fset)):
-                        ident = self._code_identity(accessor)
-                        if ident:
-                            parts.append((base.__qualname__, f"{name}.{tag}", ident))
-                    continue
-                # Unwrap decoration to reach the function whose __code__
-                # actually reflects a body edit (mirrors the single-level
-                # __wrapped__ unwrap in _analyze_method_self_deps). Without
-                # this, @functools.wraps and @functools.lru_cache both hash
-                # the WRAPPER's own generic dispatch code -- fixed regardless
-                # of what the wrapped body says -- and @functools.
-                # singledispatchmethod has no __wrapped__ or __code__ at all
-                # (it exposes the underlying function as .func instead), and
-                # would reach the data-attribute branch below as an
-                # unchanging descriptor repr.
-                outer = target
-                target = getattr(target, "__wrapped__", target)
-                if not hasattr(target, "__code__"):
-                    func_attr = getattr(target, "func", None)
-                    if func_attr is not None and hasattr(func_attr, "__code__"):
-                        target = func_attr
-                ident = self._code_identity(target)
-                if ident and callable(outer):
-                    # Every other user function it runs: the decorator's own
-                    # wrapper, and the layers below the first ``__wrapped__``.
-                    # Under two decorators the method body itself was never
-                    # reached.
-                    extra = [
-                        layer
-                        for layer in (outer, *user_layers(outer))
-                        if layer is not target and isinstance(layer, types.FunctionType) and is_user_code_object(layer)
-                    ]
-                    if extra:
-                        ident = (ident, tuple(self._code_identity(layer) for layer in extra))
-                if callable(member):
-                    if ident:
-                        # When `ident` was reached by UNWRAPPING (``.func`` /
-                        # ``__wrapped__``), it describes the inner function and
-                        # says nothing about the state the wrapper itself
-                        # carries: ``functools.partial(scale, 3)`` and
-                        # ``partial(scale, 4)`` unwrap to the same ``scale``
-                        # and collided. Fold the wrapper's own content too,
-                        # exactly as the non-callable branch does for a
-                        # ``partialmethod``. Skipped when nothing was
-                        # unwrapped, because a plain method's own pickle is
-                        # its module path -- which would make every class's
-                        # digest depend on the module it lives in.
-                        if target is not member:
-                            try:
-                                own = self._args.hash_payload((member,), {})
-                            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                                own = None
-                            if own is not None:
-                                parts.append((base.__qualname__, name, (ident, own)))
-                                continue
-                        parts.append((base.__qualname__, name, ident))
-                        continue
-                    # A callable member with NO reachable ``__code__``: a
-                    # nested class (``class Outer: inner = Inner``), a
-                    # ``functools.partial``, a callable instance. Its code
-                    # (``Inner.f``) and its content (``partial(scale, 3)``
-                    # against ``partial(scale, 4)``) are both folded.
-                    #
-                    # The nested walk recurses into ``CodeIdentity.class_surface_parts``
-                    # DIRECTLY, not through the memoized ``CodeIdentity.code_surface_hash``,
-                    # and a cycle ends on the PATH that led to it, never on a
-                    # set shared across the walk. A shared set would make the
-                    # digest depend on which class happened to be hashed first
-                    # (the memo would hold a cut result for one order and a
-                    # full one for the other) -- reintroducing exactly the
-                    # cross-process instability ``_value_identity`` avoids.
-                    # The path is fixed by *cls* alone, so every
-                    # process gets the same answer regardless of order. No
-                    # depth bound: a nested class is followed however deep.
-                    nested = None
-                    inner_cls = member if isinstance(member, type) else type(member)
-                    if is_user_code_object(inner_cls):
-                        if inner_cls is cls or inner_cls in _path:
-                            nested = f"cycle:{inner_cls.__qualname__}"
-                        else:
-                            sub_parts = self.class_surface_parts(inner_cls, (*_path, cls))
-                            if sub_parts:
-                                nested = hashlib.sha256(
-                                    repr(sub_parts).encode("utf-8"),
-                                ).hexdigest()
-                    try:
-                        content = self._args.hash_payload((member,), {})
-                    except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                        content = None
-                    if nested is not None or content is not None:
-                        parts.append((base.__qualname__, name, (nested, content)))
-                else:
-                    # A non-callable member. Fold its OWN content
-                    # unconditionally -- a descriptor like
-                    # functools.partialmethod carries bound state (.args)
-                    # that lives on the descriptor ITSELF, not on the inner
-                    # function `ident` above resolved through .func, and a
-                    # plain object that happens to expose an unrelated `.func`
-                    # attribute must not have its OTHER state go invisible
-                    # just because that lookup succeeded (a partialmethod's
-                    # bound arguments, an unrelated object's own attributes).
-                    # Fold `ident` TOO
-                    # when reachable, so a non-callable descriptor that ALSO
-                    # wraps a real function body -- functools.
-                    # singledispatchmethod, functools.cached_property, both
-                    # confirmed to expose .func without __wrapped__ or
-                    # __code__ of their own -- has that body participate as
-                    # well. Folding only one half silently drops whichever
-                    # state that particular member happens to carry.
-                    #
-                    # No repr() fallback here (unlike _value_identity):
-                    # falling back to repr() on this specific path would
-                    # reintroduce the address leak this member-content fold
-                    # exists to avoid (a class attribute's repr is often an
-                    # address). If content can't
-                    # be folded and no `ident` was found either, dropping the
-                    # member is strictly safer than a non-deterministic repr.
-                    try:
-                        content = self._args.hash_payload((member,), {})
-                    except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                        content = None
-                    if ident or content is not None:
-                        parts.append((base.__qualname__, name, (ident, content)))
+                parts.extend(self._member_parts(cls, base, name, member, _path))
+        parts.extend(self._field_factory_parts(cls))
+        return parts
 
-        # Dataclass field factories. ``dataclasses`` DELETES the class
-        # attribute when a field declares ``default_factory``, so the
-        # ``vars()`` walk above cannot see it -- ``getattr_static`` raises
-        # AttributeError for that name. The factory is nonetheless code that
-        # decides what every instance holds: editing
-        # ``field(default_factory=lambda: B(0))`` to ``B(999)`` changes what
-        # ``A()`` produces.
-        #
-        # Read from ``__dataclass_fields__`` rather than calling
-        # ``dataclasses.fields()``: the latter raises on a non-dataclass and
-        # skips pseudo-fields, and this must never raise.
+    def _member_parts(self, cls: type, base: type, name: str, member: Any, path: tuple[type, ...]) -> list[tuple]:
+        """The parts one class attribute *name* of *base* adds to *cls*'s surface."""
+        # __firstlineno__ (class attribute since Python 3.13, absent on
+        # 3.10/3.11) records the class's first source line, which shifts
+        # when a comment or blank line is added above it -- with no
+        # code change at all. Skipping it is what keeps "comments do
+        # not invalidate" (see _code_identity) true on 3.13+ too.
+        if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
+            return []
+        # The class docstring is documentation, the same as a method's
+        # (masked in `_code_object_identity`), so it is folded as if
+        # there were none -- the member itself stays, because for a
+        # type whose surface is nothing else (a C type like
+        # `_thread.lock`) dropping it left no surface at all and the
+        # type was reported as unhashable code. Except on a pydantic
+        # model: its docstring is the schema's `description`, which
+        # structured-output libraries send to the model as the prompt.
+        if name == "__doc__" and not self._pydantic_field_parts(base):
+            member = None
+        # Pydantic v2 compiles three Rust objects onto every model.
+        # They are DERIVED from the field declarations, and their
+        # digest differs in every process. `model_fields` below carries the same
+        # declarations and is stable, so this loses nothing.
+        if name in PYDANTIC_COMPILED:
+            return []
+        if name == "__dataclass_fields__" and isinstance(member, dict):
+            return self._dataclass_field_parts(base, member)
+        if isinstance(member, property):
+            return [
+                (base.__qualname__, f"{name}.{tag}", ident)
+                for tag, accessor in (("get", member.fget), ("set", member.fset))
+                if (ident := self._code_identity(accessor))
+            ]
+        target, ident = self._member_code(member)
+        if not callable(member):
+            return self._data_member_parts(base, name, member, ident)
+        if ident:
+            return [self._code_member_part(base, name, member, target, ident)]
+        return self._codeless_callable_parts(cls, base, name, member, path)
+
+    def _member_code(self, member: Any) -> tuple[Any, tuple]:
+        """``(target, ident)``: the function whose code a class attribute
+        runs, unwrapped, and its `_code_identity` (``()`` when none).
+
+        Unwraps decoration to reach the function whose __code__
+        actually reflects a body edit (mirrors the single-level
+        __wrapped__ unwrap in `MethodClassDeps._analyze_method_self_deps`). Without
+        this, @functools.wraps and @functools.lru_cache both hash
+        the WRAPPER's own generic dispatch code -- fixed regardless
+        of what the wrapped body says -- and @functools.
+        singledispatchmethod has no __wrapped__ or __code__ at all
+        (it exposes the underlying function as .func instead), and
+        would reach the data-attribute branch as an
+        unchanging descriptor repr.
+        """
+        outer = member.__func__ if isinstance(member, (classmethod, staticmethod)) else member
+        target = getattr(outer, "__wrapped__", outer)
+        if not hasattr(target, "__code__"):
+            func_attr = getattr(target, "func", None)
+            if func_attr is not None and hasattr(func_attr, "__code__"):
+                target = func_attr
+        ident = self._code_identity(target)
+        if ident and callable(outer):
+            # Every other user function it runs: the decorator's own
+            # wrapper, and the layers below the first ``__wrapped__``.
+            # Under two decorators the method body itself was never
+            # reached.
+            extra = [
+                layer
+                for layer in (outer, *user_layers(outer))
+                if layer is not target and isinstance(layer, types.FunctionType) and is_user_code_object(layer)
+            ]
+            if extra:
+                ident = (ident, tuple(self._code_identity(layer) for layer in extra))
+        return target, ident
+
+    def _member_content(self, member: Any) -> str | None:
+        """The digest of a class attribute's own pickled content, or None
+        when it cannot be pickled."""
+        try:
+            return self._args.hash_payload((member,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            return None
+
+    def _code_member_part(self, base: type, name: str, member: Any, target: Any, ident: tuple) -> tuple:
+        """The part for a callable class attribute whose code was found.
+
+        When `ident` was reached by UNWRAPPING (``.func`` /
+        ``__wrapped__``), it describes the inner function and
+        says nothing about the state the wrapper itself
+        carries: ``functools.partial(scale, 3)`` and
+        ``partial(scale, 4)`` unwrap to the same ``scale``
+        and collided. Fold the wrapper's own content too,
+        exactly as the non-callable branch does for a
+        ``partialmethod``. Skipped when nothing was
+        unwrapped, because a plain method's own pickle is
+        its module path -- which would make every class's
+        digest depend on the module it lives in.
+        """
+        if target is not member:
+            own = self._member_content(member)
+            if own is not None:
+                return (base.__qualname__, name, (ident, own))
+        return (base.__qualname__, name, ident)
+
+    def _codeless_callable_parts(
+        self, cls: type, base: type, name: str, member: Any, path: tuple[type, ...]
+    ) -> list[tuple]:
+        """The parts for a callable class attribute with NO reachable ``__code__``.
+
+        A nested class (``class Outer: inner = Inner``), a
+        ``functools.partial``, a callable instance. Its code
+        (``Inner.f``) and its content (``partial(scale, 3)``
+        against ``partial(scale, 4)``) are both folded.
+
+        The nested walk recurses into ``CodeSurface.class_surface_parts``
+        DIRECTLY, not through the memoized ``CodeSurface.code_surface_hash``,
+        and a cycle ends on the PATH that led to it, never on a
+        set shared across the walk. A shared set would make the
+        digest depend on which class happened to be hashed first
+        (the memo would hold a cut result for one order and a
+        full one for the other) -- reintroducing exactly the
+        cross-process instability ``_value_identity`` avoids.
+        The path is fixed by *cls* alone, so every
+        process gets the same answer regardless of order. No
+        depth bound: a nested class is followed however deep.
+        """
+        nested = None
+        inner_cls = member if isinstance(member, type) else type(member)
+        if is_user_code_object(inner_cls):
+            if inner_cls is cls or inner_cls in path:
+                nested = f"cycle:{inner_cls.__qualname__}"
+            else:
+                sub_parts = self.class_surface_parts(inner_cls, (*path, cls))
+                if sub_parts:
+                    nested = hashlib.sha256(
+                        repr(sub_parts).encode("utf-8"),
+                    ).hexdigest()
+        content = self._member_content(member)
+        if nested is None and content is None:
+            return []
+        return [(base.__qualname__, name, (nested, content))]
+
+    def _data_member_parts(self, base: type, name: str, member: Any, ident: tuple) -> list[tuple]:
+        """The parts for a non-callable class attribute.
+
+        Its OWN content is folded unconditionally -- a descriptor like
+        functools.partialmethod carries bound state (.args)
+        that lives on the descriptor ITSELF, not on the inner
+        function `ident` resolved through .func, and a
+        plain object that happens to expose an unrelated `.func`
+        attribute must not have its OTHER state go invisible
+        just because that lookup succeeded (a partialmethod's
+        bound arguments, an unrelated object's own attributes).
+        `ident` is folded TOO
+        when reachable, so a non-callable descriptor that ALSO
+        wraps a real function body -- functools.
+        singledispatchmethod, functools.cached_property, both
+        confirmed to expose .func without __wrapped__ or
+        __code__ of their own -- has that body participate as
+        well. Folding only one half silently drops whichever
+        state that particular member happens to carry.
+
+        No repr() fallback here (unlike _value_identity):
+        falling back to repr() on this specific path would
+        reintroduce the address leak this member-content fold
+        exists to avoid (a class attribute's repr is often an
+        address). If content can't
+        be folded and no `ident` was found either, dropping the
+        member is strictly safer than a non-deterministic repr.
+        """
+        content = self._member_content(member)
+        if not ident and content is None:
+            return []
+        return [(base.__qualname__, name, (ident, content))]
+
+    def _field_factory_parts(self, cls: type) -> list[tuple]:
+        """The parts for *cls*'s dataclass field factories.
+
+        ``dataclasses`` DELETES the class
+        attribute when a field declares ``default_factory``, so the
+        ``vars()`` walk cannot see it -- ``getattr_static`` raises
+        AttributeError for that name. The factory is nonetheless code that
+        decides what every instance holds: editing
+        ``field(default_factory=lambda: B(0))`` to ``B(999)`` changes what
+        ``A()`` produces.
+
+        Read from ``__dataclass_fields__`` rather than calling
+        ``dataclasses.fields()``: the latter raises on a non-dataclass and
+        skips pseudo-fields, and this must never raise.
+        """
+        parts: list[tuple] = []
         fields_map = getattr(cls, "__dataclass_fields__", None)
         if isinstance(fields_map, dict):
             for fname, fld in sorted(fields_map.items()):
@@ -622,17 +654,17 @@ class CodeIdentity:
         a cheap object-graph walk plus dict lookups -- never source I/O.
 
         Source-first, surface-as-fallback. Both of this method's callers
-        (``CodeIdentity.instance_class_source_parts``, directly and via
+        (``CodeSurface.instance_class_source_parts``, directly and via
         ``GlobalsFold.fold_read_globals``) gate on ``is_user_class`` -> ``is_user_module``,
         which requires ``__file__`` -- so every class actually reachable here
         already has retrievable source, and ``inspect.getsource`` succeeds. The
-        class-aware surface (``CodeIdentity.code_surface_hash``) only engages on
+        class-aware surface (``CodeSurface.code_surface_hash``) only engages on
         ``SOURCE_RETRIEVAL_ERRORS`` -- a class truly without source, e.g. a
         notebook cell's ``__main__`` has no ``__file__`` -- or when this method
         is reached some other way. Whole-class source is preferred because it
         sees a body edit under ``@functools.wraps``, ``@lru_cache`` or
         ``@singledispatchmethod`` (source is just text), where
-        ``CodeIdentity.class_surface_parts`` walks the WRAPPER.
+        ``CodeSurface.class_surface_parts`` walks the WRAPPER.
         """
         cached = self._user_class_src_cache.get(cls)
         if cached is not None:
