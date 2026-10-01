@@ -22,7 +22,7 @@ from .._memo import USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
 from ..exceptions import CashCacheIneffectiveWarning
-from ..install_paths import installed_roots, normcase_path
+from ..install_paths import is_user_code_file
 from ..purity import is_pure
 from ..source_norm import getsource
 from .ast_util import resolve_callee
@@ -137,7 +137,7 @@ _NOT_SEEN = object()
 def _read_body(func: types.FunctionType) -> "tuple[bool, tuple[ast.expr, ...]] | None":
     """What *func*'s own source says: see :data:`_body_cache`."""
     code_obj = func.__code__
-    if normcase_path(os.path.abspath(code_obj.co_filename)).startswith(installed_roots()):
+    if not is_user_code_file(code_obj.co_filename):
         return None
     try:
         source = textwrap.dedent(getsource(func))

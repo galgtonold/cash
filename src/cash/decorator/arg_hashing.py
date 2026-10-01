@@ -279,7 +279,7 @@ def frame_signature(obj: Any) -> tuple:
     ``pop``) first gives the written frame NEW block arrays, and writes
     through ``.values`` / ``to_numpy()`` raise (the arrays are read-only).
     So the identities of the block arrays, the manager and the axes are an
-    exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
+    exact change signal. The
     axis NAMES are compared by value, because ``df.index.name = ...``
     renames the same Index object and the content hash includes them; so
     are the index ``freq`` and ``attrs``, which the hash also holds.
@@ -525,8 +525,8 @@ def watch_array_handles() -> None:
     ``.array`` (of a Series or an Index), ``pd.array(s, copy=False)`` and a
     date index's ``asi8`` are the public handles to a numpy-backed array
     pandas keeps: ``s.array[0] = 100.0`` writes into the block while its
-    identity stays, and the memo served the old content hash, a stale
-    result. So does ``pd.Index(df["a"]).array[0] = 100.0``, since the index
+    identity stays, so the memo's content hash would no longer describe the
+    frame. So does ``pd.Index(df["a"]).array[0] = 100.0``, since the index
     shares the column's memory. The handle is usually gone by the next
     call, so the only trace is the one left here. pandas does not call
     ``.array`` or ``pd.array`` itself, so an ordinary workload records
@@ -644,7 +644,7 @@ def is_opaque(obj: Any) -> bool:
     A subclass that wants the same treatment is marked itself (pinned by
     ``test_a_subclass_of_an_opaque_class_does_not_inherit_opacity``).
 
-    Never raises. Measured, not assumed: a metaclass that defines
+    Never raises: a metaclass that defines
     ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
     (Python's data-model default, not just its instances), so
     ``target in OPAQUE_TYPES`` can raise ``TypeError`` on a real,
@@ -654,10 +654,9 @@ def is_opaque(obj: Any) -> bool:
     try:
         if isinstance(obj, functools.partial):
             # A partial is the function it wraps plus arguments, both of
-            # which are keyed now. `cash.opaque(functools.partial)` was the
-            # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
-            # EVERY partial in the process, including ones over code the
-            # user then edited.
+            # which are keyed. Declaring `functools.partial` opaque would
+            # silence EVERY partial in the process, including ones over code
+            # the user then edits.
             return False
         target = obj if isinstance(obj, type) else type(obj)
         return target in OPAQUE_TYPES
@@ -901,12 +900,9 @@ class ArgHasher:
             if param.kind is inspect.Parameter.VAR_POSITIONAL:
                 canon_args.extend(val)
             elif param.kind is inspect.Parameter.VAR_KEYWORD:
-                # Under its own name: a `**kwargs` entry may be called after a
-                # parameter, and writing both into one dict let it overwrite
-                # that parameter's value. `def request(url, /, **params)`
-                # called as `request("/a", url="x")` then keyed on the kwargs
-                # `url` alone, so every such call shared one entry and
-                # `request("/b", url="x")` was served `GET /a`.
+                # Under its own name: a `**kwargs` entry may be named like a
+                # parameter (`def request(url, /, **params)` called as
+                # `request("/a", url="x")`), and both are inputs.
                 for k in val:
                     canon_kwargs[f"{name}:{k}"] = val[k]
             else:
@@ -1069,45 +1065,30 @@ class ArgHasher:
                 return hashlib.sha256(fast).hexdigest()
 
         def get_arg_hash(arg):
-            # Content-authoritative builtin hashers FIRST. pandas /
-            # numpy / polars / pyarrow / modin / dask hash the argument's
-            # *content*, which is byte-stable across processes and kernel
-            # restarts. The notebook's in-memory ``_cash_lineage_hash`` (checked
-            # next) is recomputed per session and is NOT reproducible across a
-            # restart -- keying a persisted @cash.cache entry on it makes the
-            # decorator miss after a restart even though the argument is
-            # byte-identical (re-training the model the docs promise survives a
-            # restart). A value that has a content hash must key on content so
-            # the entry survives; the modest extra hashing cost is the price of
-            # the flagship "restart-and-run-all in seconds" guarantee. Mirrors
-            # principle: the reproducible signal, not the volatile
-            # in-memory one, is authoritative.
-            # Fast path: skip re-hashing a possibly-huge argument we already
-            # content-hashed this session, when it is provably the SAME,
-            # unmutated object. Keyed on ``id`` (NOT lineage): two *different*
-            # objects that happen to share a lineage string must still be
-            # distinguished by content -- an explicit invariant
-            # (test_arg_hash_restart_stable) -- and distinct live objects have
-            # distinct ids. The entry is validated on read by BOTH a weakref
-            # identity check (guards id reuse after GC) AND the object's
-            # ``_cash_lineage_hash`` being unchanged (cash's own mutation signal,
-            # the same one it trusts to cache every notebook statement). The
-            # stored value is still the reproducible content hash, so the cache
-            # key is byte-identical and restart-safe; the memo is a pure
-            # within-session speedup, empty after a restart.
-            #
-            # Trusted only where something KEEPS it current: the notebook's
-            # statement layer re-tags a variable on every assignment and
-            # mutation. The decorator also tags what it returns, and nothing
-            # ever moves that tag -- in a script, `q.F = 0.03; run(q)` or
-            # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
-            # and the tag-as-identity shortcut further down served the result
-            # for the unmutated object.
-            # The class's own ``__cash_key__``, ahead of anything that reads
-            # the value: the user has said what identifies it, and that id
-            # holds across restarts, which an in-memory tag does not. A
-            # hasher registered for the type still wins; it is the more
-            # specific, outside choice.
+            """One argument's key part. The first step that answers wins:
+
+            1. The class's ``__cash_key__``, unless a registered hasher
+               covers the type: the user said what identifies the value,
+               and that holds across restarts.
+            2. A frozen array or container (``frozen=True`` results): its
+               audited digest, without reading the content again.
+            3. The content digest memoised for this very object, while its
+               statement or frozen lineage tag is unchanged (`_memo`): a
+               within-session speedup that returns the content digest, never
+               the tag. The decorator's own tags are not trusted here, since
+               nothing moves them when the object is mutated.
+            4. A pandas copy-on-write frame's memoised digest, checked
+               exactly (`_frame_memo_lookup`).
+            5. A hasher registered with ``override=True``: the user's
+               identity beats reading the content.
+            6. A builtin content hasher (pandas, numpy, polars, pyarrow,
+               ...): byte-stable across processes, so a persisted entry
+               survives a restart where a session tag would not.
+            7. The statement or frozen lineage tag, for a value with no
+               content hasher: cheap and current within the session.
+            8. A hasher registered for the type.
+            9. The value itself, which the payload walk pickles.
+            """
             method = cash_key_method(arg)
             if method is not None and not (
                 (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
@@ -1228,7 +1209,7 @@ class ArgHasher:
         # (`shared_across`).
         try:
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
-            # it early, and the arguments after it silently left the key.
+            # it early, and the arguments after it would leave the key.
             form: tuple = (
                 tuple([plain_key_part(a) for a in hashed_args]),
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},

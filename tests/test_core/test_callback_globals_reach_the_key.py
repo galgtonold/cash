@@ -113,3 +113,57 @@ def test_an_unchanged_constant_still_hits(tmp_path):
 
     assert again == _oracle(0.0)
     assert ran == 0, f"{ran} callback call(s) recomputed with nothing changed"
+
+
+SMOOTHING = textwrap.dedent("""
+    import functools
+
+    T = 1
+
+    def scale(x, k):
+        return x * k
+
+    SMOOTH = functools.partial(scale, k=2)
+
+    def callback(x):
+        return SMOOTH(x)
+
+    class Instance:
+        def __call__(self, x):
+            return SMOOTH(x)
+
+    def helper(x):
+        return x * T
+
+    def via_helper(x):
+        return helper(x)
+""")
+
+
+@pytest.fixture
+def smoothing(tmp_path, monkeypatch):
+    (tmp_path / "smoothing_cb.py").write_text(SMOOTHING, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("smoothing_cb", None)
+    import smoothing_cb
+
+    yield smoothing_cb
+    sys.modules.pop("smoothing_cb", None)
+
+
+def test_what_a_callbacks_helpers_and_bindings_carry_reaches_the_key(smoothing, cash_instance):
+    """A callback is keyed by what the cached function's own reads are keyed
+    by: a global partial it calls, and a global its helper reads."""
+
+    @cash_instance.cache
+    def run(cb, x):
+        return cb(x)
+
+    instance = smoothing.Instance()
+    assert [run(smoothing.callback, 1), run(instance, 1), run(smoothing.via_helper, 1)] == [2, 2, 1]
+    assert [run(smoothing.callback, 1), run(instance, 1), run(smoothing.via_helper, 1)] == [2, 2, 1]
+    assert run.cache_info()["hits"] == 3
+
+    smoothing.SMOOTH = smoothing.functools.partial(smoothing.scale, k=3)
+    smoothing.T = 5
+    assert [run(smoothing.callback, 1), run(instance, 1), run(smoothing.via_helper, 1)] == [3, 3, 5]

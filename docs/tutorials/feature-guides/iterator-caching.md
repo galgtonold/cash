@@ -30,7 +30,7 @@ are cached as ordinary values.
 
 ## The first call streams
 
-<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @09f2d88d broad="the loop, the tracker scope and the commit rule are one mechanism" -->
+<!-- claim: cash/decorator/store.py:ResultStore.stream_and_store @12e0d5bd broad="the loop, the tracker scope and the commit rule are one mechanism" -->
 On a miss you get each item as the function produces it, so caching does not
 delay the first item. cash copies each item into its chunk as it is yielded,
 so editing the item afterwards (or a producer refilling one buffer it yields

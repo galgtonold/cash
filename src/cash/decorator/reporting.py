@@ -110,8 +110,8 @@ class Notices:
         ``once_per_version``: and once per CACHE for the same text -- which
         names the lines and the code it found them in -- so a later process
         records it in ``cache_info()['warnings']`` without printing it. For
-        the static findings a source reading makes, which were the same 32
-        lines in a nightly job's log every night; an edit that
+        the static findings a source reading makes, which would otherwise
+        repeat in a nightly job's log every night; an edit that
         changes what they say shows them again.
 
         ``message`` is one sentence of *what happened*; ``fix`` is one

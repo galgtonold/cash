@@ -10,7 +10,6 @@ import hashlib
 import inspect
 import pickle
 import textwrap
-import threading
 import types
 import weakref
 from collections.abc import Callable, Iterator
@@ -25,27 +24,20 @@ from ..source_norm import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
-from .code_identity import code_fingerprint, hash_callable_source, is_user_code_object
+from .code_identity import (
+    SYNC_TYPES,
+    code_fingerprint,
+    hash_callable_source,
+    is_cash_wrapper,
+    is_immutable_capture,
+    is_user_code_object,
+)
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
     from .globals_fold import GlobalsFold
     from .purity_checks import LearnedMutations
     from .reporting import Notices
-
-
-def is_immutable_capture(v: Any) -> bool:
-    """True for values that are immutable and so define a closure's
-    behaviour without drifting between calls. Mutable captures (dict/list/
-    set/objects) are excluded: they are typically side-effect accumulators
-    (e.g. a hit counter) whose value changes every call - folding those into
-    the key would make every call miss. Tuples are looked through however deep
-    they nest: one cannot hold itself."""
-    if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
-        return True
-    if isinstance(v, (tuple, frozenset)):
-        return all(is_immutable_capture(x) for x in v)
-    return False
 
 
 #: Callables that are code, not an object holding data: followed as helpers.
@@ -61,7 +53,7 @@ _CODE_CALLABLES = (
 def is_user_callable_instance(value: Any) -> bool:
     """Is *value* an instance of the user's own class with a ``__call__``,
     rather than a function, method, class or partial?"""
-    if isinstance(value, _CODE_CALLABLES) or getattr(value, "_cash_cached", False):
+    if isinstance(value, _CODE_CALLABLES) or is_cash_wrapper(value):
         return False
     cls = type(value)
     return is_user_code_object(cls) and not is_opaque(value)
@@ -374,22 +366,11 @@ class CaptureAnalysis:
 
 _UNHASHABLE_CAPTURE_ERRORS = (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError)
 
-#: Captured values that hold no data a result could depend on: a closure
-#: that serialises its work with ``with guard:`` is keyed without the lock.
-#: The same types `GlobalsFold` leaves out of a class's data.
-_SYNC_TYPES: tuple[type, ...] = (
-    type(threading.Lock()),
-    type(threading.RLock()),
-    threading.Condition,
-    threading.Event,
-    threading.Semaphore,
-)
-
 
 def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyBuildFailed:
     """KEY-UNHASHABLE-CAPTURE for *fn*'s captured *name*, whose *value* the
-    key needs and cannot hash. Left out, a change to it served the old
-    result; the call runs uncached instead."""
+    key needs and cannot hash. Left out, a change to it would not reach
+    the key; the call runs uncached instead."""
     owner = getattr(fn, "__qualname__", repr(fn))
     kind = type(value).__qualname__
     return KeyBuildFailed(
@@ -428,8 +409,8 @@ class HelperIdentity:
 
         A decorator's arguments live there: ``@scale(10)`` builds a wrapper
         whose closure holds ``k=10``, so ``@scale(100)`` -- or ``@scale(K)``
-        after ``K`` changed -- ran different code under an identical source and
-        was served stale. So does a factory's config: ``make_scorer(cfg)``
+        after ``K`` changed -- runs different code under an identical source.
+        So does a factory's config: ``make_scorer(cfg)``
         with ``cfg`` a dataclass, an ``argparse.Namespace`` or any instance.
         Never a variable the function reassigns (``nonlocal calls; calls +=
         1``), nor a mutable value it may write to: decorators often keep
@@ -437,7 +418,7 @@ class HelperIdentity:
         that drifts on every call would make every call miss. Captured
         FUNCTIONS are followed as helpers in their own right, not here. A
         value that cannot be hashed raises KEY-UNHASHABLE-CAPTURE
-        (`unhashable_capture`): left out, a change to it served the old result.
+        (`unhashable_capture`), rather than being left out of the key.
         """
         closure = getattr(fn, "__closure__", None)
         code = getattr(fn, "__code__", None)
@@ -464,19 +445,17 @@ class HelperIdentity:
                 except _UNHASHABLE_CAPTURE_ERRORS as e:
                     raise unhashable_capture(fn, name, value, e) from e
                 continue
-            if isinstance(value, _SYNC_TYPES):
+            if isinstance(value, SYNC_TYPES):
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
                 continue
             if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
                 # A value the helper only READS is data like any other:
-                # `lambda: when` with `when` a list, a dict -- or a datetime
-                # before the type list above had it -- gave every value ONE
-                # entry, so the standard frozen-clock fixture served July's
-                # answer to a March test; `x * cfg.weight` with `cfg` a
-                # frozen dataclass served the old weight. What the body
-                # mutates (a decorator's cache dict, a counter list) stays
-                # out, as before: folding it would make every call miss. An
+                # `lambda: when` with `when` a list, a dict or a datetime (a
+                # frozen-clock fixture), `x * cfg.weight` with `cfg` a frozen
+                # dataclass. What the body mutates (a decorator's cache
+                # dict, a counter list) stays out: folding it would make
+                # every call miss. An
                 # object that is not a plain container is also left out when
                 # the body calls a method on it or passes it on, which may
                 # change it where the source does not show.
@@ -568,9 +547,9 @@ class HelperIdentity:
 
         A factory-built callable as a default (`def run(xs, fn=make(3))`)
         shares its source with every other one the factory makes; the value it
-        was built with lives in its closure, and was not keyed -- `make(3)` ->
-        `make(1)` served the old result. `HelperIdentity.identity`
-        adds its immutable captures and its own defaults.
+        was built with lives in its closure (`make(3)` against `make(1)`).
+        `HelperIdentity.identity` adds its immutable captures and its own
+        defaults.
         """
         if inspect.isfunction(v):
             return f"__cash_callable__:{self.identity(v)}"
@@ -655,15 +634,14 @@ class ClosureFold:
                 attrs = self._captures.attr_reads(code).get(name, frozenset())
                 captures.append((name, module_capture_identity(v, attrs)))
                 continue
-            if getattr(v, "_cash_cached", False):
+            if is_cash_wrapper(v):
                 # A captured CACHED function is what it computes: its
                 # dependency state, as a registry holding one counts it
-                # (`GlobalsFold.data_callable_identity`). Not cash's wrapper around
-                # it, whose closure holds this Cash instance and the
-                # function's spec: those were content-hashed into the key on
-                # every call, backend and all, while the write thread changed
-                # the backend's dicts -- "dictionary changed size during
-                # iteration", and the call ran uncached.
+                # (`GlobalsFold.data_callable_identity`). Not cash's wrapper
+                # around it, whose closure holds this Cash instance and the
+                # function's spec, backend and all: none of that is an
+                # input, and the backend's dicts change under the write
+                # thread while a key is built.
                 captures.append((name, self._globals.data_callable_identity(v)))
                 continue
             # A captured FUNCTION is its code, so fold its source. Reaching
@@ -677,10 +655,9 @@ class ClosureFold:
             #         def score(px, n): return f(px, weight_fn(n))
             #         return score
             #
-            # folded NOTHING: two scorers built with different weightings share
-            # a source and a qualname (`make.<locals>.score`), collided on one
-            # key, and returned each other's results. Measured: `flat` and
-            # `ramp` both returning 0.025001250062501867, one body execution.
+            # needs its captured function keyed: two scorers built with
+            # different weightings share a source and a qualname
+            # (`make.<locals>.score`), and only `weight_fn` tells them apart.
             #
             # A call cannot mutate a function, so the reason `unsafe` exists
             # does not apply. Same predicate as `HelperIdentity.fingerprint_default`, and the
@@ -693,19 +670,17 @@ class ClosureFold:
                 # Source text alone collides for two lambdas sharing a line
                 # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
                 # `inspect.getsource` returns the same string for both).
-                # Measured: both arms returned "AAA". Their code objects differ.
+                # Their code objects differ.
                 inner_code = getattr(v, "__code__", None)
                 if inner_code is not None:
                     fingerprint = f"{fingerprint}:{code_fingerprint(inner_code)}"
                 # Source alone is not enough: a factory-built helper has the
                 # SAME source for every parameter it was built with, so
-                # `outer(2)` and `outer(3)` fingerprint identically and collide
-                # again one level down (measured: both returned 20). Recurse so
-                # the captured function's own captures fold under the same
-                # rules, however deep the factories nest (five levels down
-                # was not followed, and `outer(2)` collided with `outer(3)`
-                # again). *_walked*, the closures on this path, ends a cycle:
-                # a recursive local function captures itself.
+                # `outer(2)` and `outer(3)` fingerprint identically one level
+                # down. Recurse so the captured function's own captures fold
+                # under the same rules, however deep the factories nest.
+                # *_walked*, the closures on this path, ends a cycle: a
+                # recursive local function captures itself.
                 walked = _walked | {id(func)}
                 if id(v) in walked:
                     fingerprint = f"{fingerprint}:cycle"
@@ -721,14 +696,14 @@ class ClosureFold:
 
             if is_immutable_capture(v):
                 captures.append((name, v))
-            elif isinstance(v, _SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
+            elif isinstance(v, SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
                 # A lock holds no data. A class, an ``lru_cache`` wrapper or
                 # another callable is code, followed by the helper walk.
                 continue
             elif name not in unsafe:
                 # Read-only mutable capture: fold its content hash. One that
-                # cannot be hashed runs the call uncached: left out, a
-                # change to it served the old result.
+                # cannot be hashed runs the call uncached rather than being
+                # left out of the key.
                 try:
                     h = self._args.hash_payload((v,), {})
                 except _UNHASHABLE_CAPTURE_ERRORS as e:
@@ -755,11 +730,8 @@ class ClosureFold:
         A default is an input to the result exactly like a passed argument, but
         it lives on the FUNCTION OBJECT, not in the code object — so the bytecode
         fingerprint the state hash falls back to when source is unavailable
-        (functions defined in an IPython cell, the documented ML path) cannot see
-        it. Editing ``n_estimators=300`` to ``400`` left the key byte-identical
-        and returned the 300-tree model on an instant HIT while
-        ``inspect.signature`` reported 400 — a wrong answer that reads as a
-        finding ("accuracy has plateaued") rather than as a bug.
+        (functions defined in an IPython cell) cannot see it: editing
+        ``n_estimators=300`` to ``400`` changes no code.
 
         Defaults are hashed by VALUE through the same payload hasher arguments
         use, so ``register_hasher`` and the pandas/numpy-aware hashers apply
@@ -877,11 +849,11 @@ class ClosureFold:
         """Mix what a cached ``functools.partial`` binds into the key.
 
         ``c.cache(partial(total, arr))``: the bound values never appear in
-        the call's arguments, and they were keyed only by a ``repr`` taken at
-        decoration -- which elides the middle of an array, so two arrays
-        differing there shared an entry, and holds an ordinary object's
-        address, so the entry never hit in another process and a change to
-        the object was not seen. They are hashed per call, as arguments are.
+        the call's arguments. A ``repr`` taken at decoration is not enough: it
+        elides the middle of an array, so two arrays differing there would
+        share an entry, and it holds an ordinary object's address, which
+        never hits in another process and does not see a change to the
+        object. They are hashed per call, as arguments are.
         One that cannot be hashed leaves the call uncached: keying it on
         anything less would serve one binding's result to another.
         """

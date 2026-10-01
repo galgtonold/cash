@@ -15,7 +15,7 @@ import types
 from typing import Any
 
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
-from ..install_paths import is_user_path
+from ..install_paths import is_user_module
 from ..source_norm import (
     bytecode_identity,
     callable_identity,
@@ -35,7 +35,7 @@ _UNCACHED = object()
 
 
 def is_local_module(module: types.ModuleType) -> bool:
-    """Is *module* the user's own code (`cash.install_paths.is_user_path`),
+    """Is *module* the user's own code (`cash.install_paths.is_user_module`),
     loaded from Python source -- not an extension module or bare bytecode?"""
     file_path = getattr(module, "__file__", None)
     if not file_path:
@@ -44,7 +44,7 @@ def is_local_module(module: types.ModuleType) -> bool:
         # A .pyc counts when its .py sits next to it; anything else is compiled.
         if not (file_path.endswith((".pyc", ".pyo")) and os.path.isfile(file_path[:-1])):
             return False
-    return is_user_path(file_path)
+    return is_user_module(module)
 
 
 def _collect_imported_names(tree: ast.AST) -> set[str]:

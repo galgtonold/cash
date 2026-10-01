@@ -12,7 +12,6 @@ import inspect
 import pickle
 import sys
 import textwrap
-import threading
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -35,9 +34,12 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
 from ..source_norm import getsource, own_source
 from ..value_types import CODELESS_PRIMS, IMMUTABLE_LEAF_TYPES
 from .arg_hashing import is_opaque
-from .call_state import CAPTURE_WATCH
+from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import is_immutable_capture, iter_code_scopes, unsafe_uses_of, waived_use_filter
 from .code_identity import (
+    SYNC_TYPES,
+    cash_wrapped,
+    is_cash_wrapper,
     hash_callable_source,
     is_user_class,
     is_user_code_object,
@@ -180,21 +182,20 @@ def stabilize_for_global_hash(
     hashable and content-sensitive (dict-dispatch channel).
 
     A callable is its code AND what it carries (`carried_payload`): a
-    ``Scaler(10)`` with ``__call__`` became its class's code alone, so
-    ``Scaler(11)`` -- held in a dict, a list, or read as a global -- kept
-    the same key; so did ``{"scale": partial(mul, k=10)}`` after ``k=11``.
+    ``Scaler(10)`` with ``__call__`` and ``Scaler(11)`` -- held in a dict, a
+    list, or read as a global -- key apart, and so do
+    ``{"scale": partial(mul, k=10)}`` and ``k=11``.
     *carried* False keeps the code alone, the fallback for a carried state
     that cannot be hashed.
 
-    However deep the containers nest: past eight levels a callable was left
-    as it was, which pickles by name, so editing it kept the key. *_path*
-    (the containers and callables being rewritten) ends one that holds itself.
+    However deep the containers nest: a callable left as it is pickles by
+    name, which an edit does not move. *_path* (the containers and
+    callables being rewritten) ends one that holds itself.
 
     An object whose state is its ``__dict__`` (`_state_is_its_dict`) and that
-    holds code is rewritten as its class's name and that dict: left to be
-    pickled, ``CFG = {"b": Box(lambda x: x + 1)}`` could not be, and the
-    global was dropped from the key, so editing the lambda served the old
-    result. An object that holds no code is left as it is, keyed as before.
+    holds code is rewritten as its class's name and that dict:
+    ``CFG = {"b": Box(lambda x: x + 1)}`` cannot be pickled as it is, and
+    its lambda is an input. An object that holds no code is left as it is.
     """
     return _stabilized(v, hash_callable, _path, carried)[0]
 
@@ -346,28 +347,6 @@ CLASSES_FOLDED: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar
 #: builds two small classes. None outside a key build.
 READS_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_reads_folded", default=None)
 
-#: Synchronization objects kept on a class (`_lock = threading.Lock()`): no
-#: result is computed from them, so one that cannot be hashed is left out of
-#: the class's data without a warning.
-_SYNC_TYPES: tuple[type, ...] = (
-    type(threading.Lock()),
-    type(threading.RLock()),
-    threading.Condition,
-    threading.Event,
-    threading.Semaphore,
-)
-
-
-def is_user_data_class(cls: Any, own_pkg: str | None = None) -> bool:
-    """A class the user edits: one of their modules (`is_user_class`), or a
-    notebook cell's or exec'd module, which has no file to judge by."""
-    if not isinstance(cls, type):
-        return False
-    if is_user_class(cls, own_pkg):
-        return True
-    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
-    return mod is not None and getattr(mod, "__file__", None) is None and is_user_code_object(cls)
-
 
 def _user_bases(cls: type) -> list[type]:
     """*cls*'s own user classes in method-resolution order, and its metaclass's."""
@@ -389,7 +368,7 @@ def _function_layers(fn: Any) -> list[types.FunctionType]:
     walked: set[int] = set()
     while fn is not None and id(fn) not in walked:  # every layer; a cycle ends
         walked.add(id(fn))
-        if isinstance(fn, types.FunctionType) and not getattr(fn, "_cash_cached", False):
+        if isinstance(fn, types.FunctionType) and not is_cash_wrapper(fn):
             layers.append(fn)
         fn = getattr(fn, "__wrapped__", None)
     return layers
@@ -470,7 +449,7 @@ def class_data_items(
                 continue
             if isinstance(value, (types.FunctionType, type, types.ModuleType)) or wraps_code(value):
                 continue
-            if getattr(value, "_cash_cached", False):
+            if is_cash_wrapper(value):
                 continue
             items.append((f"{prefix}.{name}", value))
     return items
@@ -553,6 +532,18 @@ def _bytecode_mutated_globals(scopes: tuple, names: set[str]) -> set[str]:
 _NO_PLAN = object()
 
 
+def _resolve_dotted(g: dict, path: str) -> Any:
+    """The object ``pkg.conf`` names in globals *g*: the global, then each
+    attribute through modules only. None when a link is missing."""
+    head, _, rest = path.partition(".")
+    value = g.get(head)
+    for attr in rest.split(".") if rest else ():
+        if not isinstance(value, types.ModuleType):
+            return None
+        value = vars(value).get(attr)
+    return value
+
+
 def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
     """Whether the decorator expression *deco* is cash's own ``@app.cache``.
 
@@ -575,6 +566,8 @@ def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
 #: The opcodes that read a module global by name (``LOAD_NAME`` in a class
 #: body or at module level; ``LOAD_FROM_DICT_OR_GLOBALS`` in 3.12+ class bodies).
 _GLOBAL_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS"})
+#: The opcodes that read an attribute (``LOAD_METHOD`` before 3.12).
+_ATTR_OPS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
 
 
 class GlobalsFold:
@@ -778,15 +771,14 @@ class GlobalsFold:
         """A callable found INSIDE a data global, identified by what calling it runs.
 
         A registry -- ``STEPS = {"load": load_step}`` read by a cached
-        ``run(name)`` that calls ``STEPS[name](x)`` -- was keyed by each
-        function's own source, so an edit to a helper the step calls was a HIT
-        with the old result; and a cached function stored there was keyed by
-        cash's own wrapper, so not even an edit to its body moved the key. A
+        ``run(name)`` that calls ``STEPS[name](x)`` -- runs each step's helpers
+        too, so each function's own source is not enough, and a cached
+        function stored there is not cash's wrapper code. A
         cached function counts as its dependency state, the same
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
         """
-        if getattr(fn, "_cash_cached", False) and not is_mock(fn):
+        if is_cash_wrapper(fn) and not is_mock(fn):
             state = getattr(fn, "_cash_state", None)
             if state is not None:
                 # Its whole state, globals and environment included, built by
@@ -925,7 +917,7 @@ class GlobalsFold:
             if isinstance(v, type):
                 # A class's code is keyed as code; what it holds and what its
                 # methods read is data (`GlobalsFold.class_parts`).
-                if is_user_data_class(v, own_pkg):
+                if is_user_class(v, own_pkg):
                     classes.append(v)
                 continue
             if isinstance(v, types.ModuleType):
@@ -975,8 +967,8 @@ class GlobalsFold:
                 continue
             # A pre-built user-class INSTANCE (or a container of them) is only
             # value-hashed above -- its class's method SOURCE is invisible to the
-            # pickle, so editing a method served stale. Fold the class-graph
-            # source too (memoized per class; see instance_class_source_parts).
+            # pickle. Fold the class-graph source too (memoized per class; see
+            # instance_class_source_parts).
             for item in iter_contained(v):
                 if is_user_class(type(item), own_pkg):
                     for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
@@ -995,7 +987,9 @@ class GlobalsFold:
             # only, and the one-level look above does not reach them; the
             # argument walk does, so a global goes through it too.
             if self.code_args is not None:
-                code_parts = self.code_args.carrier_parts(v, func_name)
+                code_parts = self.code_args.carrier_parts(
+                    v, func_name, owner_code=owner_code if owner_code is not None else code
+                )
                 if code_parts:
                     digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
                     parts.append((f"{name}#code", digest))
@@ -1018,7 +1012,7 @@ class GlobalsFold:
             parts.extend(self._docstring_parts(code, g, own_pkg))
         # A function default is evaluated where the `def` stands, so what a
         # default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
-        # of *func*'s: editing K kept the key.
+        # of *func*'s, so it is folded here or editing K would keep the key.
         for default in self._function_defaults(func):
             if seen is not None:
                 if ("default", id(default)) in seen:
@@ -1085,8 +1079,8 @@ class GlobalsFold:
 
         A docstring is not part of the key: it documents the code. Unless the
         code reads it -- a tool description, a prompt, help text built from
-        ``__doc__`` -- and then it is an input like any string constant, and
-        editing it served the old answer. Every user function, class and
+        ``__doc__`` -- and then it is an input like any string constant.
+        Every user function, class and
         module the code names (and ``module.attr`` of those it reads), and the
         module's own docstring when it reads ``__doc__``.
         """
@@ -1102,7 +1096,7 @@ class GlobalsFold:
             if isinstance(value, types.ModuleType):
                 if not is_user_module(value, own_pkg):
                     return
-            elif getattr(value, "_cash_cached", False):
+            elif is_cash_wrapper(value):
                 pass
             elif not isinstance(value, (types.FunctionType, type)) or not is_user_code_object(value):
                 return
@@ -1183,6 +1177,45 @@ class GlobalsFold:
             seen=seen,
         )
 
+    def fold_passed_function_reads(self, fn: types.FunctionType, func_name: str, owner_code: Any) -> str:
+        """What a function that reaches the call as data reads, as one digest
+        ("" when it reads nothing): an argument, or a function a data global
+        holds.
+
+        The folds a cached function's own reads go through: its globals
+        (`GlobalsFold.fold_read_globals`), then what its helpers read
+        (`GlobalsFold.fold_passed_helper_reads`). *owner_code* is the cached
+        function's code, which the drift guard records under.
+
+        Raises `KeyBuildFailed` when the helpers cannot be found.
+        """
+        seen: set = set()
+        digest = self.fold_read_globals(fn, func_name, "", owner_code=owner_code, seen=seen)
+        return self.fold_passed_helper_reads(fn, func_name, digest, owner_code=owner_code, seen=seen)
+
+    def fold_passed_helper_reads(
+        self, fn: types.FunctionType, func_name: str, state_hash: str, *, owner_code: Any, seen: set
+    ) -> str:
+        """Fold what the helpers of *fn*, a function that reaches the call as
+        data, read: their globals and the data their bindings carry (a global
+        ``partial(scale, k=2)``), from *fn*'s own purity report, as
+        `GlobalsFold.fold_helper_read_globals` does for the cached function.
+
+        Raises `KeyBuildFailed` when the helpers cannot be found.
+        """
+        try:
+            report = get_analyzer().analyze(fn)
+        except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
+            report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({type(e).__name__}: {e})")
+        if report.unwalkable:
+            raise KeyBuildFailed(
+                "KEY-HELPERS-UNWALKABLE",
+                f"@cash.cache on {func_name}: {getattr(fn, '__qualname__', '?')} reaches the call as data, "
+                f"and {report.unwalkable}, so the call ran uncached.",
+                "If the function itself runs fine, this is a bug in cash: report it with the error.",
+            )
+        return self._fold_paths_read_globals(report, fn, func_name, state_hash, owner_code=owner_code, seen=seen)
+
     def _fold_paths_read_globals(
         self,
         report: PurityReport,
@@ -1220,8 +1253,7 @@ class GlobalsFold:
         # A callable bound at a call site carries DATA besides its code: a
         # partial's arguments, a bound method's instance, a callable
         # instance's attributes. Its code is followed as a helper; this is the
-        # rest (`F = partial(base, k=2)` -> `k=3`, and `F = S(2).f`, were both
-        # served stale).
+        # rest (`F = partial(base, k=2)` against `k=3`, `F = S(2).f`).
         carried: list[str] = []
         # A callable that changes what it carries when called -- an instance
         # memoising into its own dict -- would key each call on the last one's
@@ -1281,8 +1313,8 @@ class GlobalsFold:
         """Key parts for the DATA a user class brings: what it holds, and what
         its code reads.
 
-        A class's code reached the key (its source, its bases' source); the
-        data behind it did not, so each of these served the old result:
+        A class's code reaches the key through its source and its bases';
+        the data behind it is folded here:
 
         * a module global read by an inherited method, a property, a mixin,
           ``__init__`` or ``cached_property`` (``x * RATE`` in ``Base.scale``,
@@ -1498,7 +1530,7 @@ class GlobalsFold:
                         (stabilize_for_global_hash(value, self.data_callable_identity),), {}
                     )
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                    if not isinstance(value, _SYNC_TYPES):
+                    if not isinstance(value, SYNC_TYPES):
                         unhashable.append(label)
             if not kept:
                 return None, unhashable
@@ -1531,7 +1563,7 @@ class GlobalsFold:
         self, cls: type, func: Callable, func_name: str, state_hash: str, owner_code: Any, seen: set
     ) -> str:
         """`GlobalsFold.class_parts` for a class the helper walk reached, into *state_hash*."""
-        if not is_user_data_class(cls, own_package(func)):
+        if not is_user_class(cls, own_package(func)):
             return state_hash
         parts = self.class_parts(cls, func_name, owner_code=owner_code, seen=seen)
         if not parts:
@@ -1587,7 +1619,7 @@ class GlobalsFold:
         if verdict is not None and verdict[0] is value and not verdict[1]:
             return None
         try:
-            if getattr(value, "_cash_cached", False):
+            if is_cash_wrapper(value):
                 return None
             if isinstance(value, functools.partial):
                 payload: Any = ("partial", value.func, value.args, dict(value.keywords))
@@ -1754,17 +1786,25 @@ class GlobalsFold:
         return state_hash
 
     def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
-        """``(module_global, attribute)`` pairs the body reads, from bytecode.
+        """``(module_path, attribute)`` pairs the body reads, from bytecode.
 
-         ``import conf; conf.RATE`` compiles to ``LOAD_GLOBAL conf`` followed by
-         ``LOAD_ATTR RATE``. Only the *module* reaches ``GlobalsFold.read_global_data_names``,
-         and modules are filtered out at fold time, so the attribute was never
-         keyed on: ``conf.RATE`` went permanently stale while the equivalent
-         ``from conf import RATE`` invalidated correctly. Two spellings of one
-         dependency, one of them silently wrong.
+        ``conf.RATE``, ``pkg.conf.RATE`` and ``m = pkg.conf; m.RATE`` are
+        three spellings of one dependency, and the global the body names is
+        a module in each: none of them reaches
+        `GlobalsFold.read_global_data_names`, so the attribute is keyed here.
 
-         Walks nested scopes for the same reason the sibling channel does
-        : a read that happens only inside a genexp still counts.
+        * A global followed by a chain of attribute loads
+          (``LOAD_GLOBAL pkg; LOAD_ATTR conf; LOAD_ATTR RATE``) gives one
+          pair per link: ``("pkg", "conf")`` and ``("pkg.conf", "RATE")``.
+          `GlobalsFold.module_attr_parts` resolves the dotted path and folds
+          the pairs whose path is a user module.
+        * A module the code takes whole (bound to a local, passed on, or read
+          with ``vars(conf)["K"]`` / ``getattr(conf, "K")``) is paired with
+          every attribute name and identifier-shaped string constant in the
+          code. A pair that names nothing is dropped at fold time; one that
+          names an attribute the code does not read only adds a part.
+
+        Nested scopes count: a read inside a genexp is a read of the body.
         """
         code = getattr(func, "__code__", None)
         if code is None:
@@ -1773,32 +1813,35 @@ class GlobalsFold:
         if cached is not None:
             return cached
 
-        pairs: set[tuple[str, str]] = set()
-        # `vars(conf)["K"]` / `getattr(conf, "K")`: the attribute is a string
-        # constant rather than a LOAD_ATTR, so the pair below never formed and
-        # the constant was not keyed on. Every module read in this scope is
-        # paired with every identifier-shaped constant in it; a pair that does
-        # not exist is dropped at fold time by the getattr below.
         g = getattr(func, "__globals__", None) or {}
-        for scope in iter_code_scopes(code):
-            modules = [n for n in (scope.co_names or ()) if isinstance(g.get(n), types.ModuleType)]
-            if modules:
-                for const in scope.co_consts or ():
-                    if isinstance(const, str) and const.isidentifier():
-                        pairs.update((m, const) for m in modules)
-        for scope in iter_code_scopes(code):
-            instrs = list(dis.get_instructions(scope))
-            for prev, nxt in zip(instrs, instrs[1:]):
-                if prev.opname != "LOAD_GLOBAL":
+        pairs: set[tuple[str, str]] = set()
+        whole: set[str] = set()
+        names: set[str] = set()
+        scopes = list(iter_code_scopes(code))
+        for scope in scopes:
+            names.update(c for c in scope.co_consts or () if isinstance(c, str) and c.isidentifier())
+            instrs = [i for i in dis.get_instructions(scope) if i.opname != "EXTENDED_ARG"]
+            for i, ins in enumerate(instrs):
+                if ins.opname in _ATTR_OPS and isinstance(ins.argval, str):
+                    names.add(ins.argval)
+                if ins.opname != "LOAD_GLOBAL" or not isinstance(ins.argval, str):
                     continue
-                if nxt.opname not in ("LOAD_ATTR", "LOAD_METHOD"):
-                    continue
-                name, attr = prev.argval, nxt.argval
-                if not isinstance(name, str) or not isinstance(attr, str):
-                    continue
-                if attr.startswith("__"):
-                    continue
-                pairs.add((name, attr))
+                path = ins.argval
+                value = g.get(path)
+                j = i + 1
+                while j < len(instrs) and instrs[j].opname in _ATTR_OPS and isinstance(instrs[j].argval, str):
+                    attr = instrs[j].argval
+                    if attr.startswith("__"):
+                        break
+                    pairs.add((path, attr))
+                    path = f"{path}.{attr}"
+                    value = getattr(value, attr, None) if isinstance(value, types.ModuleType) else None
+                    j += 1
+                else:
+                    if isinstance(value, types.ModuleType):
+                        whole.add(path)
+        for path in whole:
+            pairs.update((path, n) for n in names if not n.startswith("__"))
         result = tuple(sorted(pairs))
         self._module_attr_cache[code] = result
         return result
@@ -1847,13 +1890,12 @@ class GlobalsFold:
     def _local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:
         """Key parts for data reached through names the module's globals never see.
 
-        Two shapes, both served stale (a constant 2 -> 0 and the old
-        report back):
+        Two shapes:
 
         * an import written INSIDE the body -- ``from .settings import
           ROUNDING``, or ``from . import settings`` then ``settings.ROUNDING``
-          -- binds a local, so the globals channels never saw it (#132 followed
-          only the FUNCTIONS such an import binds);
+          -- binds a local, which the globals channels never see (the helper
+          walk follows only the FUNCTIONS such an import binds);
         * a module held in a closure: ``from . import settings`` inside a
           decorator factory, read by the wrapper as ``settings.ROUNDING``.
 
@@ -1945,12 +1987,11 @@ class GlobalsFold:
         parts: list[tuple[str, str]] = []
         own_pkg = own_package(func)
         for mod_name, attr in self._read_module_attr_pairs(func):
-            obj = g.get(mod_name)
+            obj = _resolve_dotted(g, mod_name)
             is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
             # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
-            # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
-            # skipped because ``Cfg`` is a class, not a module, so editing the
-            # constant served stale. Fold user-class attributes too.
+            # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT), with a
+            # class in place of the module. Fold user-class attributes too.
             is_cls = isinstance(obj, type) and is_user_class(obj, own_pkg)
             if not (is_mod or is_cls):
                 # `scale.k` with `scale.k = 1` set on a function of the
@@ -1967,7 +2008,7 @@ class GlobalsFold:
             if isinstance(value, type):
                 # `cfg.Cfg.RATE`, `cfg.Color.RED.value`: the pair is (cfg, Cfg)
                 # and the constant is one attribute further in.
-                if is_mod and is_user_data_class(value, own_pkg):
+                if is_mod and is_user_class(value, own_pkg):
                     parts.extend(self.class_parts(value, func_name, owner_code=owner_code, seen=seen, reader=func))
                 continue
             if isinstance(value, types.ModuleType):
@@ -1977,7 +2018,7 @@ class GlobalsFold:
                 # attributes, not what its class holds (`helper = CC(10)`).
                 item_types = {type(item) for item in iter_contained(value) if type(item) not in CODELESS_PRIMS}
                 for item_type in sorted(item_types, key=lambda t: f"{t.__module__}.{t.__qualname__}"):
-                    if item_type is not type and is_user_data_class(item_type, own_pkg):
+                    if item_type is not type and is_user_class(item_type, own_pkg):
                         parts.extend(
                             self.class_parts(item_type, func_name, owner_code=owner_code, seen=seen, reader=func)
                         )
@@ -2002,12 +2043,9 @@ class GlobalsFold:
                 # One level only: fold the constants the helper itself reads.
                 # Deeper recursion would drag in whole transitive namespaces for
                 # a diminishing chance of catching a real edit.
-                if getattr(value, "_cash_cached", False):
-                    # A cached helper is cash's wrapper, whose globals are
-                    # cash's own: it warned KEY-UNHASHABLE-GLOBAL for
-                    # 'rates.fetch.ACTIVE_CONFIG' on every run (the class-method
-                    # twin is handled in source_norm).
-                    value = getattr(value, "__wrapped__", value)
+                # A cached helper's globals are those of the function it
+                # wraps, not of cash's wrapper.
+                value = cash_wrapped(value)
                 helper_globals = getattr(value, "__globals__", None)
                 if not isinstance(helper_globals, dict):
                     continue

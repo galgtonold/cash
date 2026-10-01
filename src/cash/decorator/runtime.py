@@ -40,6 +40,7 @@ from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_d
 from .globals_fold import CLASSES_FOLDED, READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
+from .store import StoreRequest
 from .rng import capture_rng_pre_state, replay_rng_state
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ def entry_expired(metadata: CacheMetadata, ttl: int | None) -> bool:
     return ttl_expired(metadata.timestamp, ttl)
 
 
-def compute_cache_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
+def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
     return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
 
@@ -293,7 +294,9 @@ class KeyBuilder:
             normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
             if self._registry.cached[func_name].seed_params:
                 self._rng.warn_if_seed_is_none(func, func_name, args, kwargs)
-            state_hash = self._code_args.fold_code_args(*normalized_args, state_hash, func_name=func_name)
+            state_hash = self._code_args.fold_code_args(
+                *normalized_args, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
+            )
             chain.append(state_hash)
             dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args)
@@ -304,7 +307,7 @@ class KeyBuilder:
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
             raise UnhashableArgs
-        cache_key = compute_cache_key(func_name, state_hash, dynamic_state_hash, args_hash)
+        cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 
 
@@ -381,30 +384,17 @@ class CallRunner:
         so a non-None metadata view with a ``None`` data value still
         counts as a hit (a function that legitimately returned ``None``).
 
-        Auto-tracked file dependencies stored in
-        ``metadata.auto_file_deps`` are re-checked here; any file whose
-        content differs from what was recorded forces a miss so the
-        function re-reads the changed file.
+        Whether a found entry is served is `CallRunner.entry_verdict`.
         """
         if metadata is None:
             self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
-        ttl = self._backend_slot.entry_ttl(ttl, metadata)
         try:
-            if entry_expired(metadata, ttl):
-                age = time.time() - (metadata.timestamp or 0)
-                self._misses.note_miss(
-                    func_name, cache_key, MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
-                )
+            verdict = self.entry_verdict(cache_key, metadata, ttl)
+            if verdict is not None:
+                self._misses.note_miss(func_name, cache_key, verdict)
                 return CACHE_MISS
-            if not self._files.auto_file_deps_fresh(metadata):
-                self._misses.note_miss(func_name, cache_key, MissReason(MissKind.FILE, describe_stale_files(metadata)))
-                return CACHE_MISS
-            if not self._chunks_are_intact(cache_key, metadata):
-                self._misses.note_miss(
-                    func_name, cache_key, MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
-                )
-                return CACHE_MISS
+            ttl = self._backend_slot.entry_ttl(ttl, metadata)
             # If this hit happens *inside* another cached function's
             # computation, replay the files this entry depends on into the
             # enclosing tracker, so the outer function records them too.
@@ -439,6 +429,28 @@ class CallRunner:
                 func_name, cache_key, MissReason(MissKind.INCOMPLETE, "the stored entry's metadata did not validate")
             )
         return CACHE_MISS
+
+    def entry_verdict(
+        self, cache_key: str, metadata: CacheMetadata, ttl: int | None, *, quiet: bool = False
+    ) -> MissReason | None:
+        """Why the entry found under *cache_key* is not served, or None to
+        serve it: its age against the ttl, its recorded files, its chunks.
+
+        The one judgement a lookup (`CallRunner._try_get_cached`) and
+        ``explain()`` both apply, so a check added here holds for both.
+        *quiet* leaves out the warnings the file check gives, for
+        ``explain()``. Raises ``TypeError``/``KeyError`` on metadata that
+        does not validate.
+        """
+        ttl = self._backend_slot.entry_ttl(ttl, metadata)
+        if entry_expired(metadata, ttl):
+            age = time.time() - (metadata.timestamp or 0)
+            return MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
+        if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
+            return MissReason(MissKind.FILE, describe_stale_files(metadata))
+        if not self._chunks_are_intact(cache_key, metadata):
+            return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
+        return None
 
     def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
         """True unless this is a chunked manifest missing some of its chunks.
@@ -547,9 +559,9 @@ class CallRunner:
             call.recompute = lambda: func(*args, **kwargs)
 
         # Everything from here to the hit/miss verdict is cash's own cost,
-        # not the user's work. Two perf_counter pairs measured at 196ns
-        # against a 25.5us floor for the cheapest possible cached call --
-        # 0.8%, so this is not gated behind a heuristic.
+        # not the user's work. Two perf_counter pairs cost under 1% of the
+        # cheapest possible cached call, so this is not gated behind a
+        # heuristic.
         overhead_t0 = _perf_counter()
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
@@ -667,21 +679,7 @@ class CallRunner:
                 args_hash=call.args_hash,
                 cache_key=call.cache_key,
             )
-            return StreamingCachedIterator(
-                self._store.stream_and_store(
-                    res,
-                    cache_key=call.cache_key,
-                    spec=spec,
-                    tracker=run.tracker,
-                    observer=run.observer,
-                    rng_new=run.rng_new,
-                    args=args,
-                    kwargs=kwargs,
-                    args_hash=call.args_hash,
-                    current_state_hash=call.state_hash,
-                    ttl=call.ttl,
-                )
-            )
+            return StreamingCachedIterator(self._store.stream_and_store(res, spec, call, run))
 
         self._purity.check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
         self._purity.report_observed_effects(func_name, run.observer)
@@ -702,17 +700,16 @@ class CallRunner:
             # that was never written.
             self._store.attach_lineage(res, call.cache_key, auto_file_deps, ttl=call.ttl, func_name=func_name)
             self._store.store(
-                call.cache_key,
-                func_name,
+                StoreRequest(
+                    call,
+                    func_name,
+                    execution_time=execution_time,
+                    auto_file_deps=auto_file_deps,
+                    body_seconds=run.body_seconds,
+                    saves_seconds=run.saves_seconds,
+                    rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
+                ),
                 res,
-                call.ttl,
-                call.state_hash,
-                call.args_hash,
-                execution_time,
-                auto_file_deps=auto_file_deps,
-                body_seconds=run.body_seconds,
-                saves_seconds=run.saves_seconds,
-                rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
             )
         # A result the disk cap had evicted, computed again: say what that cost.
         if self._misses.pending_eviction(call.cache_key) is not None:

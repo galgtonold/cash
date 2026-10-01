@@ -97,9 +97,9 @@ def checked_depends_on(depends_on: Any) -> list[Callable[..., Any] | DataSource]
     """``depends_on=`` as a list of callables and `DataSource` objects.
 
     One callable or source on its own is taken as a list of one. Anything
-    else raises: an entry that is neither was skipped, so
-    ``depends_on=["data.txt"]`` -- meant as ``file_depends_on`` -- added
-    nothing to the key and the result went stale when the file changed.
+    else raises: skipping it would let ``depends_on=["data.txt"]`` -- meant
+    as ``file_depends_on`` -- add nothing to the key, and the result would go
+    stale when the file changed.
 
     Raises:
         TypeError: *depends_on* or one of its entries is neither a callable
@@ -561,10 +561,9 @@ class FunctionRegistry:
                     self.graph.add_dependency(func_name, called)
             report = get_analyzer().analyze(func)
         except Exception as e:
-            # The analysis is what finds the helpers the key folds. A report
-            # of none, as a failure used to give, keyed the function by its
-            # own code alone, and an edit to any helper served the old
-            # result. The function still runs, uncached.
+            # The analysis is what finds the helpers the key folds. An empty
+            # report would key the function by its own code alone, leaving
+            # out every helper. The function runs, uncached.
             logger.debug("Purity analyzer failed for %s: %s", func_name, e, exc_info=True)
             reason = f"cash could not find the helpers {func_name} calls ({type(e).__name__}: {e})"
             warn_diagnostic(

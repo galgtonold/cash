@@ -570,9 +570,8 @@ class PurityChecks:
 
         The static analyzer sees `rows.append(x)` written in the function, but
         not `vendor.normalize(rows)` sorting the list inside a library it does
-        not walk into. Measured: of four state mutations that reached past the
-        analyzer, three left an observable change in the arguments -- so the
-        cheapest way to find them is to look.
+        not walk into. Such a mutation usually leaves an observable change in
+        the arguments, so the cheapest way to find it is to look.
 
         The argument hash is already computed to build the cache key, so this
         re-runs exactly that and compares. `ArgHasher.serialize_args` canonicalises
@@ -745,11 +744,9 @@ class PurityChecks:
         folds by value on every call?
 
         Then "cached results won't reflect changes to it" is false: a setter
-        rebinding it, or a test patching it, makes the next call a new entry.
-        Measured: a `configure()`-set module flag re-ran the
-        function each time it changed, 0 diffs against a no-cache oracle --
-        while the warning, of the kind the docs say never to ignore, said
-        otherwise. Kept for what the fold leaves out: callables, modules,
+        rebinding it, or a test patching it, makes the next call a new entry
+        (a `configure()`-set module flag re-runs the function each time it
+        changes). Kept for what the fold leaves out: callables, modules,
         classes (tracked their own way, or not at all), and a global the
         function itself writes.
         """

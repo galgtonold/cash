@@ -17,11 +17,13 @@ from ..analysis.purity_analyzer import ISSUE_UNTRACKABLE_DEP, get_analyzer
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..object_hashing import held_objects
-from ..source_norm import class_functions, unwrap_partials
+from ..source_norm import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method
-from .code_identity import is_user_code_module, is_user_code_object
+from ..install_paths import is_user_code_module
+from .code_identity import cached_function_in, is_user_code_object
+from .globals_fold import class_surface_functions
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -71,14 +73,6 @@ def carrier_name(carrier: Any) -> str:
     return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
 
 
-def cached_function_in(carrier: Any) -> Any:
-    """The ``@cash.cache`` wrapper *carrier* is, or a partial wraps; else None."""
-    carrier = unwrap_partials(carrier)
-    if isinstance(carrier, types.FunctionType) and getattr(carrier, "_cash_cached", False) is True:
-        return carrier
-    return None
-
-
 def is_user_code_carrier(carrier: Any) -> bool:
     """``is_user_code_object`` for the ADVISORY rather than for hashing.
 
@@ -86,15 +80,15 @@ def is_user_code_carrier(carrier: Any) -> bool:
     treat as user code". That is the safe direction when deciding whether
     to HASH something and the wrong one when deciding whether to WARN about
     it: an object with no ``__qualname__`` of its own -- a
-    ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
-    every single one was reported as un-hashable user code.
+    ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, and
+    is not un-hashable user code for that.
 
     Judge such an object by what it WRAPS (``.func``, the same attribute
     ``CodeIdentity.class_surface_parts`` already follows for ``singledispatchmethod``
-    and ``cached_property``), else by its TYPE. Measured:
-    ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
-    while ``functools.partial(<a user function>)`` still warns -- and it
-    must, because the wrapped body genuinely is absent from the key.
+    and ``cached_property``), else by its TYPE:
+    ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` do not warn,
+    while ``functools.partial(<a user function>)`` does, because the
+    wrapped body is absent from the key.
     """
     if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
         return is_user_code_object(carrier)
@@ -252,9 +246,8 @@ class CodeArgs:
         the fold takes a ``set`` of the parts anyway.
 
         The walk recurses `CODE_SEARCH_DEPTH` containers at a time; what lies
-        deeper is set aside and walked from there after. It stopped there
-        before, and a function held deeper was keyed by its name only, so
-        editing it served the old result.
+        deeper is set aside and walked from there after, so code is found
+        however deep it is held.
         """
         if _seen is None:
             _seen = set()
@@ -308,9 +301,7 @@ class CodeArgs:
         # cycle safety, and yielded carriers, to yield each once -- and NOT for
         # a leaf instance. A leaf cannot contain itself, and its class is
         # deduped by `_instance_class_carrier` anyway, so an entry per element
-        # bought nothing and cost a set insert per element: measured 2000
-        # ns/element at 200k against 470 ns/element at 10k, i.e. the set itself
-        # had become the superlinear term.
+        # would buy nothing and make the set itself grow with the argument.
         if isinstance(value, type):
             if id(value) not in _seen:
                 _seen.add(id(value))
@@ -341,8 +332,7 @@ class CodeArgs:
         # The primitive test is repeated INLINE in each loop below rather than
         # left to the recursive call's own first line. It is the same test and
         # the same result, but it skips building a generator frame per element,
-        # and a container of primitives is the overwhelmingly common argument:
-        # measured 25.8ms -> 7.2ms for a 200k-int list.
+        # and a container of primitives is the overwhelmingly common argument.
         if isinstance(value, dict):
             if id(value) in _seen:
                 return
@@ -404,9 +394,8 @@ class CodeArgs:
     def _iter_attribute_carriers(self, value: Any, _depth: int, _seen: set):
         """Code carried by what an instance of the user's own class HOLDS.
 
-        ``f(A(1, B()))`` keyed ``A``'s code, and ``A.f`` calling ``self.b.f()``
-        reached ``B`` -- whose code, and everything it calls, never entered the
-        key: editing ``B.f`` or a function it called served the old result.
+        ``f(A(1, B()))`` with ``A.f`` calling ``self.b.f()`` runs ``B``'s
+        code, and everything it calls: that code is part of the key.
         Only an instance whose class is user code is looked into (a library
         object's attributes are its own business), each once per walk, bounded
         by the same depth; attributes that are plain values cost a type test.
@@ -444,14 +433,12 @@ class CodeArgs:
         """User code a LIBRARY object holds: looked for, not keyed on the way.
 
         ``make_pipeline(Scale(), FunctionTransformer(double))`` is sklearn's,
-        so the walk stopped at it, and an edit to ``Scale.transform`` or
-        ``double`` was served the old result -- as an argument and as a global.
-        The library's own attributes are only searched: what is found and is
+        and runs ``Scale.transform`` and ``double``, as an argument and as a
+        global. The library's own attributes are only searched: what is found and is
         user code (a function, a class, an instance of one) is walked like an
         argument, and nothing of the library's own reaches the key, so its
-        caches and fitted state cannot churn it. Every value is looked at:
-        a search that gave up after 2000 missed the user function in a
-        pipeline whose fitted step held a large vocabulary.
+        caches and fitted state cannot churn it. Every value is looked at,
+        however many a fitted step holds (a large vocabulary).
         """
         if id(value) in _seen:
             return
@@ -516,8 +503,8 @@ class CodeArgs:
         Split out because three branches need it, and because the dedup is the
         difference between one user-code gate evaluation per ARGUMENT and one
         per ELEMENT -- ``is_user_code_object`` is a ``sys.modules`` lookup plus
-        a ``__qualname__`` walk, and a list of 50k instances of one class was
-        paying it 50k times (measured: 50000 calls -> 1).
+        a ``__qualname__`` walk, paid once per class rather than once per
+        element of a list of instances.
 
         A plain function rather than a generator on purpose: the callers are in
         the per-element path, and `yield from` on a fresh generator costs more
@@ -529,7 +516,9 @@ class CodeArgs:
         _seen.add(id(cls))
         return cls if is_user_code_object(cls) else None
 
-    def fold_code_args(self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?") -> str:
+    def fold_code_args(
+        self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?", owner_code: Any = None
+    ) -> str:
         """Fold user code reached through the arguments into the key.
 
         ``args_hash`` is a digest of the PICKLED arguments, and pickle
@@ -544,14 +533,19 @@ class CodeArgs:
         parts: list[str] = []
         seen_carriers: set[int] = set()
         for param, value in (*((None, a) for a in args), *kwargs.items()):
-            parts.extend(self.carrier_parts(value, func_name, param, seen_carriers))
+            parts.extend(self.carrier_parts(value, func_name, param, seen_carriers, owner_code))
         if not parts:
             return state_hash
         payload = ":".join(sorted(set(parts)))
         return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
 
     def carrier_parts(
-        self, value: Any, func_name: str = "?", param: str | None = None, seen_carriers: set[int] | None = None
+        self,
+        value: Any,
+        func_name: str = "?",
+        param: str | None = None,
+        seen_carriers: set[int] | None = None,
+        owner_code: Any = None,
     ) -> list[str]:
         """Key parts for the user code *value* carries: each carrier's code and
         what that code reads. One walk for an argument and a data global.
@@ -561,6 +555,7 @@ class CodeArgs:
         `CodeIdentity.code_surface_hash` once instead of three times. Safe by
         identity because every carrier stays reachable from the values for
         the whole key build, so no id can be recycled underneath us.
+        *owner_code* is the cached function's code, for the drift guard.
         """
         if seen_carriers is None:
             seen_carriers = set()
@@ -587,13 +582,10 @@ class CodeArgs:
             digest = self._code.code_surface_hash(carrier)
             if digest is not None:
                 parts.append(f"{carrier_name(carrier)}:{digest}")
-                # Its CODE is in the key; the globals that code reads
-                # were not. A callback reading a module
-                # constant served the old result after the constant
-                # changed, while the same read one call level deeper,
-                # or in the cached function itself, invalidated.
+                # Its code is in the key, and so is what that code reads,
+                # through the folds the cached function's own reads use.
                 if is_user_code_carrier(carrier):
-                    parts.extend(self._carrier_read_global_parts(carrier, func_name))
+                    parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)
             elif is_user_code_carrier(carrier):
                 # User code we could not hash: a C-extension type, an
@@ -604,39 +596,30 @@ class CodeArgs:
                 self._warn_unhashable_code_once(carrier, func_name, param)
         return parts
 
-    def _carrier_read_global_parts(self, carrier: Any, func_name: str) -> list[str]:
-        """Key parts for the module data a code carrier's functions read.
-
-        The same channel the cached function's own globals go through
-        (`GlobalsFold.read_global_data_names` + `GlobalsFold.safe_global_hash`, plus the
-        ``module.ATTR`` fold), applied to code that arrived as an ARGUMENT: a
-        function, a bound method's function, or a class's own methods -- which
-        is how a callable instance's ``__call__`` is reached.
+    def _carrier_read_global_parts(self, carrier: Any, func_name: str, owner_code: Any) -> list[str]:
+        """Key parts for the data a code carrier's functions read: a
+        function's or a bound method's through
+        `GlobalsFold.fold_passed_function_reads`, a class's through
+        `GlobalsFold.class_parts`. *owner_code* is the cached function's
+        code, which the drift guard records under.
         """
-
         if isinstance(carrier, type):
-            # A class: what it holds and what every function it can run --
-            # inherited, a property, `__init__` -- reads (`GlobalsFold.class_parts`).
-            return [f"argclass:{label}:{h}" for label, h in self._globals.class_parts(carrier, func_name)]
+            parts = [
+                f"argclass:{label}:{h}"
+                for label, h in self._globals.class_parts(carrier, func_name, owner_code=owner_code)
+            ]
+            seen: set = set()
+            helpers = ""
+            for member in class_surface_functions(carrier):
+                if is_user_code_object(member):
+                    helpers = self._globals.fold_passed_helper_reads(
+                        member, func_name, helpers, owner_code=owner_code, seen=seen
+                    )
+            if helpers:
+                parts.append(f"argclass:{carrier.__qualname__}#helpers:{helpers}")
+            return parts
         fn = getattr(carrier, "__func__", carrier)
-        functions = [fn] if isinstance(fn, types.FunctionType) else []
-        parts: list[str] = []
-        for fn in functions:
-            g = getattr(fn, "__globals__", None)
-            if not isinstance(g, dict):
-                continue
-            owner = getattr(fn, "__qualname__", "?")
-            for name in self._globals.read_global_data_names(fn):
-                if name not in g:
-                    continue
-                value = g[name]
-                if isinstance(value, (types.ModuleType, type)):
-                    continue
-                if callable(value) and not isinstance(value, (dict, list, tuple, set)):
-                    continue
-                h = self._globals.safe_global_hash(value, func_name, f"{owner}.{name}")
-                if h is not None:
-                    parts.append(f"argglobal:{owner}.{name}:{h}")
-            for label, h in self._globals.module_attr_parts(fn, func_name, g):
-                parts.append(f"argglobal:{owner}:{label}:{h}")
-        return parts
+        if not isinstance(fn, types.FunctionType):
+            return []
+        digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)
+        return [f"argglobal:{getattr(fn, '__qualname__', '?')}:{digest}"] if digest else []

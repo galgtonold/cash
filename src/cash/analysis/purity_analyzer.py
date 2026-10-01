@@ -75,7 +75,7 @@ from ..effects import (
     environment_input,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
-from ..install_paths import is_user_path
+from ..install_paths import in_own_package, is_user_code_file, top_package
 from ..purity import (
     KNOWN_PURE_BUILTINS,
     is_pure,
@@ -1443,35 +1443,8 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
     module = _defining_module(callee)
     if module is None:
         return False
-
-    # Top-level package shortcut - handles common case fast and
-    # works for editable installs (both pieces share the same
-    # top-level package by construction).
-    callee_mod = getattr(module, "__name__", "") or ""
-    if root_module:
-        root_top = root_module.split(".", 1)[0]
-        callee_top = callee_mod.split(".", 1)[0]
-        if root_top and callee_top and root_top == callee_top:
-            return True
-
-    # Never analyse cash's own code on a user's behalf. Under ``%cash_on``
-    # the file tracker wraps the pandas readers (and the other readers that
-    # raise no audit event) in cash shims, so a user function that reads a
-    # file resolves its callee to ``cash.tracking.reader_patches``. In a
-    # NORMAL install that lands in site-packages and the fallback below
-    # rejects it; in an EDITABLE install it does not, so the analyzer would
-    # walk the shim and report cash's own tracker calls as the user's side
-    # effect.
-    # The report is about the user's function, and cash's instrumentation
-    # is never part of it. Placed after the shortcut above so cash
-    # analysing its own functions still recurses.
-    if callee_mod == "cash" or callee_mod.startswith("cash."):
-        return False
-
-    # Fall back to the file-path-based check used by the notebook
-    # subsystem. Catches editable installs that DON'T share the
-    # cached function's package (e.g. user's project depends on a
-    # locally-developed sibling lib also installed `-e`).
+    if in_own_package(getattr(module, "__name__", None), top_package(root_module)):
+        return True
     try:
         return is_local_module(module)
     except (TypeError, AttributeError):
@@ -1526,9 +1499,11 @@ def _module_is_user_code(module_name: str, root_module: str | None) -> bool:
     nothing, so a library imported inside a function to defer its cost
     (``import torch``) is never imported early on its behalf.
     """
-    top = module_name.split(".")[0]
-    if root_module and root_module.split(".")[0] == top:
+    if in_own_package(module_name, top_package(root_module)):
         return True
+    top = top_package(module_name)
+    if top is None:
+        return False
     try:
         spec = importlib.util.find_spec(top)
     except (ImportError, ValueError):
@@ -1803,7 +1778,7 @@ def _clock_helper_read(value: Any) -> str | None:
         # wrapper's code object, which the memo below is keyed by: one cached
         # `return time.time()` made every cached callee a clock read.
         return None
-    if not is_user_path(code.co_filename):
+    if not is_user_code_file(code.co_filename):
         # A library function (`os.path.isdir`) is not the user's helper, and
         # reading its source inside a cached call would record the read.
         return None

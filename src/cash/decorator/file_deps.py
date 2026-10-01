@@ -148,8 +148,8 @@ def argument_paths(args: tuple, kwargs: dict) -> set[str]:
 def _track_directory(tracker: Any, path: str) -> None:
     """A declared directory: every file under it by content, and every
     directory in it by its listing, so an edit, a new file and a removed one
-    all count. Only the directory itself was recorded, whose timestamp an
-    edit to a file inside does not move: edits were served stale."""
+    all count. The directory's own timestamp does not move when a file in
+    it is edited, so it alone would not do."""
     for root, dirs, files in os.walk(path):
         dirs.sort()
         tracker.add_tracked(normalize_path(os.path.realpath(root)))
@@ -231,7 +231,7 @@ class FileDeps:
             else:
                 tracker.add_tracked_absent(normalize_path(path))
 
-    def auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
+    def auto_file_deps_fresh(self, metadata: CacheMetadata, *, quiet: bool = False) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
         still matches on disk.
 
@@ -244,15 +244,19 @@ class FileDeps:
         Freshness is decided by the shared
         :func:`cash.tracking.file_dep_snapshot.snapshot_is_fresh` - the same
         content-authoritative check the notebook path uses, so
-        the two subsystems can't drift. ``(mtime, size)`` alone was ambiguous in
-        both directions: a touch (identical content, bumped mtime)
-        recomputed needlessly, and a same-size edit under an indistinguishable
-        mtime was missed and served stale. The helper checks the cheap size
-        first and only hashes when the size matches.
+        the two subsystems can't drift. ``(mtime, size)`` alone is ambiguous in
+        both directions: a touch (identical content, bumped mtime) would
+        recompute needlessly, and a same-size edit under an indistinguishable
+        mtime would be missed. The helper checks the cheap size first and
+        only hashes when the size matches.
+
+        *quiet* checks without saying that checking was expensive.
         """
         snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
+        if quiet:
+            return snapshot_is_fresh(snap)[0]
 
         # Remote entries cost a network round trip each to check, so the check
         # itself is worth measuring - see warn_if_validation_is_expensive.
@@ -260,11 +264,9 @@ class FileDeps:
         # Local ones are measured too, as what is left of the pass once the
         # remote resolutions are taken out. Hashing is not free either, and
         # file deps PROPAGATE: an aggregate that calls ten cached functions
-        # inherits their inputs, so a fifty-file pipeline paid for fifty checks
-        # on every one of those hits. Measured at 168 ms a hit before the
-        # digest memo landed, with nothing anywhere to say so -- the remote
-        # channel had a cost warning and the local one, which every user has,
-        # did not.
+        # inherits their inputs, so a fifty-file pipeline pays for fifty
+        # checks on every one of those hits, and the user is told when that
+        # costs a real share of the saving.
         started = _perf_counter()
         with measured_validation() as validation:
             fresh, stale = snapshot_is_fresh(snap)
@@ -374,11 +376,10 @@ class FileDeps:
         A function is keyed by the text of its file, read once per process;
         the code that runs is what the process loaded -- or, for a worker a
         pool starts during the call, whatever the file holds THEN. Edited in
-        between, the result of one version was stored under the other's key,
-        and a later process running the first version was served the second
-        one's numbers (a helper edited while a pooled call ran; a deploy that
-        replaced a helper under a running job). Nothing can say
-        which version the result came from, so it is returned and not stored.
+        between (a helper edited while a pooled call runs; a deploy that
+        replaces a helper under a running job), the result of one version
+        would be stored under the other's key. Nothing can say which version
+        the result came from, so it is returned and not stored.
 
         Only THIS code's text counts: a file edited elsewhere -- another
         function, a comment -- runs the same code in a new worker, and the
@@ -432,13 +433,12 @@ class FileDeps:
         """Did a file this call read change before the call returned?
 
         The entry's file fingerprints are taken when it is STORED. A file
-        rewritten after the body read it but before it returned was
-        fingerprinted in its new state, so the entry matched the new file
-        and served the old answer on every later call (a sync job overlapping
-        a long pipeline; and, one level up, an outer
-        aggregate re-fingerprinting a file its inner call had already read).
-        The documented mitigation -- write to a temp file and rename -- did
-        not help, because the rename lands before the store.
+        rewritten after the body read it but before it returned (a sync job
+        overlapping a long pipeline; an outer aggregate re-fingerprinting a
+        file its inner call had already read) would be fingerprinted in its
+        new state, and the entry would match a file it was not computed
+        from. Writing to a temp file and renaming does not avoid this: the
+        rename lands before the store.
 
         The result is still returned: it is what the body computed. It is
         only not cached, because nothing can say which content it came from.
