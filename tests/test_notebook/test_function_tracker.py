@@ -169,7 +169,7 @@ class TestDetectChangedFunctions:
         user_ns = {"process": process}
 
         # First call establishes baseline
-        tracker.update_function_hash("process", process)
+        tracker.detect_changed_functions({"process": process}, {"process"})
 
         # Create a new function with same name but different source
         def process_v2(x):
@@ -188,7 +188,7 @@ class TestDetectChangedFunctions:
             return x * 2
 
         user_ns = {"process": process}
-        tracker.update_function_hash("process", process)
+        tracker.detect_changed_functions({"process": process}, {"process"})
 
         changed = tracker.detect_changed_functions(user_ns, {"process"})
         assert len(changed) == 0
@@ -200,7 +200,7 @@ class TestDetectChangedFunctions:
         def process(x):
             return x * 2
 
-        tracker.update_function_hash("process", process)
+        tracker.detect_changed_functions({"process": process}, {"process"})
 
         # Function removed from namespace
         changed = tracker.detect_changed_functions({}, {"process"})
@@ -213,86 +213,11 @@ class TestDetectChangedFunctions:
         def process(x):
             return x * 2
 
-        tracker.update_function_hash("process", process)
+        tracker.detect_changed_functions({"process": process}, {"process"})
 
         user_ns = {"process": 42}  # No longer callable
         changed = tracker.detect_changed_functions(user_ns, {"process"})
         assert "process" in changed
-
-
-class TestGetCalledFunctionNames:
-    """Test extraction of called function names from code."""
-
-    def test_simple_call(self):
-        """Should extract function names from simple calls."""
-        tracker = FunctionTracker()
-        code = "result = process(10)"
-        names = tracker.get_called_function_names(code)
-        assert "process" in names
-
-    def test_multiple_calls(self):
-        """Should extract all function names."""
-        tracker = FunctionTracker()
-        code = "a = f(x)\nb = g(y)\nc = h(a, b)"
-        names = tracker.get_called_function_names(code)
-        assert names == {"f", "g", "h"}
-
-    def test_method_call_extracts_base(self):
-        """Should extract base object for method calls."""
-        tracker = FunctionTracker()
-        code = "result = df.process(10)"
-        names = tracker.get_called_function_names(code)
-        assert "df" in names
-
-    def test_chained_method_calls(self):
-        """Should extract base object for chained method calls."""
-        tracker = FunctionTracker()
-        code = "result = df.sort_values('col').head(10)"
-        names = tracker.get_called_function_names(code)
-        assert "df" in names
-
-    def test_no_calls(self):
-        """Should return empty set when no function calls."""
-        tracker = FunctionTracker()
-        code = "x = 42\ny = x + 1"
-        names = tracker.get_called_function_names(code)
-        assert names == set()
-
-    def test_syntax_error_returns_empty(self):
-        """Should return empty set for invalid code."""
-        tracker = FunctionTracker()
-        code = "def incomplete("
-        names = tracker.get_called_function_names(code)
-        assert names == set()
-
-    def test_nested_calls(self):
-        """Should extract function names from nested calls."""
-        tracker = FunctionTracker()
-        code = "result = outer(inner(x))"
-        names = tracker.get_called_function_names(code)
-        assert "outer" in names
-        assert "inner" in names
-
-
-class TestUpdateFunctionHash:
-    """Test updating stored function hashes."""
-
-    def test_stores_hash(self):
-        """update_function_hash should store the hash."""
-        tracker = FunctionTracker()
-
-        def f(x):
-            return x
-
-        result = tracker.update_function_hash("f", f)
-        assert result is not None
-        assert tracker._function_hashes["f"] == result
-
-    def test_returns_none_for_builtin(self):
-        """Should return None for built-in functions."""
-        tracker = FunctionTracker()
-        result = tracker.update_function_hash("len", len)
-        assert result is None
 
 
 class TestIntraModuleCallDeps:

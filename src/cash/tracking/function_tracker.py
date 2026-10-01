@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import functools
 import hashlib
 import importlib
 import logging
@@ -20,7 +21,6 @@ from ..source_norm import (
     bytecode_identity,
     callable_identity,
     loaded_module_matches_disk,
-    module_identity,
     read_code_text,
     source_digest,
 )
@@ -71,6 +71,41 @@ def _collect_imported_names(tree: ast.AST) -> set[str]:
     return names
 
 
+@functools.lru_cache(maxsize=512)
+def _imported_names_of_source(source: str) -> frozenset[str]:
+    """`_collect_imported_names` of *source*, memoised on the text: every
+    change check asks it of every tracked module, and a file that did not
+    change parses the same."""
+    return frozenset(_collect_imported_names(ast.parse(source)))
+
+
+def _imports_of(module_name: str) -> frozenset[str] | None:
+    """The module names *module_name*'s source file imports, or None when it
+    is not loaded, has no source file, or the file cannot be read or parsed."""
+    mod = sys.modules.get(module_name)
+    mod_file = getattr(mod, "__file__", None) if mod is not None else None
+    if not mod_file or not os.path.isfile(mod_file):
+        return None
+    try:
+        return _imported_names_of_source(read_code_text(mod_file))
+    except (SyntaxError, ValueError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _importers_closure(seed: set[str], imports_map: dict[str, set[str]]) -> set[str]:
+    """*seed* plus every module in *imports_map* that imports one of them,
+    directly or through others."""
+    closure = set(seed)
+    grew = True
+    while grew:
+        grew = False
+        for name, deps in imports_map.items():
+            if name not in closure and deps & closure:
+                closure.add(name)
+                grew = True
+    return closure
+
+
 def _reload_from_source(module) -> None:
     """``importlib.reload(module)``, compiled from the source file whatever
     bytecode sits next to it.
@@ -103,8 +138,9 @@ class FunctionTracker:
     """
 
     def __init__(self):
-        # Maps (func_id, func_qualname) -> source_hash
-        self._source_cache: LruMemo[tuple[int, str], str | None] = LruMemo(NOTEBOOK_FUNCTIONS)
+        # Maps (func_id, func_module, func_qualname) -> source_hash. The
+        # module is in the key so a reload can drop exactly its entries.
+        self._source_cache: LruMemo[tuple[int, str | None, str], str | None] = LruMemo(NOTEBOOK_FUNCTIONS)
         # Maps function_name -> source_hash (for tracking changes)
         self._function_hashes: dict[str, str] = {}
         # Module file tracking: module_name -> last known mtime
@@ -172,8 +208,8 @@ class FunctionTracker:
         func_module = getattr(func, "__module__", None)
         use_cache = not self._tracked_module_file_changed(func_module)
 
-        # Check cache using id + qualname (id alone isn't enough since objects can be recycled)
-        cache_key = (id(func), getattr(func, "__qualname__", ""))
+        # id alone is not enough: a freed function's address is reused.
+        cache_key = (id(func), func_module, getattr(func, "__qualname__", ""))
         if use_cache:
             cached = self._source_cache.get(cache_key, _UNCACHED)
             if cached is not _UNCACHED:
@@ -261,55 +297,6 @@ class FunctionTracker:
             self._function_hashes[name] = current_hash
 
         return changed
-
-    def update_function_hash(self, name: str, func: Any) -> str | None:
-        """Update the stored hash for a function.
-
-        Args:
-            name: The function name in user namespace
-            func: The function object
-
-        Returns:
-            The new source hash, or None if not trackable
-        """
-        source_hash = self.get_function_source_hash(func)
-        if source_hash is not None:
-            self._function_hashes[name] = source_hash
-        return source_hash
-
-    def get_called_function_names(self, code: str) -> set[str]:
-        """Extract names of functions called in a code block.
-
-        Uses AST parsing to find all function calls.
-
-        Args:
-            code: Source code to analyze
-
-        Returns:
-            Set of function names called in the code
-        """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return set()
-
-        called = set()
-
-        class CallVisitor(ast.NodeVisitor):
-            def visit_Call(self, node):
-                if isinstance(node.func, ast.Name):
-                    called.add(node.func.id)
-                elif isinstance(node.func, ast.Attribute):
-                    # For method calls like obj.method(), we track the base object
-                    base = node.func
-                    while isinstance(base, ast.Attribute):
-                        base = base.value
-                    if isinstance(base, ast.Name):
-                        called.add(base.id)
-                self.generic_visit(node)
-
-        CallVisitor().visit(tree)
-        return called
 
     def clear(self):
         self._source_cache.clear()
@@ -410,9 +397,8 @@ class FunctionTracker:
         and second (`loaded_module_matches_disk`), so the module runs code that
         is not in its file. Tracking takes the file as the baseline, so no edit
         is ever seen and the stale code keeps running, while every key built
-        from the module describes the file: after a quick same-size edit and
-        Restart & Run All, a cell below printed -- and persisted -- the
-        pre-edit helper's value under the edited helper's key.
+        from the module describes the file: a result of the old code would be
+        stored under the new code's key.
 
         The modules in the set that import a reloaded one are reloaded after it,
         so their ``from x import f`` bindings pick up the new code, as a
@@ -425,14 +411,7 @@ class FunctionTracker:
         if not stale:
             return set()
         imports_map = FunctionTracker._build_imports_map_for_set(module_names)
-        to_reload = set(stale)
-        grew = True
-        while grew:
-            grew = False
-            for name, deps in imports_map.items():
-                if name not in to_reload and deps & to_reload:
-                    to_reload.add(name)
-                    grew = True
+        to_reload = _importers_closure(stale, imports_map)
         reloaded = set()
         for name in FunctionTracker._kahn_sort_bottom_up(to_reload, imports_map):
             logger.info("Module '%s' was loaded from bytecode older than its file; reloading it", name)
@@ -473,23 +452,11 @@ class FunctionTracker:
                 continue
             visited.add(mod_name)
 
-            mod = sys.modules.get(mod_name)
-            if mod is None:
+            sub_module_names = _imports_of(mod_name)
+            if sub_module_names is None:
+                logger.debug("No readable source for transitive dependency '%s'", mod_name)
                 continue
-
-            mod_file = getattr(mod, "__file__", None)
-            if not mod_file or not os.path.isfile(mod_file):
-                continue
-
-            try:
-                source = read_code_text(mod_file)
-                tree = ast.parse(source, filename=mod_file)
-            except (SyntaxError, OSError, UnicodeDecodeError):
-                logger.debug("Could not parse transitive dependency '%s'", mod_name)
-                continue
-
-            sub_module_names = _collect_imported_names(tree)
-            self._process_sub_modules(sub_module_names, module_name, visited, stack)
+            self._process_sub_modules(set(sub_module_names), module_name, visited, stack)
         return visited
 
     def refresh_transitive_dependencies(self) -> None:
@@ -714,116 +681,6 @@ class FunctionTracker:
 
         return expanded
 
-    @staticmethod
-    def _handle_getattr_call(node: ast.Call, accesses: dict[str, set[str]], bare_uses: set[str]) -> None:
-        """Handle getattr(mod, 'attr') patterns, updating accesses/bare_uses in-place."""
-        if not (
-            isinstance(node.func, ast.Name)
-            and node.func.id == "getattr"
-            and node.args
-            and isinstance(node.args[0], ast.Name)
-        ):
-            return
-        base = node.args[0].id
-        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
-            accesses.setdefault(base, set()).add(node.args[1].value)
-        else:
-            accesses[base] = set()
-            bare_uses.add(base)
-
-    @staticmethod
-    def extract_module_attribute_accesses(code: str) -> dict[str, set[str]]:
-        """Statically determine which attributes of each name are accessed in code.
-
-        Parses the code AST and looks for patterns like ``mod.func()``,
-        ``mod.CONST``, ``mod.Class(...)``, ``from mod import func``.
-
-        Returns:
-            dict mapping base name → set of attribute names accessed.
-            An empty set for a name means the module itself is used but we
-            cannot determine which specific attributes (e.g. passed as argument,
-            used in getattr, etc.) — caller should treat as "all attributes".
-        """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return {}
-
-        accesses: dict[str, set[str]] = {}
-        bare_uses: set[str] = set()
-
-        class AttrVisitor(ast.NodeVisitor):
-            def visit_Attribute(self, node):
-                # mod.attr  or  mod.attr.subattr  — we only care about the
-                # first level: base_name.attr
-                if isinstance(node.value, ast.Name):
-                    base = node.value.id
-                    if base not in accesses:
-                        accesses[base] = set()
-                    accesses[base].add(node.attr)
-                self.generic_visit(node)
-
-            def visit_Name(self, node):
-                if isinstance(node.ctx, ast.Load):
-                    # Bare name usage — might be module passed to a function,
-                    # used in getattr, etc.
-                    bare_uses.add(node.id)
-                self.generic_visit(node)
-
-            def visit_Call(self, node):
-                FunctionTracker._handle_getattr_call(node, accesses, bare_uses)
-                self.generic_visit(node)
-
-        AttrVisitor().visit(tree)
-
-        # For names that appear as bare references (not just as mod.attr base)
-        # but aren't in accesses from attribute access, add them with empty set
-        # to signal "unknown attributes used".
-        # However, if a name IS in accesses and also used bare, the bare usage
-        # means we can't be sure only the listed attrs are used.
-        for name in bare_uses:
-            if name in accesses:
-                # Name is used both as mod.attr AND bare — check if it's
-                # only used bare as the base of attribute accesses (which is fine)
-                # vs. passed to a function or used standalone.
-                pass  # We keep the tracked attrs — they're the specific ones we found
-
-        return accesses
-
-    def compute_module_symbol_hash(self, module_name: str, accessed_attrs: set[str] | None) -> str:
-        """Compute a hash for a module based on only the accessed symbols.
-
-        If ``accessed_attrs`` is None or empty (meaning we can't determine
-        which attributes are used), falls back to hashing the entire module.
-
-        Args:
-            module_name: The tracked module name
-            accessed_attrs: Set of attribute names accessed, or None/empty for full hash
-
-        Returns:
-            Hash string
-        """
-        symbol_hashes = self._module_symbol_hashes.get(module_name)
-
-        if not accessed_attrs or not symbol_hashes:
-            # Fall back to full file hash
-            module = sys.modules.get(module_name)
-            if module is None:
-                return hashlib.sha256(b"unknown").hexdigest()
-            return module_identity(module) or hashlib.sha256(b"unknown").hexdigest()
-
-        # Compute hash from only the accessed symbols (sorted for determinism)
-        hasher = hashlib.sha256()
-        for attr in sorted(accessed_attrs):
-            sym_hash = symbol_hashes.get(attr, "")
-            hasher.update(f"{attr}:{sym_hash}".encode())
-            # Also include any __import__ symbols that might define this attr
-            # (e.g., `from helper import func` makes `func` available)
-            import_key = f"__import__{attr}"
-            if import_key in symbol_hashes:
-                hasher.update(f"{import_key}:{symbol_hashes[import_key]}".encode())
-        return hasher.hexdigest()
-
     def _check_direct_modules(self) -> set[str]:
         """Check each directly tracked module file; return names of changed modules."""
         changed: set[str] = set()
@@ -933,7 +790,7 @@ class FunctionTracker:
     def _invalidate_module_functions(self, module_name: str):
         """Clear cached source hashes for functions from a specific module."""
         for key in self._source_cache.keys():
-            if module_name in key[1]:
+            if key[1] == module_name:
                 self._source_cache.pop(key)
 
         # Also clear function_hashes for functions from this module
@@ -1094,19 +951,9 @@ class FunctionTracker:
         """Return a map of tracked_module → set of other tracked modules it imports."""
         imports_map: dict[str, set[str]] = {}
         for mod_name in self.tracked_modules:
-            mod = sys.modules.get(mod_name)
-            if mod is None:
-                continue
-            mod_file = getattr(mod, "__file__", None)
-            if not mod_file or not os.path.isfile(mod_file):
-                continue
-            try:
-                source = read_code_text(mod_file)
-                tree = ast.parse(source)
-            except (SyntaxError, OSError, UnicodeDecodeError):
-                continue
-            imported_names = _collect_imported_names(tree)
-            imports_map[mod_name] = imported_names & self.tracked_modules
+            imported_names = _imports_of(mod_name)
+            if imported_names is not None:
+                imports_map[mod_name] = imported_names & self.tracked_modules
         return imports_map
 
     def _compute_reload_set(self, changed_modules: set[str]) -> set[str]:
@@ -1118,41 +965,12 @@ class FunctionTracker:
         """
         # Build importer graph among tracked modules:
         # imports_map[A] = {B, C} means module A imports modules B and C
-        imports_map = self._build_tracked_imports_map()
-
-        # Propagate: if any import of A is in the reload set, A needs reloading too
-        reload_set = set(changed_modules)
-        changed_expanded = True
-        while changed_expanded:
-            changed_expanded = False
-            for mod_name, deps in imports_map.items():
-                if mod_name not in reload_set and (deps & reload_set):
-                    reload_set.add(mod_name)
-                    changed_expanded = True
-
-        return reload_set
+        return _importers_closure(changed_modules, self._build_tracked_imports_map())
 
     @staticmethod
     def _build_imports_map_for_set(modules: set[str]) -> dict[str, set[str]]:
         """Build import graph restricted to *modules* (bottom-up dependency graph)."""
-        imports_map: dict[str, set[str]] = {}
-        for mod_name in modules:
-            mod = sys.modules.get(mod_name)
-            if mod is None:
-                imports_map[mod_name] = set()
-                continue
-            mod_file = getattr(mod, "__file__", None)
-            if not mod_file or not os.path.isfile(mod_file):
-                imports_map[mod_name] = set()
-                continue
-            try:
-                source = read_code_text(mod_file)
-                tree = ast.parse(source)
-            except (SyntaxError, OSError, UnicodeDecodeError):
-                imports_map[mod_name] = set()
-                continue
-            imports_map[mod_name] = _collect_imported_names(tree) & modules
-        return imports_map
+        return {mod_name: set((_imports_of(mod_name) or frozenset()) & modules) for mod_name in modules}
 
     @staticmethod
     def _kahn_sort_bottom_up(modules: set[str], imports_map: dict[str, set[str]]) -> list[str]:

@@ -1,13 +1,23 @@
-"""Wrappers on the readers that raise no audit event.
+"""Wrappers on the calls that raise no audit event.
 
-Readers that open files in C (pyarrow, polars, sqlite3, some pandas readers),
-existence probes and ``Path.stat`` raise no audit event, so they are wrapped
-while a tracker is open: `FileDependencyRegistry` says which functions and
-how, and a meta-path hook wraps a registered module imported meanwhile. The
-executor ``submit`` methods are wrapped too, to carry the tracker into worker
-threads and bring back what worker processes read. Every wrapper looks the
-tracker up in `active_tracker` at call time, so one install serves every
-tracker.
+These are wrapped while a tracker is open; this list is the one place that
+names them:
+
+- readers that open files in C: pandas, polars, pyarrow and ``sqlite3``
+  (`FileDependencyRegistry` says which functions and how, and a meta-path
+  hook wraps a registered module imported meanwhile);
+- existence probes: ``os.path.exists``, ``lexists``, ``isfile``, ``isdir``
+  and ``os.access``;
+- metadata calls: ``Path.stat``, ``os.stat``, ``os.lstat``,
+  ``os.path.getsize``, ``getmtime``, ``getctime`` and the entries of
+  ``os.scandir``;
+- ``linecache.getline`` and ``getlines``, which read source files;
+- the ``submit`` of thread and process pool executors and
+  ``multiprocessing.Pool``, to carry the tracker into worker threads and
+  bring back what worker processes read.
+
+Every wrapper looks the tracker up in `active_tracker` at call time, so one
+install serves every tracker.
 """
 
 from __future__ import annotations
@@ -56,13 +66,12 @@ _PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file", "pa
 
 
 def _dispatch_track(path: Any) -> None:
-    """Module-level tracker-dispatching shim. Custom handler factories
-    registered via :meth:`Cash.register_file_handler` receive this as
-    their ``tracker_callback`` argument. The shim consults
-    ``active_tracker`` at *call* time, so old-signature factories
-    (whose wrappers do ``tracker_callback(path)``) transparently route
-    to whichever tracker is active on the current asyncio task or
-    thread — same isolation guarantees as the built-in handlers.
+    """The ``tracker_callback`` every handler factory receives, including
+    those registered with :meth:`Cash.register_file_handler`.
+
+    It looks up ``active_tracker`` at *call* time, so a wrapper calling
+    ``tracker_callback(path)`` records into whichever tracker is active on
+    the current asyncio task or thread, as the built-in handlers do.
     """
     _tracker = active_tracker.get()
     if _tracker is not None:
@@ -208,10 +217,9 @@ def _patch_aliases_in(module: types.ModuleType) -> None:
     """Point the names in *module* that hold a wrapped reader at its wrapper.
 
     ``from pyarrow.parquet import read_table`` at the top of a module binds the
-    ORIGINAL function, before any tracker opened; wrapping the module
-    attribute does nothing for that name, so the read went unseen and edits
-    were served stale -- while ``pq.read_table(...)`` beside it recomputed.
-    A plain alias (``reader = pl.read_csv``) is the same case. The wrapper
+    ORIGINAL function, before any tracker opened, and wrapping the module
+    attribute does nothing for that name: it must be rebound to be seen as
+    ``pq.read_table(...)`` is. A plain alias (``reader = pl.read_csv``) is the same case. The wrapper
     stands for the library's function in a cache key, as the patched module
     attribute always has. Remembered per namespace while its size holds, so a
     module with no such name (most) costs one lookup.
@@ -285,12 +293,9 @@ def _patch_attribute(owner: Any, name: str, make: Callable[[Any], Any]) -> None:
 def _track_regular_file(path: Any) -> None:
     """Record *path* as read when a tracker is active and it is a regular file.
 
-    For the metadata calls (``Path.stat``, ``os.path.getsize`` ...; ``os.stat``
-    records its own): what they
-    report is the file's, so the file is a dependency -- a directory has no
-    content to hash, and an absent path raised before this was reached.
-    ``os.stat``, not ``os.path.isfile``: that one is patched to record a
-    NEGATIVE answer as an absent dependency.
+    What a metadata call reports is the file's, so the file is a dependency;
+    a directory has no content to hash. ``os.stat``, not ``os.path.isfile``:
+    that one is patched to record a NEGATIVE answer as an absent dependency.
     """
     tracker = active_tracker.get()
     if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
@@ -324,20 +329,15 @@ def _patch_pathlib_stat() -> None:
             try:
                 result = original(self, *args, **kwargs)
             except (FileNotFoundError, NotADirectoryError):
-                # ``Path.exists()`` / ``is_file()`` answering False: the path
-                # was looked for and was not there.
-                tracker = active_tracker.get()
-                if tracker is not None:
-                    tracker.track_absent(self)
+                # ``Path.exists()`` / ``is_file()`` answering False.
+                _record_path_answer(self, None, sys._getframe(1))
                 raise
-            tracker = active_tracker.get()
-            if tracker is not None:
-                if stat.S_ISREG(result.st_mode):
-                    _track_regular_file(self)
-                elif stat.S_ISDIR(result.st_mode) and _asked_by_user_code(sys._getframe(1)):
-                    # ``Path("out").is_dir()``: a directory has no content to
-                    # depend on, but it being there is what the code asked.
-                    tracker.track_present(self, "dir")
+            if stat.S_ISREG(result.st_mode):
+                _record_path_answer(self, "content", sys._getframe(1))
+            elif stat.S_ISDIR(result.st_mode):
+                # ``Path("out").is_dir()``: a directory has no content to
+                # depend on, but it being there is what the code asked.
+                _record_path_answer(self, "dir", sys._getframe(1))
             return result
 
         return tracked_path_stat
@@ -349,20 +349,18 @@ def _patch_thread_pool_submit() -> None:
     """Run work submitted to a ``ThreadPoolExecutor`` under the submitter's context.
 
     The tracker is found through a ContextVar, and a pool's worker threads
-    start with an empty context -- so ``ex.map(np.load, shards)`` inside a
-    cached function read files no tracker saw, and editing a shard served the
-    pre-edit result while the serial loop beside it invalidated.
+    start with an empty context, so without this ``ex.map(np.load, shards)``
+    inside a cached function would read files no tracker sees.
 
     With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
-    call in ``copy_context().run``; with none, it is the original. A pool can
-    opt out with ``_cash_internal = True``. Threads started directly with
+    call in ``copy_context().run``; with none, it is the original. Threads started directly with
     ``threading.Thread`` still begin empty -- documented, not patched.
     """
 
     def make(original):
         @functools.wraps(original)
         def submit(self, fn, /, *args, **kwargs):
-            if active_tracker.get() is None or getattr(self, "_cash_internal", False):
+            if active_tracker.get() is None:
                 return original(self, fn, *args, **kwargs)
             return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
 
@@ -390,15 +388,13 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
     @functools.wraps(original_func)
     def tracked_probe(path, *args, **kwargs):
         result = original_func(path, *args, **kwargs)
-        _tracker = active_tracker.get()
-        if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
+        if active_tracker.get() is not None:
             if result:
-                if _asked_by_user_code(sys._getframe(1)):
-                    _tracker.track_present(path, kind)
+                _record_path_answer(path, kind, sys._getframe(1))
             elif exact_negative:
-                _tracker.track_absent(path)
+                _record_path_answer(path, None, sys._getframe(1))
             else:
-                _record_negative_probe(_tracker, path)
+                _record_negative_probe(path, sys._getframe(1))
         return result
 
     return tracked_probe
@@ -409,31 +405,73 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
 _PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathlib", "pathlib._local", "pathlib._abc"})
 
 
-def _asked_by_user_code(frame: Any) -> bool:
-    """Did the user's own code ask this probe (through pathlib or ``os`` at most)?
+#: The pseudo-filename prefix of a notebook statement cash compiled
+#: (``cash.notebook.compiled_source.CASH_FILENAME_PREFIX``): code the user
+#: wrote in a cell, though it has no file.
+_NOTEBOOK_STATEMENT_PREFIX = "<cash-"
 
-    A path found THERE is recorded only then. Libraries and cash probe paths
-    for themselves all the time -- ``inspect`` checks that a function's source
-    file exists while cash keys a nested call -- and each would become a
-    dependency of whatever cached call was running. A path NOT there is
-    recorded whoever asked, as it always was.
-    """
+
+def _who_asked(frame: Any) -> str:
+    """`frame_kind` of the code that made the call *frame* made, looking
+    through pathlib and ``os``, which only pass a path question on. A
+    notebook statement is the user's code."""
     while frame is not None and frame.f_globals.get("__name__") in _PATH_MACHINERY:
         frame = frame.f_back
-    return frame is not None and frame_kind(frame.f_code.co_filename) == "user"
+    if frame is None:
+        return "other"
+    filename = frame.f_code.co_filename
+    if filename.startswith(_NOTEBOOK_STATEMENT_PREFIX):
+        return "user"
+    return frame_kind(filename)
 
 
-def _record_negative_probe(tracker: Any, path: Any) -> None:
+def _asked_by_user_code(frame: Any) -> bool:
+    """Did the user's own code make the call *frame* made?"""
+    return _who_asked(frame) == "user"
+
+
+def _record_path_answer(path: Any, answer: str | None, caller: Any) -> None:
+    """Record what a metadata or existence call on *path* answered.
+
+    This is the one rule every stat and probe wrapper applies. *caller* is
+    the frame that made the call; *answer* is None when nothing was there,
+    ``"content"`` when the call reported a file's size or times, and
+    otherwise the kind it found there (``file``, ``dir``, ``any``) when it
+    asked only whether something is there.
+
+    Nothing there is recorded whoever asked, except cash itself: the path
+    appearing changes the answer, and a path that never appears costs
+    nothing. Something there is recorded only when the user's own code
+    asked: libraries and cash stat and probe paths for themselves all the
+    time -- ``inspect`` checks that a function's source file exists while
+    cash keys a nested call -- and each would become a dependency of the
+    cached call around it. "content" makes a regular file a dependency by
+    its content, as a read does; a directory has none.
+    """
+    tracker = active_tracker.get()
+    if tracker is None or not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    who = _who_asked(caller)
+    if answer is None:
+        if who not in ("cash", "wrapper"):
+            tracker.track_absent(path)
+    elif who != "user":
+        return
+    elif answer == "content":
+        _track_regular_file(path)
+    else:
+        tracker.track_present(path, answer)
+
+
+def _record_negative_probe(path: Any, caller: Any) -> None:
     """A probe said no: absent if nothing is there, else present as what is."""
     try:
         st = os.stat(path)
-    except (OSError, ValueError):
-        tracker.track_absent(path)
-        return
-    if not _asked_by_user_code(sys._getframe(2)):
+    except (OSError, ValueError, TypeError):
+        _record_path_answer(path, None, caller)
         return
     kind = "dir" if stat.S_ISDIR(st.st_mode) else "file" if stat.S_ISREG(st.st_mode) else "any"
-    tracker.track_present(path, kind)
+    _record_path_answer(path, kind, caller)
 
 
 def _dataset_member(name: str) -> bool:
@@ -463,12 +501,9 @@ def track_dataset(tracker: Any, target: Any) -> None:
 
     A dataset reader (``pd.read_parquet("dd")``, ``pl.read_parquet("dd/*.parquet")``,
     ``ds.dataset("dd")``) reads every file under the directory or matching
-    the pattern. Recorded as the directory alone, a rewrite of one of its files
-    left the directory's mtime -- the only thing checked -- where it was, and
-    the old total was served; a glob recorded as a path that does not exist
-    was dropped altogether, so even a new file went unseen. Each file is a
-    dependency now, and each directory listed on the way is too, so a new
-    file counts.
+    the pattern. Each file is a dependency, since rewriting one leaves the
+    directory's mtime where it was, and each directory listed on the way is
+    too, so a new file counts. A glob is never recorded as a path itself.
     """
     text = os.fsdecode(target) if isinstance(target, bytes) else os.fspath(target)
     if not isinstance(text, str) or is_remote_url(text):
@@ -525,8 +560,8 @@ def _track_sqlite_wal(tracker: Any, database: Any) -> None:
     """Make ``<db>-wal`` part of a WAL-mode database's dependency.
 
     In WAL mode a commit goes to the ``-wal`` file and the main file stays as
-    it was until a checkpoint, so a query cached on the main file alone was
-    served stale while any writer kept its connection open. The header says
+    it was until a checkpoint, so the main file alone does not show a commit
+    while any writer keeps its connection open. The header says
     the mode (bytes 18 and 19 are 2 for WAL); the ``-wal`` file is tracked by
     content when it is there and as absent when it is not. A rollback-journal
     database has no ``-wal``, and switching one to WAL rewrites its header.
@@ -670,7 +705,7 @@ def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(original)
     def submit(self, fn, /, *args, **kwargs):
         tracker = active_tracker.get()
-        if tracker is None or getattr(self, "_cash_internal", False):
+        if tracker is None:
             return original(self, fn, *args, **kwargs)
         inner = original(self, _ReadsInWorker(fn, type(tracker)), *args, **kwargs)
         outer = _RelayFuture(inner)
@@ -697,10 +732,9 @@ def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
 def _patch_process_pool_submit() -> None:
     """Bring the files a ``ProcessPoolExecutor`` task read back to the submitter.
 
-    A cached orchestrator that fans work out to a process pool read its data in
-    the workers, where no tracker of the parent's can see: after a data fix in
-    one input it served the pre-fix report, while the thread-pool version beside
-    it invalidated. ``submit`` is what ``Executor.map`` calls, chunked or not.
+    A cached orchestrator that fans work out to a process pool reads its data
+    in the workers, where no tracker of the parent's can see, so the workers
+    report what they read and it is credited to the submitter. ``submit`` is what ``Executor.map`` calls, chunked or not.
     joblib's default backend (loky, behind ``Parallel(n_jobs=...)`` and every
     scikit-learn ``n_jobs=``) runs on an executor of the same shape and is
     wrapped the same way, as is ``multiprocessing.Pool``
@@ -923,14 +957,10 @@ class FileDependencyRegistry:
         self.register("sqlite3.dbapi2", "connect", self._create_sqlite_connect_handler)
 
         # Existence probes: "is there a config here?" The ABSENCE of a file is
-        # an input -- it selects the defaults branch -- and it was the only
-        # input cash could not see, because a file that is never opened
-        # produces no read to track. An entry written by a run that found
-        # nothing recorded no dependencies at all, so it looked valid
-        # everywhere: directory B's answer came back in directory A,
-        # silently. A probe that says YES is an input too: a flag file or an
-        # output folder that is checked and never read was served as present
-        # after it was deleted. `os.stat` raises no audit event.
+        # an input -- it selects the defaults branch -- and a file that is
+        # never opened produces no read to track. A probe that says YES is an
+        # input too: a flag file or an output folder that is checked and never
+        # read. `os.stat` raises no audit event.
         for module in ("os.path", "genericpath"):
             self.register(module, "exists", self._create_exists_handler)
             self.register(module, "lexists", self._create_exists_handler)
@@ -941,8 +971,7 @@ class FileDependencyRegistry:
         # What a file's metadata says is the file's: ``max(files,
         # key=os.path.getmtime)`` picks the newest export and
         # ``os.path.getsize(p)`` reports it, and an in-place rewrite moves
-        # neither the directory's listing nor anything else recorded, so the
-        # old answer was served. ``Path.stat`` was watched; these were not.
+        # nothing else that is recorded.
         for module in ("os.path", "genericpath"):
             for name in ("getsize", "getmtime", "getctime"):
                 self.register(module, name, self._create_metadata_handler)
@@ -989,11 +1018,10 @@ class FileDependencyRegistry:
         serves any number of concurrent trackers.
         """
 
-        # Positional OR keyword. The wrapper used to demand the path as its
-        # first positional parameter, so while it was installed
-        # `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)` or
-        # `pq.read_table(source=p)` raised TypeError EVERYWHERE in the process,
-        # inside cached code or not. Measured while adding the pyarrow readers.
+        # Positional OR keyword: readers take the path either way
+        # (`pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`,
+        # `pq.read_table(source=p)`), and the wrapper is installed process-wide,
+        # so it must accept every call the original accepts.
         @functools.wraps(original_func)
         def tracked_func(*args, **kwargs):
             target = args[0] if args else next((kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
@@ -1039,9 +1067,9 @@ class FileDependencyRegistry:
         """``sqlite3.connect``: the database file, also when named by a URI.
 
         With ``uri=True`` the database is a ``file:`` URI --
-        ``file:d.db?mode=ro`` for a read-only connection -- and recorded as it
-        was written it named no file, so the query was served stale after an
-        INSERT. The URI's path is the file; an in-memory database has none.
+        ``file:d.db?mode=ro`` for a read-only connection -- which as written
+        names no file. The URI's path is the file; an in-memory database has
+        none.
         """
         path_handler = FileDependencyRegistry._create_path_arg_handler(original_func, track_callback)
 
@@ -1083,16 +1111,9 @@ class FileDependencyRegistry:
             except (FileNotFoundError, NotADirectoryError):
                 # `try: getsize(p) except OSError:` answers for a file that is
                 # not there yet, so its appearing is a change.
-                tracker = active_tracker.get()
-                if (
-                    tracker is not None
-                    and isinstance(path, (str, bytes, os.PathLike))
-                    and _asked_by_user_code(sys._getframe(1))
-                ):
-                    tracker.track_absent(path)
+                _record_path_answer(path, None, sys._getframe(1))
                 raise
-            if active_tracker.get() is not None and _asked_by_user_code(sys._getframe(1)):
-                _track_regular_file(path)
+            _record_path_answer(path, "content", sys._getframe(1))
             return result
 
         return tracked_metadata
@@ -1102,11 +1123,10 @@ class FileDependencyRegistry:
         """``os.stat(p).st_size`` in the user's own code: the regular file is a
         dependency, as through ``Path.stat``.
 
-        Only when the user's code called it DIRECTLY. ``os.stat`` is what the
-        rest of the standard library, every library and cash itself stat with
-        -- ``shutil`` stats the file it is about to overwrite, and
-        ``os.path.exists`` stats what it probes, which is a question about
-        being there, not about content (`_probe_handler`).
+        A call the path machinery makes (``os.path.exists`` stats what it
+        probes, ``getsize`` what it measures) is part of the question the
+        user asked through it, which that call's own wrapper records.
+        Otherwise `_record_path_answer` decides.
         """
 
         @functools.wraps(original_func)
@@ -1116,24 +1136,17 @@ class FileDependencyRegistry:
             except (FileNotFoundError, NotADirectoryError):
                 # `try: os.stat(p) except FileNotFoundError:` answers for a
                 # file that is not there yet, so its appearing is a change.
-                tracker = active_tracker.get()
-                if (
-                    tracker is not None
-                    and isinstance(path, (str, bytes, os.PathLike))
-                    and kwargs.get("dir_fd") is None
-                    and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
-                ):
-                    tracker.track_absent(path)
+                caller = sys._getframe(1)
+                if kwargs.get("dir_fd") is None and caller.f_globals.get("__name__") not in _PATH_MACHINERY:
+                    _record_path_answer(path, None, caller)
                 raise
-            tracker = active_tracker.get()
+            caller = sys._getframe(1)
             if (
-                tracker is not None
-                and stat.S_ISREG(result.st_mode)
-                and isinstance(path, (str, bytes, os.PathLike))
+                stat.S_ISREG(result.st_mode)
                 and kwargs.get("dir_fd") is None
-                and frame_kind(sys._getframe(1).f_code.co_filename) == "user"
+                and caller.f_globals.get("__name__") not in _PATH_MACHINERY
             ):
-                tracker.track_path(path)
+                _record_path_answer(path, "content", caller)
             return result
 
         return tracked_os_stat
@@ -1148,7 +1161,10 @@ class FileDependencyRegistry:
         @functools.wraps(original_func)
         def tracked_scandir(*args, **kwargs):
             result = original_func(*args, **kwargs)
-            if active_tracker.get() is None or frame_kind(sys._getframe(1).f_code.co_filename) != "user":
+            caller = sys._getframe(1)
+            if active_tracker.get() is None or caller.f_globals.get("__name__") in _PATH_MACHINERY:
+                return result  # os.walk, pathlib: they never hand the user an entry's stat()
+            if not _asked_by_user_code(caller):
                 return result
             if args and isinstance(args[0], int):
                 return result  # a descriptor: entries have no usable path
@@ -1242,7 +1258,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         # It's a target. We need to let the real import happen, then patch.
         self._skip.add(fullname)
         try:
-            spec = importlib.util.find_spec(fullname, path)
+            spec = importlib.util.find_spec(fullname)
         finally:
             self._skip.remove(fullname)
 
@@ -1255,15 +1271,31 @@ class PostImportHook(importlib.abc.MetaPathFinder):
 
 
 class _PatchingLoader:
+    """Runs the original loader, then patches the module.
+
+    It stands in for the original loader during this one import only: the
+    module's ``__loader__`` and ``__spec__.loader`` are set back to the
+    original before it executes, so ``importlib.resources``, ``pkgutil``
+    and a later reload see the real loader. Anything else asked of it
+    goes to the original loader.
+    """
+
     def __init__(self, original_loader, fullname):
         self.original_loader = original_loader
         self.fullname = fullname
+
+    def __getattr__(self, name):
+        return getattr(self.original_loader, name)
 
     def create_module(self, spec):
         return self.original_loader.create_module(spec)
 
     def exec_module(self, module):
-        # execute module
+        spec = getattr(module, "__spec__", None)
+        if spec is not None and spec.loader is self:
+            spec.loader = self.original_loader
+        if getattr(module, "__loader__", None) is self:
+            module.__loader__ = self.original_loader
         self.original_loader.exec_module(module)
 
         # Now patch it via the module-level dispatcher installer —

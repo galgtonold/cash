@@ -31,7 +31,7 @@ print(load_features.explain())
     /home/you/project/data/features.csv: content changed
 ```
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @03b217be -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
 hits. A same-size edit within the same second still recomputes.
 

@@ -15,7 +15,7 @@ class TestHotReloadNotification:
 
         mock_shell.user_ns["helper"] = helper
         ft = cash_magics._statement_processor.function_tracker
-        ft.update_function_hash("helper", helper)
+        ft.detect_changed_functions({"helper": helper}, {"helper"})
 
         # Now replace it with a different implementation
         def helper_v2(x):
@@ -74,7 +74,7 @@ class TestHotReloadNotification:
 
         mock_shell.user_ns["helper"] = helper
         ft = cash_magics._statement_processor.function_tracker
-        ft.update_function_hash("helper", helper)
+        ft.detect_changed_functions({"helper": helper}, {"helper"})
 
         # Same function, no change
         changed = ft.detect_changed_functions(mock_shell.user_ns)
@@ -92,8 +92,8 @@ class TestHotReloadNotification:
         mock_shell.user_ns["func_a"] = func_a
         mock_shell.user_ns["func_b"] = func_b
         ft = cash_magics._statement_processor.function_tracker
-        ft.update_function_hash("func_a", func_a)
-        ft.update_function_hash("func_b", func_b)
+        ft.detect_changed_functions({"func_a": func_a}, {"func_a"})
+        ft.detect_changed_functions({"func_b": func_b}, {"func_b"})
 
         # Replace both
         def func_a_v2():
@@ -131,7 +131,7 @@ class TestHotReloadNotification:
 
         mock_shell.user_ns["old_func"] = old_func
         ft = cash_magics._statement_processor.function_tracker
-        ft.update_function_hash("old_func", old_func)
+        ft.detect_changed_functions({"old_func": old_func}, {"old_func"})
 
         # Delete the function
         del mock_shell.user_ns["old_func"]
@@ -147,7 +147,7 @@ class TestHotReloadNotification:
 
         mock_shell.user_ns["my_func"] = my_func
         ft = cash_magics._statement_processor.function_tracker
-        ft.update_function_hash("my_func", my_func)
+        ft.detect_changed_functions({"my_func": my_func}, {"my_func"})
 
         # Replace with a string
         mock_shell.user_ns["my_func"] = "not a function"

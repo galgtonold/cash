@@ -224,6 +224,26 @@ class TestReloadModule:
         assert hash2 is not None
         assert hash1 != hash2
 
+    def test_reload_forgets_exactly_that_modules_functions(self, tracker, temp_module):
+        """A reload drops the memoised hashes of the module's functions, so a
+        new function landing on a freed address is hashed afresh, and keeps
+        every other module's."""
+        module_name, _ = temp_module
+        import importlib
+        import json
+
+        mod = importlib.import_module(module_name)
+        tracker.track_module(module_name)
+        old_helper = mod.helper
+        assert tracker.get_function_source_hash(old_helper) is not None
+        assert tracker.get_function_source_hash(json.dumps) is not None
+
+        tracker.reload_module(module_name)
+
+        remembered = {(key[0], key[-1]) for key in tracker._source_cache.keys()}
+        assert (id(old_helper), "helper") not in remembered
+        assert (id(json.dumps), "dumps") in remembered
+
 
 # ============================================================================
 # FunctionTracker.clear tests

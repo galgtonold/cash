@@ -17,6 +17,7 @@ import contextvars
 import logging
 import os
 import time
+from collections.abc import Iterator
 from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
@@ -32,6 +33,7 @@ from cash.tracking.read_classification import (
     is_cash_internal,
     is_pseudo_fs,
     regular_file_stat,
+    stat_key,
 )
 from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
@@ -60,9 +62,10 @@ class FileAccessTracker:
     statement reads.
 
     **ContextVar dispatch**: Python-level opens and directory listings
-    arrive as audit events (:mod:`cash.tracking.io_watch`); readers that open
-    in C, existence probes and ``Path.stat`` get dispatcher wrappers, plus a
-    meta-path import hook for libraries loaded later. Both consult a
+    arrive as audit events (:mod:`cash.tracking.io_watch`); the calls that
+    raise none get dispatcher wrappers (listed in
+    :mod:`cash.tracking.reader_patches`), plus a meta-path import hook for
+    libraries loaded later. Both consult a
     ``ContextVar`` (``active_tracker``) at *call* time to decide whether to
     record the access. ``__enter__`` sets that ContextVar to ``self`` and
     stores the token; ``__exit__`` ``reset()``s it.
@@ -189,13 +192,19 @@ class FileAccessTracker:
         parent = self._parent_stack[-1]
         return parent if parent is not self else None
 
+    def _self_and_parents(self) -> Iterator[FileAccessTracker]:
+        """This tracker, then each enclosing one a record is passed up to."""
+        tracker: FileAccessTracker | None = self
+        while tracker is not None:
+            yield tracker
+            tracker = tracker._propagation_parent()
+
     def suspend(self):
         """Stop tracking until :meth:`resume`, restoring the enclosing tracker.
 
         For a streaming cached generator: production is tracked, the caller's
-        loop body is not. `__enter__` cannot be used per item -- it took 5.1us
-        against 0.15us for the ContextVar swap alone, which on a 200k-item
-        iterator is over a second of pure bookkeeping.
+        loop body is not. `__enter__` is too costly to run per item; this is
+        one ContextVar swap.
         """
         parent = self._parent_stack[-1] if self._parent_stack else None
         return active_tracker.set(parent)
@@ -231,10 +240,8 @@ class FileAccessTracker:
             resolved = normalize_path(os.path.realpath(raw))
         except (TypeError, ValueError, OSError):
             return
-        tracker: FileAccessTracker | None = self
-        while tracker is not None:
+        for tracker in self._self_and_parents():
             tracker.ctime_unreliable.add(resolved)
-            tracker = tracker._propagation_parent()
 
     def get_accessed_remote_urls(self) -> set[str]:
         """Remote URLs read in this block, tracked by store validator instead."""
@@ -276,14 +283,12 @@ class FileAccessTracker:
             resolved = normalize_path(os.path.realpath(raw))
         except (TypeError, ValueError, OSError):
             return
-        tracker: FileAccessTracker | None = self
-        while tracker is not None:
+        for tracker in self._self_and_parents():
             if resolved not in tracker.accessed_files:  # read first: an input
                 if directory:
                     tracker.created_dirs.append(resolved.rstrip("/") + "/")
                 else:
                     tracker.created_files.add(resolved)
-            tracker = tracker._propagation_parent()
 
     def created_by_block(self, abs_path: str) -> bool:
         """Did this block create *abs_path*, or a directory it lies in?"""
@@ -329,9 +334,7 @@ class FileAccessTracker:
             return
         if SCRATCH_MEMMAP in abs_path:
             # joblib's memmaps of a parallel call's arrays: deleted when the
-            # call returns, so recorded, every entry that read them was stale
-            # for ever -- a ``cross_val_predict(n_jobs=4)`` loop re-ran on
-            # every run of the report cell.
+            # call returns, so an entry depending on one could never be fresh.
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
             return
         if RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(RUNTIME_CACHE_SUFFIXES):
@@ -408,10 +411,8 @@ class FileAccessTracker:
 
     def add_tracked_unresolved(self, path: str) -> None:
         """Record a read that cannot be checked, here and on the parents."""
-        self.unresolved_files.add(path)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_unresolved(path)
+        for tracker in self._self_and_parents():
+            tracker.unresolved_files.add(path)
 
     def add_tracked(self, abs_path: str, digest: str | None = None, lstat: Any = None) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,
@@ -423,16 +424,19 @@ class FileAccessTracker:
 
         *lstat* is the stat taken while resolving the path, of a regular file
         that is not a link, so it is the stat the file would have given."""
+        for tracker in self._self_and_parents():
+            # The lstat was taken for this tracker's read; an enclosing one
+            # stats the file itself.
+            digest = tracker._add_tracked_here(abs_path, digest, lstat if tracker is self else None)
+
+    def _add_tracked_here(self, abs_path: str, digest: str | None, lstat: Any) -> str | None:
+        """`add_tracked` on this tracker alone; returns the digest to hand up."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
-            st = (
-                regular_file_stat(abs_path)
-                if lstat is None
-                else (lstat.st_size, lstat.st_mtime_ns, getattr(lstat, "st_ctime_ns", 0))
-            )
+            st = regular_file_stat(abs_path) if lstat is None else stat_key(lstat)
             if st is not None:
                 self.read_stats[abs_path] = st
                 if self._hash_on_read:
@@ -443,9 +447,7 @@ class FileAccessTracker:
                         self.read_digests[abs_path] = digest
         elif digest is None:
             digest = self.read_digests.get(abs_path)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked(abs_path, digest)
+        return digest
 
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
@@ -458,10 +460,8 @@ class FileAccessTracker:
     def note_reading_code(self, code: Any) -> None:
         """Record *code* as user code that read a file in this block, here and
         in every tracker this one propagates to."""
-        self.reading_codes.add(code)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.note_reading_code(code)
+        for tracker in self._self_and_parents():
+            tracker.reading_codes.add(code)
 
     def track_absent(self, path) -> None:
         """Record *path* as looked-for-and-missing."""
@@ -491,8 +491,8 @@ class FileAccessTracker:
     def _probed_before(self, path, kind: str | None) -> bool:
         """Was this probe, with this answer, recorded in this block already?
 
-        A loop that checks the same file on every iteration asked once:
-        recording it again cost 20-40 us a probe, for nothing. The recorded
+        A loop that checks the same file on every iteration asked once, and
+        recording it again would cost time for nothing. The recorded
         form does not depend on the working directory (see `_probed_path`),
         so the path as given is the key.
         """
@@ -552,26 +552,20 @@ class FileAccessTracker:
 
     def add_tracked_absent(self, path: str) -> None:
         """Record an absent path here and, when propagating, on the parents."""
-        self.absent_files.add(path)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_absent(path)
+        for tracker in self._self_and_parents():
+            tracker.absent_files.add(path)
 
     def add_tracked_present(self, path: str, kind: str) -> None:
         """Record a path probed and found here and, when propagating, on the
         parents. Probed as two kinds, it is recorded as ``any``."""
-        known = self.present_files.get(path)
-        self.present_files[path] = kind if known in (None, kind) else "any"
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_present(path, kind)
+        for tracker in self._self_and_parents():
+            known = tracker.present_files.get(path)
+            tracker.present_files[path] = kind if known in (None, kind) else "any"
 
     def add_tracked_remote(self, url: str) -> None:
         """Record a remote *url* read, propagating to the enclosing tracker."""
-        self.accessed_remote.add(url)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_remote(url)
+        for tracker in self._self_and_parents():
+            tracker.accessed_remote.add(url)
 
 
 #: Seconds spent recording reads; `tracking_seconds`.
@@ -582,9 +576,8 @@ def tracking_seconds() -> float:
     """Seconds cash has spent recording file reads in this process.
 
     Read before and after a statement, the difference is cash's own time inside
-    it, which is not the statement's cost: a folder read recorded 16.5 s for a
-    load that takes 1.8 s without cash, and a later hit credited all of it as
-    saved.
+    it, which is not the statement's cost and must not be credited as time a
+    later hit saves.
     """
     return _tracking_seconds
 

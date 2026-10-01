@@ -6,25 +6,15 @@ remote and absent entries). These are not pure functions: they stat and hash
 files, keep short-lived memos of both (``begin_file_state_epoch``,
 :class:`FreshnessMemo`), and do their own reads outside every tracker
 (``untracked``). A file's content is always hashed in full, never sampled.
-Consumed by:
 
-- ``src/cash/core.py`` — the decorator subsystem, when recording file deps for
-  a cached function call.
-- :class:`cash.notebook.Restorer` (``restore.py``) — when validating that
-  cached file deps still match.
-- :class:`cash.notebook.upstream.VirtualLineage` — when checking file
-  freshness during upstream simulation.
-- :class:`cash.notebook.statement.CacheFreshnessChecker` — the post-execution
-  freshness check for statement-level caching.
-
-They live here, outside the notebook's ``statement/`` package, so the
-decorator and other callers never import
-``cash.notebook.statement.freshness`` for them.
+Used by the decorator (``decorator/file_deps.py``, ``explain``) and by the
+notebook, so it lives outside the notebook package and the decorator never
+imports the notebook for it.
 
 **Content-hash freshness.** ``(mtime, size)`` alone is an
 ambiguous freshness signal and fails two opposite ways: a touch-only change
-(identical content + size, only the mtime bumped) spuriously invalidates
-, and a same-size edit under a mtime the coarse check can't tell apart
+(identical content + size, only the mtime bumped) spuriously invalidates,
+and a same-size edit under a mtime the coarse check can't tell apart
 (sub-resolution / same-second write) is missed. We therefore record a
 content hash at snapshot time and treat CONTENT as authoritative whenever the
 size matches: the cheap size check runs first (and never hashes on the
@@ -49,6 +39,7 @@ from typing import Any, NamedTuple
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
+from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -102,8 +93,7 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #: stat fields: ``(path, st_dev, st_ino, size, mtime_ns, ctime_ns)``.
 #:
 #: File dependencies propagate, so one burst of cached calls checks the same
-#: inputs many times (50 files x 2 MiB cost 168 ms per hit without it); with
-#: the memo later checks are one ``stat`` each. Any write moves ``mtime``, and
+#: inputs many times; with the memo later checks are one ``stat`` each. Any write moves ``mtime``, and
 #: on POSIX ``ctime`` too; on Windows a same-size edit that RESTORES the mtime
 #: leaves every key field identical. Three rules bound that (a fully-hashed
 #: file must still catch it: ``test_same_size_edit_under_identical_mtime_
@@ -112,16 +102,16 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #: 1. Only a file UNTOUCHED for ``_HASH_MEMO_MIN_AGE_SECONDS`` is memoized --
 #:    a file written moments ago may still be being written.
 #: 2. A digest is reused for ``_HASH_MEMO_TTL_SECONDS`` from when it was
-#:    computed (not refreshed on use; one second expired entries mid-pass).
+#:    computed (not refreshed on use, so it ends on schedule).
 #:    Within that window such an edit is not seen -- a documented limitation
 #:    ("an edit that keeps size and timestamps, in a running process"), and
 #:    one that never reaches a stored entry, whose fingerprint is taken when
-#:    the body reads the file. Re-hashing on every call cost ~144 ms per
-#:    iteration of a loop over a 200 MB input.
+#:    the body reads the file. Without it a loop over a large input would
+#:    re-hash it on every call.
 #: 3. In a notebook a digest also holds for the rest of the CELL RUN
 #:    (``begin_file_state_epoch`` .. ``end_file_state_epoch``): a cell over
-#:    thousands of files outlasts the window on its own, and re-hashing them
-#:    for every derived statement cost 19-108 s a cell. The next cell run
+#:    thousands of files outlasts the window on its own, and must not re-hash
+#:    them for every derived statement. The next cell run
 #:    falls back to the window; between cells only the window applies.
 _HASH_MEMO: LruMemo[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = LruMemo(FILE_DIGESTS)
 _HASH_MEMO_TTL_SECONDS = 5.0
@@ -349,7 +339,7 @@ def snapshot_file_deps(
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
         read = known.get(f) if known else None
         hashed_at = None
-        if read is not None and read[0] == (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0)):
+        if read is not None and read[0] == stat_key(st):
             # Hashed when the body read it; when, if the tracker noted it.
             content_hash = read[1]
             hashed_at = read[2] if len(read) > 2 else None
@@ -557,7 +547,7 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     from the directory itself, a few milliseconds for the lot. Elsewhere a
     listing entry's stat IS a stat, so there is nothing to gain.
 
-    What the listing reports can lag the file in one case measured: a file with
+    What the listing reports can lag the file in one case: a file with
     a second hard link, edited through the other name, until something opens
     this one. ``file_dep_is_fresh`` takes a listed stat only for a file it
     hashes in full, where content decides and a lagging size or time can at
@@ -632,11 +622,11 @@ def _note_settled(st: os.stat_result, stored: dict[str, Any], checked_at: float)
     re-taken shows what `_unchanged_since_hashed` needs: the same content,
     under the same metadata, of a file that had settled by then.
 
-    A file read within ``_HASH_MEMO_MIN_AGE_SECONDS`` of being written kept
-    the ``hashed_at`` of that first read for the life of the entry, so it was
-    hashed in full on every check, in every process -- 0.6 s a hit for a 200
-    MB intermediate a pipeline stage had written seconds before the next one
-    read it. The snapshot is the entry's own metadata, held by the backend:
+    Otherwise a file read within ``_HASH_MEMO_MIN_AGE_SECONDS`` of being
+    written would keep the ``hashed_at`` of that first read for the life of
+    the entry, and be hashed in full on every check, in every process -- an
+    intermediate one pipeline stage writes just before the next reads it,
+    say. The snapshot is the entry's own metadata, held by the backend:
     the file backend writes it back with the entry's access stamps, so later
     processes take the stat-only path too.
     """
@@ -666,12 +656,8 @@ def file_dep_is_fresh(
     (the file could not be read when it was taken) is fresh only while its
     mtime is unchanged to the nanosecond.
 
-    A snapshot marked ``sampled`` holds a digest of three regions of the file,
-    which no whole-file digest equals: it is stale (``'hash-mode'``) without
-    reading the file.
-
     ``stale_reason`` is ``None`` when fresh, else one of
-    ``'unreadable' | 'size' | 'content' | 'hash-mode' | 'mtime' |
+    ``'unreadable' | 'size' | 'content' | 'mtime' |
     'appeared' | 'vanished' | 'unresolved' | 'remote-changed' |
     'remote-unresolved'`` for debug attribution.
 
@@ -699,8 +685,6 @@ def file_dep_is_fresh(
             return False, "vanished"
     if stored.get(_UNRESOLVED_MARKER):
         return False, "unresolved"
-    if stored.get("sampled"):
-        return False, "hash-mode"
     stored_size = stored.get("size")
     stored_hash = stored.get("hash")
     # A listed stat (``stats_from_listings``) stands in for one where content
@@ -739,10 +723,9 @@ def file_dep_is_fresh(
 # own config -- is part of that install, not a fixed location on disk. Two
 # installs of one tool on one machine (a checkout and a wheel), or two releases
 # of one job side by side, run byte-identical code, so they share cache keys;
-# and the entry's file dependency was recorded at the WRITER's path. The other
-# install's lookup validated the writer's file, found it unchanged, and served
-# the writer's answer: a tool served another install's exchange rates, and a
-# rollback served the newer release's report.
+# and the entry's file dependency is recorded at the WRITER's path. Checked
+# there, the other install's lookup would validate the writer's file, not its
+# own, and take the writer's answer.
 #
 # So such a dependency is also recorded relative to the code's root, and each
 # process checks it against ITS OWN copy. Same bytes in both installs: a hit,

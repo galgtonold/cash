@@ -124,7 +124,7 @@ reads or the function's own code.
 
 <iframe class="cash-badge" title="cash badge example: file changed" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @03b217be -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d -->
 A file the statement read (through `pd.read_csv`, `np.load`, `open` and the
 other [tracked readers](how-it-works/invalidation.md#what-counts-as-a-change))
 has different contents. A new timestamp alone does not count: cash compares

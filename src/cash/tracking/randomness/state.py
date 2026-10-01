@@ -244,9 +244,9 @@ def restore_object_rng_states(
     else is skipped rather than forced.
 
     Args:
-        states: Mapping produced by :func:`capture_object_rng_states`.  Cache
-            entries written before this field existed pass ``None`` here and
-            restore unchanged.
+        states: Mapping produced by :func:`capture_object_rng_states`;
+            ``None`` or empty when nothing was captured, which restores
+            nothing.
         user_ns: The shell namespace to resolve names against.
     """
     if not states:
@@ -304,9 +304,7 @@ def _rng_states_equal(before: object, after: object) -> bool:
     hot path -- the observer runs on every statement -- and digesting dominated
     it: the stdlib state is MT19937's 624 state words plus a position, carried as
     a 625-element tuple of Python ints, and feeding those ints one at a time into
-    sha256 cost ~155us per comparison versus ~3.5us for numpy's ndarray (one
-    ``tobytes``). Direct comparison does the same job ~100x faster (measured
-    484us -> 4.6us for a two-module snapshot pair).
+    a hash is far slower than one tuple comparison.
 
     Arrays are still compared by BYTES, never ``repr``, so display truncation can
     never mask a difference -- and torch tensors now go by bytes too (via
