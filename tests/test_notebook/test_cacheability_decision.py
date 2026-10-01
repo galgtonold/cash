@@ -409,16 +409,39 @@ class TestIdentityCoupledReason:
         rows = list(figure_mod.Figure().subplots(2, 2))
         assert identity_coupled_reason("rows", rows) is not None
 
-    def test_container_scan_is_depth_bounded_and_cycle_safe(self):
-        """The scan is depth-bounded: a self-referential container terminates
-        (returns None rather than looping), and a coupled object within the cap
-        is still found."""
+    def test_container_scan_is_cycle_safe(self):
+        """A self-referential container terminates with no objection, and a
+        cycle that also holds an Axes is still refused."""
         figure_mod = pytest.importorskip("matplotlib.figure")
         cyclic: list = []
         cyclic.append(cyclic)
         assert identity_coupled_reason("cyclic", cyclic) is None
         ax = figure_mod.Figure().add_subplot()
-        assert identity_coupled_reason("wrapped", [[ax]]) is not None
+        loop: dict = {"self": None, "ax": ax}
+        loop["self"] = loop
+        assert identity_coupled_reason("loop", [loop, loop]) is not None
+
+    def test_figure_after_many_entries_is_refused(self):
+        """A result dict with the figure as one entry among many, or a list
+        whose last item is the figure, is refused however long it is."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        fig = figure_mod.Figure()
+        stats = {f"s{i}": i for i in range(50)}
+        assert identity_coupled_reason("d", {**stats, "fig": fig}) is not None
+        assert identity_coupled_reason("t", (*range(50), fig)) is not None
+        assert identity_coupled_reason("rows", [[i] for i in range(50)] + [[fig]]) is not None
+
+    def test_deeply_nested_figure_is_refused(self):
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        nested: object = figure_mod.Figure()
+        for _ in range(20):
+            nested = [nested]
+        assert identity_coupled_reason("nested", nested) is not None
+
+    def test_axes_as_dict_key_is_refused(self):
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        ax = figure_mod.Figure().add_subplot()
+        assert identity_coupled_reason("by_axes", {ax: [1, 2]}) is not None
 
     def test_other_matplotlib_artists_stay_cacheable(self):
         """Precision guard: do NOT blanket-ban matplotlib. Line2D is an Artist
