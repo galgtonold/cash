@@ -58,6 +58,12 @@ _ASCII_FALLBACKS: dict[str, str] = {
 }
 
 
+#: Fallback keys of more than one code point (an emoji with its variation
+#: selector), longest first: `safe_text` replaces these in the whole string
+#: before it looks at single characters, which can never match them.
+_MULTI_CHAR_KEYS = tuple(sorted((k for k in _ASCII_FALLBACKS if len(k) > 1), key=len, reverse=True))
+
+
 def stdout_supports_unicode(stream: object | None = None) -> bool:
     """Return ``True`` if *stream* (default: ``sys.stdout``) can encode emojis.
 
@@ -84,8 +90,10 @@ def safe_text(s: str, *, stream: object | None = None) -> str:
 
     Pass-through when the stream can encode everything (the common case in
     Jupyter / on Linux / when ``PYTHONIOENCODING=utf-8``).  Otherwise replace
-    each unsupported character with an entry from :data:`_ASCII_FALLBACKS`
-    or, lacking a mapping, drop it.
+    each unsupported symbol with an entry from :data:`_ASCII_FALLBACKS`
+    or, lacking a mapping, drop it. A symbol of several code points (an
+    emoji and its variation selector) is replaced whole, before the single
+    characters.
 
     The function preserves all ASCII characters as-is, so log lines stay
     readable even on legacy Windows consoles.
@@ -102,6 +110,9 @@ def safe_text(s: str, *, stream: object | None = None) -> str:
         return s  # nothing to downgrade
     except UnicodeEncodeError:
         pass
+    for key in _MULTI_CHAR_KEYS:
+        if key in s:
+            s = s.replace(key, _ASCII_FALLBACKS[key])
     out: list[str] = []
     for ch in s:
         try:
