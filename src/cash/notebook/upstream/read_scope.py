@@ -17,7 +17,7 @@ from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import read_provenance_key
 from ..tracking_state import TrackingState
-from .virtual_lineage import VirtualLineage
+from .cache_probe import CacheProbe
 
 __all__ = ["ReadScope"]
 
@@ -65,21 +65,14 @@ def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
 class ReadScope:
     """The file paths the cell being checked depends on."""
 
-    def __init__(self, shell: ShellProtocol, tracking_state: TrackingState, virtual_lineage: VirtualLineage) -> None:
+    def __init__(self, shell: ShellProtocol, tracking_state: TrackingState, probe: CacheProbe) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
-        self.virtual_lineage = virtual_lineage
+        self.probe = probe
 
     def _persisted_reads(self, code: str) -> set[str] | None:
         """Files *code* read when it last ran, from the backend, or ``None``."""
-        backend = self.virtual_lineage.backend()
-        if backend is None:
-            return None
-
-        try:
-            record = backend.get_metadata(read_provenance_key(code))
-        except (OSError, TypeError, ValueError, AttributeError):
-            return None
+        record = self.probe.record(read_provenance_key(code))
         if not record or not record.get("read_provenance"):
             return None
         return set(record.get("paths") or ())

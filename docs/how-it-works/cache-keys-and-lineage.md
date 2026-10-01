@@ -100,7 +100,7 @@ example `stmt:ffd3d255…`.
   itself, and the digest also goes into the lineage of what the statement
   assigns.
 
-<!-- claim: cash/notebook/upstream/virtual_lineage.py:VirtualLineage._register_virtual_callable @57dbc4f5 -->
+<!-- claim: cash/notebook/upstream/simulated_callables.py:SimulatedCallables.register_def @37dee9bc -->
 After a restart, cash computes these keys from the notebook's code before
 your `def` cells have run again, so a statement that calls a notebook
 function still hits.

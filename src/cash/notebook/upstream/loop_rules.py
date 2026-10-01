@@ -8,6 +8,7 @@ the classifier and the planner alike.
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
 import types
@@ -15,10 +16,15 @@ from typing import TYPE_CHECKING
 
 from cash.control_markers import iteration_digest, strip_markers
 
+from ...analysis.cacheability import analyze_statement
+from ...analysis.code_analyzer import CodeAnalyzer
+from ...lineage_tag import own_tag
 from ...source_norm import exact_source_digest
+from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
-    from .virtual_lineage import VirtualLineage
+    from .._protocols import ShellProtocol
+    from ..tracking_state import TrackingState
 
 
 __all__ = ["LoopRules"]
@@ -47,8 +53,9 @@ class LoopRules:
         "finally:",
     )
 
-    def __init__(self, virtual_lineage: VirtualLineage) -> None:
-        self.virtual_lineage = virtual_lineage
+    def __init__(self, shell: ShellProtocol, tracking_state: TrackingState) -> None:
+        self.shell = shell
+        self.tracking_state = tracking_state
 
     def loop_accumulators_with_external_init(
         self,
@@ -85,9 +92,9 @@ class LoopRules:
                 if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                     continue  # loop/control wrapper; iterable feeds via the loop
                 for inp in inputs:
-                    if inp in loop_target_vars or self.virtual_lineage._unbound_builtin(inp):
+                    if inp in loop_target_vars or unbound_builtin(inp, self.tracking_state.variable_lineage):
                         continue
-                    val = self.virtual_lineage.shell.user_ns.get(inp)
+                    val = self.shell.user_ns.get(inp)
                     if val is not None and isinstance(val, types.ModuleType):
                         continue
                     tainted.add(acc)
@@ -121,7 +128,7 @@ class LoopRules:
         their lineages disagree by construction.
         """
         changed: set[str] = set()
-        outcomes = self.virtual_lineage.tracking_state.control_outcomes
+        outcomes = self.tracking_state.control_outcomes
         for entry in simulation_trace:
             stmt_code, outputs, inputs, input_hashes = (
                 entry.stmt_code,
@@ -140,10 +147,10 @@ class LoopRules:
                     inp in outputs
                     or inp in loop_target_vars
                     or inp in vars_derived_from_loops
-                    or self.virtual_lineage._unbound_builtin(inp, input_hashes)
+                    or unbound_builtin(inp, self.tracking_state.variable_lineage, input_hashes)
                 ):
                     continue
-                if isinstance(self.virtual_lineage.shell.user_ns.get(inp), types.ModuleType):
+                if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
                     continue
                 now, then = input_hashes.get(inp), recorded[0].get(inp)
                 if now is not None and then is not None and now != then:
@@ -238,9 +245,9 @@ class LoopRules:
         )
         if not empty_init_pattern.match(stripped):
             return False
-        if out_var not in self.virtual_lineage.shell.user_ns:
+        if out_var not in self.shell.user_ns:
             return False
-        existing_val = self.virtual_lineage.shell.user_ns[out_var]
+        existing_val = self.shell.user_ns[out_var]
         try:
             is_non_empty = bool(existing_val)
         except (ValueError, TypeError):
@@ -331,9 +338,9 @@ class LoopRules:
         if upstream_has_modifications or not vars_mutated_by_loops:
             return False
         for mv in vars_mutated_by_loops:
-            if mv not in self.virtual_lineage.tracking_state.executed_cell_codes:
+            if mv not in self.tracking_state.executed_cell_codes:
                 continue
-            exec_code = strip_markers(self.virtual_lineage.tracking_state.executed_cell_codes[mv]).strip()
+            exec_code = strip_markers(self.tracking_state.executed_cell_codes[mv]).strip()
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]
@@ -373,3 +380,42 @@ class LoopRules:
                             data_input_lineages[inp] = virtual_lineage[inp]
                     loop_var_input_lineages[out] = data_input_lineages
         return loop_var_input_lineages
+
+    def single_unit_loop_self_modifies(self, var_name: str) -> bool:
+        """True if *var_name* is a no-lineage var self-modified by a single-unit loop.
+
+        Detects the shape: the variable's producing statement is a
+        ``while`` or ``with`` block (executed as one opaque unit, unlike a ``for``
+        loop's per-iteration replay) that writes the variable in place or
+        re-binds it each pass — ``n += 1``, ``total += n``, ``acc.append(..)``,
+        or a walrus in the condition (``while (n := n + 1) <= 5``) — AND the live
+        value carries no ``_cash_lineage_hash``. Lineage-carrying receivers
+        (DataFrame / Series) are excluded — they reset correctly through the
+        value-lineage path and must keep it.
+
+        The caller only reaches this for a var that is already both a required
+        input and a current-cell output, so for a single-unit loop the var is
+        genuinely self-referential across iterations. We confirm the loop writes
+        it via ``all_mutated_vars`` (in-place mutation, incl. method receivers
+        the output analysis misses) OR the static output set (Name re-bind /
+        walrus target the mutation visitor misses).
+        """
+        live = self.shell.user_ns.get(var_name)
+        if own_tag(live) is not None:
+            return False
+        code = self.tracking_state.executed_cell_codes.get(var_name)
+        if not code:
+            return False
+        try:
+            tree = ast.parse(code.strip())
+        except (SyntaxError, ValueError):
+            return False
+        if len(tree.body) != 1 or not isinstance(tree.body[0], (ast.While, ast.With)):
+            return False
+        try:
+            if var_name in analyze_statement(code, None).all_mutated_vars:
+                return True
+            _, outputs = CodeAnalyzer.analyze_code_block(code)
+            return var_name in outputs
+        except (SyntaxError, ValueError, TypeError):
+            return False

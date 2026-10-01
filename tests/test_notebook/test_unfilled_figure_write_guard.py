@@ -36,12 +36,13 @@ import pytest
 from cash.exceptions import CashWarning
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream._types import TraceEntry
+from cash.notebook.upstream.library_rules import figure_save_receiver
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
+from cash.notebook.upstream.simulator import NotebookSimulator
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=TrackingState())
-    return ReexecutionPlanner(vl, classifier=None)
+    return NotebookSimulator(types.SimpleNamespace(user_ns=user_ns), None, TrackingState()).planner
 
 
 def _entry(stmt, outputs=(), inputs=()):
@@ -74,7 +75,7 @@ class TestPostRestart:
         # The dangerous plan: rebuild the figure [0] and save it [3], with the
         # statements that draw into it [1][2] left behind.
         with pytest.warns(CashWarning):
-            kept, restored = planner._guard_unfilled_figure_writes(
+            kept, restored = planner.figure_writes.guard_unfilled_writes(
                 [0, 3],
                 trace,
                 [],
@@ -87,7 +88,7 @@ class TestPostRestart:
         planner = _planner({})
         with warnings.catch_warnings():
             warnings.simplefilter("error")  # any refusal here is a bug
-            kept, _ = planner._guard_unfilled_figure_writes(
+            kept, _ = planner.figure_writes.guard_unfilled_writes(
                 [0, 1, 2, 3],
                 _plot_trace(),
                 [],
@@ -99,7 +100,7 @@ class TestPostRestart:
         planner = _planner({})
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            kept, _ = planner._guard_unfilled_figure_writes([3], _plot_trace(), [])
+            kept, _ = planner.figure_writes.guard_unfilled_writes([3], _plot_trace(), [])
         assert kept == [3]
 
     def test_a_refused_write_is_dropped_from_the_restored_set_too(self):
@@ -107,7 +108,7 @@ class TestPostRestart:
         trace = _plot_trace()
         restored = [{"code": trace[3].stmt_code, "status": "CACHED"}]
         with pytest.warns(CashWarning):
-            _, remaining = planner._guard_unfilled_figure_writes([0, 3], trace, restored)
+            _, remaining = planner.figure_writes.guard_unfilled_writes([0, 3], trace, restored)
         assert remaining == [], "a refused write must not linger as restored"
 
 
@@ -123,7 +124,7 @@ class TestOwnership:
             planner = _planner({"fig": fig, "ax": ax, "plt": plt})
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
-                kept, _ = planner._guard_unfilled_figure_writes(
+                kept, _ = planner.figure_writes.guard_unfilled_writes(
                     [0, 3],
                     _plot_trace(),
                     [],
@@ -146,7 +147,7 @@ class TestOwnership:
         ]
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            kept, _ = planner._guard_unfilled_figure_writes([0, 2], trace, [])
+            kept, _ = planner.figure_writes.guard_unfilled_writes([0, 2], trace, [])
         assert kept == [0, 2]
 
 
@@ -162,10 +163,10 @@ def test_the_guard_is_actually_wired_into_the_plan():
     import inspect
 
     source = inspect.getsource(ReexecutionPlanner.plan)
-    assert "_guard_unfilled_figure_writes" in source, (
+    assert "guard_unfilled_writes" in source, (
         "the guard is no longer called from the plan builder; the unit tests above would not have caught this"
     )
-    assert source.index("_complete_stateful_carrier_history") < source.index("_guard_unfilled_figure_writes"), (
+    assert source.index("_complete_stateful_carrier_history") < source.index("guard_unfilled_writes"), (
         "the guard must run AFTER the carrier-history pass -- it exists to "
         "catch what that pass misses when the carrier is not live"
     )
@@ -183,4 +184,4 @@ class TestDetector:
         ],
     )
     def test_receiver_detection(self, code, expected):
-        assert ReexecutionPlanner._receiver_bound_figure_write(code) == expected
+        assert figure_save_receiver(code) == expected

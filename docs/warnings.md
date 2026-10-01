@@ -1317,7 +1317,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._warn_orphaned_figure_write @9973d398 -->
+<!-- claim: cash/notebook/upstream/figure_writes.py:FigureWriteGuard._warn_orphaned_write @74b1d56c -->
 **What happened.** While re-running earlier statements, cash skipped a
 `plt.savefig(path)` whose figure was not being redrawn. The file on disk is
 unchanged.

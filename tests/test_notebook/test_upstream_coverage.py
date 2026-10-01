@@ -23,8 +23,8 @@ import pytest
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry
+from cash.notebook.upstream.cache_probe import CacheProbe
 from cash.notebook.upstream.cache_restore import lineage_conflict
-from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 # ---------------------------------------------------------------------------
@@ -210,17 +210,17 @@ class TestStatFileDeps:
     def test_existing_files(self, tmp_path):
         f = tmp_path / "data.csv"
         f.write_text("a,b\n1,2", encoding="utf-8")
-        result = VirtualLineage._stat_file_deps({str(f): 0.0})
+        result = CacheProbe.stat_file_deps({str(f): 0.0})
         assert str(f) in result
         assert result[str(f)] == pytest.approx(os.path.getmtime(str(f)), abs=0.1)
 
     def test_missing_files_excluded(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        result = VirtualLineage._stat_file_deps({missing: 0.0})
+        result = CacheProbe.stat_file_deps({missing: 0.0})
         assert missing not in result
 
     def test_empty_input(self):
-        result = VirtualLineage._stat_file_deps({})
+        result = CacheProbe.stat_file_deps({})
         assert result == {}
 
     def test_multiple_files(self, tmp_path):
@@ -228,7 +228,7 @@ class TestStatFileDeps:
         f2 = tmp_path / "b.csv"
         f1.write_text("data1", encoding="utf-8")
         f2.write_text("data2", encoding="utf-8")
-        result = VirtualLineage._stat_file_deps({str(f1): 0.0, str(f2): 0.0})
+        result = CacheProbe.stat_file_deps({str(f1): 0.0, str(f2): 0.0})
         assert len(result) == 2
 
 

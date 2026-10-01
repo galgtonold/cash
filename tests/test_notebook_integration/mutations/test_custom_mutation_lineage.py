@@ -12,7 +12,7 @@ genuinely cached -- ``%cash_persist`` here forces that.)
 THE FIX (``mutations.standalone_method_mutation_receivers``): the receiver of
 a top-level bare-``Expr`` mutating method call is routed into the statement's
 *output* set in BOTH the runtime (``StatementProcessor.process_statement``) and
-the upstream simulation (``VirtualLineage._update_virtual_lineage``). Both engines
+the upstream simulation (``StatementLineage.apply``). Both engines
 then compute the receiver's lineage with the SAME source-based formula
 ``f(source_hash, sorted(input_lineages), ...)`` -- so they stay in sync, unlike
 the reverted runtime-only content-hash bump that desynced cross-cell restore. The

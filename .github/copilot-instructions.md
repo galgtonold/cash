@@ -79,8 +79,11 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
 - **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
   `ipython/` (`CashMagics`, the cell executor, and `CashSession`, the one
   owner of the session statistics), `statement/` (`StatementProcessor`
-  and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator`,
-  virtual lineage), `control_structures/` (per-iteration loop and branch caching)
+  and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator` and
+  the parts it wires together: `VirtualLineage` for the forward simulation,
+  `StatementLineage` for one statement's key and lineages, `CacheProbe` for
+  backend reads, `SimulatedCallables`, `ControlSimulation`, `CacheRestorer`),
+  `control_structures/` (per-iteration loop and branch caching)
   and `badge_renderer/`. `cache_key.py` and `lineage_store.py` hold the rules below.
 - **Layering:** `notebook/` imports `core` and the shared layer, never the reverse.
   Outside `notebook/`, only the magics loaders (`Cash.register_magic`,
@@ -112,8 +115,8 @@ key has its own single builder, `KeyBuilder.build` in
 predicts the key the call looks up.
 
 Keys are computed at runtime (`_analyze_and_hash` in `statement/processor.py`),
-during upstream simulation and virtual restore (`_update_virtual_lineage` in
-`upstream/virtual_lineage.py`, `try_virtual_restore` in
+during upstream simulation and virtual restore (`StatementLineage.apply` in
+`upstream/statement_lineage.py`, `try_virtual_restore` in
 `upstream/cache_restore.py`) and for call units (`call_key.py`). If two of these disagree, a kernel restart turns into cache
 misses or stale values; that has caused critical bugs more than once. To change
 the key, change only `compute_cache_key()`, and add tests next to

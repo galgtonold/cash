@@ -80,7 +80,7 @@ def _entry_lineages(
     The runtime's own lineage wherever it has one, and the simulation's where
     it does not -- a name bound in the ``%cash_on`` cell, say, which ran before
     cash was listening. The dict must carry every key the simulation carries:
-    ``VirtualLineage._simulate_one_control_unit`` compares it whole, and a
+    ``ControlSimulation._simulate_unit`` compares it whole, and a
     short one never matches, so the loop re-runs after every restart.
 
     Filling from the simulation rather than comparing only the shared keys
