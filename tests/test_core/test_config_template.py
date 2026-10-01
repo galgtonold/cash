@@ -15,13 +15,9 @@ import pytest
 
 tomllib = pytest.importorskip("tomllib")
 
-from cash.config import (
-    CashConfig,
-    TierConfig,
-    _load_toml_layer,
-    _tier_key_docs,
-    create_default_config,
-)
+from cash.config.schema import CashConfig, TierConfig
+from cash.config.sources import load_toml_layer
+from cash.config.template import _tier_key_docs, create_default_config
 
 _SETTING = re.compile(r"^# (\w+) = (.*)$")
 
@@ -49,7 +45,7 @@ def test_the_template_names_every_setting_at_its_default(tmp_path):
 
 def test_the_template_changes_nothing_until_a_line_is_uncommented(tmp_path):
     path = create_default_config(str(tmp_path / "config.toml"))
-    data, _outcome = _load_toml_layer(tmp_path / "config.toml")
+    data, _outcome = load_toml_layer(tmp_path / "config.toml")
     assert data == {}, path
 
 

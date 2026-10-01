@@ -18,7 +18,7 @@ import os
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from ..config import TIER_TYPES, TierConfig
+from ..config.schema import TIER_TYPES, TierConfig
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
@@ -30,7 +30,7 @@ from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
-    from cash.config import CashConfig
+    from cash.config.schema import CashConfig
 
 logger = logging.getLogger(__name__)
 

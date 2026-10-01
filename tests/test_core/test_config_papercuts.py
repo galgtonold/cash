@@ -23,7 +23,7 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.config import get_config
+from cash.config.resolve import get_config
 from cash.units import parse_size
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
@@ -140,7 +140,7 @@ def test_pytest_from_above_the_project_uses_the_project_config(tmp_path, workers
     out = tmp_path / "where.txt"
     (project / "tests" / "test_where.py").write_text(
         "import os\n"
-        "from cash.config import get_config\n"
+        "from cash.config.resolve import get_config\n"
         "def test_where():\n"
         "    with open(os.environ['WHERE'], 'a') as f:\n"
         "        f.write(str(get_config().cache_dir) + '\\n')\n",
@@ -163,7 +163,7 @@ def test_a_config_file_named_in_code_outranks_the_launching_projects_pyproject(t
     """A package shipped its cash settings in a TOML file of its own
     and named it with Cash(config_path=...); the pyproject.toml of whatever
     project launched it overrode them. Environment variables still win."""
-    from cash.config import _resolve_config
+    from cash.config.resolve import _resolve_config
 
     own = tmp_path / "pkg" / "cash.toml"
     own.parent.mkdir()

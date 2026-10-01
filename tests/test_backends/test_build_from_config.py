@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from cash.config import CashConfig, TierConfig
+from cash.config.schema import CashConfig, TierConfig
 
 
 # Lazy import so the module loads even before the factory is implemented.
@@ -210,7 +210,7 @@ class TestCashConstructorUsesFactory:
 
 
 def _default_config(tmp_path):
-    from cash.config import CashConfig
+    from cash.config.schema import CashConfig
 
     return CashConfig(cache_dir=str(tmp_path / "cache"))
 
@@ -341,7 +341,7 @@ def test_a_setting_a_tier_does_not_use_is_reported(tier, unused, monkeypatch):
     ``default_ttl`` looked like it gave RAM entries a lifetime."""
     import dataclasses
 
-    from cash import config as cash_config
+    from cash.config import notices as cash_config
     from cash.exceptions import CashCacheIneffectiveWarning
 
     monkeypatch.setattr(cash_config, "_CONFIG_NOTICES", set())

@@ -8,7 +8,7 @@ and a cache folder on disk, which survives a restart.
 
 ## Where the cache folder is
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/_location.py:installed_entry_point_cache_dir @76af1800, cash/config.py:CashConfig.cache_dir == ".cash" -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/_location.py:installed_entry_point_cache_dir @76af1800, cash/config/schema.py:CashConfig.cache_dir == ".cash" -->
 Unless you set it, the folder is called `.cash`, and where it goes depends on
 what is running:
 
@@ -112,7 +112,7 @@ the entry was written with and the tier's current `default_ttl`.
 
 === "Notebook"
 
-    <!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1, cash/config.py:CashConfig.min_cache_savings_pct == 0.2, cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728 -->
+    <!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1, cash/config/schema.py:CashConfig.min_cache_savings_pct == 0.2, cash/config/schema.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728 -->
     Each statement is judged on its own. A result that took less than 10 ms
     is not stored at all. One that took less than 0.1 s stays in memory. Above
     that, it goes to disk only when reading it back is predicted to be at

@@ -77,7 +77,7 @@ RAM for this process, and
 
 ### Cache folder
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config.py:_anchor_cache_dir @edf1f957 -->
+<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
 The cache folder (the cache directory) is `.cash` at your project root. So
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
 started it, from any directory. cash finds the folder from the running script:
@@ -106,7 +106,7 @@ absolute path leaves no doubt about where entries go.
 
 ### Cache size limit
 
-<!-- claim: cash/config.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
+<!-- claim: cash/config/schema.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
 The disk cap is automatic. By default the disk tier may use a quarter of
 the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
 memory. `cash info` prints both numbers:

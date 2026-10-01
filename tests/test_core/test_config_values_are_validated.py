@@ -20,7 +20,7 @@ import pytest
 import cash
 from cash import Cash
 from cash.backends._writes import discarded_writes
-from cash.config import get_config
+from cash.config.resolve import get_config
 
 pytestmark = pytest.mark.core
 
@@ -125,7 +125,7 @@ def test_a_tier_left_out_of_the_stack_is_named(monkeypatch):
     stack without a word."""
     import warnings
 
-    from cash import config as cash_config
+    from cash.config import notices as cash_config
 
     monkeypatch.setattr(cash_config, "_CONFIG_NOTICES", set())
     monkeypatch.setenv("CASH_TIER_0_TYPE", "memory")

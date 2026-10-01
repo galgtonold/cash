@@ -42,7 +42,7 @@ from .code_identity import func_key, is_user_module, own_package
 from .globals_fold import plain_data_kind
 
 if TYPE_CHECKING:
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from .arg_hashing import ArgHasher
     from .frozen import FrozenResults
     from .globals_fold import GlobalsFold

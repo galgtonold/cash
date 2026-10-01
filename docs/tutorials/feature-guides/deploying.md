@@ -26,7 +26,7 @@ export CASH_SUMMARY=1
 `cash info`, run with the same environment, prints the folder, backend and cap
 the job will use. Check it once in the container or on the host.
 
-<!-- claim: cash/config.py:CashConfig.max_cache_size == None -->
+<!-- claim: cash/config/schema.py:CashConfig.max_cache_size == None -->
 **The disk cap.** Without `max_cache_size`, the disk tier may use a quarter of
 the room on its volume. When it is full, cash evicts the entries worth least per
 byte first: cheap to recompute, large, rarely read. On a volume other programs

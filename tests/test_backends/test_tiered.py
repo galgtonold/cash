@@ -139,7 +139,7 @@ class TestLargeFramePersistence:
 
     def _smart_tiered(self, tmp_path):
         from cash.backends.factory import build_backend_from_config
-        from cash.config import CashConfig
+        from cash.config.schema import CashConfig
 
         cfg = CashConfig(
             cache_dir=str(tmp_path / ".cash"),

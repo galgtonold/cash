@@ -67,7 +67,9 @@ src/cash/
 ├── ui/                 # the dashboard and the cache explorer
 ├── labextension/       # the prebuilt JupyterLab extension (source in
 │                       #   labextension/ at the repo root)
-├── config.py           # CashConfig and how settings are resolved
+├── config/            # settings: the CashConfig schema, reading files
+│                       #   and CASH_* variables, merging the layers,
+│                       #   the config file template
 ├── units.py            # byte sizes: "2GB" read, and written back
 ├── effects.py          # which calls write files, send requests, read
 │                       #   the clock or environment

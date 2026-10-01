@@ -72,7 +72,7 @@ class TestCLIInfo:
     def test_info_shows_what_this_projects_cache_holds(self, tmp_path, capsys, monkeypatch):
         """`cash info` named the cache dir but not how big it is --
         the number a user asks for when deciding whether to clear it."""
-        from cash.config import get_config
+        from cash.config.resolve import get_config
 
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()

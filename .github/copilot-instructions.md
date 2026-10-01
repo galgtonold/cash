@@ -50,6 +50,12 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
 - **`src/cash/backends/`**: storage backends. `factory.py` maps a `TierConfig.type`
   (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to a class. The default is
   `TieredBackend([InMemoryBackend, FileBackend])`.
+- **`src/cash/config/`**: the settings. `schema.py` holds `CashConfig` and
+  `TierConfig` and what each value may be; `sources.py` reads a config file and
+  the `CASH_*` variables; `resolve.py` merges the layers (`get_config`);
+  `template.py` writes the documented config file. Which keys a tier type uses
+  is `backends/factory.py`'s `TIER_FIELDS`. Byte sizes (`"2GB"`) are read and
+  formatted in `units.py`.
 - **`src/cash/tracking/`** and **`src/cash/analysis/`**, plus `purity.py`,
   `object_hashing.py` and `cost_model.py` at the top level: the layer that the
   decorator and the notebook share. `tracking/` records what a computation depends

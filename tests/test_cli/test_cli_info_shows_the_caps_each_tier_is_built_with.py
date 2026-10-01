@@ -10,7 +10,8 @@ from __future__ import annotations
 import dataclasses
 
 from cash import __main__ as cli
-from cash.config import TierConfig, get_config
+from cash.config.resolve import get_config
+from cash.config.schema import TierConfig
 from tests._cli_args import cli_args
 
 

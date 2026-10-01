@@ -23,15 +23,9 @@ from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.factory import tier_cap, tier_specs
 from cash.backends.file_backend import FileBackend, StoredEntry
 from cash.backends.persistence_policy import PersistencePolicy
-from cash.config import (
-    SIZE_FIELDS,
-    TOML_MISSING,
-    TOML_NOT_CASH,
-    TOML_SECTION,
-    CashConfig,
-    config_provenance,
-    get_config,
-)
+from cash.config.resolve import get_config
+from cash.config.schema import SIZE_FIELDS, CashConfig, config_provenance
+from cash.config.sources import TOML_MISSING, TOML_NOT_CASH, TOML_SECTION
 from cash.units import format_size, human_bytes
 
 logger = logging.getLogger(__name__)

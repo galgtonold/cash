@@ -470,7 +470,7 @@ decorated function, `f.cache_info()` shows whether you get any hits.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/config.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
+<!-- claim: cash/config/schema.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
 **What happened.** At exit, cash waited for its background writes (60 s by
 default) and some were still running, so the process exited without them. The
 message says how many. With `shutdown_write_timeout=0`, which asks not to
@@ -504,7 +504,7 @@ A setting cash found but could not act on. Every code here starts `CONFIG-`.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_resolve_config @21f63b6a -->
+<!-- claim: cash/config/resolve.py:_resolve_config @1bb37f57 -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. cash used the other configuration layers.
 
@@ -529,7 +529,7 @@ before passing it.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @31e81d57, cash/config.py:_warn_toml_malformed @ca4597b4, cash/config.py:_load_toml_layer @f94a029d, cash/config.py:_build_tiers @d9b42b7d, cash/config.py:TierConfig.__post_init__ @8f5450d5 -->
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/sources.py:_warn_toml_malformed @7aa948bd, cash/config/sources.py:load_toml_layer @b8dfea05, cash/config/resolve.py:_build_tiers @d17e1cb5, cash/config/schema.py:TierConfig.__post_init__ @099eecbf -->
 **What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -556,7 +556,7 @@ the line.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config.py:_validated_layer @31e81d57, cash/config.py:_unknown_key @87165926 -->
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/resolve.py:_unknown_key @6098acf3 -->
 **What happened.** A `[tool.cash]` table, a `[cash]` table or a
 `CASH_TIER_<N>_*` variable sets a key that is not a cash setting. The message
 names the closest real setting:
