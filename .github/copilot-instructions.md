@@ -59,7 +59,8 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
   send requests, read the clock or the environment; the decorator warns on
   them and the notebook refuses to cache them.
 - **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
-  `ipython/` (`CashMagics`, the cell executor), `statement/` (`StatementProcessor`
+  `ipython/` (`CashMagics`, the cell executor, and `CashSession`, the one
+  owner of the session statistics), `statement/` (`StatementProcessor`
   and its siblings), `upstream/` (`UpstreamChecker`, `NotebookSimulator`,
   virtual lineage), `control_structures/` (per-iteration loop and branch caching)
   and `badge_renderer/`. `cache_key.py` and `lineage_store.py` hold the rules below.

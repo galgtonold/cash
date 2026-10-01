@@ -48,7 +48,8 @@ src/cash/
 │                       #   it raises
 ├── notebook/           # the notebook engine (only the magics loaders
 │                       #   import it)
-│   ├── ipython/        #   the magics and the cell executor
+│   ├── ipython/        #   the magics, the cell executor and the
+│   │                   #   session statistics
 │   ├── statement/      #   statement-level caching
 │   ├── control_structures/ #   per-iteration loop and branch caching
 │   ├── upstream/       #   upstream simulation and restore
