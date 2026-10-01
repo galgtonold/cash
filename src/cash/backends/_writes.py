@@ -22,7 +22,7 @@ from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.tracking.tracker_context import untracked
 
-from ..config import get_config
+from ..config import CashConfig, get_config
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +104,9 @@ def reset_discarded_writes(keep: int = 0) -> None:
         del _DISCARDED_WRITES[keep:]
 
 
-#: Fallback for `_shutdown_write_timeout`; the configured default lives on
-#: ``CashConfig.shutdown_write_timeout``.
-_DEFAULT_SHUTDOWN_WRITE_TIMEOUT = 60.0
+#: Fallback for `_shutdown_write_timeout` when no config can be read: the
+#: configured default.
+_DEFAULT_SHUTDOWN_WRITE_TIMEOUT = CashConfig.shutdown_write_timeout
 
 
 def _shutdown_write_timeout() -> float:

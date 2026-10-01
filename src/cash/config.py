@@ -53,11 +53,11 @@ __all__ = [
 
 
 #: The backend types a tier can be (``cash.backends.factory``).
-_SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
+TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
 
 #: Settings whose value must be one of a fixed set (see ``validate_value``).
 #: ``backend = "tiered"`` is the RAM + disk stack; any other is one tier.
-_NAMED_CHOICES = {"backend": _SUPPORTED_TIER_TYPES | {"tiered"}, "type": _SUPPORTED_TIER_TYPES}
+_NAMED_CHOICES = {"backend": TIER_TYPES | {"tiered"}, "type": TIER_TYPES}
 
 
 #: The `TierConfig` fields each tier type is built from
@@ -200,8 +200,8 @@ class TierConfig:
     region: str | None = None
 
     def __post_init__(self) -> None:
-        if self.type not in _SUPPORTED_TIER_TYPES:
-            raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(_SUPPORTED_TIER_TYPES)}")
+        if self.type not in TIER_TYPES:
+            raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(TIER_TYPES)}")
         unused = sorted(
             f.name
             for f in fields(self)
@@ -1056,9 +1056,9 @@ def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_
                     tiers.append(
                         {k: (validate_value(k, v, TierConfig) if k in tier_valid else v) for k, v in t.items()}
                     )
-                    if tiers[-1].get("type") not in _SUPPORTED_TIER_TYPES:
+                    if tiers[-1].get("type") not in TIER_TYPES:
                         raise ValueError(
-                            f"tiers[{i}].type={t.get('type')!r}: not one of {', '.join(sorted(_SUPPORTED_TIER_TYPES))}"
+                            f"tiers[{i}].type={t.get('type')!r}: not one of {', '.join(sorted(TIER_TYPES))}"
                         )
                 out[key] = tiers
             elif key in valid:

@@ -24,15 +24,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import Any, NamedTuple
 
 from cash import cost_model
+from cash.config import CashConfig
 
 from ._base import store_seconds
 from .value_policy import worth_its_bytes
-
-if TYPE_CHECKING:
-    from cash.config import CashConfig
 
 __all__ = [
     "COMPUTE_FLOOR_S",
@@ -51,19 +49,21 @@ __all__ = [
 #: statements, saved no time, and grew the cache 355-fold.
 COMPUTE_FLOOR_S = 0.1
 
+# The tunables below are configuration settings; their defaults live on
+# `CashConfig` alone, so a policy built from a config and one built bare agree.
+
 #: The fraction of the compute a restore has to save.
-MIN_SAVINGS_PCT = 0.20
+MIN_SAVINGS_PCT = CashConfig.min_cache_savings_pct
 
 #: A notebook statement that computes faster than this gets no cache entry,
 #: not even a metadata-only one, so the next lookup is a fast clean miss
-#: rather than a read that only finds "recompute". The default of
-#: ``min_execution_time_to_cache_seconds``.
-STORE_FLOOR_S = 0.01
+#: rather than a read that only finds "recompute".
+STORE_FLOOR_S = CashConfig.min_execution_time_to_cache_seconds
 
 #: The restore time a notebook value may always take, whatever its compute:
 #: the fixed overhead of a cheap restore (opening a file) must not refuse a
-#: trivial statement. The default of ``min_cache_fixed_budget_seconds``.
-RESTORE_BUDGET_S = 0.05
+#: trivial statement.
+RESTORE_BUDGET_S = CashConfig.min_cache_fixed_budget_seconds
 
 
 def restore_kind(backend: Any) -> str:

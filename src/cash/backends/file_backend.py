@@ -21,6 +21,7 @@ from typing import Any, NamedTuple
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
+from ..config import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, entry_expired
@@ -157,7 +158,7 @@ class FileBackend(CacheBackend):
         cache_dir: str,
         compress: bool = False,
         max_size_bytes: int | None = None,
-        flush_interval: int = 5,
+        flush_interval: int = CashConfig.flush_interval,
         default_ttl: int | None = None,
         adaptive_cap: bool = False,
     ) -> None:

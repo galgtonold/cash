@@ -18,7 +18,7 @@ import os
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from ..config import TierConfig
+from ..config import TIER_TYPES, TierConfig
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
 from .adaptive_caps import adaptive_disk_cap_for, resolve_ram_cap
@@ -137,7 +137,7 @@ def _settings(tier: TierConfig, config: CashConfig) -> dict[str, Any]:
             "region": tier.region or config.s3_region,
             "prefix": tier.prefix or config.s3_prefix,
         }
-    raise ValueError(f"Unknown tier type {t!r}: one of memory, file, sqlite, redis, s3.")
+    raise ValueError(f"Unknown tier type {t!r}: one of {', '.join(sorted(TIER_TYPES))}.")
 
 
 def tier_cap(kind: str, settings: dict[str, Any], held_bytes: int = 0) -> int | None:
