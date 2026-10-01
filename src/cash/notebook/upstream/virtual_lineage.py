@@ -17,6 +17,7 @@ import importlib.util
 import logging
 import marshal
 import os
+import re
 import sys
 import types
 from collections.abc import Callable, Mapping
@@ -106,6 +107,40 @@ def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[Tr
         if entry.inputs & vars_derived:
             vars_derived.update(entry.outputs)
     return vars_derived
+
+
+#: ``reset_magic_deletes`` result for a reset that empties the user namespace.
+RESET_ALL = re.compile("")
+
+
+def reset_magic_deletes(line: str) -> re.Pattern[str] | None:
+    """Which user variables the IPython magic on *line* deletes.
+
+    ``None`` when the line is not a reset that deletes variables, else a
+    pattern the deleted names match (``RESET_ALL`` for all of them).
+
+    - ``%reset`` with no target, or with ``-s``, empties the namespace.
+    - ``%reset in|out|dhist`` flush only IPython's history caches.
+    - ``%reset array`` deletes the names that hold numpy arrays, which the
+      simulation cannot tell from the source. Treating it as a full wipe would
+      make every other name fall back to its live lineage and hide an edit
+      above, so it deletes nothing here.
+    - ``%reset_selective regex`` deletes the names ``re.search`` matches.
+    """
+    parts = line.split()
+    if not parts or parts[0] not in ("%reset", "%reset_selective"):
+        return None
+    flags = [p for p in parts[1:] if p.startswith("-")]
+    args = [p for p in parts[1:] if not p.startswith("-")]
+    if parts[0] == "%reset":
+        soft = any(not f.startswith("--") and "s" in f for f in flags)
+        return RESET_ALL if soft or not args else None
+    if not args:
+        return None
+    try:
+        return re.compile(" ".join(args))
+    except re.error:
+        return None
 
 
 class VirtualLineage:
@@ -662,18 +697,24 @@ class VirtualLineage:
         trace_start = len(simulation_trace)
         cell_file_deps: dict = {}
 
-        # Model ``%reset`` / ``%reset -f`` as a full namespace wipe BEFORE the
-        # strip_magics empty-cell short-circuit below (a reset cell strips to
-        # empty). Like ``del`` it clears ``user_ns`` but not ``variable_lineage``;
-        # position-scoping (the simulator only replays cells 0..current) means a
-        # reset ABOVE the target wipes the virtual state so an above-the-reset
-        # consumer's inputs are reconstructed, while a reset BELOW is never
-        # simulated. Without this the liveness gate would resurrect a
-        # reset variable as a phantom restore (test_reset_magic_no_phantom_restore).
+        # Model the ``%reset`` magics BEFORE the strip_magics empty-cell
+        # short-circuit below (a reset cell strips to empty). Like ``del`` they
+        # clear ``user_ns`` but not ``variable_lineage``; position-scoping (the
+        # simulator only replays cells 0..current) means a reset ABOVE the
+        # target drops the names it deletes from the virtual state, so the
+        # liveness gate does not resurrect them as phantom restores, while a
+        # reset BELOW is never simulated.
         for line in cell_code.split("\n"):
-            if line.strip().startswith("%reset"):
+            dropped = reset_magic_deletes(line)
+            if dropped is None:
+                continue
+            if dropped is RESET_ALL:
                 virtual_lineage.clear()
                 virtual_modules.clear()
+                continue
+            for name in [n for n in virtual_lineage if dropped.search(n)]:
+                del virtual_lineage[name]
+            virtual_modules.difference_update({m for m in virtual_modules if dropped.search(m)})
 
         try:
             clean_cell_code = clean_cell_source(cell_code)
