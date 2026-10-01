@@ -60,39 +60,33 @@ psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 __all__ = [
     "bytecode_identity",
     "callable_identity",
+    "class_functions",
+    "code_consts_without_docstring",
     "compiled_identity",
+    "extension_file_digest",
+    "getsource",
+    "getsourcelines",
+    "loaded_class_identity",
+    "loaded_code_matches_disk",
+    "loaded_module_matches_disk",
     "module_identity",
-    "opaque_identity",
-    "unwrap_partials",
     "own_source",
     "own_source_digest",
+    "read_code_text",
+    "settled_source_version",
     "source_digest",
-    "code_consts_without_docstring",
-    "extension_file_digest",
-    "normalize_source_for_hash",
     "source_identity_digest",
+    "source_version_unchanged",
     "stat_has_settled",
-    "strip_cache_decorator",
     "unparse_without_docstrings",
+    "unwrap_partials",
 ]
-
-# Populated on first use from ``cash.analysis.annotations``. Imported
-# lazily because this module sits below the notebook package in the
-# import graph, and hashing only runs long after imports have settled.
-_ANNOTATION_PATTERN: re.Pattern[str] | None = None
 
 # Structural markers. Chosen outside the range a Python token can carry
 # so they cannot collide with real source text.
 _INDENT = "\x02"
 _DEDENT = "\x03"
 _SEP = "\x01"
-
-
-def _annotation_pattern() -> re.Pattern[str]:
-    global _ANNOTATION_PATTERN
-    if _ANNOTATION_PATTERN is None:
-        _ANNOTATION_PATTERN = ANNOTATION_PATTERN
-    return _ANNOTATION_PATTERN
 
 
 def _canonical_number(text: str) -> str:
@@ -152,7 +146,7 @@ def _annotation_atom(comment: str) -> str | None:
     call. Here an unparseable value is simply kept verbatim -- it still has
     to move the digest, because editing it is an edit the user meant.
     """
-    match = _annotation_pattern().search(comment)
+    match = ANNOTATION_PATTERN.search(comment)
     if match is None:
         return None
     directive = match.group(1).lower()
