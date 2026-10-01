@@ -16,6 +16,11 @@ every child gets the same environment:
 - the ``cash`` under test comes first on ``PYTHONPATH``;
 - a timeout, so a hung child fails its test instead of waiting for the
   per-test backstop.
+
+A child that builds or installs something (``pip install``, ``python -m
+build``, a new venv) goes through ``run_tied`` instead: it can run for
+minutes and starts children of its own, and a timeout alone only binds while
+the test that started it is alive.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+
+import psutil
 
 import cash
 
@@ -82,6 +89,87 @@ def run_python(
     if check:
         assert done.returncode == 0, f"exit {done.returncode}\n{_tail(done.stdout)}\n{_tail(done.stderr)}"
     return done
+
+
+# Runs as the direct child of the test process. It starts the real command
+# and kills the command's whole process tree as soon as the test process is
+# gone: an xdist worker that crashed or was killed cannot do that itself.
+# Otherwise it exits with the command's own code.
+_TIE = """
+import subprocess, sys, time
+import psutil
+
+def alive(p):
+    try:
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except psutil.Error:
+        return False
+
+parent = psutil.Process(int(sys.argv[1]))
+child = subprocess.Popen(sys.argv[2:])
+while child.poll() is None:
+    if not alive(parent):
+        try:
+            root = psutil.Process(child.pid)
+            procs = [*root.children(recursive=True), root]
+        except psutil.Error:
+            procs = []
+        for p in procs:
+            try:
+                p.kill()
+            except psutil.Error:
+                pass
+        sys.exit(124)
+    time.sleep(0.5)
+sys.exit(child.returncode)
+"""
+
+
+def run_tied(
+    argv: list[str | Path],
+    *,
+    timeout: float,
+    cwd: str | Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run *argv* and return it finished, its output captured as text.
+
+    Its whole process tree is killed when *timeout* seconds pass (raising
+    ``subprocess.TimeoutExpired``), when the test is interrupted, and, through
+    a small watcher process, when this process dies.
+    """
+    tie = [sys.executable, "-c", _TIE, str(os.getpid()), *map(str, argv)]
+    proc = subprocess.Popen(
+        tie,
+        cwd=None if cwd is None else str(cwd),
+        env=None if env is None else dict(env),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except BaseException:
+        _kill_tree(proc.pid)
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(list(map(str, argv)), proc.returncode, out, err)
+
+
+def _kill_tree(pid: int) -> None:
+    """Kill *pid* and everything it started, children first."""
+    try:
+        root = psutil.Process(pid)
+        procs = [*root.children(recursive=True), root]
+    except psutil.Error:
+        return
+    for p in procs:
+        try:
+            p.kill()
+        except psutil.Error:
+            pass
 
 
 def _tail(stream, limit: int = 3000) -> str:

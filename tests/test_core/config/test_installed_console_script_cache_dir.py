@@ -31,6 +31,8 @@ import textwrap
 
 import pytest
 
+from tests._scripts import run_tied
+
 # The module fixture builds cash from source and pip-installs it into a fresh
 # venv, and pytest-timeout charges that to whichever test asks first. ~20 s
 # locally, but the suite-wide 30 s budget killed the worker outright on a slow
@@ -99,17 +101,14 @@ def installed_tool(tmp_path_factory):
     """A venv with cash and a console-script package installed into it."""
     base = tmp_path_factory.mktemp("consolescript")
     venv = base / "venv"
-    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True)
+    made = run_tied([sys.executable, "-m", "venv", str(venv)], timeout=180)
+    assert made.returncode == 0, made.stderr[-2000:]
     bindir = venv / ("Scripts" if os.name == "nt" else "bin")
     python = bindir / ("python.exe" if os.name == "nt" else "python")
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     dist = _write_distribution(base / "dist")
-    install = subprocess.run(
-        [str(python), "-m", "pip", "install", "-q", repo_root, str(dist)],
-        capture_output=True,
-        text=True,
-    )
+    install = run_tied([python, "-m", "pip", "install", "-q", repo_root, dist], timeout=480)
     if install.returncode != 0:
         pytest.skip(f"could not build the probe distribution:\n{install.stderr[-2000:]}")
 
@@ -121,7 +120,7 @@ def installed_tool(tmp_path_factory):
 def _run(exe, cwd, env=None):
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env or {})
-    out = subprocess.run([str(exe)], cwd=str(cwd), capture_output=True, text=True, env=environ)
+    out = subprocess.run([str(exe)], cwd=str(cwd), capture_output=True, text=True, env=environ, timeout=120)
     assert out.returncode == 0, out.stdout + out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
 
@@ -192,7 +191,9 @@ def test_a_plain_script_is_unaffected(installed_tool, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
-    out = subprocess.run([str(python), str(script)], cwd=str(elsewhere), capture_output=True, text=True, env=environ)
+    out = subprocess.run(
+        [str(python), str(script)], cwd=str(elsewhere), capture_output=True, text=True, env=environ, timeout=120
+    )
     assert out.returncode == 0, out.stderr
 
     assert out.stdout.strip() == os.path.normpath(str(project / ".cash")), out.stdout
@@ -215,7 +216,7 @@ def _cash_cli(base, *argv, cwd, env):
     exe = bindir / ("cash.exe" if os.name == "nt" else "cash")
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env)
-    return subprocess.run([str(exe), *argv], cwd=str(cwd), capture_output=True, text=True, env=environ)
+    return subprocess.run([str(exe), *argv], cwd=str(cwd), capture_output=True, text=True, env=environ, timeout=120)
 
 
 def test_the_installed_cash_cli_agrees_with_python_m_cash(installed_tool, tmp_path):
@@ -231,7 +232,12 @@ def test_the_installed_cash_cli_agrees_with_python_m_cash(installed_tool, tmp_pa
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env)
     via_module = subprocess.run(
-        [str(python), "-m", "cash", "info"], cwd=str(project / "sub"), capture_output=True, text=True, env=environ
+        [str(python), "-m", "cash", "info"],
+        cwd=str(project / "sub"),
+        capture_output=True,
+        text=True,
+        env=environ,
+        timeout=120,
     )
 
     def cache_line(out):
@@ -251,7 +257,9 @@ def test_the_cli_reaches_a_tools_per_user_cache_by_name(installed_tool, tmp_path
 
     environ = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     environ.update(env)
-    ran = subprocess.run([str(exe), "compute"], cwd=str(nowhere), capture_output=True, text=True, env=environ)
+    ran = subprocess.run(
+        [str(exe), "compute"], cwd=str(nowhere), capture_output=True, text=True, env=environ, timeout=120
+    )
     assert ran.returncode == 0, ran.stdout + ran.stderr
     tool_dir = next(root.rglob(_PKG), None)
     assert tool_dir is not None and tool_dir.is_dir(), "the tool cached nowhere private"
@@ -283,7 +291,9 @@ def test_python_dash_m_of_the_installed_tool_uses_the_same_per_user_cache(instal
     environ.update(env)
 
     def run_m(cwd):
-        out = subprocess.run([str(python), "-m", _PKG], cwd=str(cwd), capture_output=True, text=True, env=environ)
+        out = subprocess.run(
+            [str(python), "-m", _PKG], cwd=str(cwd), capture_output=True, text=True, env=environ, timeout=120
+        )
         assert out.returncode == 0, out.stdout + out.stderr
         return json.loads(out.stdout.strip().splitlines()[-1])["cache_dir"]
 

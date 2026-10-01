@@ -15,12 +15,13 @@ So this test builds a real sdist and looks inside it.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 import tarfile
 from pathlib import Path
 
 import pytest
+
+from tests._scripts import run_tied
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -55,12 +56,9 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     except ImportError:
         pytest.skip("`build` not installed; cannot construct an sdist to inspect")
 
-    cp = subprocess.run(
-        [sys.executable, "-m", "build", "--sdist", "--outdir", str(tmp_path)],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-    )
+    # Inside the 30 s per-test budget, so a slow build fails this test rather
+    # than the per-test timeout killing the worker.
+    cp = run_tied([sys.executable, "-m", "build", "--sdist", "--outdir", tmp_path], timeout=25, cwd=REPO_ROOT)
     assert cp.returncode == 0, f"sdist build failed:\n{cp.stdout[-3000:]}\n{cp.stderr[-3000:]}"
 
     archives = list(tmp_path.glob("*.tar.gz"))
