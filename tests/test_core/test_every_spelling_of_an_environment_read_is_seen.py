@@ -16,7 +16,8 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.analysis.purity_analyzer import ISSUE_AMBIENT_READ, PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_report import ISSUE_AMBIENT_READ
 from cash.notebook.lineage_formula import statement_environment_reads
 
 _VAR = "CASH_TEST_FLAG"

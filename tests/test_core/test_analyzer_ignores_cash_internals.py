@@ -7,7 +7,7 @@ straight into it and report the shim's own ``_tracker.track_path(...)`` as
 "likely side effects or scope mutations" -- blaming the user for cash's
 instrumentation.
 
-It only ever reproduced in an EDITABLE install. ``_is_user_code``'s fallback
+It only ever reproduced in an EDITABLE install. ``is_user_code``'s fallback
 is ``is_local_module``, which asks whether the module lives outside
 site-packages; a released wheel does not, so the shim was rejected there and
 no released user could see it. That asymmetry is exactly why it needs a test:
@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import warnings
 
-from cash.analysis.purity_analyzer import _is_user_code, get_analyzer
+from cash.analysis.helper_code import is_user_code
+from cash.analysis.purity_analyzer import get_analyzer
 from cash.tracking.reader_patches import FileDependencyRegistry
 
 # A REAL cash shim, built the way the file tracker builds it. Its code lives in
@@ -40,13 +41,13 @@ def _user_function_that_reads_a_file(path):
 
 
 def test_is_user_code_rejects_cash_modules_for_a_user_function():
-    assert _is_user_code(_SHIM, "__main__") is False
-    assert _is_user_code(_SHIM, "my_project.pipeline") is False
+    assert is_user_code(_SHIM, "__main__") is False
+    assert is_user_code(_SHIM, "my_project.pipeline") is False
 
 
 def test_is_user_code_still_recurses_when_cash_analyses_itself():
     """The exclusion must not blind cash to its own helpers internally."""
-    assert _is_user_code(_SHIM, "cash.core") is True
+    assert is_user_code(_SHIM, "cash.core") is True
 
 
 def test_analyzer_does_not_attribute_cash_internals_to_the_user():

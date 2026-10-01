@@ -743,8 +743,8 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_analyzer.py:_PurityVisitor.visit_Subscript @3b13759e -->
-<!-- claim: cash/analysis/purity_analyzer.py:_ambient_call @2d93af7a, cash/effects.py:_canonical_names @e0692d46 -->
+<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
 **What happened.** The function reads the clock or a fresh UUID
 (`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`,
@@ -755,8 +755,8 @@ these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
 
 <!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/globals_fold.py:GlobalsFold.fold_environment @0398e851 -->
-<!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/purity_analyzer.py:_log_helper_names @c43afd2c -->
-<!-- claim: cash/analysis/purity_analyzer.py:_clock_helper_read @936a32c3 -->
+<!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @39516f3a -->
+<!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @300df3f0 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
@@ -1001,8 +1001,8 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_analyzer.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
-<!-- claim: cash/analysis/purity_analyzer.py:_opens_tracked_database @35da8b91 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @d8880798, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
+<!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @35da8b91 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
 ...")`, `pd.read_sql`). A query over a SQLite file the function opens itself
@@ -1424,7 +1424,7 @@ generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
 
-<!-- claim: cash/decorator/rng.py:unseeded_library_calls @56f56fa1 -->
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @96f66467 -->
 A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or

@@ -366,17 +366,7 @@ def _classify_method_mutations(
     is_classmethod = _has_named_decorator(method, "classmethod")
     is_staticmethod = _has_named_decorator(method, "staticmethod")
     params = all_param_names(method)
-    global_decls: set[str] = set()
-    local_assigned: set[str] = set()
-    for node in _iter_method_body_nodes(method):
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            global_decls.update(node.names)
-        elif isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                for leaf in iter_store_targets(tgt):
-                    if isinstance(leaf, ast.Name):
-                        local_assigned.add(leaf.id)
-    local_assigned -= global_decls
+    local_assigned = _assigned_locals(method)
 
     mutates_self = False
     class_targets: set[str] = set()
@@ -411,27 +401,52 @@ def _classify_method_mutations(
         else:
             free.add(root)
 
-    # ``super().<m>()`` runs the inherited implementation — attribute its hidden
-    # mutations too (the first resolvable base of the CURRENT class defining <m>
-    # wins, MRO-ish).
+    s2, c2, f2 = _super_method_mutations(method, recv_class_name, cdef, resolve_class_source, _seen, _current)
+    return mutates_self or s2, frozenset(class_targets | c2), frozenset(free | f2)
+
+
+def _assigned_locals(method: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Names *method* binds by a plain assignment and does not declare
+    ``global`` / ``nonlocal``: its locals."""
+    global_decls: set[str] = set()
+    local_assigned: set[str] = set()
+    for node in _iter_method_body_nodes(method):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            global_decls.update(node.names)
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Name):
+                        local_assigned.add(leaf.id)
+    return local_assigned - global_decls
+
+
+def _super_method_mutations(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+    recv_class_name: str,
+    cdef: ast.ClassDef,
+    resolve_class_source,
+    seen: set[tuple[str, str]],
+    current: ast.ClassDef,
+) -> tuple[bool, frozenset[str], frozenset[str]]:
+    """The hidden mutations of the inherited implementations *method* runs
+    through ``super().<m>()``: for each, the first resolvable base of the
+    CURRENT class that defines ``<m>`` (MRO-ish), classified like *method*."""
+    mutates_self = False
+    class_targets: set[str] = set()
+    free: set[str] = set()
     for m_name in _super_called_methods(method):
-        for base_name in _class_bases(_current):
+        for base_name in _class_bases(current):
             base_cdef = _resolve_class_def(base_name, resolve_class_source)
             base_m = _class_method(base_cdef, m_name, resolve_class_source) if base_cdef is not None else None
             if base_m is not None:
                 s2, c2, f2 = _classify_method_mutations(
-                    base_m,
-                    recv_class_name,
-                    cdef,
-                    resolve_class_source,
-                    _seen,
-                    base_cdef,
+                    base_m, recv_class_name, cdef, resolve_class_source, seen, base_cdef
                 )
                 mutates_self = mutates_self or s2
                 class_targets |= c2
                 free |= f2
                 break
-
     return mutates_self, frozenset(class_targets), frozenset(free)
 
 
@@ -514,307 +529,301 @@ def object_protocol_mutations(
     * *decorated_class* — ``var -> class_name`` for a class-based decorator
       binding ``@Counter def task`` (or ``None``).
     """
-    free_vars: set[str] = set()
-    receivers: set[str] = set()
-    class_defs: set[str] = set()
-    if decorated_class is None:
+    if tree is None:
+        return ObjectProtocolResets(frozenset(), frozenset(), frozenset())
+    scan = _ProtocolScan(resolve_class_source, instance_class, resolve_source, resolve_var_factory, decorated_class)
+    return scan.run(tree)
 
-        def decorated_class(_var):
-            return None
 
-    _class_cache: dict[str, ast.ClassDef | None] = {}
+class _ProtocolScan:
+    """One scan of a cell: the resolvers it reads classes and functions
+    through, and the reset targets found so far, one set per channel."""
 
-    def _classdef(name):
-        if name not in _class_cache:
-            _class_cache[name] = _resolve_class_def(name, resolve_class_source)
-        return _class_cache[name]
+    def __init__(self, resolve_class_source, instance_class, resolve_source, resolve_var_factory, decorated_class):
+        self._resolve_class_source = resolve_class_source
+        self._instance_class = instance_class
+        self._resolve_source = resolve_source
+        self._resolve_var_factory = resolve_var_factory
+        self._decorated_class = decorated_class
+        self._class_cache: dict[str, ast.ClassDef | None] = {}
+        self.free_vars: set[str] = set()
+        self.receivers: set[str] = set()
+        self.class_defs: set[str] = set()
+        self.init_subclass_free: set[str] = set()
 
-    def _apply_method(cdef, class_name, method, recv_var, *, allow_self):
-        si, class_targets, fv = _classify_method_mutations(
-            method,
-            class_name,
-            cdef,
-            resolve_class_source,
+    def run(self, tree: ast.Module) -> ObjectProtocolResets:
+        for node in _walk_executable(tree):
+            self._visit(node)
+        self._scan_init_subclass(tree)
+        return ObjectProtocolResets(
+            frozenset(self.free_vars),
+            frozenset(self.receivers),
+            frozenset(self.class_defs),
+            frozenset(self.init_subclass_free),
         )
+
+    def _visit(self, node: ast.AST) -> None:
+        """Dispatch one executable node to the channel it invokes."""
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                self._with_item(item.context_expr)
+        # --- subscript operations dispatching to custom dunders ----------------
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Subscript) and isinstance(leaf.value, ast.Name):
+                        self._dispatch_dunder(leaf.value.id, "__setitem__")
+                    elif isinstance(leaf, ast.Attribute) and isinstance(leaf.value, ast.Name):
+                        self._dispatch_attr(leaf.value.id, leaf.attr, "setter", "__set__")
+        elif isinstance(node, ast.Delete):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
+                    self._dispatch_dunder(tgt.value.id, "__delitem__")
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            self._aug_assign(node.target.id, node.op)
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
+            self._dispatch_dunder(node.value.id, "__getitem__")
+        # --- ``recv.attr`` load dispatching to a property getter / __get__ -----
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
+            self._dispatch_attr(node.value.id, node.attr, "getter", "__get__")
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                self._name_call(node, node.func.id)
+            elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                self._method_call(node, node.func.value.id, node.func.attr)
+
+    # --- resolving classes and applying a method's mutations ---
+
+    def _classdef(self, name: str) -> ast.ClassDef | None:
+        if name not in self._class_cache:
+            self._class_cache[name] = _resolve_class_def(name, self._resolve_class_source)
+        return self._class_cache[name]
+
+    def _instance_classdef(self, var: str) -> tuple[str | None, ast.ClassDef | None]:
+        """The notebook class *var* is an instance of, and its ``ClassDef``."""
+        cls = self._instance_class(var)
+        return cls, (self._classdef(cls) if cls else None)
+
+    def _method(self, cdef: ast.ClassDef, name: str):
+        return _class_method(cdef, name, self._resolve_class_source)
+
+    def _apply_method(self, cdef, class_name, method, recv_var, *, allow_self) -> None:
+        si, class_targets, fv = _classify_method_mutations(method, class_name, cdef, self._resolve_class_source)
         if fv:
-            free_vars.update(fv)
+            self.free_vars.update(fv)
         if class_targets:
             # The class-var reset target is the OWNING class (a base when the var
             # is inherited), which must re-run to recreate the class-level
             # container. When the var is inherited (owner != receiver's class),
             # also reset the receiver's class so its instances re-derive against
             # the fresh base — a subclass method mutating an inherited class var
-            # via ``self`` needs both, since the reset cascade is one level deep
-            # . For a non-inherited var the owner IS the receiver's class,
+            # via ``self`` needs both, since the reset cascade is one level
+            # deep. For a non-inherited var the owner IS the receiver's class,
             # so this adds nothing.
-            class_defs.update(class_targets)
-            class_defs.add(class_name)
+            self.class_defs.update(class_targets)
+            self.class_defs.add(class_name)
         if si and allow_self and recv_var is not None:
-            receivers.add(recv_var)
+            self.receivers.add(recv_var)
 
-    def _apply_ctor(cdef, class_name):
-        """A construction ``X()`` — the fresh instance's self-init is discarded, so
-        only class-var / free-var mutations in ``__init__`` (or a dataclass
-        ``__post_init__``) persist."""
-        for ctor in ("__init__", "__post_init__"):
-            method = _class_method(cdef, ctor, resolve_class_source)
+    def _apply_methods(self, cdef, class_name, names, recv_var, *, allow_self) -> None:
+        """`_apply_method` for each of *names* the class defines, in order."""
+        for name in names:
+            method = self._method(cdef, name)
             if method is not None:
-                _apply_method(cdef, class_name, method, None, allow_self=False)
+                self._apply_method(cdef, class_name, method, recv_var, allow_self=allow_self)
 
-    def _dispatch_dunder(recv_var, dunder):
-        cls = instance_class(recv_var)
-        cdef = _classdef(cls) if cls else None
-        if cdef is None:
+    # --- one handler per protocol channel ---
+
+    def _with_item(self, ctx: ast.expr) -> None:
+        """``with ctx:`` — ``__enter__`` / ``__exit__`` of an instance, a class
+        constructed in place, a ``@contextmanager`` generator, or a factory
+        returning a notebook class."""
+        if isinstance(ctx, ast.Name):
+            self._dispatch_context(ctx.id)
             return
-        method = _class_method(cdef, dunder, resolve_class_source)
-        if method is not None:
-            _apply_method(cdef, cls, method, recv_var, allow_self=True)
-
-    def _dispatch_context(recv_var):
-        """A context-managed instance ``recv_var`` (``with cm:`` or
-        ``stack.enter_context(cm)``): analyse its ``__enter__`` / ``__exit__``."""
-        cls = instance_class(recv_var)
-        cdef = _classdef(cls) if cls else None
-        if cdef is None:
+        if not (isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Name)):
             return
-        for dunder in ("__enter__", "__exit__"):
-            method = _class_method(cdef, dunder, resolve_class_source)
-            if method is not None:
-                _apply_method(cdef, cls, method, recv_var, allow_self=True)
+        nm = ctx.func.id
+        cdef = self._classdef(nm)
+        if cdef is not None:
+            # ``with SomeCM():`` — anonymous instance, no receiver to
+            # reset; only class-var / free-var mutations persist.
+            self._apply_methods(cdef, nm, ("__enter__", "__exit__"), None, allow_self=False)
+            return
+        fdef = resolve_function_def(nm, self._resolve_source)
+        if fdef is None:
+            return
+        # A ``@contextmanager`` generator's free-var mutations,
+        self.free_vars.update(free_vars_mutated_in_function(fdef))
+        # or a plain factory ``def cm(): return Mgr()`` — the returned
+        # instance's __enter__/__exit__ run anonymously (``with cm() as x:``),
+        # so only class-var / free-var mutations persist.
+        ret_name, ret_cdef = self._return_class(fdef)
+        if ret_cdef is not None:
+            self._apply_methods(ret_cdef, ret_name, ("__enter__", "__exit__"), None, allow_self=False)
 
-    def _return_class(fdef):
+    def _return_class(self, fdef):
         """The ``(name, ClassDef)`` of a notebook class a factory function
-         RETURNS (``def cm(): return Mgr()`` → ``Mgr``), or ``(None, None)``
-        . Used for ``with cm() as x:`` where ``cm`` is a plain factory."""
+        RETURNS (``def cm(): return Mgr()`` → ``Mgr``), or ``(None, None)``.
+        Used for ``with cm() as x:`` where ``cm`` is a plain factory."""
         for sub in ast.walk(fdef):
             if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Call) and isinstance(sub.value.func, ast.Name):
-                rcdef = _classdef(sub.value.func.id)
+                rcdef = self._classdef(sub.value.func.id)
                 if rcdef is not None:
                     return sub.value.func.id, rcdef
         return None, None
 
-    def _dispatch_descriptor(cdef, attr, dunder):
+    def _dispatch_context(self, recv_var: str) -> None:
+        """A context-managed instance ``recv_var`` (``with cm:`` or
+        ``stack.enter_context(cm)``): analyse its ``__enter__`` / ``__exit__``."""
+        cls, cdef = self._instance_classdef(recv_var)
+        if cdef is not None:
+            self._apply_methods(cdef, cls, ("__enter__", "__exit__"), recv_var, allow_self=True)
+
+    def _dispatch_dunder(self, recv_var: str, dunder: str) -> None:
+        cls, cdef = self._instance_classdef(recv_var)
+        if cdef is not None:
+            self._apply_methods(cdef, cls, (dunder,), recv_var, allow_self=True)
+
+    def _dispatch_attr(self, recv_var: str, attr: str, accessor: str, descriptor_dunder: str) -> None:
+        """``recv.attr = v`` / ``recv.attr`` dispatching to a ``@property``
+        setter or getter, else to a data descriptor's ``__set__`` /
+        ``__get__``. A plain attribute resolves to neither and is a no-op."""
+        cls, cdef = self._instance_classdef(recv_var)
+        if cdef is None:
+            return
+        method = _property_accessor(cdef, attr, accessor, self._resolve_class_source)
+        if method is not None:
+            self._apply_method(cdef, cls, method, recv_var, allow_self=True)
+        else:
+            self._dispatch_descriptor(cdef, attr, descriptor_dunder)
+
+    def _dispatch_descriptor(self, cdef, attr: str, dunder: str) -> None:
         """A data descriptor's ``__set__`` / ``__get__`` receives ``self`` (the
         descriptor, a shared class attribute) and ``obj`` (the instance) — both
         parameters — so only its FREE-var side effects are attributed."""
-        ddef = _descriptor_class(cdef, attr, resolve_class_source)
+        ddef = _descriptor_class(cdef, attr, self._resolve_class_source)
         if ddef is None:
             return
-        method = _class_method(ddef, dunder, resolve_class_source)
+        method = self._method(ddef, dunder)
         if method is not None:
-            free_vars.update(free_vars_mutated_in_function(method))
+            self.free_vars.update(free_vars_mutated_in_function(method))
 
-    def _dispatch_attr_set(recv_var, attr):
-        """``recv.attr = v`` dispatching to a ``@property`` setter or a data
-        descriptor's ``__set__``. A plain attribute assign resolves to
-        neither and is a no-op."""
-        cls = instance_class(recv_var)
-        cdef = _classdef(cls) if cls else None
-        if cdef is None:
+    def _aug_assign(self, target: str, op: ast.operator) -> None:
+        """``obj <op>= x`` dispatching to an in-place operator dunder."""
+        cls, cdef = self._instance_classdef(target)
+        dunders = _AUGOP_DUNDERS.get(type(op).__name__)
+        if cdef is None or dunders is None:
             return
-        setter = _property_accessor(cdef, attr, "setter", resolve_class_source)
-        if setter is not None:
-            _apply_method(cdef, cls, setter, recv_var, allow_self=True)
-        else:
-            _dispatch_descriptor(cdef, attr, "__set__")
-
-    def _dispatch_attr_get(recv_var, attr):
-        """``recv.attr`` (load) dispatching to a ``@property`` getter or a data
-        descriptor's ``__get__`` with a side effect."""
-        cls = instance_class(recv_var)
-        cdef = _classdef(cls) if cls else None
-        if cdef is None:
+        inplace_dunder, fallback_dunder = dunders
+        method = self._method(cdef, inplace_dunder)
+        if method is not None:
+            # ``__iadd__`` mutates the receiver in place (returns self).
+            self._apply_method(cdef, cls, method, target, allow_self=True)
             return
-        getter = _property_accessor(cdef, attr, "getter", resolve_class_source)
-        if getter is not None:
-            _apply_method(cdef, cls, getter, recv_var, allow_self=True)
-        else:
-            _dispatch_descriptor(cdef, attr, "__get__")
+        # No in-place form: ``obj += x`` REASSIGNS obj to a fresh
+        # ``obj.__add__(x)`` (idempotent), so only its free-var / class-var
+        # side effects persist.
+        method = self._method(cdef, fallback_dunder)
+        if method is not None:
+            self._apply_method(cdef, cls, method, target, allow_self=False)
 
-    if tree is None:
-        return ObjectProtocolResets(frozenset(), frozenset(), frozenset())
+    def _name_call(self, node: ast.Call, nm: str) -> None:
+        """``nm(...)``: ``next(it)``, a constructor, a class-based decorator's
+        instance, an instance's ``__call__``, or a decorated function."""
+        # ``next(it)`` advances the iterator via ``It.__next__``.
+        if nm == "next" and node.args and isinstance(node.args[0], ast.Name):
+            self._dispatch_dunder(node.args[0].id, "__next__")
+            return
+        cdef = self._classdef(nm)
+        if cdef is not None:
+            # A construction ``X()`` — the fresh instance's self-init is
+            # discarded, so only class-var / free-var mutations in ``__init__``
+            # (or a dataclass ``__post_init__``) persist.
+            self._apply_methods(cdef, nm, ("__init__", "__post_init__"), None, allow_self=False)
+            return
+        if self._decorated_instance_call(nm):
+            return
+        # An instance called via __call__ (``a('z')``).
+        cls, icdef = self._instance_classdef(nm)
+        if icdef is not None:
+            self._apply_methods(icdef, cls, ("__call__",), nm, allow_self=True)
+        self._decorator_wrapper_call(nm)
 
-    nodes = list(_walk_executable(tree))
+    def _decorated_instance_call(self, nm: str) -> bool:
+        """A class-based decorator ``@Counter def task`` — ``task`` is a
+        Counter INSTANCE holding the wrapped function, so it is a stateful
+        callable: calling it runs ``Counter.__call__`` (which mutates
+        ``self.n``). Re-run its producer (the decorated def) to reset — the
+        receiver's content is unhashable (holds a function), so a
+        self-mutation routes to the class-def channel. True when *nm* is one."""
+        deco_cls = self._decorated_class(nm) if self._decorated_class is not None else None
+        dcdef = self._classdef(deco_cls) if deco_cls else None
+        if dcdef is None:
+            return False
+        call_m = self._method(dcdef, "__call__")
+        if call_m is not None:
+            si, ct, fv = _classify_method_mutations(call_m, deco_cls, dcdef, self._resolve_class_source)
+            self.free_vars.update(fv)
+            self.class_defs.update(ct)
+            if si:
+                self.class_defs.add(nm)
+        return True
 
-    for node in nodes:
-        # --- with statements: __enter__ / __exit__ or a @contextmanager gen ----
-        if isinstance(node, (ast.With, ast.AsyncWith)):
-            for item in node.items:
-                ctx = item.context_expr
-                if isinstance(ctx, ast.Name):
-                    _dispatch_context(ctx.id)
-                elif isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Name):
-                    nm = ctx.func.id
-                    cdef = _classdef(nm)
-                    if cdef is not None:
-                        # ``with SomeCM():`` — anonymous instance, no receiver to
-                        # reset; only class-var / free-var mutations persist.
-                        for dunder in ("__enter__", "__exit__"):
-                            method = _class_method(cdef, dunder, resolve_class_source)
-                            if method is not None:
-                                _apply_method(cdef, nm, method, None, allow_self=False)
-                    else:
-                        fdef = resolve_function_def(nm, resolve_source)
-                        if fdef is not None:
-                            # A ``@contextmanager`` generator's free-var mutations,
-                            free_vars.update(free_vars_mutated_in_function(fdef))
-                            # or a plain factory ``def cm(): return Mgr()`` — the
-                            # returned instance's __enter__/__exit__ run anonymously
-                            # (``with cm() as x:``), so only class-var / free-var
-                            # mutations persist.
-                            ret_name, ret_cdef = _return_class(fdef)
-                            if ret_cdef is not None:
-                                for dunder in ("__enter__", "__exit__"):
-                                    method = _class_method(ret_cdef, dunder, resolve_class_source)
-                                    if method is not None:
-                                        _apply_method(ret_cdef, ret_name, method, None, allow_self=False)
-        # --- subscript operations dispatching to custom dunders ----------------
-        elif isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                for leaf in iter_store_targets(tgt):
-                    if isinstance(leaf, ast.Subscript) and isinstance(leaf.value, ast.Name):
-                        _dispatch_dunder(leaf.value.id, "__setitem__")
-                    elif isinstance(leaf, ast.Attribute) and isinstance(leaf.value, ast.Name):
-                        _dispatch_attr_set(leaf.value.id, leaf.attr)
-        elif isinstance(node, ast.Delete):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
-                    _dispatch_dunder(tgt.value.id, "__delitem__")
-        # --- ``obj <op>= x`` dispatching to an in-place operator dunder ---------
-        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-            cls = instance_class(node.target.id)
-            cdef = _classdef(cls) if cls else None
-            dunders = _AUGOP_DUNDERS.get(type(node.op).__name__)
-            if cdef is not None and dunders is not None:
-                inplace_dunder, fallback_dunder = dunders
-                method = _class_method(cdef, inplace_dunder, resolve_class_source)
-                if method is not None:
-                    # ``__iadd__`` mutates the receiver in place (returns self).
-                    _apply_method(cdef, cls, method, node.target.id, allow_self=True)
-                else:
-                    # No in-place form: ``obj += x`` REASSIGNS obj to a fresh
-                    # ``obj.__add__(x)`` (idempotent), so only its free-var /
-                    # class-var side effects persist.
-                    method = _class_method(cdef, fallback_dunder, resolve_class_source)
-                    if method is not None:
-                        _apply_method(cdef, cls, method, node.target.id, allow_self=False)
-        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
-            _dispatch_dunder(node.value.id, "__getitem__")
-        # --- ``recv.attr`` load dispatching to a property getter / __get__ -----
-        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
-            _dispatch_attr_get(node.value.id, node.attr)
-        # --- calls: constructor / instance __call__ / decorated fn / method ----
-        elif isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name):
-                nm = func.id
-                # ``next(it)`` advances the iterator via ``It.__next__``.
-                if nm == "next" and node.args and isinstance(node.args[0], ast.Name):
-                    _dispatch_dunder(node.args[0].id, "__next__")
-                    continue
-                cdef = _classdef(nm)
-                if cdef is not None:
-                    _apply_ctor(cdef, nm)
-                    continue
-                # A class-based decorator ``@Counter def task`` — ``task`` is a
-                # Counter INSTANCE holding the wrapped function, so it is a
-                # stateful callable: calling it runs ``Counter.__call__`` (which
-                # mutates ``self.n``). Re-run its producer (the decorated def) to
-                # reset — the receiver's content is unhashable (holds a function),
-                # so route a self-mutation to the class-def channel.
-                deco_cls = decorated_class(nm)
-                dcdef = _classdef(deco_cls) if deco_cls else None
-                if dcdef is not None:
-                    call_m = _class_method(dcdef, "__call__", resolve_class_source)
-                    if call_m is not None:
-                        si, ct, fv = _classify_method_mutations(
-                            call_m,
-                            deco_cls,
-                            dcdef,
-                            resolve_class_source,
-                        )
-                        free_vars.update(fv)
-                        class_defs.update(ct)
-                        if si:
-                            class_defs.add(nm)
-                    continue
-                # An instance called via __call__ (``a('z')``).
-                cls = instance_class(nm)
-                icdef = _classdef(cls) if cls else None
-                if icdef is not None:
-                    call_m = _class_method(icdef, "__call__", resolve_class_source)
-                    if call_m is not None:
-                        _apply_method(icdef, cls, call_m, nm, allow_self=True)
-                # A decorated function whose wrapper mutates a free var, or a
-                # reassignment decorator ``g = counting(g)``.
-                fdef = resolve_function_def(nm, resolve_source)
-                if fdef is not None:
-                    for dname in _decorator_names(fdef):
-                        ddef = resolve_function_def(dname, resolve_source)
-                        if ddef is not None:
-                            free_vars.update(_decorator_free_var_mutations(ddef))
-                factory = resolve_var_factory(nm) if resolve_var_factory else None
-                if factory is not None:
-                    free_vars.update(_decorator_free_var_mutations(factory))
-            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                recv = func.value.id
-                method_name = func.attr
-                # ``stack.enter_context(cm)`` runs ``cm.__enter__`` / ``__exit__``
-                # regardless of what ``stack`` is (an ExitStack), so dispatch to
-                # the ARGUMENT's context manager.
-                if method_name == "enter_context" and node.args and isinstance(node.args[0], ast.Name):
-                    _dispatch_context(node.args[0].id)
-                    continue
-                own_class = _classdef(recv)
-                if own_class is not None:
-                    # A class-level call ``Registry.record()`` — no instance.
-                    method = _class_method(own_class, method_name, resolve_class_source)
-                    if method is not None:
-                        _apply_method(own_class, recv, method, None, allow_self=False)
-                else:
-                    cls = instance_class(recv)
-                    cdef = _classdef(cls) if cls else None
-                    if cdef is not None:
-                        method = _class_method(cdef, method_name, resolve_class_source)
-                        if method is not None:
-                            _apply_method(cdef, cls, method, recv, allow_self=True)
+    def _decorator_wrapper_call(self, nm: str) -> None:
+        """A decorated function whose wrapper mutates a free var, or a
+        reassignment decorator ``g = counting(g)``."""
+        fdef = resolve_function_def(nm, self._resolve_source)
+        if fdef is not None:
+            for dname in _decorator_names(fdef):
+                ddef = resolve_function_def(dname, self._resolve_source)
+                if ddef is not None:
+                    self.free_vars.update(_decorator_free_var_mutations(ddef))
+        factory = self._resolve_var_factory(nm) if self._resolve_var_factory else None
+        if factory is not None:
+            self.free_vars.update(_decorator_free_var_mutations(factory))
 
-    # --- top-level ``class Sub(Base):`` triggering a base __init_subclass__ -----
-    # A subclass def runs the nearest base's ``__init_subclass__(cls, ...)`` hook
-    # during CLASS CREATION (before any node in this cell's body executes), so it
-    # is invisible to the executable-node walk above. The hook receives ``cls``
-    # (the fresh subclass, discarded on re-derivation) — analyse its body exactly
-    # like a constructor (``allow_self=False``) so only its class-var / free-var
-    # mutations persist. A class-var accumulator (``Base.registry``) routes to the
-    # class-def channel (already under the cross-cell guard); a module/free
-    # var (``registry.append``) is collected SEPARATELY so the caller can apply the
-    # same guard — the simulator cannot see this hidden cross-cell mutation.
-    # Only ``__init_subclass__`` is handled here (metaclass hooks / __set_name__
-    # are separate follow-ups). ClassDefs are deferred scopes so the walk above
-    # never yields them — scan ``tree.body`` directly.
-    init_subclass_free: set[str] = set()
-    for node in tree.body:
-        if not (isinstance(node, ast.ClassDef) and node.bases):
-            continue
-        for base_name in _class_bases(node):
-            base_cdef = _classdef(base_name)
-            if base_cdef is None:
+    def _method_call(self, node: ast.Call, recv: str, method_name: str) -> None:
+        """``recv.method(...)`` on a class or an instance of one."""
+        # ``stack.enter_context(cm)`` runs ``cm.__enter__`` / ``__exit__``
+        # regardless of what ``stack`` is (an ExitStack), so dispatch to the
+        # ARGUMENT's context manager.
+        if method_name == "enter_context" and node.args and isinstance(node.args[0], ast.Name):
+            self._dispatch_context(node.args[0].id)
+            return
+        own_class = self._classdef(recv)
+        if own_class is not None:
+            # A class-level call ``Registry.record()`` — no instance.
+            self._apply_methods(own_class, recv, (method_name,), None, allow_self=False)
+            return
+        cls, cdef = self._instance_classdef(recv)
+        if cdef is not None:
+            self._apply_methods(cdef, cls, (method_name,), recv, allow_self=True)
+
+    def _scan_init_subclass(self, tree: ast.Module) -> None:
+        """A top-level ``class Sub(Base):`` runs the nearest base's
+        ``__init_subclass__(cls, ...)`` hook during CLASS CREATION (before any
+        node in this cell's body executes), so the executable-node walk never
+        sees it. The hook receives ``cls`` (the fresh subclass, discarded on
+        re-derivation), so it is analysed like a constructor: only its
+        class-var / free-var mutations persist. A class-var accumulator
+        (``Base.registry``) routes to the class-def channel; a module/free var
+        (``registry.append``) is collected SEPARATELY so the caller can apply
+        its cross-cell guard — the simulator cannot see this hidden cross-cell
+        mutation. ClassDefs are deferred scopes, so ``tree.body`` is scanned
+        directly."""
+        for node in tree.body:
+            if not (isinstance(node, ast.ClassDef) and node.bases):
                 continue
-            hook = _class_method(base_cdef, "__init_subclass__", resolve_class_source)
-            if hook is not None:
-                _, class_targets, fv = _classify_method_mutations(
-                    hook,
-                    base_name,
-                    base_cdef,
-                    resolve_class_source,
-                )
-                class_defs.update(class_targets)
-                init_subclass_free.update(fv)
-                break
-
-    return ObjectProtocolResets(
-        frozenset(free_vars),
-        frozenset(receivers),
-        frozenset(class_defs),
-        frozenset(init_subclass_free),
-    )
+            for base_name in _class_bases(node):
+                base_cdef = self._classdef(base_name)
+                if base_cdef is None:
+                    continue
+                hook = self._method(base_cdef, "__init_subclass__")
+                if hook is not None:
+                    _, class_targets, fv = _classify_method_mutations(
+                        hook, base_name, base_cdef, self._resolve_class_source
+                    )
+                    self.class_defs.update(class_targets)
+                    self.init_subclass_free.update(fv)
+                    break

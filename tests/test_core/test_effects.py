@@ -12,7 +12,7 @@ import ast
 import pytest
 
 from cash.analysis.file_effects import NOTEBOOK_POLICY
-from cash.analysis.purity_analyzer import DECORATOR_POLICY
+from cash.analysis.purity_policy import DECORATOR_POLICY
 from cash.effects import Action, EffectKind, classify_call
 
 
