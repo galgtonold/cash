@@ -49,6 +49,7 @@ from typing import Any, NamedTuple
 from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import normalize_path, resolve_file_dep_path
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
+from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
 
 logger = logging.getLogger(__name__)
@@ -349,7 +350,7 @@ def snapshot_file_deps(
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
         read = known.get(f) if known else None
         hashed_at = None
-        if read is not None and read[0] == (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0)):
+        if read is not None and read[0] == stat_key(st):
             # Hashed when the body read it; when, if the tracker noted it.
             content_hash = read[1]
             hashed_at = read[2] if len(read) > 2 else None

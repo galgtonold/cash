@@ -29,6 +29,7 @@ __all__ = [
     "is_pseudo_fs",
     "register_cache_dir",
     "regular_file_stat",
+    "stat_key",
 ]
 
 # Kernel pseudo-filesystems are never data dependencies, and recording one is
@@ -51,13 +52,19 @@ __all__ = [
 _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
 
 
-def regular_file_stat(path: str) -> tuple[int, int, int] | None:
-    """``(size, mtime_ns, ctime_ns)`` for a regular file, None otherwise.
+def stat_key(st: os.stat_result) -> tuple[int, int, int]:
+    """``(size, mtime_ns, ctime_ns)`` of *st*: what a file is compared by
+    between its read and a later look (``read_stats``, the snapshot).
 
     ``ctime_ns`` is the inode change time on POSIX, so an edit that restores
     the mtime still moves this tuple there; on Windows it is the creation
     time and adds nothing.
     """
+    return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+
+
+def regular_file_stat(path: str) -> tuple[int, int, int] | None:
+    """`stat_key` of *path* when it is a regular file, None otherwise."""
 
     try:
         st = os.stat(path)
@@ -65,7 +72,7 @@ def regular_file_stat(path: str) -> tuple[int, int, int] | None:
         return None
     if not stat.S_ISREG(st.st_mode):
         return None
-    return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+    return stat_key(st)
 
 
 #: The folder joblib memory-maps a parallel call's large arguments into.

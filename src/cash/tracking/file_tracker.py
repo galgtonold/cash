@@ -17,6 +17,7 @@ import contextvars
 import logging
 import os
 import time
+from collections.abc import Iterator
 from typing import Any, Optional
 
 from cash._clock import perf_counter as _perf_counter
@@ -32,6 +33,7 @@ from cash.tracking.read_classification import (
     is_cash_internal,
     is_pseudo_fs,
     regular_file_stat,
+    stat_key,
 )
 from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
@@ -189,6 +191,13 @@ class FileAccessTracker:
         parent = self._parent_stack[-1]
         return parent if parent is not self else None
 
+    def _self_and_parents(self) -> Iterator[FileAccessTracker]:
+        """This tracker, then each enclosing one a record is passed up to."""
+        tracker: FileAccessTracker | None = self
+        while tracker is not None:
+            yield tracker
+            tracker = tracker._propagation_parent()
+
     def suspend(self):
         """Stop tracking until :meth:`resume`, restoring the enclosing tracker.
 
@@ -231,10 +240,8 @@ class FileAccessTracker:
             resolved = normalize_path(os.path.realpath(raw))
         except (TypeError, ValueError, OSError):
             return
-        tracker: FileAccessTracker | None = self
-        while tracker is not None:
+        for tracker in self._self_and_parents():
             tracker.ctime_unreliable.add(resolved)
-            tracker = tracker._propagation_parent()
 
     def get_accessed_remote_urls(self) -> set[str]:
         """Remote URLs read in this block, tracked by store validator instead."""
@@ -276,14 +283,12 @@ class FileAccessTracker:
             resolved = normalize_path(os.path.realpath(raw))
         except (TypeError, ValueError, OSError):
             return
-        tracker: FileAccessTracker | None = self
-        while tracker is not None:
+        for tracker in self._self_and_parents():
             if resolved not in tracker.accessed_files:  # read first: an input
                 if directory:
                     tracker.created_dirs.append(resolved.rstrip("/") + "/")
                 else:
                     tracker.created_files.add(resolved)
-            tracker = tracker._propagation_parent()
 
     def created_by_block(self, abs_path: str) -> bool:
         """Did this block create *abs_path*, or a directory it lies in?"""
@@ -408,10 +413,8 @@ class FileAccessTracker:
 
     def add_tracked_unresolved(self, path: str) -> None:
         """Record a read that cannot be checked, here and on the parents."""
-        self.unresolved_files.add(path)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_unresolved(path)
+        for tracker in self._self_and_parents():
+            tracker.unresolved_files.add(path)
 
     def add_tracked(self, abs_path: str, digest: str | None = None, lstat: Any = None) -> None:
         """Record *abs_path* on this tracker and, when propagation is enabled,
@@ -423,16 +426,19 @@ class FileAccessTracker:
 
         *lstat* is the stat taken while resolving the path, of a regular file
         that is not a link, so it is the stat the file would have given."""
+        for tracker in self._self_and_parents():
+            # The lstat was taken for this tracker's read; an enclosing one
+            # stats the file itself.
+            digest = tracker._add_tracked_here(abs_path, digest, lstat if tracker is self else None)
+
+    def _add_tracked_here(self, abs_path: str, digest: str | None, lstat: Any) -> str | None:
+        """`add_tracked` on this tracker alone; returns the digest to hand up."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
-            st = (
-                regular_file_stat(abs_path)
-                if lstat is None
-                else (lstat.st_size, lstat.st_mtime_ns, getattr(lstat, "st_ctime_ns", 0))
-            )
+            st = regular_file_stat(abs_path) if lstat is None else stat_key(lstat)
             if st is not None:
                 self.read_stats[abs_path] = st
                 if self._hash_on_read:
@@ -443,9 +449,7 @@ class FileAccessTracker:
                         self.read_digests[abs_path] = digest
         elif digest is None:
             digest = self.read_digests.get(abs_path)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked(abs_path, digest)
+        return digest
 
     def _digest_now(self, abs_path: str, size: int) -> str | None:
         """The file's content hash as the body is about to read it."""
@@ -458,10 +462,8 @@ class FileAccessTracker:
     def note_reading_code(self, code: Any) -> None:
         """Record *code* as user code that read a file in this block, here and
         in every tracker this one propagates to."""
-        self.reading_codes.add(code)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.note_reading_code(code)
+        for tracker in self._self_and_parents():
+            tracker.reading_codes.add(code)
 
     def track_absent(self, path) -> None:
         """Record *path* as looked-for-and-missing."""
@@ -552,26 +554,20 @@ class FileAccessTracker:
 
     def add_tracked_absent(self, path: str) -> None:
         """Record an absent path here and, when propagating, on the parents."""
-        self.absent_files.add(path)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_absent(path)
+        for tracker in self._self_and_parents():
+            tracker.absent_files.add(path)
 
     def add_tracked_present(self, path: str, kind: str) -> None:
         """Record a path probed and found here and, when propagating, on the
         parents. Probed as two kinds, it is recorded as ``any``."""
-        known = self.present_files.get(path)
-        self.present_files[path] = kind if known in (None, kind) else "any"
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_present(path, kind)
+        for tracker in self._self_and_parents():
+            known = tracker.present_files.get(path)
+            tracker.present_files[path] = kind if known in (None, kind) else "any"
 
     def add_tracked_remote(self, url: str) -> None:
         """Record a remote *url* read, propagating to the enclosing tracker."""
-        self.accessed_remote.add(url)
-        parent = self._propagation_parent()
-        if parent is not None:
-            parent.add_tracked_remote(url)
+        for tracker in self._self_and_parents():
+            tracker.accessed_remote.add(url)
 
 
 #: Seconds spent recording reads; `tracking_seconds`.
