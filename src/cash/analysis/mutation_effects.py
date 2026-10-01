@@ -23,12 +23,13 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .annotations import extract_annotations_for_statements
 from .ast_util import called_names
 from .cacheability import alias_mutation_sources, analyze_statement
-from .cacheability_decision import receiver_is_identity_coupled
+from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
     callee_global_mutations,
     function_arg_mutations,
@@ -88,7 +89,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
     if callable(fn) and not isinstance(fn, type):
         try:
             return inspect.getsource(fn)
-        except (OSError, TypeError):
+        except SOURCE_RETRIEVAL_ERRORS:
             pass
     if name not in namespace and name in BUILTIN_NAMES:
         # ``len`` or ``print`` unbound in the namespace is the builtin, which
@@ -105,7 +106,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
         if callable(candidate) and not isinstance(candidate, type):
             try:
                 return inspect.getsource(candidate)
-            except (OSError, TypeError):
+            except SOURCE_RETRIEVAL_ERRORS:
                 continue
     return None
 
@@ -603,6 +604,9 @@ class StatementEffects:
     #: Variables handed to a bare call of a user function that mutates the
     #: matching parameter in place (``def add(d): d.append(x)`` + ``add(data)``).
     arg_mutations: frozenset[str]
+    #: Why the callees could not be analysed, when they could not. The
+    #: statement then runs uncached: what it writes is unknown.
+    unanalysed: tuple[str, ...] = ()
 
 
 def is_module_name(name: str, namespace: Mapping[str, Any], virtual_modules: Iterable[str] = ()) -> bool:
@@ -651,22 +655,28 @@ def statement_effects(
     ask about it.
     """
     resolve_source = _resolve_once(resolve_source)
-    inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree, resolve_source=resolve_source, user_ns=namespace)
     callee_globals: frozenset[str] = frozenset()
-    if not control_body:
-        callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
-        if namespace is not None:
-            callee_globals = capturable_globals(callee_globals, namespace)
     arg_mutations: frozenset[str] = frozenset()
     try:
+        inputs, outputs = CodeAnalyzer.analyze_code_block(
+            code, tree=tree, resolve_source=resolve_source, user_ns=namespace
+        )
+        if not control_body:
+            callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
+            if namespace is not None:
+                callee_globals = capturable_globals(callee_globals, namespace)
         if standalone_call_arg_targets(tree):
             arg_mutations = frozenset(
                 v
                 for v in function_arg_mutations(tree, resolve_source)
                 if not is_module_name(v, namespace, virtual_modules)
             )
-    except (SyntaxError, ValueError, RecursionError):
-        arg_mutations = frozenset()
+    except Exception as exc:  # noqa: BLE001 - unknown writes must not read as no writes
+        # What the called functions write is unknown, so the statement keeps
+        # its own reads and writes and is marked to run uncached.
+        inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree, user_ns=namespace)
+        reason = analysis_failed("analyse the functions this statement calls", exc)
+        return StatementEffects(frozenset(inputs), frozenset(outputs), frozenset(), frozenset(), (reason,))
     return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations)
 
 

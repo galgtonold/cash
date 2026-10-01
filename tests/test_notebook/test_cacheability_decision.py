@@ -122,7 +122,7 @@ class TestForbiddenFunctions:
         assert cacheable is False
         assert reasons == ["time.time"]
 
-    def test_forbidden_scan_exception_does_not_crash(self):
+    def test_forbidden_scan_exception_makes_it_uncacheable(self):
         def bad_scan(*_a, **_k):
             raise TypeError("boom")
 
@@ -134,8 +134,8 @@ class TestForbiddenFunctions:
             variable_lineage={"x": "h"},
             scan_forbidden=bad_scan,
         )
-        assert cacheable is True
-        assert reasons == []
+        assert cacheable is False
+        assert "could not" in reasons[0]
 
 
 class TestStatefulCall:
@@ -181,7 +181,7 @@ class TestStatefulCall:
         assert cacheable is False
         assert reasons == ["Calls @stateful function"]
 
-    def test_stateful_lookup_exception_does_not_crash(self):
+    def test_stateful_lookup_exception_makes_it_uncacheable(self):
         def bad_lookup(_name):
             raise AttributeError("boom")
 
@@ -191,8 +191,8 @@ class TestStatefulCall:
             outputs={"y"},
             is_stateful_call=bad_lookup,
         )
-        assert cacheable is True
-        assert reasons == []
+        assert cacheable is False
+        assert "could not" in reasons[0]
 
 
 class TestMutationsAndSideEffects:

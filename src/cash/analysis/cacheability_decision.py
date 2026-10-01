@@ -46,11 +46,14 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
 from cash.analysis.namespace_effects import statement_user_writer_call
+from cash.diagnostics import warn_diagnostic
+from cash.exceptions import CashCacheIneffectiveWarning
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "analysis_failed",
     "decide_cacheability",
     "identity_coupled_reason",
     "receiver_is_identity_coupled",
@@ -203,6 +206,34 @@ def receiver_is_identity_coupled(value: Any) -> bool:
     return bool(_coupled_kind(value) or _coupled_kind_in_container(value))
 
 
+#: Failures already reported, so a statement that runs every time does not
+#: repeat the same warning.
+_REPORTED_FAILURES: set[tuple[str, str]] = set()
+
+
+def analysis_failed(check: str, exc: BaseException) -> str:
+    """The uncacheable reason for a safety *check* that raised, warned once.
+
+    A check whose job is to stop caching cannot answer "nothing found" when it
+    crashed: the statement it could not judge runs uncached instead.
+    """
+    reason = f"cash could not {check} ({type(exc).__name__}: {exc}), so the statement runs uncached"
+    logger.debug("analysis failed: %s", reason, exc_info=exc)
+    key = (check, type(exc).__name__)
+    if key not in _REPORTED_FAILURES:
+        _REPORTED_FAILURES.add(key)
+        try:
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "NOTEBOOK-ANALYSIS-FAILED",
+                f"{reason}.",
+                "nothing to change in your code; please report the error so the check can handle it.",
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+            logger.debug("could not warn about a failed analysis", exc_info=True)
+    return reason
+
+
 def decide_cacheability(
     *,
     code: str,
@@ -228,10 +259,10 @@ def decide_cacheability(
 
     try:
         forbidden = scan_forbidden(code, user_ns, tree)
-        if forbidden:
-            return False, list(forbidden)
-    except (TypeError, AttributeError, SyntaxError) as exc:
-        logger.debug("Error scanning for forbidden functions: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
+        return False, [analysis_failed("scan the statement for calls it must not cache", exc)]
+    if forbidden:
+        return False, list(forbidden)
 
     try:
         # Bare names first, then ``helpers.announce(...)`` -- how a @stateful
@@ -251,8 +282,8 @@ def decide_cacheability(
         if found:
             name, writer = found
             return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
-    except (TypeError, AttributeError) as exc:
-        logger.debug("Error checking function purity: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
+        return False, [analysis_failed("check the functions the statement calls", exc)]
 
     ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
     if ast_reasons:

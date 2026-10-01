@@ -11,6 +11,7 @@ import ast
 import functools
 import textwrap
 
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .ast_util import CallScope, called_names
 from .mutations import MutationVisitor, iter_store_targets
 
@@ -455,6 +456,9 @@ def callee_global_mutations(
     ``inner()``, which appends to ``LOG``), as for parameter mutations: a
     hit skips the whole call, so every write inside it must be known.
 
+    Any other error from *resolve_source* propagates: not knowing what a
+    callee writes is not the same as knowing it writes nothing.
+
     The statement path asks with ``scope="no_control_bodies"``: a loop or
     branch is one unit to the upstream simulation and to the accumulator
     machinery, so a write in its body belongs to the control structure, not to
@@ -473,8 +477,8 @@ def callee_global_mutations(
         seen.add(name)
         try:
             source = resolve_source(name)
-        except Exception:  # noqa: BLE001 - a resolver must never break analysis
-            continue
+        except SOURCE_RETRIEVAL_ERRORS:
+            continue  # no source: a builtin or C function, which changes no global of ours
         if source:
             out |= source_global_mutations(source)
             pending.extend(source_called_names(source))

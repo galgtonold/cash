@@ -799,12 +799,12 @@ class CodeAnalyzer:
         visitor.visit(tree)
         inputs, outputs = visitor.real_inputs, visitor.outputs
         if resolve_source is not None:
-            try:
-                extra = callee_global_mutations(tree, resolve_source)
-                if user_ns is not None:
-                    extra = capturable_globals(extra, user_ns)
-            except Exception:  # noqa: BLE001 - analysis must never break a cell
-                extra = frozenset()
+            # Raises when a callee cannot be analysed; the caller decides what
+            # a statement it cannot see through means (``statement_effects``
+            # runs it uncached).
+            extra = callee_global_mutations(tree, resolve_source)
+            if user_ns is not None:
+                extra = capturable_globals(extra, user_ns)
             if extra:
                 outputs = outputs | set(extra)
         if user_ns is not None and outputs:
