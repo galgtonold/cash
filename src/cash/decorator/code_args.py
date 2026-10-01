@@ -18,7 +18,7 @@ from ..content_hashers import held_objects
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_code_module
-from ..source_norm import class_functions
+from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .cash_key import cash_key_method

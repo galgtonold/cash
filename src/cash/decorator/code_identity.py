@@ -29,13 +29,12 @@ from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, is_user_module, top_package
+from ..loaded_code import loaded_class_identity, loaded_code_matches_disk
 from ..source_norm import (
     bytecode_identity,
     callable_identity,
     code_consts_without_docstring,
     compiled_identity,
-    loaded_class_identity,
-    loaded_code_matches_disk,
     own_source_digest,
     source_digest,
     unwrap_partials,

@@ -85,6 +85,7 @@ src/cash/
 ├── source_reading.py   # reads source files and source lines, memoised
 │                       #   per file version
 ├── process_start.py    # when this process started (no psutil import)
+├── loaded_code.py      # is the code on disk still the code running?
 ├── cost_model.py       # predicted serialise and restore time per
 │                       #   type and backend
 ├── effectiveness.py    # notices when caching costs more than it

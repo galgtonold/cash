@@ -1072,8 +1072,8 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
-<!-- claim: cash/source_norm.py:_pyc_proves_unchanged @5d0686e2 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @f140e8b2, cash/decorator/code_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @5d0686e2 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
