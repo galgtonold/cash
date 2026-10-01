@@ -279,7 +279,7 @@ def frame_signature(obj: Any) -> tuple:
     ``pop``) first gives the written frame NEW block arrays, and writes
     through ``.values`` / ``to_numpy()`` raise (the arrays are read-only).
     So the identities of the block arrays, the manager and the axes are an
-    exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
+    exact change signal. The
     axis NAMES are compared by value, because ``df.index.name = ...``
     renames the same Index object and the content hash includes them; so
     are the index ``freq`` and ``attrs``, which the hash also holds.
@@ -525,8 +525,8 @@ def watch_array_handles() -> None:
     ``.array`` (of a Series or an Index), ``pd.array(s, copy=False)`` and a
     date index's ``asi8`` are the public handles to a numpy-backed array
     pandas keeps: ``s.array[0] = 100.0`` writes into the block while its
-    identity stays, and the memo served the old content hash, a stale
-    result. So does ``pd.Index(df["a"]).array[0] = 100.0``, since the index
+    identity stays, so the memo's content hash would no longer describe the
+    frame. So does ``pd.Index(df["a"]).array[0] = 100.0``, since the index
     shares the column's memory. The handle is usually gone by the next
     call, so the only trace is the one left here. pandas does not call
     ``.array`` or ``pd.array`` itself, so an ordinary workload records
@@ -644,7 +644,7 @@ def is_opaque(obj: Any) -> bool:
     A subclass that wants the same treatment is marked itself (pinned by
     ``test_a_subclass_of_an_opaque_class_does_not_inherit_opacity``).
 
-    Never raises. Measured, not assumed: a metaclass that defines
+    Never raises: a metaclass that defines
     ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
     (Python's data-model default, not just its instances), so
     ``target in OPAQUE_TYPES`` can raise ``TypeError`` on a real,
@@ -654,10 +654,9 @@ def is_opaque(obj: Any) -> bool:
     try:
         if isinstance(obj, functools.partial):
             # A partial is the function it wraps plus arguments, both of
-            # which are keyed now. `cash.opaque(functools.partial)` was the
-            # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
-            # EVERY partial in the process, including ones over code the
-            # user then edited.
+            # which are keyed. Declaring `functools.partial` opaque would
+            # silence EVERY partial in the process, including ones over code
+            # the user then edits.
             return False
         target = obj if isinstance(obj, type) else type(obj)
         return target in OPAQUE_TYPES
@@ -901,12 +900,9 @@ class ArgHasher:
             if param.kind is inspect.Parameter.VAR_POSITIONAL:
                 canon_args.extend(val)
             elif param.kind is inspect.Parameter.VAR_KEYWORD:
-                # Under its own name: a `**kwargs` entry may be called after a
-                # parameter, and writing both into one dict let it overwrite
-                # that parameter's value. `def request(url, /, **params)`
-                # called as `request("/a", url="x")` then keyed on the kwargs
-                # `url` alone, so every such call shared one entry and
-                # `request("/b", url="x")` was served `GET /a`.
+                # Under its own name: a `**kwargs` entry may be named like a
+                # parameter (`def request(url, /, **params)` called as
+                # `request("/a", url="x")`), and both are inputs.
                 for k in val:
                     canon_kwargs[f"{name}:{k}"] = val[k]
             else:
@@ -1213,7 +1209,7 @@ class ArgHasher:
         # (`shared_across`).
         try:
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
-            # it early, and the arguments after it silently left the key.
+            # it early, and the arguments after it would leave the key.
             form: tuple = (
                 tuple([plain_key_part(a) for a in hashed_args]),
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},

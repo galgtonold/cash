@@ -448,7 +448,7 @@ class RngWatch:
 
         A hit never runs the body, so the stream it advanced stays where it was
         and the CALLER's next draw returns what the function drew: with
-        ``np.random.seed(0)``, the draw after a hit WAS the cached value. The
+        ``np.random.seed(0)``, the draw after a hit would BE the cached value. The
         notebook path replays the
         recorded state; this is the same for the decorator.
 

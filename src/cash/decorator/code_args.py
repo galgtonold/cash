@@ -80,15 +80,15 @@ def is_user_code_carrier(carrier: Any) -> bool:
     treat as user code". That is the safe direction when deciding whether
     to HASH something and the wrong one when deciding whether to WARN about
     it: an object with no ``__qualname__`` of its own -- a
-    ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
-    every single one was reported as un-hashable user code.
+    ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, and
+    is not un-hashable user code for that.
 
     Judge such an object by what it WRAPS (``.func``, the same attribute
     ``CodeIdentity.class_surface_parts`` already follows for ``singledispatchmethod``
-    and ``cached_property``), else by its TYPE. Measured:
-    ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
-    while ``functools.partial(<a user function>)`` still warns -- and it
-    must, because the wrapped body genuinely is absent from the key.
+    and ``cached_property``), else by its TYPE:
+    ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` do not warn,
+    while ``functools.partial(<a user function>)`` does, because the
+    wrapped body is absent from the key.
     """
     if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
         return is_user_code_object(carrier)
@@ -246,9 +246,8 @@ class CodeArgs:
         the fold takes a ``set`` of the parts anyway.
 
         The walk recurses `CODE_SEARCH_DEPTH` containers at a time; what lies
-        deeper is set aside and walked from there after. It stopped there
-        before, and a function held deeper was keyed by its name only, so
-        editing it served the old result.
+        deeper is set aside and walked from there after, so code is found
+        however deep it is held.
         """
         if _seen is None:
             _seen = set()
@@ -302,9 +301,7 @@ class CodeArgs:
         # cycle safety, and yielded carriers, to yield each once -- and NOT for
         # a leaf instance. A leaf cannot contain itself, and its class is
         # deduped by `_instance_class_carrier` anyway, so an entry per element
-        # bought nothing and cost a set insert per element: measured 2000
-        # ns/element at 200k against 470 ns/element at 10k, i.e. the set itself
-        # had become the superlinear term.
+        # would buy nothing and make the set itself grow with the argument.
         if isinstance(value, type):
             if id(value) not in _seen:
                 _seen.add(id(value))
@@ -335,8 +332,7 @@ class CodeArgs:
         # The primitive test is repeated INLINE in each loop below rather than
         # left to the recursive call's own first line. It is the same test and
         # the same result, but it skips building a generator frame per element,
-        # and a container of primitives is the overwhelmingly common argument:
-        # measured 25.8ms -> 7.2ms for a 200k-int list.
+        # and a container of primitives is the overwhelmingly common argument.
         if isinstance(value, dict):
             if id(value) in _seen:
                 return
@@ -398,9 +394,8 @@ class CodeArgs:
     def _iter_attribute_carriers(self, value: Any, _depth: int, _seen: set):
         """Code carried by what an instance of the user's own class HOLDS.
 
-        ``f(A(1, B()))`` keyed ``A``'s code, and ``A.f`` calling ``self.b.f()``
-        reached ``B`` -- whose code, and everything it calls, never entered the
-        key: editing ``B.f`` or a function it called served the old result.
+        ``f(A(1, B()))`` with ``A.f`` calling ``self.b.f()`` runs ``B``'s
+        code, and everything it calls: that code is part of the key.
         Only an instance whose class is user code is looked into (a library
         object's attributes are its own business), each once per walk, bounded
         by the same depth; attributes that are plain values cost a type test.
@@ -438,14 +433,12 @@ class CodeArgs:
         """User code a LIBRARY object holds: looked for, not keyed on the way.
 
         ``make_pipeline(Scale(), FunctionTransformer(double))`` is sklearn's,
-        so the walk stopped at it, and an edit to ``Scale.transform`` or
-        ``double`` was served the old result -- as an argument and as a global.
-        The library's own attributes are only searched: what is found and is
+        and runs ``Scale.transform`` and ``double``, as an argument and as a
+        global. The library's own attributes are only searched: what is found and is
         user code (a function, a class, an instance of one) is walked like an
         argument, and nothing of the library's own reaches the key, so its
-        caches and fitted state cannot churn it. Every value is looked at:
-        a search that gave up after 2000 missed the user function in a
-        pipeline whose fitted step held a large vocabulary.
+        caches and fitted state cannot churn it. Every value is looked at,
+        however many a fitted step holds (a large vocabulary).
         """
         if id(value) in _seen:
             return
@@ -510,8 +503,8 @@ class CodeArgs:
         Split out because three branches need it, and because the dedup is the
         difference between one user-code gate evaluation per ARGUMENT and one
         per ELEMENT -- ``is_user_code_object`` is a ``sys.modules`` lookup plus
-        a ``__qualname__`` walk, and a list of 50k instances of one class was
-        paying it 50k times (measured: 50000 calls -> 1).
+        a ``__qualname__`` walk, paid once per class rather than once per
+        element of a list of instances.
 
         A plain function rather than a generator on purpose: the callers are in
         the per-element path, and `yield from` on a fresh generator costs more
@@ -589,11 +582,8 @@ class CodeArgs:
             digest = self._code.code_surface_hash(carrier)
             if digest is not None:
                 parts.append(f"{carrier_name(carrier)}:{digest}")
-                # Its CODE is in the key; the globals that code reads
-                # were not. A callback reading a module
-                # constant served the old result after the constant
-                # changed, while the same read one call level deeper,
-                # or in the cached function itself, invalidated.
+                # Its code is in the key, and so is what that code reads,
+                # through the folds the cached function's own reads use.
                 if is_user_code_carrier(carrier):
                     parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)

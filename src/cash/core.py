@@ -99,11 +99,9 @@ def get_ipython():
     """Return the live IPython shell, or ``None``.
 
     Resolved on FIRST CALL rather than at import. ``from IPython import
-    get_ipython`` looks cheap but pulls the whole package -- measured at ~4s of
-    the ~10s ``import cash``, most of it ``IPython.terminal.embed``. That cost
-    sits in front of every kernel start and every subprocess a test spawns, and
-    a test running three subprocesses tripped the 30s per-test timeout on
-    imports alone.
+    get_ipython`` pulls the whole package (``IPython.terminal.embed``
+    included), which is most of the cost of ``import cash`` when paid up
+    front, in front of every kernel start and every subprocess.
 
     Outside IPython this is the common case and stays cheap: ``sys.modules`` is
     consulted first, so a plain script never imports IPython at all. Inside a
@@ -298,9 +296,8 @@ class Cash:
         **config_overrides: Any,
     ) -> None:
         # ``backend`` is also the name of a setting ("tiered", "file",
-        # "sqlite", ...), and a setting may be passed by name. A string here
-        # used to reach the backend slot as if it were a backend, and every
-        # cached call then failed with an AttributeError.
+        # "sqlite", ...), and a setting may be passed by name: a string is
+        # that setting, never a backend instance.
         if isinstance(backend, str):
             config_overrides.setdefault("backend", backend)
             backend = None
@@ -1115,9 +1112,9 @@ class Cash:
     def _summary_reasons(stat: dict[str, Any]) -> list[str]:
         """The indented lines under a summary row: why it missed, what stayed.
 
-        "1 miss" was the whole story before, and it hid the common surprise:
-        a result computed in 0.05 s is never written to disk, so every new
-        process misses it. The run that CAUSES that is the one that can say so.
+        A bare "1 miss" would hide the common surprise: a result computed in
+        0.05 s is never written to disk, so every new process misses it. The
+        run that CAUSES that is the one that can say so.
         """
         out = []
         reasons = stat.get("miss_reasons") or {}

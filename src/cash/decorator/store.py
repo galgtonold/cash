@@ -383,9 +383,9 @@ class ResultStore:
             # What a later hit saves is the BODY's time. The wall-clock cost
             # also holds cash's own work -- the first call's analysis, the key
             # -- which the next process pays again whether this entry exists
-            # or not. Judged on wall-clock, a function that returns at once was
-            # persisted whenever a busy machine made that first-call work cross
-            # the 0.1s floor (Windows CI).
+            # or not. Judged on wall-clock, a function that returns at once
+            # would be persisted whenever a busy machine made that first-call
+            # work cross the 0.1s floor.
             if body_seconds is not None:
                 execution_time = body_seconds
             # The ttl the entry is WRITTEN with, a tier's default included: a
@@ -539,8 +539,8 @@ class ResultStore:
         **Each stream writes its own chunks.** Two streams of one key overlap
         whenever two callers miss before either finishes (two threads, two
         requests, ``zip(gen(6), gen(6))``). Under shared chunk names the one
-        that stopped early deleted chunks the finished one had stored, and two
-        finished ones stored a result mixing chunks of both runs. So chunk
+        that stops early would delete chunks the finished one stored, and two
+        finished ones would store a result mixing chunks of both runs. So chunk
         names carry a stream id the manifest records (`chunk_prefix`): the
         manifest written last names a complete run of its own, and cleaning up
         touches only what this stream wrote.

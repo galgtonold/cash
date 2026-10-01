@@ -211,8 +211,8 @@ STORE_OUTCOMES_MAX = 4096
 
 def same_file_key(path: str) -> str:
     """One spelling per file: the tracker can record a file under the relative
-    path the code opened it by AND its absolute path, which listed it twice --
-    "and 1 more" was the same file."""
+    path the code opened it by AND its absolute path, which would list it
+    twice."""
     try:
         return os.path.normcase(os.path.realpath(path))
     except (OSError, ValueError, TypeError):

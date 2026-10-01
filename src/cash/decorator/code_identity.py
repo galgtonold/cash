@@ -53,12 +53,9 @@ logger = logging.getLogger(__name__)
 # and the object is retained so the id cannot be recycled under us -- the same
 # guard `function_tracker._source_cache` uses.
 #
-# NOT keyed on the code object directly, which was the first attempt: CodeType
-# implements __eq__/__hash__ BY VALUE, and co_filename is not part of that
-# equality, so two helpers with the same body in different modules share one
-# dict slot. That made `test_real_helper_change_still_recomputes` fail
-# reproducibly under xdist while passing alone -- a stale digest served across
-# tests through a module-level memo.
+# NOT keyed on the code object directly: CodeType implements __eq__/__hash__
+# BY VALUE, and co_filename is not part of that equality, so two helpers with
+# the same body in different modules would share one slot.
 #
 # A redefinition (reloaded module, re-run cell) compiles a NEW code object, so
 # identity keying still cannot serve a digest for code that is no longer
@@ -68,8 +65,7 @@ logger = logging.getLogger(__name__)
 # Load-bearing, not a micro-optimisation. `hash_callable_source` is the live
 # per-call identity of every transitive helper, and it calls
 # `inspect.getsource`, which re-reads and RE-TOKENISES the source block on
-# every call. Measured on a 2-helper function: 8700 tokenizer calls per 300
-# cache hits, and 37ms of a 65ms key computation.
+# every call: without the memo, most of a hit's key computation.
 #
 # Module-level rather than per-instance: the digest depends only on the code
 # object, so two Cash instances cannot legitimately disagree about it.
@@ -240,8 +236,8 @@ def hash_callable_source(fn: Callable) -> str:
 
     # The source on disk may no longer be the code that is running: a file
     # edited after this process imported it (new files land, the restart
-    # comes later) gives the NEW text for the OLD code object, and an entry
-    # keyed by the new text but computed by the old code was served to the
+    # comes later) gives the NEW text for the OLD code object; an entry keyed
+    # by the new text but computed by the old code would be served to the
     # restarted process. Key such a helper by what actually runs.
     # One os.stat in the normal case; see `loaded_code_matches_disk`.
     if not loaded_code_matches_disk(fn):
@@ -907,19 +903,16 @@ class CodeIdentity:
         inlined them -- a plain comprehension compiles to a NESTED code
         object stored in the enclosing method's ``co_consts``. Its ``repr()``
         is ``<code object <genexpr> at 0x...>``: a live memory address, fresh
-        every process. Measured: the same class's digest differed between two
-        freshly started processes whenever a method held one of these,
-        permanently missing the cache cross-process for any user class with a
-        comprehension in a method. A nested code object carries no defaults of
+        every process, which would give a class a different digest in every
+        process. A nested code object carries no defaults of
         its own (those belong to the FUNCTION eventually built from it, not to
         the raw code object), so only co_code/co_consts/co_names apply here.
 
-        The SAME disease reaches a plain (non-code) const too: ``x in
-        {'alpha', 'beta'}`` compiles a ``frozenset`` straight into
-        ``co_consts``, and ``repr()`` of a set/frozenset follows the table's
-        internal (hash-order-dependent) iteration -- under Python's default
-        per-process string-hash randomization, measured 2 distinct orderings
-        across repeated fresh processes for a 2-element set. ``_value_identity``
+        The same holds for a plain (non-code) const: ``x in {'alpha',
+        'beta'}`` compiles a ``frozenset`` straight into ``co_consts``, and
+        ``repr()`` of a set/frozenset follows the table's internal
+        (hash-order-dependent) iteration, which Python's per-process
+        string-hash randomization changes. ``_value_identity``
         folds CONTENT instead, which is order-independent for a set/frozenset.
         """
         return (
@@ -967,9 +960,9 @@ class CodeIdentity:
         value cannot be keyed: `KeyBuildFailed`, and the call runs uncached,
         as for an unhashable default of the cached function itself.
         """
-        # However deep the containers nest: a lambda five lists down was
-        # "<deep>", and editing it kept the key. *_path* (the containers
-        # being walked) ends a container that holds itself.
+        # However deep the containers nest: a lambda five lists down is code
+        # like any other, and editing it must move the key. *_path* (the
+        # containers being walked) ends a container that holds itself.
         if isinstance(v, (list, tuple, set, frozenset, dict)):
             if id(v) in _path:
                 return f"<cycle:{type(v).__qualname__}>"
@@ -1045,12 +1038,12 @@ class CodeIdentity:
         """
         # A `functools.partial` is its function plus arguments. The arguments
         # already reach the key (a partial pickles them, by value); its code is
-        # the wrapped function's, which pickle names only by reference -- so an
-        # edit to that function's body kept the key, and the partial was
-        # reported as uncomputable code instead (KEY-OPAQUE-CALLABLE).
+        # the wrapped function's, which pickle names only by reference -- so
+        # the wrapped function's code is keyed here, or an edit to its body
+        # would keep the key.
         obj = cash_wrapped(unwrap_partials(obj))
         # Dispatch FIRST, memo read second. Every argument to a cached
-        # function passes through here (Task 4), and most are not a
+        # function passes through here, and most are not a
         # class or callable at all -- a list, dict, set, numpy array,
         # DataFrame. Checking the dispatch before touching the memo means
         # those return None from a plain isinstance()/callable() check
@@ -1078,10 +1071,9 @@ class CodeIdentity:
                 return None
             parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
             # And the user functions it runs besides its own code: what a
-            # decorator wraps, a function a closure holds. A decorated
-            # function passed as an argument was keyed by its wrapper's code
-            # alone, which every function that decorator wraps shares, so an
-            # edit to the function itself served the old result.
+            # decorator wraps, a function a closure holds. A decorator's
+            # wrapper code is shared by every function it wraps; the
+            # function itself is what tells them apart.
             layers = [obj, *self.user_layers(obj)]
             for layer in layers[1:]:
                 parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
@@ -1187,8 +1179,7 @@ class CodeIdentity:
                 consider(glb.get(name))
             # A name spelled as a string: `getattr(MOD, "fun1")()`,
             # `globals()["fun1"]`. The string is a constant, not a loaded name,
-            # so `co_names` never had it, and an edit to `fun1` reached through
-            # an argument's method was served stale. Resolved in the code's
+            # so `co_names` does not have it. Resolved in the code's
             # module and in the user modules it loads; a string that only
             # happens to match a function costs a needless recompute, never a
             # stale value.
@@ -1213,12 +1204,11 @@ class CodeIdentity:
     def code_surface_hash(self, obj: Any) -> str | None:
         """A digest of *obj*'s code AND the user code that code reaches.
 
-        Folding only what an argument or global directly carries left a real
-        hole: a class whose field factory constructs another class changes
-        behaviour when THAT class is edited, and nothing in the first class's
-        own surface moves. Measured -- the cache returned
-        ``A(value=B(value=10))`` where a fresh call produced
-        ``A(value=B(value=1000))``, a wrong answer rather than a stale one.
+        What an argument or global directly carries is not enough: a class
+        whose field factory constructs another class changes behaviour when
+        THAT class is edited (``A(value=B(value=10))`` becomes
+        ``A(value=B(value=1000))``), and nothing in the first class's own
+        surface moves.
 
         Reachability is STATIC: names the code loads from its globals,
         transitively, however deep. Code selected at runtime (a class picked out of
@@ -1279,15 +1269,12 @@ class CodeIdentity:
         and into ``__dataclass_fields__``. The attribute that remains is just
         the default value, so a field's TYPE and its ``metadata=`` never
         reached the digest -- and ``__dataclass_fields__`` itself cannot be
-        pickled, because ``Field.metadata`` is a ``mappingproxy``. The generic
-        fold below caught that ``TypeError``, set ``content = None``, and
-        dropped the member in silence.
+        pickled, because ``Field.metadata`` is a ``mappingproxy``, so the
+        generic fold cannot take it.
 
-        Measured: a schema class with ``field(metadata={"desc": ...})``, passed
-        as an argument, served an answer built from the OLD description after
-        that description was rewritten. Which is the whole hazard, because a
-        field description is prompt text in every structured-output library
-        there is -- it is not decoration, it is the instruction.
+        A field description (``field(metadata={"desc": ...})``) is prompt
+        text in every structured-output library there is -- it is not
+        decoration, it is the instruction.
 
         Only the parts nothing else covers are folded. The default value is
         already the class attribute and is hashed there; folding it again would
@@ -1394,10 +1381,7 @@ class CodeIdentity:
                     member = None
                 # Pydantic v2 compiles three Rust objects onto every model.
                 # They are DERIVED from the field declarations, and their
-                # digest differs in every process -- measured: the same
-                # unedited model produced a different class digest on each
-                # run, so a pydantic spec passed as an argument never hit
-                # across processes. `model_fields` below carries the same
+                # digest differs in every process. `model_fields` below carries the same
                 # declarations and is stable, so this loses nothing.
                 if name in PYDANTIC_COMPILED:
                     continue
@@ -1420,11 +1404,9 @@ class CodeIdentity:
                 # the WRAPPER's own generic dispatch code -- fixed regardless
                 # of what the wrapped body says -- and @functools.
                 # singledispatchmethod has no __wrapped__ or __code__ at all
-                # (it exposes the underlying function as .func instead), so it
-                # fell through to the data-attribute branch below and hashed
-                # an unchanging descriptor repr. Measured: editing any of
-                # these three wrapped method bodies left the digest unchanged
-                # without this step.
+                # (it exposes the underlying function as .func instead), and
+                # would reach the data-attribute branch below as an
+                # unchanging descriptor repr.
                 outer = target
                 target = getattr(target, "__wrapped__", target)
                 if not hasattr(target, "__code__"):
@@ -1469,12 +1451,9 @@ class CodeIdentity:
                         continue
                     # A callable member with NO reachable ``__code__``: a
                     # nested class (``class Outer: inner = Inner``), a
-                    # ``functools.partial``, a callable instance. Dropping it
-                    # meant the non-callable branch below folded content for
-                    # an ordinary member while these three folded nothing at
-                    # all -- measured: editing ``Inner.f`` left ``Outer``'s
-                    # digest unchanged, and ``partial(scale, 3)`` collided
-                    # with ``partial(scale, 4)``.
+                    # ``functools.partial``, a callable instance. Its code
+                    # (``Inner.f``) and its content (``partial(scale, 3)``
+                    # against ``partial(scale, 4)``) are both folded.
                     #
                     # The nested walk recurses into ``CodeIdentity.class_surface_parts``
                     # DIRECTLY, not through the memoized ``CodeIdentity.code_surface_hash``,
@@ -1483,11 +1462,10 @@ class CodeIdentity:
                     # digest depend on which class happened to be hashed first
                     # (the memo would hold a cut result for one order and a
                     # full one for the other) -- reintroducing exactly the
-                    # cross-process instability ``_value_identity`` was just
-                    # fixed for. The path is fixed by *cls* alone, so every
+                    # cross-process instability ``_value_identity`` avoids.
+                    # The path is fixed by *cls* alone, so every
                     # process gets the same answer regardless of order. No
-                    # depth bound: a nested class three levels down whose
-                    # method was edited left the digest unchanged.
+                    # depth bound: a nested class is followed however deep.
                     nested = None
                     inner_cls = member if isinstance(member, type) else type(member)
                     if is_user_code_object(inner_cls):
@@ -1513,10 +1491,9 @@ class CodeIdentity:
                     # function `ident` above resolved through .func, and a
                     # plain object that happens to expose an unrelated `.func`
                     # attribute must not have its OTHER state go invisible
-                    # just because that lookup succeeded (measured: a
-                    # partialmethod's bound-argument edit, and an unrelated
-                    # object's own attribute edit, both went undetected when
-                    # `ident` alone short-circuited this). Fold `ident` TOO
+                    # just because that lookup succeeded (a partialmethod's
+                    # bound arguments, an unrelated object's own attributes).
+                    # Fold `ident` TOO
                     # when reachable, so a non-callable descriptor that ALSO
                     # wraps a real function body -- functools.
                     # singledispatchmethod, functools.cached_property, both
@@ -1528,8 +1505,8 @@ class CodeIdentity:
                     # No repr() fallback here (unlike _value_identity):
                     # falling back to repr() on this specific path would
                     # reintroduce the address leak this member-content fold
-                    # exists to avoid (a class attribute is exactly what
-                    # Blocker 2 measured repr() leaking on). If content can't
+                    # exists to avoid (a class attribute's repr is often an
+                    # address). If content can't
                     # be folded and no `ident` was found either, dropping the
                     # member is strictly safer than a non-deterministic repr.
                     try:
@@ -1543,9 +1520,9 @@ class CodeIdentity:
         # attribute when a field declares ``default_factory``, so the
         # ``vars()`` walk above cannot see it -- ``getattr_static`` raises
         # AttributeError for that name. The factory is nonetheless code that
-        # decides what every instance holds: measured, editing
-        # ``field(default_factory=lambda: B(0))`` to ``B(999)`` changed what
-        # ``A()`` produced while leaving this digest byte-identical.
+        # decides what every instance holds: editing
+        # ``field(default_factory=lambda: B(0))`` to ``B(999)`` changes what
+        # ``A()`` produces.
         #
         # Read from ``__dataclass_fields__`` rather than calling
         # ``dataclasses.fields()``: the latter raises on a non-dataclass and
@@ -1580,12 +1557,10 @@ class CodeIdentity:
         class-aware surface (``CodeIdentity.code_surface_hash``) only engages on
         ``SOURCE_RETRIEVAL_ERRORS`` -- a class truly without source, e.g. a
         notebook cell's ``__main__`` has no ``__file__`` -- or when this method
-        is reached some other way in the future. Preferring it unconditionally
-        was measured to regress every file-backed class whose method is wrapped
-        by ``@functools.wraps``, ``@lru_cache``, or ``@singledispatchmethod``:
-        ``CodeIdentity.class_surface_parts`` walks the WRAPPER, not the wrapped function, so
-        a body edit under one of those decorators stopped invalidating even
-        though whole-class source hashing always saw it (source is just text).
+        is reached some other way. Whole-class source is preferred because it
+        sees a body edit under ``@functools.wraps``, ``@lru_cache`` or
+        ``@singledispatchmethod`` (source is just text), where
+        ``CodeIdentity.class_surface_parts`` walks the WRAPPER.
         """
         cached = self._user_class_src_cache.get(cls)
         if cached is not None:
@@ -1608,10 +1583,10 @@ class CodeIdentity:
         """``(qualname, source-hash)`` for the user classes behind an INSTANCE.
 
         A cached function that reads a pre-built module-level object -- ``pre =
-        MyTransformer()`` imported and dropped into a pipeline -- had that object
-        only VALUE-hashed: its ``__dict__`` pickle carries no method source, so an
-        edit to ``MyTransformer.transform`` left the key unchanged and served a
-        stale result (found replaying a real repo's git history). Fold the source
+        MyTransformer()`` imported and dropped into a pipeline -- cannot be only
+        VALUE-hashed: its ``__dict__`` pickle carries no method source, so an
+        edit to ``MyTransformer.transform`` would leave the key unchanged and
+        serve a stale result. Fold the source
         of the instance's class -- and of the user-class instances it holds,
         however deep -- so a method-body edit invalidates.
 
@@ -1626,9 +1601,8 @@ class CodeIdentity:
             _seen = set()
         parts: list[tuple[str, str]] = []
         # Depth-first with an explicit stack, however deep the instances nest
-        # (a linked list of user objects is as deep as it is long): a class
-        # held five objects down was not folded, and an edit to its method
-        # served the old result. ``_seen`` ends cycles.
+        # (a linked list of user objects is as deep as it is long).
+        # ``_seen`` ends cycles.
         stack = [value]
         while stack:
             item = stack.pop()

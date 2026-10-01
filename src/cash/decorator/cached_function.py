@@ -71,8 +71,8 @@ def checked_ttl(ttl: Any) -> float | None:
     seconds ``>= 0``. A `datetime.timedelta` becomes its seconds.
 
     Checked when the function is decorated, because the value is written
-    into every entry's metadata: a ``ttl="300"`` read from a config file
-    used to be accepted and then break every later lookup of those entries.
+    into every entry's metadata, and every later lookup of those entries
+    reads it: a ``ttl="300"`` read from a config file is refused here.
 
     Raises:
         TypeError: not a number, ``None`` or a timedelta (a str, a bool).

@@ -559,9 +559,9 @@ class CallRunner:
             call.recompute = lambda: func(*args, **kwargs)
 
         # Everything from here to the hit/miss verdict is cash's own cost,
-        # not the user's work. Two perf_counter pairs measured at 196ns
-        # against a 25.5us floor for the cheapest possible cached call --
-        # 0.8%, so this is not gated behind a heuristic.
+        # not the user's work. Two perf_counter pairs cost under 1% of the
+        # cheapest possible cached call, so this is not gated behind a
+        # heuristic.
         overhead_t0 = _perf_counter()
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run

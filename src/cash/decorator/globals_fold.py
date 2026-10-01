@@ -182,21 +182,20 @@ def stabilize_for_global_hash(
     hashable and content-sensitive (dict-dispatch channel).
 
     A callable is its code AND what it carries (`carried_payload`): a
-    ``Scaler(10)`` with ``__call__`` became its class's code alone, so
-    ``Scaler(11)`` -- held in a dict, a list, or read as a global -- kept
-    the same key; so did ``{"scale": partial(mul, k=10)}`` after ``k=11``.
+    ``Scaler(10)`` with ``__call__`` and ``Scaler(11)`` -- held in a dict, a
+    list, or read as a global -- key apart, and so do
+    ``{"scale": partial(mul, k=10)}`` and ``k=11``.
     *carried* False keeps the code alone, the fallback for a carried state
     that cannot be hashed.
 
-    However deep the containers nest: past eight levels a callable was left
-    as it was, which pickles by name, so editing it kept the key. *_path*
-    (the containers and callables being rewritten) ends one that holds itself.
+    However deep the containers nest: a callable left as it is pickles by
+    name, which an edit does not move. *_path* (the containers and
+    callables being rewritten) ends one that holds itself.
 
     An object whose state is its ``__dict__`` (`_state_is_its_dict`) and that
-    holds code is rewritten as its class's name and that dict: left to be
-    pickled, ``CFG = {"b": Box(lambda x: x + 1)}`` could not be, and the
-    global was dropped from the key, so editing the lambda served the old
-    result. An object that holds no code is left as it is, keyed as before.
+    holds code is rewritten as its class's name and that dict:
+    ``CFG = {"b": Box(lambda x: x + 1)}`` cannot be pickled as it is, and
+    its lambda is an input. An object that holds no code is left as it is.
     """
     return _stabilized(v, hash_callable, _path, carried)[0]
 
@@ -772,10 +771,9 @@ class GlobalsFold:
         """A callable found INSIDE a data global, identified by what calling it runs.
 
         A registry -- ``STEPS = {"load": load_step}`` read by a cached
-        ``run(name)`` that calls ``STEPS[name](x)`` -- was keyed by each
-        function's own source, so an edit to a helper the step calls was a HIT
-        with the old result; and a cached function stored there was keyed by
-        cash's own wrapper, so not even an edit to its body moved the key. A
+        ``run(name)`` that calls ``STEPS[name](x)`` -- runs each step's helpers
+        too, so each function's own source is not enough, and a cached
+        function stored there is not cash's wrapper code. A
         cached function counts as its dependency state, the same
         as a call to it would; a plain function of the user's as its source
         plus its helpers, re-resolved live like any helper's.
@@ -969,8 +967,8 @@ class GlobalsFold:
                 continue
             # A pre-built user-class INSTANCE (or a container of them) is only
             # value-hashed above -- its class's method SOURCE is invisible to the
-            # pickle, so editing a method served stale. Fold the class-graph
-            # source too (memoized per class; see instance_class_source_parts).
+            # pickle. Fold the class-graph source too (memoized per class; see
+            # instance_class_source_parts).
             for item in iter_contained(v):
                 if is_user_class(type(item), own_pkg):
                     for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
@@ -1014,7 +1012,7 @@ class GlobalsFold:
             parts.extend(self._docstring_parts(code, g, own_pkg))
         # A function default is evaluated where the `def` stands, so what a
         # default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
-        # of *func*'s: editing K kept the key.
+        # of *func*'s, so it is folded here or editing K would keep the key.
         for default in self._function_defaults(func):
             if seen is not None:
                 if ("default", id(default)) in seen:
@@ -1081,8 +1079,8 @@ class GlobalsFold:
 
         A docstring is not part of the key: it documents the code. Unless the
         code reads it -- a tool description, a prompt, help text built from
-        ``__doc__`` -- and then it is an input like any string constant, and
-        editing it served the old answer. Every user function, class and
+        ``__doc__`` -- and then it is an input like any string constant.
+        Every user function, class and
         module the code names (and ``module.attr`` of those it reads), and the
         module's own docstring when it reads ``__doc__``.
         """
@@ -1255,8 +1253,7 @@ class GlobalsFold:
         # A callable bound at a call site carries DATA besides its code: a
         # partial's arguments, a bound method's instance, a callable
         # instance's attributes. Its code is followed as a helper; this is the
-        # rest (`F = partial(base, k=2)` -> `k=3`, and `F = S(2).f`, were both
-        # served stale).
+        # rest (`F = partial(base, k=2)` against `k=3`, `F = S(2).f`).
         carried: list[str] = []
         # A callable that changes what it carries when called -- an instance
         # memoising into its own dict -- would key each call on the last one's
@@ -1316,8 +1313,8 @@ class GlobalsFold:
         """Key parts for the DATA a user class brings: what it holds, and what
         its code reads.
 
-        A class's code reached the key (its source, its bases' source); the
-        data behind it did not, so each of these served the old result:
+        A class's code reaches the key through its source and its bases';
+        the data behind it is folded here:
 
         * a module global read by an inherited method, a property, a mixin,
           ``__init__`` or ``cached_property`` (``x * RATE`` in ``Base.scale``,
@@ -1893,13 +1890,12 @@ class GlobalsFold:
     def _local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:
         """Key parts for data reached through names the module's globals never see.
 
-        Two shapes, both served stale (a constant 2 -> 0 and the old
-        report back):
+        Two shapes:
 
         * an import written INSIDE the body -- ``from .settings import
           ROUNDING``, or ``from . import settings`` then ``settings.ROUNDING``
-          -- binds a local, so the globals channels never saw it (#132 followed
-          only the FUNCTIONS such an import binds);
+          -- binds a local, which the globals channels never see (the helper
+          walk follows only the FUNCTIONS such an import binds);
         * a module held in a closure: ``from . import settings`` inside a
           decorator factory, read by the wrapper as ``settings.ROUNDING``.
 
@@ -1994,9 +1990,8 @@ class GlobalsFold:
             obj = _resolve_dotted(g, mod_name)
             is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
             # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
-            # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
-            # skipped because ``Cfg`` is a class, not a module, so editing the
-            # constant served stale. Fold user-class attributes too.
+            # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT), with a
+            # class in place of the module. Fold user-class attributes too.
             is_cls = isinstance(obj, type) and is_user_class(obj, own_pkg)
             if not (is_mod or is_cls):
                 # `scale.k` with `scale.k = 1` set on a function of the
