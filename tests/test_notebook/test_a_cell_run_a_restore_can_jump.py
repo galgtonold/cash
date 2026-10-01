@@ -21,7 +21,8 @@ def _runs(src):
     "src",
     [
         "sales = raw[raw['a'] >= 0]\nsales = sales.drop_duplicates()\nsales['t'] = sales['a'] * 2",
-        "df = load()\ndf['x'] = 1\nflag = df['x'] > 0\ndf['y'] = flag.astype(int)",
+        "df = pd.read_csv(p)\ndf['x'] = 1\nflag = df['x'] > 0\ndf['y'] = flag.astype(int)",
+        "df = raw.copy()\ndf.loc[df['a'] > 0, 'b'] = 1\ndf = df.dropna()",
         "total = a + b\ntotal = total * 2",
     ],
 )
@@ -38,6 +39,12 @@ def test_a_run_rebuilding_its_own_objects_can_jump(src):
         "df2 = df\ndf2['a'] += 100\ndf2 = df2.copy()",
         "col = df['a']\ncol[0] = 1\ncol = col + 1",  # a column may be a view
         "m = np.asarray(arr)\nm[0] = 1\nm = m + 1",  # may be arr itself
+        "b = a.astype(np.float64, copy=False)\nb += 1\nb = b * 2",  # may be a itself
+        "t = torch.from_numpy(arr)\nt += 1\nt = t * 2",  # shares arr's memory
+        "m = np.array(arr, copy=False)\nm[0] = 1\nm = m + 1",
+        "df = load()\ndf['x'] = 1\ndf = df * 2",  # a helper may return a global
+        "y = [x]\ny[0][0] = 5\ny = y + [1]",  # the list holds x itself
+        "y = x.copy()\ny[0]['k'] = 1\ny = list(y)",  # a shallow copy shares x's items
         "sales = sales.dropna()\nsales = sales.copy()",  # reads what it rebuilds first
         "a = 1\nb = 2",  # nothing rebuilt
     ],

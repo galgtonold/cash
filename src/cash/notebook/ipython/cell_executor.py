@@ -544,37 +544,68 @@ def _jumpable_runs(body: list[ast.stmt], raw_cell: str, touches_rng) -> dict[int
     return runs
 
 
-#: Methods whose result may be the object they are called on, or share its data.
-_VIEW_METHODS = frozenset(
+#: Calls known to return a new object that shares no data with their
+#: arguments or receiver, unless told otherwise by a ``copy=`` argument.
+#: Any other call -- a user helper, ``torch.from_numpy``, ``df.to_numpy()``,
+#: ``np.asarray`` -- may hand back its input or a view of it.
+_COPY_CALLS = frozenset(
     {
-        "view",
-        "reshape",
-        "ravel",
-        "squeeze",
-        "transpose",
-        "swapaxes",
-        "pipe",
-        "asarray",
-        "asanyarray",
-        "ascontiguousarray",
-        "__getitem__",
-        "get",
+        # copies of the receiver or argument
+        "copy",
+        "deepcopy",
+        "astype",
+        "array",
+        "list",
+        "dict",
+        "set",
+        "sorted",
+        # fresh arrays
+        "zeros",
+        "ones",
+        "empty",
+        "full",
+        "zeros_like",
+        "ones_like",
+        "empty_like",
+        "full_like",
+        "arange",
+        "linspace",
+        # pandas methods that build a new frame
+        "drop_duplicates",
+        "dropna",
+        "fillna",
+        "drop",
+        "merge",
+        "concat",
+        "assign",
+        "sort_values",
+        "sort_index",
+        "reset_index",
     }
 )
+
+#: Indexers through which ``name.<indexer>[...] = v`` writes into ``name`` itself.
+_INDEXERS = frozenset({"loc", "iloc", "at", "iat"})
 
 
 def _makes_a_new_object(value: ast.expr) -> bool:
     """Whether *value* evaluates to an object no other name holds.
 
     Conservative: a name, an attribute, a slice (``arr[1:]`` is a view of
-    ``arr``) or a column (``df['a']``) may be shared, as may a call known to
-    return its receiver or a view. A mask or a list of columns selects a copy;
-    arithmetic, literals and other calls make a new object.
+    ``arr``) or a column (``df['a']``) may be shared, and so may any call
+    outside ``_COPY_CALLS`` or one passed ``copy=`` anything but ``True``
+    (``a.astype(float, copy=False)`` can be ``a`` itself). A mask or a list of
+    columns selects a copy; arithmetic, literals and the listed calls make a
+    new object.
     """
     if isinstance(value, ast.Call):
         func = value.func
         name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-        return name not in _VIEW_METHODS
+        if not (name in _COPY_CALLS or name.startswith("read_")):
+            return False
+        return all(
+            kw.arg != "copy" or (isinstance(kw.value, ast.Constant) and kw.value.value is True) for kw in value.keywords
+        )
     if isinstance(
         value,
         (
@@ -601,6 +632,24 @@ def _makes_a_new_object(value: ast.expr) -> bool:
     return False
 
 
+def _writes_into_the_name_itself(target: ast.expr) -> bool:
+    """Whether a write to *target* lands in the object its base name holds.
+
+    ``df['a'] = v``, ``obj.x = v`` and ``df.loc[m, 'a'] = v`` do. A deeper
+    target -- ``y[0][1] = v``, ``obj.a.b = v`` -- writes into an object held
+    *inside* it, which a shallow copy or a literal like ``[x]`` shares.
+    """
+    inner = target.value
+    if isinstance(inner, ast.Name):
+        return True
+    return (
+        isinstance(target, ast.Subscript)
+        and isinstance(inner, ast.Attribute)
+        and inner.attr in _INDEXERS
+        and isinstance(inner.value, ast.Name)
+    )
+
+
 def _writes_only_into_its_own_objects(nodes: list[ast.stmt]) -> bool:
     """Whether every in-place write of the run lands in an object the run made.
 
@@ -608,7 +657,8 @@ def _writes_only_into_its_own_objects(nodes: list[ast.stmt]) -> bool:
     ``arr``: skipping or restoring those statements loses the change to the
     object outside the run. So a name the run writes into -- ``name[...] =``,
     ``name.attr =``, ``name += ...`` -- must have been bound in the run, before
-    the write, by an expression that makes a new object.
+    the write, by an expression that makes a new object, and the write must
+    land in that object rather than in one it holds.
     """
     fresh: set[str] = set()
     for node in nodes:
@@ -623,6 +673,8 @@ def _writes_only_into_its_own_objects(nodes: list[ast.stmt]) -> bool:
                 base = base.value
             if base is not target:
                 if not isinstance(base, ast.Name) or base.id not in fresh:
+                    return False
+                if not _writes_into_the_name_itself(target):
                     return False
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             names = {t.id for t in targets if isinstance(t, ast.Name)}
