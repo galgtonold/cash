@@ -29,7 +29,8 @@ from datetime import date, datetime
 import pytest
 
 from cash import Cash
-from cash.analysis.purity_analyzer import ISSUE_AMBIENT_READ, PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_report import ISSUE_AMBIENT_READ
 from cash.exceptions import CashImpureFunctionError, CashImpurityWarning
 
 

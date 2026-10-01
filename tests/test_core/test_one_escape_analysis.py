@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from cash.analysis.purity_analyzer import ISSUE_SCOPE_MUTATION, PurityAnalyzer
+from cash.analysis.purity_analyzer import PurityAnalyzer
+from cash.analysis.purity_report import ISSUE_SCOPE_MUTATION
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
 

@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import (
     REPORTED_METHODS,
-    PurityReport,
     callable_layers,
     get_analyzer,
     is_mock,
@@ -28,6 +27,7 @@ from ..analysis.purity_analyzer import (
     resolve_binding,
     resolve_local_import,
 )
+from ..analysis.purity_report import PurityReport
 from ..dependency_state import SysModulesHelperResolver, ledger_note
 from ..effects import environment_component
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashImpurityWarning
