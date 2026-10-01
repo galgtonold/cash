@@ -21,7 +21,7 @@ def imported_under_tracker(tmp_path, monkeypatch):
     pkg = tmp_path / "loaderpkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("def read(path):\n    return path\n", encoding="utf-8")
-    (pkg / "data.txt").write_text("hi\n", encoding="utf-8")
+    (pkg / "data.txt").write_bytes(b"hi\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     registry = FileDependencyRegistry()
     registry.register("loaderpkg", "read", FileDependencyRegistry._create_path_arg_handler)
