@@ -51,10 +51,9 @@ from collections.abc import Callable
 from typing import Any
 
 from .._annotation_refs import annotation_referents
-from .._memo import CODE_OBJECTS, MODULE_ANALYSES, PURITY_REPORTS, LruMemo
+from .._memo import MODULE_ANALYSES, PURITY_REPORTS, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import (
-    CLOCK_WHEN_ARG_CALLS,
     ENVIRON_KEYED_METHODS,
     ENVIRON_NAMES,
     MODULE_CALLS,
@@ -68,7 +67,6 @@ from ..effects import (
     environment_input,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
-from ..install_paths import is_user_code_file
 from ..purity import (
     KNOWN_PURE_BUILTINS,
     is_pure,
@@ -85,8 +83,9 @@ from ..source_norm import (
     source_version_unchanged,
 )
 from ..value_types import BUILTIN_NAMES
+from .ambient_reads import ambient_call, clock_helper_of, log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
-from .ast_util import bytecode_global_refs, called_names, resolve_callee
+from .ast_util import bytecode_global_refs, resolve_callee
 from .callee_effects import module_function_global_changes, scope_locals
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .helper_bindings import (
@@ -105,9 +104,7 @@ from .helper_bindings import (
 from .helper_code import UnwalkableLayers, callable_layers, is_mock, is_user_code, own_code_is_user, qualname_of
 from .mutations import PANDAS_INPLACE_METHODS
 from .purity_flow import (
-    LogOnlyFlow,
     fresh_name_nodes,
-    is_log_helper,
     is_log_line,
     receiver_is_fresh,
 )
@@ -260,10 +257,10 @@ class _PurityVisitor(ast.NodeVisitor):
         self.issues: list[PurityIssue] = []
         #: *namespace* plus, in a method, its ``self`` / ``cls`` bound to the
         #: class: what a call site's clock helper is looked up in
-        #: (`_ambient_call`), so ``self.stamp()`` is judged like ``stamp()``.
+        #: (`ambient_call`), so ``self.stamp()`` is judged like ``stamp()``.
         self._ambient_namespace = namespace if ambient_namespace is None else ambient_namespace
         #: Code objects of the clock helpers this body's call sites judged
-        #: (`_clock_helper_of`): the walk leaves their own read to that judgment.
+        #: (`clock_helper_of`): the walk leaves their own read to that judgment.
         self.judged_helpers: set[Any] = set()
         #: ids of ``sys.stdin`` nodes reached as a method's receiver.
         self._stdin_attributes: set[int] = set()
@@ -315,9 +312,9 @@ class _PurityVisitor(ast.NodeVisitor):
         # Ambient reads (by node id) whose value reaches only a log line.
         self._log_only = log_only
         # What the body's names are bound to, so an aliased ambient read
-        # (`_dt.datetime.now()`) is recognised (`_ambient_call`).
+        # (`_dt.datetime.now()`) is recognised (`ambient_call`).
         self._namespace = namespace
-        # The module's own log helpers (`_log_helper_names`): a call to one is
+        # The module's own log helpers (`log_helper_names`): a call to one is
         # a print, not a call made for an effect a hit would skip.
         self._log_helpers = log_helpers
         # ``os.environ`` nodes read for one named variable (a subscript, a
@@ -705,8 +702,8 @@ class _PurityVisitor(ast.NodeVisitor):
                             )
                         )
                     return
-            ambient = _ambient_call(node, self._ambient_namespace)
-            helper = _clock_helper_of(node, self._ambient_namespace) if ambient is not None else None
+            ambient = ambient_call(node, self._ambient_namespace)
+            helper = clock_helper_of(node, self._ambient_namespace) if ambient is not None else None
             if helper is not None:
                 # A clock helper is still the user's code: walked, so an edit
                 # to it reaches the key like any helper's.
@@ -1062,140 +1059,6 @@ class _PurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     visit_AsyncFor = visit_For
-
-
-def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | None:
-    """The ambient read *node* makes, spelled canonically, or None.
-
-    The spelling in the source first (``datetime.now()``), then what its names
-    are bound to in *namespace* (:func:`cash.effects.classify_call`): users
-    wrote ``import datetime as _dt; _dt.datetime.now()``, ``from datetime
-    import datetime as DateTime``, ``import time as _time``, ``import os as
-    _os`` and ``pd.Timestamp.now()`` freezing a timestamp with no warning,
-    while the canonical spellings warned. Also ``pd.to_datetime("today")`` and
-    ``pd.Timestamp("now")``.
-    """
-    effect = classify_call(node, namespace)
-    if effect is not None and effect.kind in AMBIENT_KINDS:
-        if effect.name in CLOCK_WHEN_ARG_CALLS:
-            return f"{effect.name}({node.args[0].value!r})"  # type: ignore[attr-defined]
-        return effect.name
-    helper = _clock_helper_of(node, namespace)
-    if helper is not None:
-        inner = _clock_helper_read(helper)
-        shown = inner if inner.endswith(")") else f"{inner}()"  # type: ignore[union-attr]
-        return f"{'.'.join(callee_chain(node.func) or ())}() (which returns {shown})"
-    return None
-
-
-def _clock_helper_of(node: ast.Call, namespace: dict[str, Any] | None) -> Any:
-    """The clock helper (`_clock_helper_read`) *node* calls, or None.
-
-    Called by name (``now()``) or through a module, a class or a method's own
-    ``self`` (``clocks.now()``, ``Clock.now()``, ``self.stamp()``). Only the
-    bare name was judged, and the helper's own read is left to the call site,
-    so every dotted spelling froze the clock with no warning.
-    """
-    chain = callee_chain(node.func)
-    if not namespace or not chain or chain[0] not in namespace:
-        return None
-    if len(chain) == 1:
-        helper = namespace[chain[0]]
-    else:
-        helper = resolve_callee(node.func, namespace, modules_only=False)
-    helper = getattr(helper, "__func__", helper)  # a bound method or classmethod
-    return helper if _clock_helper_read(helper) is not None else None
-
-
-def _method_namespace(func: Any, func_def: ast.AST, namespace: dict[str, Any]) -> dict[str, Any]:
-    """*namespace* with a method's first parameter bound to its class.
-
-    For the clock-helper judgment only (`_clock_helper_of`): ``self.stamp()``
-    names ``Class.stamp`` as far as its code goes. A plain function, a
-    static method or a function nested in another function is left alone.
-    """
-    qualname = getattr(func, "__qualname__", "") or ""
-    parts = qualname.split(".")
-    args = getattr(func_def, "args", None)
-    positional = (args.posonlyargs + args.args) if args is not None else []
-    if len(parts) < 2 or "<locals>" in parts or not positional:
-        return namespace
-    owner: Any = getattr(func, "__globals__", {}).get(parts[0])
-    for part in parts[1:-1]:
-        owner = getattr(owner, part, None) if isinstance(owner, type) else None
-    if not isinstance(owner, type):
-        return namespace
-    try:
-        raw = inspect.getattr_static(owner, parts[-1])
-    except AttributeError:
-        return namespace
-    if isinstance(raw, staticmethod):
-        return namespace
-    return {**namespace, positional[0].arg: owner}
-
-
-def _clock_helper_read(value: Any) -> str | None:
-    """The ambient read a CLOCK HELPER returns, or None.
-
-    A clock helper is a function of the user's whose body is log lines and one
-    ``return <ambient read>``: ``def mark(name): print(..., file=sys.stderr);
-    return time.perf_counter()``. Calling it IS the ambient read, so it is
-    judged where it is called -- where ``t0 = mark("step")`` handed only to a
-    ``done(name, t0)`` that prints it cannot reach a result.
-    Inside the helper it is not
-    reported at all when the helper is reached from a cached function.
-    """
-    code = getattr(value, "__code__", None)
-    if not isinstance(value, types.FunctionType) or code is None:
-        return None
-    if getattr(value, "_cash_cached", False) is True:
-        # Judged by its own analysis. And every cached function shares its
-        # wrapper's code object, which the memo below is keyed by: one cached
-        # `return time.time()` made every cached callee a clock read.
-        return None
-    if not is_user_code_file(code.co_filename):
-        # A library function (`os.path.isdir`) is not the user's helper, and
-        # reading its source inside a cached call would record the read.
-        return None
-    known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
-    if known is not _NOT_JUDGED:
-        return known
-    _CLOCK_HELPER_CACHE[code] = None  # a helper that calls itself
-    found = None
-    try:
-        tree = ast.parse(textwrap.dedent(getsource(value)))
-        func_def = tree.body[0] if tree.body else None
-        body = list(getattr(func_def, "body", []))
-        if (
-            body
-            and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)
-        ):
-            body = body[1:]
-        if (
-            body
-            and isinstance(body[-1], ast.Return)
-            and isinstance(body[-1].value, ast.Call)
-            and all(
-                isinstance(s, ast.Expr) and isinstance(s.value, ast.Call) and is_log_line(s.value) for s in body[:-1]
-            )
-        ):
-            namespace = build_namespace(value)
-            # A read the key folds (`environment_input`) is an input, not a
-            # frozen value: the helper's own walk lists it.
-            if environment_input(body[-1].value, namespace, resolve_constants=True) is None:
-                found = _ambient_call(body[-1].value, namespace)
-    except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
-        found = None
-    _CLOCK_HELPER_CACHE[code] = found
-    return found
-
-
-#: code object -> the ambient read that clock helper returns, or None.
-_CLOCK_HELPER_CACHE: LruMemo[Any, str | None] = LruMemo(CODE_OBJECTS)
-#: A miss in `_CLOCK_HELPER_CACHE`, whose entries may be None.
-_NOT_JUDGED = object()
 
 
 class PurityAnalyzer:
@@ -1611,14 +1474,14 @@ class PurityAnalyzer:
                 if _obj is not None:
                     namespace[_local] = _obj
             dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
-            ambient_namespace = _method_namespace(func, func_def, namespace)
+            ambient_namespace = method_namespace(func, func_def, namespace)
             visitor = _PurityVisitor(
                 qualname=qualname,
                 param_names=param_names,
                 fresh_nodes=fresh_name_nodes(func_def),
-                log_only=_log_only_ambient_reads(func_def, func, ambient_namespace),
+                log_only=log_only_ambient_reads(func_def, func, ambient_namespace),
                 namespace=namespace,
-                log_helpers=_log_helper_names(func_def, func),
+                log_helpers=log_helper_names(func_def, func),
                 ambient_namespace=ambient_namespace,
                 func_def=func_def,
             )
@@ -1628,7 +1491,7 @@ class PurityAnalyzer:
             if visitor.opens_tracked_database:
                 visitor.issues = [i for i in visitor.issues if i.effect_kind is not EffectKind.DB_READ]
             if depth > 0 and getattr(func, "__code__", None) in judged_helpers:
-                # Judged where it is called (`_clock_helper_read`). Reached
+                # Judged where it is called (`clock_helper_read`). Reached
                 # any other way (``fn = now; fn()``), it reports its own read.
                 visitor.issues = [i for i in visitor.issues if i.kind != ISSUE_AMBIENT_READ]
             judged_helpers |= visitor.judged_helpers
@@ -1953,65 +1816,6 @@ def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> Non
             line=issue.line + first - 1 if issue.line else 0,
             filename=filename,
         )
-
-
-def _log_only_ambient_reads(
-    func_def: ast.AST, func: Any = None, namespace: dict[str, Any] | None = None
-) -> frozenset[int]:
-    """ids of the ambient reads in *func_def* whose value is only logged.
-
-    "Logged" includes being passed to one of the module's own log helpers
-    (`_log_helper_names`): one project counted ~20 KEY-AMBIENT-READ lines per
-    worker start from ``_log(f"... {time.perf_counter() - t0:.2f}s")``,
-    none of which could reach a result.
-    """
-    candidates = []
-    for node in ast.walk(func_def):
-        if isinstance(node, ast.Call):
-            if _ambient_call(node, namespace) is not None:
-                candidates.append(node)
-        elif (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.ctx, ast.Load)
-            and get_base_name(node.value) in ENVIRON_NAMES
-        ):
-            candidates.append(node)
-        elif isinstance(node, ast.Attribute) and dotted_name(node) in ENVIRON_NAMES:
-            candidates.append(node)
-        elif environ_membership(node) is not None:
-            candidates.append(node)
-    if not candidates:
-        return frozenset()  # the common case pays for no parent map
-    flow = LogOnlyFlow(func_def, _log_helper_names(func_def, func))
-    return frozenset(id(n) for n in candidates if flow.only_logged(n))
-
-
-def _log_helper_names(func_def: ast.AST, func: Any) -> frozenset[str]:
-    """Names *func_def* calls that are, in *func*'s globals, log helpers."""
-    module_ns = getattr(func, "__globals__", None)
-    if not isinstance(module_ns, dict):
-        return frozenset()
-    return frozenset(name for name in called_names(func_def) if _is_log_helper_function(module_ns.get(name)))
-
-
-def _is_log_helper_function(value: Any) -> bool:
-    code = getattr(value, "__code__", None)
-    if not isinstance(value, types.FunctionType) or code is None:
-        return False
-    known = _LOG_HELPER_CACHE.get(code)
-    if known is None:
-        try:
-            tree = ast.parse(textwrap.dedent(getsource(value)))
-            known = bool(tree.body) and is_log_helper(tree.body[0])
-        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError, ValueError):
-            known = False
-        _LOG_HELPER_CACHE[code] = known
-    return known
-
-
-#: code object -> "is it a log helper?". Code objects are immutable, so a
-#: redefined helper is a new key.
-_LOG_HELPER_CACHE: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
 
 
 def _describe_subscript(node: ast.Subscript) -> str:
