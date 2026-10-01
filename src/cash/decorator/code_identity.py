@@ -13,7 +13,6 @@ import os
 import pickle
 import re
 import textwrap
-import threading
 import types
 import weakref
 from collections.abc import Callable
@@ -41,6 +40,7 @@ from ..source_norm import (
 )
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
+from .key_values import SYNC_TYPES, is_immutable_capture, iter_contained
 from .user_code import cash_wrapped, is_user_class, is_user_code_object
 
 if TYPE_CHECKING:
@@ -332,33 +332,6 @@ def walk_nested_code(code: types.CodeType, glb: dict):
         stack.extend(const for const in reversed(current.co_consts) if isinstance(const, types.CodeType))
 
 
-def iter_contained(obj: Any):
-    """Yield *obj*, or its members if it is a plain container, skipping
-    primitives outright (they can hold no user class and are common)."""
-    if isinstance(obj, (str, bytes, bytearray, int, float, bool, complex, type(None))):
-        return
-    if isinstance(obj, (list, tuple, set, frozenset)):
-        yield from obj
-    elif isinstance(obj, dict):
-        yield from obj.values()
-    else:
-        yield obj
-
-
-def is_immutable_capture(v: Any) -> bool:
-    """True for values that are immutable and so define a closure's
-    behaviour without drifting between calls. Mutable captures (dict/list/
-    set/objects) are excluded: they are typically side-effect accumulators
-    (e.g. a hit counter) whose value changes every call - folding those into
-    the key would make every call miss. Tuples are looked through however deep
-    they nest: one cannot hold itself."""
-    if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
-        return True
-    if isinstance(v, (tuple, frozenset)):
-        return all(is_immutable_capture(x) for x in v)
-    return False
-
-
 def _defaults_pin(functions: list[Any]) -> tuple | None:
     """The defaults of *functions*, when every one is immutable; else None."""
     pin = []
@@ -370,17 +343,6 @@ def _defaults_pin(functions: list[Any]) -> tuple | None:
         pin.append((pos, dict(kwd)))
     return tuple(pin)
 
-
-#: Synchronization objects (``threading.Lock()``): no result is computed
-#: from one, so a lock held as a class attribute, captured by a closure or
-#: given as a default is left out of the key.
-SYNC_TYPES: tuple[type, ...] = (
-    type(threading.Lock()),
-    type(threading.RLock()),
-    threading.Condition,
-    threading.Event,
-    threading.Semaphore,
-)
 
 #: A memory address in a repr (``<object object at 0x7f...>``).
 _ADDRESS_REPR = re.compile(r"\bat 0x[0-9a-fA-F]+")
