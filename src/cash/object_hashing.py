@@ -53,7 +53,10 @@ from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, LEAF_TYPES, PARSED_
 
 logger = logging.getLogger(__name__)
 
-_HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError)
+#: What a hash that cannot read a value raises. RecursionError: a value nested
+#: deeper than pickle or a walk follows, such as a linked list of a few
+#: hundred objects, has no content hash either.
+_HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, RecursionError)
 
 
 # ---------------------------------------------------------------------------
@@ -1236,7 +1239,7 @@ def compute_hash(obj: Any) -> str:
 
     try:
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-    except (TypeError, pickle.PicklingError):
+    except (TypeError, pickle.PicklingError, RecursionError):
         pass
     except BaseException as exc:
         if not is_native_panic(exc):
