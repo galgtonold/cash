@@ -14,7 +14,11 @@ class TestUIGeneration(unittest.TestCase):
         self.app = Cash(cache_dir=self.cache_dir)
 
     def tearDown(self):
-        self.app.backend.clear()
+        # Shut the instance down before deleting its folder: its record of
+        # stored keys is written to <cache_dir>/.keys by a background writer
+        # that the backend's own clear does not wait for, and a write landing
+        # during rmtree fails it (directory not empty, temp file vanished).
+        self.app.shutdown()
         shutil.rmtree(self.cache_dir)
 
     def test_size_tracking(self):
