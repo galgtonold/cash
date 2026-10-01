@@ -95,6 +95,7 @@ from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, called_names, resolve_callee
+from .callee_effects import module_function_global_changes, scope_locals
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .mutations import PANDAS_INPLACE_METHODS
 from .purity_flow import (
@@ -2617,7 +2618,7 @@ class PurityAnalyzer:
             # spelling was followed, so an edit to `g` served the old result.
             # Resolved statically (no property runs), from a module or class
             # the name is bound to, not a local or parameter that shadows it.
-            shadowed = (param_names | _function_locals(func_def)) - local_imports.keys()
+            shadowed = (param_names | scope_locals(func_def)) - local_imports.keys()
             for _node in visitor.read_attributes:
                 _chain = _callee_chain(_node)
                 if _chain is None or _chain[0] in shadowed:
@@ -2679,7 +2680,7 @@ class PurityAnalyzer:
         if not modified:
             return
         module_ns = getattr(func, "__globals__", None) or {}
-        locals_ = _function_locals(func_def)
+        locals_ = scope_locals(func_def)
         freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
         own_name = getattr(func, "__name__", None)
         candidates = (read_names.keys() & modified) - locals_ - freevars - BUILTIN_NAMES
@@ -2839,67 +2840,6 @@ def _describe_subscript(node: ast.Subscript) -> str:
     return "a subscript"
 
 
-def _target_root_name(node: ast.AST) -> str | None:
-    """Root ``Name`` id of an Attribute/Subscript chain (``a.b[c]`` -> ``a``)."""
-    cur = node
-    while isinstance(cur, (ast.Attribute, ast.Subscript)):
-        cur = cur.value
-    return cur.id if isinstance(cur, ast.Name) else None
-
-
-def _collect_bound_names(target: ast.AST, out: set[str]) -> None:
-    """Names bound by an assignment target (``Name`` / nested tuple/list)."""
-    if isinstance(target, ast.Name):
-        out.add(target.id)
-    elif isinstance(target, (ast.Tuple, ast.List, ast.Starred)):
-        for el in ast.iter_child_nodes(target):
-            _collect_bound_names(el, out)
-
-
-def _function_locals(func_node: ast.AST) -> frozenset[str]:
-    """Names local to a function scope: parameters plus names it binds, minus
-    any declared ``global``/``nonlocal``. Does not descend into nested scopes."""
-    args = getattr(func_node, "args", None)
-    locs: set[str] = set()
-    decl: set[str] = set()
-    if args is not None:
-        for a in args.posonlyargs + args.args + args.kwonlyargs:
-            locs.add(a.arg)
-        if args.vararg:
-            locs.add(args.vararg.arg)
-        if args.kwarg:
-            locs.add(args.kwarg.arg)
-    body = getattr(func_node, "body", [])
-    # A lambda's body is a single expression, not a statement list.
-    stack = list(body) if isinstance(body, list) else [body]
-    while stack:
-        n = stack.pop()
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            continue  # separate scope
-        if isinstance(n, (ast.Global, ast.Nonlocal)):
-            decl.update(n.names)
-        elif isinstance(n, ast.Assign):
-            for t in n.targets:
-                _collect_bound_names(t, locs)
-        elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-            if isinstance(n.target, ast.Name):
-                locs.add(n.target.id)
-        elif isinstance(n, (ast.For, ast.AsyncFor)):
-            _collect_bound_names(n.target, locs)
-        elif isinstance(n, (ast.With, ast.AsyncWith)):
-            for item in n.items:
-                if item.optional_vars:
-                    _collect_bound_names(item.optional_vars, locs)
-        elif isinstance(n, (ast.Import, ast.ImportFrom)):
-            for al in n.names:
-                locs.add(al.asname or al.name.split(".")[0])
-        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        for child in ast.iter_child_nodes(n):
-            stack.append(child)
-    return frozenset(locs - decl)
-
-
 def _imported_module_names(tree: ast.AST) -> frozenset[str]:
     """Names bound by a plain ``import x`` / ``import x as y`` in *tree*.
 
@@ -2911,101 +2851,6 @@ def _imported_module_names(tree: ast.AST) -> frozenset[str]:
             for alias in node.names:
                 names.add(alias.asname or alias.name.split(".")[0])
     return frozenset(names)
-
-
-class _GlobalMutationScanner(ast.NodeVisitor):
-    """Collects module-global names that are reassigned or mutated *inside a
-    function body* (i.e. reachable at runtime), scope-aware so a function's
-    local that merely shares a name with a global is not mistaken for a
-    mutation of that global.
-
-    Mutations at module top level are ignored on purpose: they run once at
-    import, before any cached function is called, so the global is effectively
-    constant during runtime and reading it is safe. This avoids flagging
-    registries/config dicts that are populated at import and then never change.
-    (A mutation inside a function that only ever runs at import - e.g. a
-    decorator body - is still flagged conservatively, since we cannot prove
-    statically that the function never runs at call time. A false flag is a
-    harmless warning; a missed one would be a silent stale cache.)"""
-
-    def __init__(self, module_names: frozenset[str] = frozenset()) -> None:
-        self.modified: set[str] = set()
-        self._locals_stack: list[frozenset[str]] = []  # enclosing function locals
-        # Names bound by a plain ``import x`` / ``import x as y``. A
-        # write-METHOD call on one of these does not mutate it: `net.post(...)`
-        # calls a function that lives on the module, it does not change the
-        # module. Without this, one `requests.post(...)` anywhere in a file made
-        # every function in that file that merely READS `requests` report
-        # "reads module global 'requests' that is reassigned or mutated
-        # elsewhere" -- measured, and on a finding that carries no line number,
-        # so it could not even be waived per statement.
-        #
-        # Only plain module imports are excluded. `from config import SETTINGS`
-        # binds an object that `SETTINGS.update(...)` really does mutate, so
-        # those still flag.
-        self._module_names = module_names
-
-    @property
-    def _in_function(self) -> bool:
-        return bool(self._locals_stack)
-
-    def _is_global(self, name: str) -> bool:
-        # Inside a function, a name is the global only if it isn't shadowed by
-        # a local there. (Only consulted when _in_function is True.)
-        return all(name not in loc for loc in self._locals_stack)
-
-    def visit_FunctionDef(self, node):
-        self._locals_stack.append(_function_locals(node))
-        self.generic_visit(node)
-        self._locals_stack.pop()
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-
-    def visit_Lambda(self, node):
-        self._locals_stack.append(_function_locals(node))
-        self.generic_visit(node)
-        self._locals_stack.pop()
-
-    def visit_Global(self, node):
-        # An explicit `global G` inside a function is intent to rebind the
-        # module global at runtime. (`global` at module scope is a no-op.)
-        if self._in_function:
-            self.modified.update(node.names)
-        self.generic_visit(node)
-
-    def visit_AugAssign(self, node):
-        base = _target_root_name(node.target)
-        if self._in_function and base and self._is_global(base):
-            self.modified.add(base)
-        self.generic_visit(node)
-
-    def visit_Assign(self, node):
-        for t in node.targets:
-            if isinstance(t, (ast.Subscript, ast.Attribute)):
-                base = _target_root_name(t)
-                if self._in_function and base and self._is_global(base):
-                    self.modified.add(base)
-        self.generic_visit(node)
-
-    def visit_Delete(self, node):
-        for t in node.targets:
-            base = t.id if isinstance(t, ast.Name) else _target_root_name(t)
-            if self._in_function and base and self._is_global(base):
-                self.modified.add(base)
-        self.generic_visit(node)
-
-    def visit_Call(self, node):
-        f = node.func
-        if (
-            self._in_function
-            and isinstance(f, ast.Attribute)
-            and f.attr in REPORTED_METHODS
-            and isinstance(f.value, ast.Name)
-            and self._is_global(f.value.id)
-            and f.value.id not in self._module_names
-        ):
-            self.modified.add(f.value.id)
-        self.generic_visit(node)
 
 
 def _module_modified_globals(module: Any) -> frozenset[str]:
@@ -3042,13 +2887,18 @@ def _modified_globals_in_source(source: str) -> frozenset[str]:
         tree = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError):
         return frozenset()
+    # Changes made by code at module level run once, at import, before any
+    # cached function is called, so a registry filled at import reads as
+    # constant; only function bodies count. A function that only ever runs
+    # at import (a decorator body) still counts: a false flag is a warning, a
+    # missed one a stale cache. A method call on a plainly imported module
+    # (``requests.post``) calls a function and does not change the module;
+    # ``from config import SETTINGS`` binds an object, which still counts.
     try:
-        scanner = _GlobalMutationScanner(_imported_module_names(tree))
-        scanner.visit(tree)
+        return module_function_global_changes(tree, _imported_module_names(tree))
     except RecursionError:
         logger.debug("global-mutation scan gave up on a deeply nested module")
         return frozenset()
-    return frozenset(scanner.modified)
 
 
 def _qualname_of(func: Callable[..., Any]) -> str:

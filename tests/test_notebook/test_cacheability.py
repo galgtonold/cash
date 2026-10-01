@@ -1332,11 +1332,18 @@ class TestCalleeGlobalMutations:
     def test_no_tree_is_empty(self):
         assert callee_global_mutations(None, self.SRCS.get) == frozenset()
 
-    def test_a_raising_resolver_is_silent(self):
+    def test_a_callee_without_source_is_skipped(self):
+        def resolve(name):
+            raise OSError(name)
+
+        assert callee_global_mutations(ast.parse("bump()"), resolve) == frozenset()
+
+    def test_a_crashing_resolver_is_not_read_as_no_writes(self):
         def resolve(name):
             raise RuntimeError(name)
 
-        assert callee_global_mutations(ast.parse("bump()"), resolve) == frozenset()
+        with pytest.raises(RuntimeError):
+            callee_global_mutations(ast.parse("bump()"), resolve)
 
     def test_control_body_calls_belong_to_the_loop(self):
         code = "for t in [1, 2]:\n    out.append(compute(t))"

@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @8568ad55 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ad43cda5 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -74,7 +74,7 @@ A `# @cash:` comment that cash could not honour. Every code here starts `ANNOT-`
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
+<!-- claim: cash/analysis/annotations.py:parse_annotation_line @58513e3e -->
 **What happened.** The value after `# @cash:ttl=` is not a whole number of
 seconds (`ttl=5m`, `ttl=300.0`, `ttl=-5`, or no `=`), so cash ignored the
 annotation.
@@ -83,9 +83,8 @@ annotation.
 If the TTL was the only thing meant to refresh it, the stored value is served
 until something else invalidates it.
 
-<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
-**What to do.** Write plain seconds: `# @cash:ttl=300` for five minutes. Put
-one directive per line: a second `# @cash:` on the same line is not read. See
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @58513e3e -->
+**What to do.** Write plain seconds: `# @cash:ttl=300` for five minutes. See
 [Annotations](annotations.md).
 
 **When it is safe to ignore.** When cash already tracks what the value depends
@@ -1237,10 +1236,29 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 
 | Code | Applies to | Meaning |
 |---|---|---|
+| [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+
+### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @cebe64c3 -->
+**What happened.** A check that decides whether a statement may be cached
+raised an error: the scan for calls it must not cache, or the analysis of the
+functions it calls and what they write. The message names the check and the
+exception.
+
+**Why it matters.** cash cannot tell whether a cache hit would be safe, so the
+statement runs every time and is not stored. The result is correct.
+
+**What to do.** Nothing in your code needs to change. Please report the
+exception as a bug. The warning is shown once per check and error type.
+
+**When it is safe to ignore.** When the statement is cheap to run.
 
 ### NOTEBOOK-BAILOUT {#notebook-bailout}
 

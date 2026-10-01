@@ -245,6 +245,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
         # ran the cell uncached
+        "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
+        # the statement ran uncached
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off

@@ -485,7 +485,7 @@ def fetch_user(uid):
     return requests.get(url).json()   # @cash:assume-safe
 ```
 
-<!-- claim: cash/analysis/annotations.py:audited_lines @da3b0e65 -->
+<!-- claim: cash/analysis/annotations.py:audited_lines @5aa0a42f -->
 The comment covers that statement only (put it on the opening line of a call
 that spans lines, or on the line above), so code added later is still checked.
 

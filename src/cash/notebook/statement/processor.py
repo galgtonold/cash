@@ -512,6 +512,9 @@ class StatementProcessor:
         """
         self._begin(run)
         effects, analysis_time, hash_time = self._analyze(run)
+        if effects.unanalysed:
+            run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
+            run.skip_cache = True
 
         done = self._check_redundant_import(run)
         if done is not None:

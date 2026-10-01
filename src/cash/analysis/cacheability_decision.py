@@ -36,6 +36,7 @@ override, so no hook indirection is justified.
 from __future__ import annotations
 
 import ast
+import collections
 import logging
 import types
 from collections.abc import Callable, Mapping
@@ -45,11 +46,14 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
 from cash.analysis.namespace_effects import statement_user_writer_call
+from cash.diagnostics import warn_diagnostic
+from cash.exceptions import CashCacheIneffectiveWarning
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "analysis_failed",
     "decide_cacheability",
     "identity_coupled_reason",
     "receiver_is_identity_coupled",
@@ -88,18 +92,15 @@ _IDENTITY_COUPLED_BASES: Mapping[str, str] = {
 }
 
 # ``fig, axes = plt.subplots(2, 2)`` binds ``axes`` to a numpy object-array of
-# Axes, and ``axs = fig.subplots(2, 2)`` never binds the Figure at all — so a
-# top-level type check alone would miss it and silently cache the Axes (which
-# drags the Figure).  A *bounded* scan catches the common spellings without
-# walking a million-element list on the hot path: these containers are
-# homogeneous, so the first few elements settle it.  It also recurses a few
-# levels and covers ``dict`` — ``rows = list(axes)`` nests a list of ndarrays,
-# and ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` (and typically
-# binds ONLY that dict, so nothing bare-Figure/Axes co-occurs to trip the check
-# for the statement). The depth cap also makes the plain recursion
-# cycle-safe (unlike ``deepcopy`` it has no memo).
-_CONTAINER_SCAN_LIMIT = 8
-_CONTAINER_SCAN_MAX_DEPTH = 4  # dict-of-list-of-Axes is 2 deep; leave headroom.
+# Axes, ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]``, and a function
+# may return ``{"mean": ..., "fig": fig}``: a top-level type check alone would
+# cache the Figure inside. So the check walks every item of every builtin
+# container (and of object-dtype numpy arrays) at every depth. A skipped item
+# would be a cached Figure, so there is no count or depth limit; the walk is
+# iterative with an ``id()`` seen set, which makes it cycle-safe. Numeric numpy
+# arrays and plain scalars are skipped by type, since they cannot hold an Axes.
+_SCAN_CONTAINERS: tuple[type, ...] = (list, tuple, set, frozenset, collections.deque)
+_SCALAR_TYPES: frozenset[type] = frozenset({int, float, complex, bool, str, bytes, type(None)})
 
 _SKIP_INPUT_NAMES: frozenset[str] = frozenset({"get_ipython", "__builtins__", "print", "__name__", "__doc__"})
 
@@ -121,35 +122,51 @@ def _coupled_kind(value: Any) -> str | None:
     return mro_kind(value, _IDENTITY_COUPLED_BASES, ("matplotlib",))
 
 
-def _coupled_kind_in_container(value: Any, _depth: int = 0) -> str | None:
-    """Return the friendly name if a container holds a coupled object.
+_EXHAUSTED = object()
 
-    Bounded by ``_CONTAINER_SCAN_LIMIT`` per level and ``_CONTAINER_SCAN_MAX_DEPTH``
-    levels deep.  Handles list/tuple/set/frozenset, ``dict`` (scanning values —
-    ``subplot_mosaic`` returns ``dict[str, Axes]``), and object-dtype numpy
-    arrays.  Only object-dtype arrays are scanned — a numeric array cannot hold
-    an Axes, and checking ``dtype`` first keeps big numeric arrays off this path
-    entirely.  Recurses so ``rows = list(axes)`` (a list of ndarrays of Axes)
-    and other nestings are caught; the depth cap also keeps a pathological
-    self-referential container from looping.
-    """
-    if _depth >= _CONTAINER_SCAN_MAX_DEPTH:
-        return None
+
+def _container_items(value: Any) -> Any:
+    """The items a container can hold a coupled object in, or None for a leaf."""
     if isinstance(value, dict):
-        items: Any = value.values()
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        items = value
-    elif type(value).__module__ == "numpy" and getattr(getattr(value, "dtype", None), "kind", "") == "O":
-        items = value.flat
-    else:
-        return None
+        return (*value.keys(), *value.values())
+    if isinstance(value, _SCAN_CONTAINERS):
+        return value
+    if type(value).__module__ == "numpy" and getattr(getattr(value, "dtype", None), "kind", "") == "O":
+        return value.flat
+    return None
 
-    for index, item in enumerate(items):
-        if index >= _CONTAINER_SCAN_LIMIT:
-            break
-        kind = _coupled_kind(item) or _coupled_kind_in_container(item, _depth + 1)
+
+def _coupled_kind_in_container(value: Any) -> str | None:
+    """Return the friendly name if a container holds a coupled object at any depth.
+
+    Walks list/tuple/set/frozenset/deque, ``dict`` keys and values, and
+    object-dtype numpy arrays, item by item and level by level, so
+    ``rows = list(axes)`` (a list of ndarrays of Axes) and a figure as the
+    ninth entry of a result dict are both found. Each container is visited
+    once (an ``id()`` seen set), which keeps a self-referential container
+    from looping.
+    """
+    root_items = _container_items(value)
+    if root_items is None:
+        return None
+    seen = {id(value)}
+    stack = [iter(root_items)]
+    while stack:
+        item = next(stack[-1], _EXHAUSTED)
+        if item is _EXHAUSTED:
+            stack.pop()
+            continue
+        if type(item) in _SCALAR_TYPES:
+            continue
+        kind = _coupled_kind(item)
         if kind is not None:
             return kind
+        if id(item) in seen:
+            continue
+        items = _container_items(item)
+        if items is not None:
+            seen.add(id(item))
+            stack.append(iter(items))
     return None
 
 
@@ -182,11 +199,39 @@ def receiver_is_identity_coupled(value: Any) -> bool:
     ``ax.hist()`` (Axes -> in-place draw) apart from ``df.hist()`` (DataFrame ->
     genuinely receiver-pure, must not bump ``df``).
 
-    Reuses the identity-coupled scan (direct value + bounded container
+    Reuses the identity-coupled scan (direct value + full container
     walk for the ``fig, axes = plt.subplots(2, 2)`` object-array spelling), so it
     imports no matplotlib and covers subclasses/projections.
     """
     return bool(_coupled_kind(value) or _coupled_kind_in_container(value))
+
+
+#: Failures already reported, so a statement that runs every time does not
+#: repeat the same warning.
+_REPORTED_FAILURES: set[tuple[str, str]] = set()
+
+
+def analysis_failed(check: str, exc: BaseException) -> str:
+    """The uncacheable reason for a safety *check* that raised, warned once.
+
+    A check whose job is to stop caching cannot answer "nothing found" when it
+    crashed: the statement it could not judge runs uncached instead.
+    """
+    reason = f"cash could not {check} ({type(exc).__name__}: {exc}), so the statement runs uncached"
+    logger.debug("analysis failed: %s", reason, exc_info=exc)
+    key = (check, type(exc).__name__)
+    if key not in _REPORTED_FAILURES:
+        _REPORTED_FAILURES.add(key)
+        try:
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "NOTEBOOK-ANALYSIS-FAILED",
+                f"{reason}.",
+                "nothing to change in your code; please report the error so the check can handle it.",
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+            logger.debug("could not warn about a failed analysis", exc_info=True)
+    return reason
 
 
 def decide_cacheability(
@@ -214,10 +259,10 @@ def decide_cacheability(
 
     try:
         forbidden = scan_forbidden(code, user_ns, tree)
-        if forbidden:
-            return False, list(forbidden)
-    except (TypeError, AttributeError, SyntaxError) as exc:
-        logger.debug("Error scanning for forbidden functions: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
+        return False, [analysis_failed("scan the statement for calls it must not cache", exc)]
+    if forbidden:
+        return False, list(forbidden)
 
     try:
         # Bare names first, then ``helpers.announce(...)`` -- how a @stateful
@@ -237,8 +282,8 @@ def decide_cacheability(
         if found:
             name, writer = found
             return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
-    except (TypeError, AttributeError) as exc:
-        logger.debug("Error checking function purity: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
+        return False, [analysis_failed("check the functions the statement calls", exc)]
 
     ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
     if ast_reasons:

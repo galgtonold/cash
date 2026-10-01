@@ -137,7 +137,7 @@ def test_an_axes_array_is_refused_too(tmp_path):
     """``fig, axes = plt.subplots(2, 2)`` binds an object-array of Axes.
 
     A top-level type check alone would miss it and cache the array, which
-    drags the Figure along.  Covered by the bounded container scan.
+    drags the Figure along.  Covered by the container scan.
     """
     plt.close("all")
     c = cash.Cash(cache_dir=str(tmp_path / "cache"))
@@ -152,6 +152,28 @@ def test_an_axes_array_is_refused_too(tmp_path):
     cached(1)
     cached(1)
     assert calls == [1, 1], f"the Axes array was cached: {calls}"
+
+
+def test_a_figure_inside_a_large_result_dict_is_refused(tmp_path):
+    """A result dict that carries the figure next to many statistics is
+    refused like a bare figure: the check looks at every entry."""
+    plt.close("all")
+    c = cash.Cash(cache_dir=str(tmp_path / "cache"))
+    calls = []
+
+    def summary(n):
+        calls.append(n)
+        fig, ax = plt.subplots()
+        ax.plot(range(n))
+        result = {f"s{i}": i for i in range(8)}
+        result["fig"] = fig
+        return result
+
+    cached = c.cache(summary)
+    first = cached(5)
+    assert plt.gcf() is first["fig"], "caching detached plt.gcf() from the returned figure"
+    cached(5)
+    assert calls == [5, 5], f"the result dict holding a Figure was cached: {calls}"
 
 
 def test_the_refusal_warns_once(tmp_path):

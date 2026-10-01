@@ -66,9 +66,12 @@ When several directives reach one statement, they combine: each flag applies if
 any of them sets it, and the last `ttl=` wins. `no-cache` beats `persist` and
 also switches off the caching of calls inside the statement.
 
-<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @5d8ea461 -->
-Spelling: `@cash:` must be lower case, and a space after the colon or around `=`
-is fine (`# @cash: persist`, `# @cash:ttl = 60`). An unknown name warns once with
+<!-- claim: cash/analysis/annotations.py:ANNOTATION_PATTERN @412c3ce1, cash/analysis/annotations.py:parse_annotation_line @58513e3e -->
+Spelling: `@cash:` must be lower case; the directive name may be any case, and a
+space after the colon or around `=` is fine (`# @cash: persist`, `# @cash:ttl = 60`).
+Several directives may share a line (`# @cash: no-cache  # @cash: assume-safe`).
+The notebook, the decorator and the runtime checks read them the same way. An
+unknown name warns once with
 [`ANNOT-UNKNOWN-DIRECTIVE`](warnings.md#annot-unknown-directive) and suggests the
 right spelling (`nocache` → `no-cache`).
 
@@ -84,7 +87,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @28ae25ec -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows a plain `EXECUTED` row. A statement below that reads its
 result is cached as usual and computed again when the value changes.
@@ -149,7 +152,7 @@ directive and has no such caveat.
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @e0e77376, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @28ae25ec, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached
