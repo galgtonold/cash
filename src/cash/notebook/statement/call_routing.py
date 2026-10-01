@@ -430,56 +430,9 @@ class CallRouting:
         if strip_markers(code) in self._calls_not_worth_wrapping:
             return code, tree
         try:
-            # The object-level half of the gate: a call that
-            # is structurally eligible (its free variables don't read the
-            # statement's own target) can still be uncacheable for every reason
-            # a statement can be -- a forbidden call, an untracked input, a
-            # user-ns shape ``decide_cacheability`` refuses. Judging it by the
-            # SAME rules as the statement containing it (rather than not judging
-            # it at all) is what ``call_site_is_cacheable`` exists for; wiring it
-            # here means an eligible-but-uncacheable site is never wrapped in
-            # the first place, so a doomed key is never even attempted.
-            def gate(call: ast.Call, local: frozenset[str] = frozenset()) -> bool:
-                # `call_site_is_cacheable` runs the full `decide_cacheability`
-                # / `analyze_statement` / `scan_for_forbidden_functions` stack
-                # against a bare `ast.Expr(Call)` sub-expression -- a shape the
-                # analyzer has never been exercised against before this gate
-                # existed. The outer `try` below only ever guarded a copy and
-                # an unparse, so it only catches (SyntaxError, ValueError,
-                # TypeError, AttributeError); anything else escaping THIS
-                # function would surface as the user's own traceback on their
-                # statement. Fail closed instead: an
-                # exception here means "don't wrap", exactly like a `False`
-                # verdict, never "crash the cell".
-                try:
-                    return call_site_is_cacheable(
-                        call,
-                        user_ns=self.shell.user_ns,
-                        annotation=annotation,
-                        # The runtime lineage table genuinely exists at this
-                        # call site (unlike the AST-only rewrite-time case
-                        # `call_site_is_cacheable`'s docstring justifies
-                        # omission for) -- passing it lets the missing-lineage
-                        # reason source apply here too, tightening the gate to
-                        # the same standard the statement itself is judged by.
-                        variable_lineage=self.tracking_state.variable_lineage,
-                        is_stateful_call=self._is_stateful_call,
-                        scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
-                        local_names=local,
-                    )[0]
-                except Exception:  # noqa: BLE001 - fail closed to "don't wrap"
-                    # Not `ast.unparse(call)` in this message: that can itself
-                    # raise, and doing so here would defeat the very fix this
-                    # except exists to provide.
-                    logger.debug(
-                        "%s cache-calls gate raised; leaving a call site unwrapped",
-                        _LOG_PROCESSOR,
-                    )
-                    return False
-
             rewritten, sites = wrap_eligible_calls(
                 tree if tree is not None else ast.parse(code),
-                gate=gate,
+                gate=self._call_site_gate(annotation),
                 namespace=self.shell.user_ns,
             )
             if not sites:
@@ -493,40 +446,97 @@ class CallRouting:
             # statement echo a value the user silenced.
             if code.rstrip().endswith(";"):
                 new_code += ";"
-            if self._call_cache is None or self._call_cache_owner is not cash_instance:
-                self._call_cache = CallCache(
-                    cash_instance,
-                    ttl_provider=self.current_call_ttl,
-                    persist_provider=self.current_call_persist,
-                    ctx_provider=lambda: CacheKeyContext(
-                        variable_lineage=self.tracking_state.variable_lineage,
-                        user_ns=self.shell.user_ns,
-                        function_tracker=self.function_tracker,
-                        compute_hash_fn=self.compute_hash,
-                    ),
-                    # `self.current_loop_vars_for_call_key` (bound method, not
-                    # a lambda capturing a snapshot) so it re-reads
-                    # `_loop_vars` at INVOKE time -- the `CallCache`
-                    # instance is reused across statement executions (guarded
-                    # by `_call_cache_owner` above), but the loop this call
-                    # sits in pushes/pops its vars fresh on every iteration.
-                    #
-                    # Depth-and-name-keyed: a call INSIDE a
-                    # loop that reuses an ancestor's target name needs BOTH
-                    # scopes' entries to survive at once -- see
-                    # `_depth_keyed_loop_scope`'s docstring.
-                    loop_vars_provider=self.current_loop_vars_for_call_key,
-                    loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
-                )
-                self._call_cache_owner = cash_instance
+            call_cache = self._call_cache_for(cash_instance)
             plain = _plain_call_assignment(code)
-            self._call_cache.set_sites(sites, plain_value_source=plain[0] if plain else None)
+            call_cache.set_sites(sites, plain_value_source=plain[0] if plain else None)
             self._calls_wrapped_for = code
-            self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
+            self.shell.user_ns[HELPER_NAME] = call_cache.resolve
             return new_code, rewritten
         except (SyntaxError, ValueError, TypeError, AttributeError):
             logger.debug("%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR)
             return code, tree
+
+    def _call_site_gate(self, annotation: Any | None) -> Callable[..., bool]:
+        """Whether a structurally eligible call may be wrapped.
+
+        The object-level half of the gate: a call that is structurally
+        eligible (its free variables don't read the statement's own target)
+        can still be uncacheable for every reason a statement can be -- a
+        forbidden call, an untracked input, a user-ns shape
+        ``decide_cacheability`` refuses. Judging it by the SAME rules as the
+        statement containing it is what ``call_site_is_cacheable`` exists
+        for; an eligible-but-uncacheable site is then never wrapped in the
+        first place, so a doomed key is never even attempted.
+        """
+
+        def gate(call: ast.Call, local: frozenset[str] = frozenset()) -> bool:
+            # `call_site_is_cacheable` runs the full `decide_cacheability`
+            # / `analyze_statement` / `scan_for_forbidden_functions` stack
+            # against a bare `ast.Expr(Call)` sub-expression. The rewrite's
+            # own `try` only catches (SyntaxError, ValueError, TypeError,
+            # AttributeError); anything else escaping THIS function would
+            # surface as the user's own traceback on their statement. Fail
+            # closed instead: an exception here means "don't wrap", exactly
+            # like a `False` verdict, never "crash the cell".
+            try:
+                return call_site_is_cacheable(
+                    call,
+                    user_ns=self.shell.user_ns,
+                    annotation=annotation,
+                    # The runtime lineage table genuinely exists at this
+                    # call site (unlike the AST-only rewrite-time case
+                    # `call_site_is_cacheable`'s docstring justifies
+                    # omission for) -- passing it lets the missing-lineage
+                    # reason source apply here too, tightening the gate to
+                    # the same standard the statement itself is judged by.
+                    variable_lineage=self.tracking_state.variable_lineage,
+                    is_stateful_call=self._is_stateful_call,
+                    scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                    local_names=local,
+                )[0]
+            except Exception:  # noqa: BLE001 - fail closed to "don't wrap"
+                # Not `ast.unparse(call)` in this message: that can itself
+                # raise, and doing so here would defeat the very fix this
+                # except exists to provide.
+                logger.debug(
+                    "%s cache-calls gate raised; leaving a call site unwrapped",
+                    _LOG_PROCESSOR,
+                )
+                return False
+
+        return gate
+
+    def _call_cache_for(self, cash_instance: Any) -> CallCache:
+        """The call cache for *cash_instance*, built on first use and rebuilt
+        when the instance changes (a ``reset_session()``), so callees never
+        resolve against a dead backend."""
+        if self._call_cache is None or self._call_cache_owner is not cash_instance:
+            self._call_cache = CallCache(
+                cash_instance,
+                ttl_provider=self.current_call_ttl,
+                persist_provider=self.current_call_persist,
+                ctx_provider=lambda: CacheKeyContext(
+                    variable_lineage=self.tracking_state.variable_lineage,
+                    user_ns=self.shell.user_ns,
+                    function_tracker=self.function_tracker,
+                    compute_hash_fn=self.compute_hash,
+                ),
+                # `self.current_loop_vars_for_call_key` (bound method, not
+                # a lambda capturing a snapshot) so it re-reads
+                # `_loop_vars` at INVOKE time -- the `CallCache`
+                # instance is reused across statement executions (guarded
+                # by `_call_cache_owner` above), but the loop this call
+                # sits in pushes/pops its vars fresh on every iteration.
+                #
+                # Depth-and-name-keyed: a call INSIDE a
+                # loop that reuses an ancestor's target name needs BOTH
+                # scopes' entries to survive at once -- see
+                # `_depth_keyed_loop_scope`'s docstring.
+                loop_vars_provider=self.current_loop_vars_for_call_key,
+                loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
+            )
+            self._call_cache_owner = cash_instance
+        return self._call_cache
 
     def cash_time_marks(self) -> CashMarks:
         """Cash's own clocks, read around a statement (see :meth:`price`)."""
