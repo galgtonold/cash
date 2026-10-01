@@ -56,7 +56,7 @@ from .mutations import (
     top_level_call_argument_bases,
 )
 from .namespace_effects import capturable_globals, fits_its_receiver
-from .object_protocol import object_protocol_mutations
+from .object_protocol import ObjectProtocolResets, object_protocol_mutations
 
 __all__ = [
     "CellEffects",
@@ -526,14 +526,20 @@ def _object_protocol_effects(
     def op_var_factory(name):
         return sources.factory_def(name, follow_aliases=True)
 
-    resets = object_protocol_mutations(
-        tree,
-        sources.classes.get,
-        sources.instance_class,
-        sources.functions.get,
-        op_var_factory,
-        decorated_class=sources.decorated_class,
-    )
+    def resets_of(cell_tree: ast.Module) -> ObjectProtocolResets:
+        # One call shape for this cell and every other cell, so the sole-
+        # mutator check below resolves exactly what this cell resolves
+        # (instances, ``@Counter def task`` decorations, factories).
+        return object_protocol_mutations(
+            cell_tree,
+            sources.classes.get,
+            sources.instance_class,
+            sources.functions.get,
+            op_var_factory,
+            decorated_class=sources.decorated_class,
+        )
+
+    resets = resets_of(tree)
     free = resets.free_vars - nocache
     receivers = resets.receivers - nocache
     class_defs = resets.class_defs - nocache
@@ -555,13 +561,7 @@ def _object_protocol_effects(
                 seen_current = True
                 continue
             try:
-                other = object_protocol_mutations(
-                    ast.parse(code),
-                    sources.classes.get,
-                    sources.instance_class,
-                    sources.functions.get,
-                    op_var_factory,
-                )
+                other = resets_of(ast.parse(code))
             except (SyntaxError, ValueError):
                 continue
             other_receivers |= other.receivers

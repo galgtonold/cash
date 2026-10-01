@@ -95,6 +95,20 @@ class TestCellEffects:
         assert "g" in sole.method_receivers
         assert "g" not in shared.method_receivers
 
+    def test_a_class_decorated_function_called_by_another_cell_too_is_not_reset(self):
+        """``@Counter def task`` keeps its count on the instance; when another
+        cell also calls ``task()``, re-running the def would drop that cell's
+        calls, so neither cell may claim the def as its own to reset."""
+        klass = (
+            "class Counter:\n    def __init__(self, f):\n        self.f = f\n        self.n = 0\n"
+            "    def __call__(self):\n        self.n += 1\n        return self.f()"
+        )
+        deco = "@Counter\ndef task():\n    return 1"
+        sole = _effects("task()", klass, deco)
+        shared = _effects("task()", klass, deco, "task()\nprint(task.n)")
+        assert "task" in sole.stateful_funcs
+        assert "task" not in shared.stateful_funcs
+
     def test_a_numpy_view_mutates_its_base(self):
         class ndarray:  # duck-types numpy's type name
             __module__ = "numpy"
