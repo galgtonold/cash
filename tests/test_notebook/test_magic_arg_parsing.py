@@ -70,15 +70,15 @@ def test_stats_reset_with_trailing_comment_actually_resets(
     capsys,
 ):
     """A comment must not turn `reset` into "print the stats"."""
-    cash_magics._session.stats["cells_executed"] = 7
-    cash_magics._session.stats["statements_computed"] = 3
+    cash_magics.session.stats["cells_executed"] = 7
+    cash_magics.session.stats["statements_computed"] = 3
 
     cash_magics.cash_stats("reset  # start over")
     out = capsys.readouterr().out
 
     assert "reset" in out.lower()
-    assert cash_magics._session.stats["cells_executed"] == 0
-    assert cash_magics._session.stats["statements_computed"] == 0
+    assert cash_magics.session.stats["cells_executed"] == 0
+    assert cash_magics.session.stats["statements_computed"] == 0
 
 
 def test_persist_on_with_trailing_comment_does_not_toggle_off(cash_magics, capsys):
@@ -141,7 +141,7 @@ def test_status_unknown_argument_refuses(cash_magics, capsys):
 def test_provenance_unknown_argument_refuses(cash_magics, capsys, line):
     """`%cash_provenance x --grpah` dropped the typo and showed x without the
     graph it asked for; `--clear now` cleared anyway."""
-    cash_magics._session.provenance.clear = lambda: pytest.fail("cleared on a bad argument")
+    cash_magics.session.provenance.clear = lambda: pytest.fail("cleared on a bad argument")
     cash_magics.cash_provenance(line)
     assert "unrecognised" in capsys.readouterr().out.lower()
 

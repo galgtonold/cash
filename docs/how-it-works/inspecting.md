@@ -83,7 +83,7 @@ the key, so editing one changes what the row shows but still hits.
 
 ### Where a value came from
 
-<!-- claim: cash/notebook/ipython/inspection.py:InspectionMagicsMixin.cash_provenance @6ac4d19b, cash/notebook/provenance.py:ProvenanceTracker._format_graph_section @8089ee0d -->
+<!-- claim: cash/notebook/ipython/inspection.py:show_provenance @c46bbe9d, cash/notebook/provenance.py:ProvenanceTracker._format_graph_section @8089ee0d -->
 `%cash_provenance NAME` shows the code that produced a variable, its inputs,
 the files it read and how long it took. `--graph` adds the chain of inputs
 (five levels deep), `--time` the last ten records with whether each step was
@@ -105,7 +105,7 @@ records as JSON, `%cash_debug file log.txt` also appends them to a file, and
 
 ### Session totals
 
-<!-- claim: cash/notebook/ipython/inspection.py:InspectionMagicsMixin.cash_stats @ea63b466 -->
+<!-- claim: cash/notebook/ipython/inspection.py:show_stats @762ae128 -->
 `%cash_stats` reports the session: cells run, statements computed, restored
 and skipped, the hit rate, and the time saved. `%cash_stats json` gives the
 same numbers as JSON and `%cash_stats reset` starts over.

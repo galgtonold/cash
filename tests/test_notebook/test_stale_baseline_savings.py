@@ -51,7 +51,7 @@ def _replay_retail_etl(magics) -> None:
     is 24s. Nothing is recomputed, so nothing corroborates the 25s baselines.
     """
     for i in range(3):
-        magics._update_session_stats(
+        magics.session.record_cell(
             [
                 {
                     "status": CacheStatus.RESTORED,
@@ -60,7 +60,7 @@ def _replay_retail_etl(magics) -> None:
                     "code": f"df{i} = pd.read_csv(f{i})",
                 }
             ],
-            cell_total_time=8.0,
+            wall_time=8.0,
         )
 
 
@@ -85,9 +85,9 @@ class TestStaleBaselineCannotPrintAWin:
     def test_arbitrarily_large_stale_credit_still_cannot_net_positive(self, cash_magics, capsys):
         # A pathological stale baseline: an hour of "saving" credited from cache
         # metadata, on a cell that cost 5s of real wall time and verified nothing.
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.RESTORED, "saved_time": 3600.0, "execution_time": 0.0, "code": "huge = load()"}],
-            cell_total_time=5.0,
+            wall_time=5.0,
         )
         data = _stats_json(cash_magics, capsys)
         # No quantity of unverified credit can buy a positive headline.
@@ -119,14 +119,14 @@ class TestVerifiedSavingsStillRead:
     def test_same_session_recompute_verifies_the_saving(self, cash_magics, capsys):
         # Cell computes a 30s fit HERE — that is a baseline measured under
         # today's conditions ...
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.COMPUTED, "execution_time": 30.0, "code": "model = fit(X)"}],
-            cell_total_time=30.2,
+            wall_time=30.2,
         )
         # ... and re-running the cell restores it in 0.2s.
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.RESTORED, "saved_time": 30.0, "execution_time": 0.0, "code": "model = fit(X)"}],
-            cell_total_time=0.2,
+            wall_time=0.2,
         )
         data = _stats_json(cash_magics, capsys)
         assert data["total_verified_saved"] == pytest.approx(30.0)
@@ -135,13 +135,13 @@ class TestVerifiedSavingsStillRead:
         assert data["net_sign_verified"] is True
 
     def test_verified_win_is_labelled_and_not_hedged(self, cash_magics, capsys):
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.COMPUTED, "execution_time": 30.0, "code": "model = fit(X)"}],
-            cell_total_time=30.2,
+            wall_time=30.2,
         )
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.RESTORED, "saved_time": 30.0, "execution_time": 0.0, "code": "model = fit(X)"}],
-            cell_total_time=0.2,
+            wall_time=0.2,
         )
         capsys.readouterr()
         cash_magics.cash_stats("")
@@ -155,11 +155,11 @@ class TestVerifiedSavingsStillRead:
     def test_stale_high_baseline_is_credited_at_the_remeasured_cost(self, cash_magics, capsys):
         # The P1 pathology in miniature: the cache says the frame cost 25s (cold),
         # but this session re-parsed it in 6s (warm). Only the 6s is defensible.
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.COMPUTED, "execution_time": 6.0, "code": "df = pd.read_csv(p)"}],
-            cell_total_time=6.1,
+            wall_time=6.1,
         )
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [
                 {
                     "status": CacheStatus.RESTORED,
@@ -168,7 +168,7 @@ class TestVerifiedSavingsStillRead:
                     "code": "df = pd.read_csv(p)",
                 }
             ],
-            cell_total_time=8.0,
+            wall_time=8.0,
         )
         data = _stats_json(cash_magics, capsys)
         # Gross still carries the cache's stale 25s ...
@@ -197,10 +197,10 @@ class TestVerificationFiresOnTheRealPipeline:
         cell = "slow = sum(i * i for i in range(2_000_000))"
 
         run_cash_cell(cash_magics, cell)
-        stats = cash_magics._session.stats
+        stats = cash_magics.session.stats
         assert stats["statements_computed"] == 1
         # The baseline was measured HERE, keyed by the statement source.
-        assert cash_magics._session.measured_compute, "no baseline recorded for a COMPUTED statement"
+        assert cash_magics.session.measured_compute, "no baseline recorded for a COMPUTED statement"
 
         run_cash_cell(cash_magics, cell)
         assert stats["statements_restored"] == 1, "second run did not hit the cache"
@@ -212,12 +212,12 @@ class TestVerificationFiresOnTheRealPipeline:
     def test_stats_reset_forgets_the_measured_baselines(self, cash_magics, capsys):
         cash_magics.badges.mode = "off"
         run_cash_cell(cash_magics, "slow2 = sum(i * i for i in range(2_000_000))")
-        assert cash_magics._session.measured_compute
+        assert cash_magics.session.measured_compute
 
         cash_magics.cash_stats("reset")
         # A reset that kept the baselines would go on verifying savings against
         # measurements it claims to have forgotten.
-        assert cash_magics._session.measured_compute == {}
+        assert cash_magics.session.measured_compute == {}
         data = _stats_json(cash_magics, capsys)
         assert data["total_verified_saved"] == 0.0
 
@@ -252,7 +252,7 @@ class TestUpstreamComputeIsNotOverhead:
     def test_upstream_recompute_counts_as_user_compute(self, cash_magics, capsys):
         # 40s of upstream ETL re-run inside a 41s cell: cash's own tax is the 1s,
         # not the 41s.
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [
                 {"status": CacheStatus.COMPUTED, "execution_time": 40.0, "is_upstream": True, "code": "df = etl()"},
                 {
@@ -262,7 +262,7 @@ class TestUpstreamComputeIsNotOverhead:
                     "code": "print(df.shape)",
                 },
             ],
-            cell_total_time=41.0,
+            wall_time=41.0,
         )
         data = _stats_json(cash_magics, capsys)
         assert data["total_compute_time"] == pytest.approx(40.01)

@@ -67,6 +67,11 @@ class VersionedJsonStore(Generic[V]):
         self._items: dict[str, V] = {}
         self._loaded = False
 
+    @property
+    def persistent(self) -> bool:
+        """Whether the store is kept on disk; False for one with no cache dir."""
+        return self._path is not None
+
     def _load_value(self, value: Any) -> V | None:
         """*value* as read from the file, or ``None`` to drop the entry."""
         raise NotImplementedError

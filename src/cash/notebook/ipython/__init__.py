@@ -8,7 +8,7 @@ into IPython's `Magics` system: `%cash_on`, `%cash_status`,
 Public surface:
     - :class:`CashMagics` — the `Magics` subclass that IPython registers.
 
-Everything else (`InspectionMagicsMixin`, `CellExecutor`, `BadgePresenter`, the value types
+Everything else (`CellExecutor`, `BadgePresenter`, the value types
 `TimingBreakdown` / `StatementSummary` / `CellMetrics` / `CashSession`,
 `show_clean_error`, the internal pipeline sentinels) is package-internal:
 code outside the package imports only `CashMagics`.

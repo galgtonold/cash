@@ -48,8 +48,9 @@ def test_provenance_dependency_graph_is_populated(cash_magics, mock_shell):
     mock_shell.user_ns["b"] = 2
     # Compute c from a and b, then drain into provenance via the magic flow.
     metrics = cash_magics._statement_processor.process_statement("c = a + b")
-    cash_magics._record_provenance([metrics])
-    deps = set(cash_magics._session.provenance.get_latest("c").inputs)
+    state = cash_magics.tracking_state
+    cash_magics.session.record_provenance([metrics], state.variable_lineage, state.executed_file_deps)
+    deps = set(cash_magics.session.provenance.get_latest("c").inputs)
     assert "a" in deps, f"expected 'a' in dependencies of c, got {deps}"
     assert "b" in deps, f"expected 'b' in dependencies of c, got {deps}"
 

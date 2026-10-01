@@ -170,14 +170,14 @@ class TestCashProvenanceMagic:
         assert "No provenance" in output
 
     def test_list_with_data(self, cash_magics, capsys):
-        cash_magics._session.provenance.record("x", "x = 1", [], status="computed")
+        cash_magics.session.provenance.record("x", "x = 1", [], status="computed")
         cash_magics.cash_provenance("--all")
         output = capsys.readouterr().out
         assert "x" in output
         assert "1 records" in output
 
     def test_show_variable(self, cash_magics, capsys):
-        cash_magics._session.provenance.record(
+        cash_magics.session.provenance.record(
             "result", "result = calc()", ["data"], status="computed", duration_ms=50.0
         )
         cash_magics.cash_provenance("result")
@@ -186,14 +186,14 @@ class TestCashProvenanceMagic:
         assert "Status: EXECUTED" in output
 
     def test_clear(self, cash_magics, capsys):
-        cash_magics._session.provenance.record("x", "x = 1", [])
+        cash_magics.session.provenance.record("x", "x = 1", [])
         cash_magics.cash_provenance("--clear")
         output = capsys.readouterr().out
         assert "cleared" in output
-        assert len(cash_magics._session.provenance.tracked_variables) == 0
+        assert len(cash_magics.session.provenance.tracked_variables) == 0
 
     def test_json_output(self, cash_magics, capsys):
-        cash_magics._session.provenance.record("x", "x = 1", [])
+        cash_magics.session.provenance.record("x", "x = 1", [])
         cash_magics.cash_provenance("x --json")
         output = capsys.readouterr().out
         data = json.loads(output)

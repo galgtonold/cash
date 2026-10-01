@@ -44,9 +44,9 @@ class TestNetPositive:
     def test_expensive_restore_nets_positive_and_below_gross(self, cash_magics, capsys):
         # Gross = 7s of avoided recompute, paid for with 0.4s of cash wall time
         # (restore + simulation + badge machinery). No user compute ran.
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.RESTORED, "saved_time": 7.0, "execution_time": 0.0}],
-            cell_total_time=0.4,
+            wall_time=0.4,
         )
         data = _stats_json(cash_magics, capsys)
         assert data["total_time_saved"] == pytest.approx(7.0)
@@ -59,13 +59,13 @@ class TestNetPositive:
     def test_human_output_reads_positive_and_non_alarming(self, cash_magics, capsys):
         # Compute the statement first, so the 7.0s baseline is one THIS session
         # measured and the saving is a verified win rather than a claim.
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.COMPUTED, "execution_time": 7.0, "code": "m = fit()"}],
-            cell_total_time=7.1,
+            wall_time=7.1,
         )
-        cash_magics._update_session_stats(
+        cash_magics.session.record_cell(
             [{"status": CacheStatus.RESTORED, "saved_time": 7.0, "execution_time": 0.0, "code": "m = fit()"}],
-            cell_total_time=0.4,
+            wall_time=0.4,
         )
         capsys.readouterr()
         cash_magics.cash_stats("")
@@ -120,7 +120,7 @@ class TestOverheadAccountingIsCheap:
             run_cash_cell(cash_magics, f"guard_{i} = {i} + 1")
 
         # Overhead was accumulated purely in memory ...
-        assert cash_magics._session.stats["total_overhead"] > 0.0
+        assert cash_magics.session.stats["total_overhead"] > 0.0
         # ... and NOTHING was committed to disk per cell.
         with contextlib.closing(sqlite3.connect(am.db_path)) as conn:
             committed = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
@@ -135,7 +135,7 @@ class TestDiscriminatesGrossOverstatement:
         # Drive the stats dict directly so this runs identically on the baseline,
         # whose %cash_stats never derives a net. Mirrors the real report: a 7.4s
         # gross saving with 3.0s of cash overhead → 4.4s net.
-        cash_magics._session.stats.update(
+        cash_magics.session.stats.update(
             {
                 "statements_restored": 1,
                 "total_restored_time": 7.4,

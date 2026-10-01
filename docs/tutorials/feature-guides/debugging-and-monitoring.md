@@ -63,7 +63,7 @@ input that moved.
 
 ## 3. Check the session with `%cash_stats`
 
-<!-- claim: cash/notebook/ipython/inspection.py:InspectionMagicsMixin.cash_stats @ea63b466 -->
+<!-- claim: cash/notebook/ipython/inspection.py:show_stats @762ae128 -->
 `%cash_stats` summarises this kernel session: cells run, statements computed,
 restored and skipped, the hit rate, and time saved.
 

@@ -44,9 +44,9 @@ def test_perfect_session_buried_in_trivia_does_not_read_as_failure(
     capsys,
 ):
     """The reported session: 7/7 expensive statements hit, 40 trivia alongside."""
-    cash_magics._update_session_stats(
+    cash_magics.session.record_cell(
         _trivia(40) + _expensive_hits(7),
-        cell_total_time=1.6,
+        wall_time=1.6,
     )
     cash_magics.cash_stats("")
     out = capsys.readouterr().out
@@ -60,8 +60,8 @@ def test_perfect_session_buried_in_trivia_does_not_read_as_failure(
 
 def test_trivia_are_excluded_from_the_denominator(cash_magics):
     """Trivia must not enter the cacheable counters at all."""
-    cash_magics._update_session_stats(_trivia(40), cell_total_time=0.1)
-    stats = cash_magics._session.stats
+    cash_magics.session.record_cell(_trivia(40), wall_time=0.1)
+    stats = cash_magics.session.stats
 
     assert stats["statements_computed"] == 40
     assert stats["statements_cacheable_hit"] == 0
@@ -70,21 +70,21 @@ def test_trivia_are_excluded_from_the_denominator(cash_magics):
 
 def test_a_real_miss_still_reads_as_a_miss(cash_magics, capsys):
     """The fix must not flatter: expensive statements that MISSED count."""
-    cash_magics._update_session_stats(
+    cash_magics.session.record_cell(
         _trivia(40) + _expensive_misses(7),
-        cell_total_time=95.0,
+        wall_time=95.0,
     )
     cash_magics.cash_stats("")
     out = capsys.readouterr().out
 
-    assert cash_magics._session.stats["statements_cacheable_miss"] == 7
+    assert cash_magics.session.stats["statements_cacheable_miss"] == 7
     assert "0.0%" in out, "7 expensive misses and 0 hits must read as 0%"
 
 
 def test_half_hit_session_reports_the_true_cacheable_rate(cash_magics, capsys):
-    cash_magics._update_session_stats(
+    cash_magics.session.record_cell(
         _trivia(10) + _expensive_hits(3) + _expensive_misses(1),
-        cell_total_time=20.0,
+        wall_time=20.0,
     )
     cash_magics.cash_stats("")
     out = capsys.readouterr().out
@@ -99,7 +99,7 @@ def test_no_cacheable_statements_reports_no_rate(cash_magics, capsys):
     Printing 0% would blame cash for correctly declining to cache a notebook
     that contained nothing worth caching.
     """
-    cash_magics._update_session_stats(_trivia(12), cell_total_time=0.05)
+    cash_magics.session.record_cell(_trivia(12), wall_time=0.05)
     cash_magics.cash_stats("")
     out = capsys.readouterr().out
 
@@ -110,7 +110,7 @@ def test_no_cacheable_statements_reports_no_rate(cash_magics, capsys):
 
 def test_single_number_when_there_is_no_trivia(cash_magics, capsys):
     """With nothing to disambiguate, don't print two rates."""
-    cash_magics._update_session_stats(_expensive_hits(4), cell_total_time=1.0)
+    cash_magics.session.record_cell(_expensive_hits(4), wall_time=1.0)
     cash_magics.cash_stats("")
     out = capsys.readouterr().out
 
@@ -122,9 +122,9 @@ def test_json_exposes_the_cacheable_rate_and_nulls_it_when_undefined(
     cash_magics,
     capsys,
 ):
-    cash_magics._update_session_stats(
+    cash_magics.session.record_cell(
         _trivia(40) + _expensive_hits(7),
-        cell_total_time=1.6,
+        wall_time=1.6,
     )
     cash_magics.cash_stats("json")
     payload = json.loads(capsys.readouterr().out)
@@ -136,7 +136,7 @@ def test_json_exposes_the_cacheable_rate_and_nulls_it_when_undefined(
     # Undefined must serialise as null, never 0.0.
     cash_magics.cash_stats("reset")
     capsys.readouterr()
-    cash_magics._update_session_stats(_trivia(5), cell_total_time=0.01)
+    cash_magics.session.record_cell(_trivia(5), wall_time=0.01)
     cash_magics.cash_stats("json")
     payload = json.loads(capsys.readouterr().out)
     assert payload["hit_rate_cacheable_percent"] is None
@@ -144,12 +144,12 @@ def test_json_exposes_the_cacheable_rate_and_nulls_it_when_undefined(
 
 def test_reset_clears_the_cacheable_counters(cash_magics, capsys):
     """A reset must forget these too, or the next session inherits them."""
-    cash_magics._update_session_stats(
+    cash_magics.session.record_cell(
         _trivia(3) + _expensive_hits(2),
-        cell_total_time=1.0,
+        wall_time=1.0,
     )
     cash_magics.cash_stats("reset")
-    stats = cash_magics._session.stats
+    stats = cash_magics.session.stats
 
     assert stats["statements_cacheable_hit"] == 0
     assert stats["statements_cacheable_miss"] == 0
@@ -165,16 +165,16 @@ def test_reset_zeroes_every_stat_a_session_can_hold(cash_magics, capsys):
     """
     from cash.notebook.ipython.session import new_session_stats
 
-    for key in cash_magics._session.stats:
-        cash_magics._session.stats[key] = 99
-    cash_magics._session.measured_compute["x = f()"] = 1.0
+    for key in cash_magics.session.stats:
+        cash_magics.session.stats[key] = 99
+    cash_magics.session.measured_compute["x = f()"] = 1.0
 
     cash_magics.cash_stats("reset")
 
-    assert cash_magics._session.stats == new_session_stats()
+    assert cash_magics.session.stats == new_session_stats()
     # The verified-saving baselines are part of the stats, not the
     # cache, so a reset must drop them too.
-    assert cash_magics._session.measured_compute == {}
+    assert cash_magics.session.measured_compute == {}
 
 
 @pytest.mark.parametrize(
@@ -192,9 +192,9 @@ def test_the_split_follows_cashs_own_floor_not_a_second_opinion(
     """ "Worth caching" must mean exactly what the cache meant by it."""
     cash_magics._cash_instance.config.min_execution_time_to_cache_seconds = floor
 
-    cash_magics._update_session_stats(
+    cash_magics.session.record_cell(
         [{"status": CacheStatus.COMPUTED, "execution_time": 0.02, "code": "x = f()"}],
-        cell_total_time=0.02,
+        wall_time=0.02,
     )
 
-    assert cash_magics._session.stats["statements_cacheable_miss"] == expect_cacheable
+    assert cash_magics.session.stats["statements_cacheable_miss"] == expect_cacheable

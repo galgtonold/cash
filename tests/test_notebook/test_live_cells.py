@@ -476,6 +476,7 @@ def test_wiring_cashmagics_installs_both_halves_of_the_live_cell_contract():
     shell.run_cell_async = None
 
     magics = CashMagics.__new__(CashMagics)
+    magics._cash_instance = None
     magics._init_session_state(shell)
 
     assert TARGET in shell.kernel.comm_manager.targets, "the comm target was never registered"

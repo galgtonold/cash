@@ -1,28 +1,23 @@
-"""The session-inspection magics, ``%cash_stats`` and ``%cash_provenance``.
+"""What the session-inspection magics, ``%cash_stats`` and ``%cash_provenance``,
+print.
 
-They live in a mixin inherited by :class:`~cash.notebook.ipython.magics.CashMagics`,
-so IPython registers them with the rest.
+:class:`~cash.notebook.ipython.magics.CashMagics` registers the magics and
+hands each call to :func:`show_stats` or :func:`show_provenance` here, with
+the session they read.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-from IPython.core.magic import line_magic
 
 from cash._console import safe_text
 
 from ...backends._writes import discarded_writes
-from ..provenance import BADGE_WORDS
+from ..provenance import BADGE_WORDS, ProvenanceTracker
 from ._args import parse_mode, strip_inline_comment
-from .session import new_session_stats
+from .session import CashSession, StatsSummary
 
-if TYPE_CHECKING:
-    from .magics import CashMagics
-
-__all__ = ["InspectionMagicsMixin"]
+__all__ = ["show_provenance", "show_stats"]
 
 
 # ---------------------------------------------------------------------------
@@ -53,81 +48,7 @@ def _fmt_signed_time(seconds: float) -> str:
     return _fmt_time(seconds)
 
 
-@dataclass(frozen=True)
-class _StatsSummary:
-    """What ``%cash_stats`` reports, derived from the session counters."""
-
-    total_stmts: int
-    #: Hits over every statement, the trivial ones included.
-    hit_rate: float
-    cacheable_hit: int
-    cacheable_total: int
-    #: Hits over the statements worth caching; None when there were none.
-    cacheable_rate: float | None
-    gross_saved: float
-    measured_saved: float
-    overhead: float
-    #: The net credited only from verified and measured savings.
-    net_saved: float
-    #: The net if every restore saved what its entry recorded.
-    net_upper: float
-
-
-def _summarize(stats: dict) -> _StatsSummary:
-    """The rates and nets ``%cash_stats`` reports for the counters *stats*."""
-    total_stmts = stats["statements_computed"] + stats["statements_restored"] + stats["statements_skipped"]
-    hit_rate = (stats["statements_restored"] + stats["statements_skipped"]) / max(total_stmts, 1) * 100
-
-    # The rate over ALL statements answers a question nobody asked: its
-    # denominator is dominated by prints, imports and cheap assignments that
-    # cash deliberately never tried to cache. Counting cash's own correct
-    # "not worth caching" decisions as misses reported 14.9% for a session
-    # in which 100% of the expensive statements hit. Overstating savings is
-    # the same failure inverted, so the same rule binds: the number must not
-    # imply a conclusion the data does not support, in EITHER direction.
-    cacheable_hit = stats.get("statements_cacheable_hit", 0)
-    cacheable_miss = stats.get("statements_cacheable_miss", 0)
-    cacheable_total = cacheable_hit + cacheable_miss
-    cacheable_rate = (cacheable_hit / cacheable_total * 100) if cacheable_total else None
-
-    # Two nets, because two different qualities of evidence.
-    #
-    # ``gross_saved`` is a counterfactual: each restore is credited with the
-    # compute time recorded when the value was FIRST cached. Nothing
-    # re-measures that. If the first run was colder — cold page cache, cold
-    # imports — the credit is stale-high, and a session that was slower by
-    # wall clock still prints a win. That is the lie the verified net fixes, and it
-    # is not fixable by estimating harder: the true recompute cost cannot be
-    # known without doing the recompute.
-    #
-    # So the HEADLINE net is credited only from savings this session
-    # verified by computing the same statement itself. The gross figure is
-    # still shown, explicitly as an unverified upper bound. This
-    # deliberately UNDERSTATES a session that really did save time but never
-    # re-measured a baseline — an understatement is a defensible error here;
-    # an overstatement is the bug.
-    gross_saved = stats["total_time_saved"]
-    verified_saved = stats.get("total_verified_saved", 0.0)
-    # Measured on this machine in an earlier kernel, at the least it ever
-    # cost. Evidence of the same kind as ``verified``, one run older -- and
-    # the only kind a Restart & Run All can have.
-    measured_saved = stats.get("total_measured_saved", 0.0)
-    overhead = stats.get("total_overhead", 0.0)
-    return _StatsSummary(
-        total_stmts=total_stmts,
-        hit_rate=hit_rate,
-        cacheable_hit=cacheable_hit,
-        cacheable_total=cacheable_total,
-        cacheable_rate=cacheable_rate,
-        gross_saved=gross_saved,
-        measured_saved=measured_saved,
-        overhead=overhead,
-        net_saved=verified_saved + measured_saved - overhead,
-        net_upper=gross_saved - overhead,
-    )
-
-
-def _stats_json(stats: dict, summary: _StatsSummary, discarded: list) -> dict:
+def _stats_json(stats: dict, summary: StatsSummary, discarded: list) -> dict:
     """``%cash_stats json``: the counters with the derived figures."""
     return {
         **stats,
@@ -150,7 +71,7 @@ def _stats_json(stats: dict, summary: _StatsSummary, discarded: list) -> dict:
     }
 
 
-def _print_counts(stats: dict, summary: _StatsSummary) -> None:
+def _print_counts(stats: dict, summary: StatsSummary) -> None:
     """The statement counts and the hit rate, each rate with its denominator."""
     print("Cash Session Statistics")
     # These reset on a kernel restart and were read as the
@@ -186,7 +107,7 @@ def _print_counts(stats: dict, summary: _StatsSummary) -> None:
         print("                       cheap to cache, so cash never tried: not misses.")
 
 
-def _print_time(stats: dict, summary: _StatsSummary) -> None:
+def _print_time(stats: dict, summary: StatsSummary) -> None:
     """Compute, gross saving, overhead and the net, as certain as the evidence."""
     net_saved, net_upper = summary.net_saved, summary.net_upper
     overhead, gross_saved = summary.overhead, summary.gross_saved
@@ -245,150 +166,108 @@ def _print_footer(tracked: int) -> None:
     print("  saves beside the space it takes (`cash clear` empties it).")
 
 
-class InspectionMagicsMixin:
-    """Mixin providing the session-inspection magics.
+def show_stats(session: CashSession, line: str, tracked_variables: int) -> None:
+    """``%cash_stats [json|reset]`` for *session*.
 
-    All methods expect ``self`` to be a fully-initialised
-    :class:`~cash.notebook.ipython.magics.CashMagics` instance (i.e. attributes such
-    as ``self._cash_instance``, ``self.tracking_state.variable_lineage``, etc. are available).
+    *tracked_variables* is the count of variables with a lineage, for the
+    footer.
     """
+    # ``reset`` mutates state, so an unrecognised argument must not fall
+    # through to "print the stats" — that reports success (stats appear) for
+    # a reset that never happened.
+    mode = parse_mode(line, ("", "json", "reset"))
+    if mode is None:
+        print(f"[Error] %cash_stats: unrecognised argument: {strip_inline_comment(line)!r}")
+        print("   Valid forms: %cash_stats | %cash_stats json | %cash_stats reset")
+        return
 
-    # ------------------------------------------------------------------
-    # Session statistics
-    # ------------------------------------------------------------------
+    if mode == "reset":
+        session.reset()
+        print("[OK] Session statistics reset.")
+        return
 
-    @line_magic
-    def cash_stats(self: CashMagics, line: str) -> None:
-        """Display session-wide caching statistics.
+    stats = session.stats
+    summary = session.summary()
+    # Deliberately no backend walk here (no ``list_entries()``): on a
+    # disk cache with thousands of entries that is an O(N) scan that opens
+    # every metadata file. ``cash inspect`` gives the backend-wide view.
 
-        Usage::
+    # Writes that failed and were thrown away. A silent loss: the entry is
+    # absent, so that work recomputes every run, and none of the counters
+    # above can show it -- a discarded write is not a miss, it is a hit that
+    # never got the chance to exist. The only other report is a logger
+    # warning from ``_report_failed_writes`` at shutdown, which in a
+    # notebook means at kernel death, i.e. never. This is the one place a
+    # user asking "is caching working?" can actually be told that it isn't.
+    discarded = discarded_writes()
 
-            %cash_stats           # Show human-readable stats
-            %cash_stats json      # Return JSON format
-            %cash_stats reset     # Reset session stats
-        """
-        # ``reset`` mutates state, so an unrecognised argument must not fall
-        # through to "print the stats" — that reports success (stats appear) for
-        # a reset that never happened.
-        mode = parse_mode(line, ("", "json", "reset"))
-        if mode is None:
-            print(f"[Error] %cash_stats: unrecognised argument: {strip_inline_comment(line)!r}")
-            print("   Valid forms: %cash_stats | %cash_stats json | %cash_stats reset")
-            return
+    if mode == "json":
+        print(json.dumps(_stats_json(stats, summary, discarded), indent=2))
+        return
 
-        if mode == "reset":
-            self._reset_session_stats()
-            print("[OK] Session statistics reset.")
-            return
+    _print_counts(stats, summary)
+    print()
+    _print_time(stats, summary)
+    _print_discarded(discarded)
+    _print_footer(tracked_variables)
 
-        stats = self._session.stats
-        summary = _summarize(stats)
-        # Deliberately no backend walk here (no ``list_entries()``): on a
-        # disk cache with thousands of entries that is an O(N) scan that opens
-        # every metadata file. ``cash inspect`` gives the backend-wide view.
 
-        # Writes that failed and were thrown away. A silent loss: the entry is
-        # absent, so that work recomputes every run, and none of the counters
-        # above can show it -- a discarded write is not a miss, it is a hit that
-        # never got the chance to exist. The only other report is a logger
-        # warning from ``_report_failed_writes`` at shutdown, which in a
-        # notebook means at kernel death, i.e. never. This is the one place a
-        # user asking "is caching working?" can actually be told that it isn't.
-        discarded = discarded_writes()
+def _provenance_unknown_args(parts: list[str]) -> list[str]:
+    """The words of a ``%cash_provenance`` line it does not understand."""
+    if parts and parts[0] in ("--all", "--clear"):
+        return parts[1:]
+    if not parts:
+        return []
+    unknown = [p for p in parts[1:] if p not in ("--graph", "--time", "--timeline", "--json")]
+    if parts[0].startswith("-"):
+        unknown.insert(0, parts[0])
+    return unknown
 
-        if mode == "json":
-            print(json.dumps(_stats_json(stats, summary, discarded), indent=2))
-            return
 
-        _print_counts(stats, summary)
-        print()
-        _print_time(stats, summary)
-        _print_discarded(discarded)
-        _print_footer(len(self.tracking_state.variable_lineage))
+def _print_tracked(provenance: ProvenanceTracker) -> None:
+    """``%cash_provenance --all``: every tracked variable and its latest status."""
+    tracked = sorted(provenance.tracked_variables)
+    if not tracked:
+        print("No provenance data recorded yet.")
+        return
+    print(f"Tracked variables ({len(tracked)}):")
+    for var in tracked:
+        latest = provenance.get_latest(var)
+        status_word = BADGE_WORDS.get(latest.status if latest else "", "UNKNOWN")
+        history_count = len(provenance.get_history(var))
+        print(f"  {status_word:<8} {var} ({history_count} records)")
 
-    def _reset_session_stats(self: CashMagics) -> None:
-        """Forget this session's statistics and the baselines behind them."""
-        # Rebuilt from the same definition a fresh session uses, so a new
-        # counter can never be added to the stats and silently survive a
-        # reset.
-        self._session.stats.update(new_session_stats())
-        # The verified-saving baselines are part of the stats, not of the
-        # cache: a reset must drop them too or savings would be credited
-        # against measurements the reset claims to have forgotten.
-        self._session.measured_compute.clear()
-        # Same rule for the decorator baselines: a reset that keeps
-        # them would credit a post-reset hit as "verified" against a compute
-        # the reset claims to have forgotten.
-        self._session.measured_decorator_compute.clear()
-        # On disk too: a reset that kept them would credit a later hit
-        # against a measurement it claims to have forgotten.
-        self._baselines().clear()
 
-    # ------------------------------------------------------------------
-    # Provenance
-    # ------------------------------------------------------------------
+def show_provenance(provenance: ProvenanceTracker, line: str) -> None:
+    """``%cash_provenance <var> [--graph] [--time] [--json] | --all | --clear``."""
+    parts = strip_inline_comment(line).split()
+    # A misspelt flag (``--grpah``) or a stray word must not be dropped
+    # silently, as if the output it asked for simply had nothing to show.
+    unknown = _provenance_unknown_args(parts)
+    if unknown:
+        print(f"[Error] %cash_provenance: unrecognised argument: {' '.join(unknown)!r}")
+        print("   Valid forms: %cash_provenance <var> [--graph] [--time] [--json] | --all | --clear")
+        return
 
-    @line_magic
-    def cash_provenance(self: CashMagics, line: str) -> None:
-        """Show provenance (computation history) for a variable.
+    if not parts or parts[0] == "--all":
+        _print_tracked(provenance)
+        return
 
-        Usage::
+    if parts[0] == "--clear":
+        provenance.clear()
+        print("Provenance data cleared.")
+        return
 
-            %cash_provenance x           - Show how 'x' was computed
-            %cash_provenance x --graph   - Include dependency graph
-            %cash_provenance x --time    - Include a timeline of computations
-            %cash_provenance x --json    - Output as JSON
-            %cash_provenance --all       - List all tracked variables
-            %cash_provenance --clear     - Clear provenance data
-        """
-        parts = strip_inline_comment(line).split()
-        # A misspelt flag (``--grpah``) or a stray word must not be dropped
-        # silently, as if the output it asked for simply had nothing to show.
-        if parts and parts[0] in ("--all", "--clear"):
-            unknown = parts[1:]
-        elif parts:
-            unknown = [p for p in parts[1:] if p not in ("--graph", "--time", "--timeline", "--json")]
-            if parts[0].startswith("-"):
-                unknown.insert(0, parts[0])
-        else:
-            unknown = []
-        if unknown:
-            print(f"[Error] %cash_provenance: unrecognised argument: {' '.join(unknown)!r}")
-            print("   Valid forms: %cash_provenance <var> [--graph] [--time] [--json] | --all | --clear")
-            return
-
-        if not parts or parts[0] == "--all":
-            tracked = sorted(self._session.provenance.tracked_variables)
-            if not tracked:
-                print("No provenance data recorded yet.")
-            else:
-                print(f"Tracked variables ({len(tracked)}):")
-                for var in tracked:
-                    latest = self._session.provenance.get_latest(var)
-                    status_word = BADGE_WORDS.get(latest.status if latest else "", "UNKNOWN")
-                    history_count = len(self._session.provenance.get_history(var))
-                    print(f"  {status_word:<8} {var} ({history_count} records)")
-            return
-
-        if parts[0] == "--clear":
-            self._session.provenance.clear()
-            print("Provenance data cleared.")
-            return
-
-        var_name = parts[0]
-        show_graph = "--graph" in parts
-        show_time = "--time" in parts or "--timeline" in parts
-        as_json = "--json" in parts
-
-        if as_json:
-            print(self._session.provenance.to_json(var_name))
-        else:
-            print(
-                safe_text(
-                    self._session.provenance.format_provenance(
-                        var_name,
-                        show_graph=show_graph,
-                        show_timeline=show_time,
-                    )
-                )
+    var_name = parts[0]
+    if "--json" in parts:
+        print(provenance.to_json(var_name))
+        return
+    print(
+        safe_text(
+            provenance.format_provenance(
+                var_name,
+                show_graph="--graph" in parts,
+                show_timeline="--time" in parts or "--timeline" in parts,
             )
+        )
+    )

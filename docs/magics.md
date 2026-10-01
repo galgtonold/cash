@@ -127,7 +127,7 @@ What the log lines mean is in [Debugging](tutorials/feature-guides/debugging-and
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/inspection.py:InspectionMagicsMixin.cash_stats @ea63b466 -->
+<!-- claim: cash/notebook/ipython/inspection.py:show_stats @762ae128 -->
 
 **Usage:** `%cash_stats [json|reset]`
 
@@ -164,7 +164,7 @@ status = %cash_status dict
 ```
 
 ### `%cash_provenance`
-<!-- claim: cash/notebook/ipython/inspection.py:InspectionMagicsMixin.cash_provenance @6ac4d19b -->
+<!-- claim: cash/notebook/ipython/inspection.py:show_provenance @c46bbe9d -->
 
 **Usage:** `%cash_provenance [NAME|--all|--clear] [--graph] [--time] [--json]`
 

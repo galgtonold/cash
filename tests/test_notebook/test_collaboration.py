@@ -7,9 +7,9 @@ class TestCashStats:
     """Test %cash_stats magic."""
 
     def test_stats_initial_state(self, cash_magics):
-        assert cash_magics._session.stats["cells_executed"] == 0
-        assert cash_magics._session.stats["statements_computed"] == 0
-        assert cash_magics._session.stats["statements_restored"] == 0
+        assert cash_magics.session.stats["cells_executed"] == 0
+        assert cash_magics.session.stats["statements_computed"] == 0
+        assert cash_magics.session.stats["statements_restored"] == 0
 
     def test_stats_after_compute(self, cash_magics, capsys):
         run_cash_cell(cash_magics, "x = 42")
@@ -36,8 +36,8 @@ class TestCashStats:
     def test_stats_reset(self, cash_magics, capsys):
         run_cash_cell(cash_magics, "x = 42")
         cash_magics.cash_stats("reset")
-        assert cash_magics._session.stats["cells_executed"] == 0
-        assert cash_magics._session.stats["statements_computed"] == 0
+        assert cash_magics.session.stats["cells_executed"] == 0
+        assert cash_magics.session.stats["statements_computed"] == 0
 
     def test_stats_display_all_fields(self, cash_magics, capsys):
         cash_magics.cash_stats("")

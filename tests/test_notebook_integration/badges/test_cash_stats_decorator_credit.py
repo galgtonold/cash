@@ -6,7 +6,7 @@ decorator hit made %cash_stats print "cash cost you 27.3s" — the exact inverse
 of cash's value — while `cache_info()` and `explain()` were both correct.
 
 Root cause, established by inspection with a sleep-mocked trainer so the compute
-cost is a known constant: `_update_session_stats` walked the statement-metrics
+cost is a known constant: the session stats walked the statement-metrics
 stream only, so a decorator hit contributed nothing to gross saved. The value
 came from the decorator, so the wrapping statement only did a fast lookup and
 read as cheap COMPUTED work.

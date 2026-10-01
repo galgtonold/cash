@@ -25,7 +25,6 @@ from ...core import Cash
 from ...object_hashing import compute_hash
 from ...tracking import io_watch
 from ...tracking.function_tracker import FunctionTracker
-from .. import compute_baselines
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
@@ -55,7 +54,7 @@ from .cell_executor import (
     RunInstead,
     discarded_writes_notification,
 )
-from .inspection import InspectionMagicsMixin
+from .inspection import show_provenance, show_stats
 from .session import CashSession
 
 __all__ = ["CashMagics"]
@@ -80,7 +79,7 @@ def _is_silent(args: tuple, kwargs: dict) -> bool:
 
 
 @magics_class
-class CashMagics(InspectionMagicsMixin, Magics):
+class CashMagics(Magics):
     def __init__(self, shell: ShellProtocol, cash_instance: Cash) -> None:
         """Initialise CashMagics in three phases (ordering matters):
 
@@ -190,8 +189,11 @@ class CashMagics(InspectionMagicsMixin, Magics):
             "status": None,
         }
 
-        # Session-level concerns (statistics, provenance) grouped in one object
-        self._session = CashSession()
+        # The session statistics, provenance and compute baselines.
+        self.session = CashSession(
+            self._cash_instance,
+            store_floor_s=lambda: self._statement_processor.persistence_policy().store_floor_s,
+        )
 
         # When CashMagics is re-instantiated in a still-running kernel
         # (cash.reset_session(), a second Cash(), or %load_ext after a reset),
@@ -662,6 +664,33 @@ class CashMagics(InspectionMagicsMixin, Magics):
         print(json.dumps(status, default=str, indent=2))
         return status
 
+    @line_magic
+    def cash_stats(self, line: str) -> None:
+        """Display session-wide caching statistics.
+
+        Usage::
+
+            %cash_stats           # Show human-readable stats
+            %cash_stats json      # Return JSON format
+            %cash_stats reset     # Reset session stats
+        """
+        show_stats(self.session, line, len(self.tracking_state.variable_lineage))
+
+    @line_magic
+    def cash_provenance(self, line: str) -> None:
+        """Show provenance (computation history) for a variable.
+
+        Usage::
+
+            %cash_provenance x           - Show how 'x' was computed
+            %cash_provenance x --graph   - Include dependency graph
+            %cash_provenance x --time    - Include a timeline of computations
+            %cash_provenance x --json    - Output as JSON
+            %cash_provenance --all       - List all tracked variables
+            %cash_provenance --clear     - Clear provenance data
+        """
+        show_provenance(self.session.provenance, line)
+
     @staticmethod
     def cell_id_from_parent_metadata(shell: Any) -> str | None:
         """Return cell_id from IPython parent-header metadata, or None.
@@ -1022,10 +1051,12 @@ class CashMagics(InspectionMagicsMixin, Magics):
         # Update last cell metrics for %cash_status
         self._update_last_cell_metrics(all_metrics, hook_total)
 
-        # Update session-wide statistics
-        self._update_session_stats(all_metrics, hook_total)
-
-        self._record_provenance(all_metrics)
+        self.session.record_cell(all_metrics, hook_total)
+        self.session.record_provenance(
+            all_metrics,
+            self.tracking_state.variable_lineage,
+            self.tracking_state.executed_file_deps,
+        )
 
         logger.debug(
             "[TIMING_PROXY] Total %.1fms (badge init %.1fms, upstream check %.1fms, badge progress %.1fms)",
@@ -1114,201 +1145,3 @@ class CashMagics(InspectionMagicsMixin, Magics):
             "upstream_metrics": [m for m in all_metrics if m.get("is_upstream", False)],
             "status": overall_status,
         }
-
-    def _baselines(self):
-        """Measurements from earlier kernels against this cache directory.
-
-        Resolved on use, not in ``__init__``: a notebook's backend is not
-        settled when the magics are constructed (``%cash_on`` may still
-        replace it), and a store bound to "nowhere to persist" then would
-        stay that way for the session -- silently reporting no measured
-        saving, which is the bug this store exists to fix.
-        """
-        store = self._session.baselines
-        if getattr(store, "_path", None) is None:
-            resolved = compute_baselines.store_for_backend(getattr(self._cash_instance, "backend", None))
-            if resolved is not None and getattr(resolved, "_path", None) is not None:
-                self._session.baselines = resolved
-                return resolved
-        return store
-
-    def _update_session_stats(self, all_metrics: list[ProcessResult], cell_total_time: float = 0.0) -> None:
-        """Increment session-wide caching statistics from *all_metrics*.
-
-        ``cell_total_time`` is this cell's full cash-mediated wall time
-        (``hook_total``). Cash's own overhead for the cell is that wall time
-        minus the user compute that would have run anyway (the COMPUTED
-        statements). What remains — cache restores, upstream simulation,
-        hashing, badge machinery — is time cash *added*, so it is accumulated
-        into ``total_overhead`` and later subtracted from the gross
-        ``total_time_saved`` to report an honest NET figure. This is
-        a single float subtraction per cell, no I/O — it must never
-        reintroduce the per-cell fsync that was removed earlier.
-
-        Upstream COMPUTED statements count as user compute, NOT as overhead:
-        they are the user's own notebook code, and the state they rebuild is
-        state the user would have had to rebuild by hand (that is the restart
-        pain cash exists to absorb). Booking them as cash's overhead would make
-        cash understate itself by the size of the user's own ETL on exactly the
-        sessions where it helps most — a mirror-image lie.
-
-        The gross saving is credited from ``saved_time``, which is a *stale*
-        baseline (see ``total_time_saved``). Restores whose baseline this
-        session re-measured are additionally credited to
-        ``total_verified_saved``, which is what ``%cash_stats`` reports as the
-        headline NET — so an unverifiable claim can never print as a win.
-        """
-        stats = self._session.stats
-        measured = self._session.measured_compute
-        baselines = self._baselines()
-        stats["cells_executed"] += 1
-        cell_compute_time = 0.0
-        # The statement store's own "too cheap to cache" floor, so the
-        # cacheable/trivial split below matches the decision the cache actually
-        # made rather than a second opinion invented here.
-        floor = self._statement_processor.persistence_policy().store_floor_s
-        for m in all_metrics:
-            status = m.get("status")
-            if status == CacheStatus.COMPUTED:
-                stats["statements_computed"] += 1
-                # What the USER's code cost: the statement's wall time less
-                # cash's own time inside it -- recording file reads, keying and
-                # hashing the arguments of the calls it routes, storing them
-                # (``cash_tax``, the same measurement ``CallRouting.price``
-                # uses). Counting that as the user's compute cancelled it out
-                # of the overhead below, so a paired run measured 370 s of
-                # slowdown where %cash_stats reported 210 s.
-                exec_time = max(0.0, m.get("execution_time", 0.0) - m.get("cash_tax", 0.0))
-                stats["total_compute_time"] += exec_time
-                cell_compute_time += exec_time
-                code = m.get("code")
-                if code:
-                    measured[code] = exec_time
-                    # Kept on disk too, so tomorrow's kernel can still point at
-                    # a measurement of what this costs.
-                    baselines.record(code, exec_time)
-                # Measured today: a real miss on a statement worth caching.
-                if exec_time >= floor:
-                    stats["statements_cacheable_miss"] += 1
-            elif status == CacheStatus.RESTORED:
-                stats["statements_restored"] += 1
-                saved = m.get("saved_time", 0.0)
-                stats["total_restored_time"] += saved
-                stats["total_time_saved"] += saved
-                # ``saved`` is the cache's stale baseline, so it is NOT trusted
-                # for time — it is used only to answer "was this the
-                # kind of statement caching was for?". A hit is a fact either
-                # way; only the denominator's membership rests on the baseline.
-                if saved >= floor:
-                    stats["statements_cacheable_hit"] += 1
-                # Credit a VERIFIED saving only where this session computed the
-                # same statement itself and so knows today's cost. Take the
-                # min: if the cache's baseline is the smaller of the two it is
-                # the one we can defend, and if today's measurement is smaller
-                # the cache's baseline was stale-high and must not be credited.
-                today = measured.get(m.get("code"))
-                if today is not None:
-                    stats["total_verified_saved"] += min(saved, today)
-                else:
-                    # Nothing recomputed it here -- the usual case right after
-                    # a restart. An earlier run on this machine measured it,
-                    # and the least it ever cost is what it is credited.
-                    before = baselines.get(m.get("code") or "")
-                    if before is not None:
-                        stats["total_measured_saved"] += min(saved, before)
-            elif status == CacheStatus.SKIPPED:
-                stats["statements_skipped"] += 1
-            # A ``@cash.cache`` HIT inside this statement saved real compute that
-            # is invisible to the counting above: the value came from the
-            # decorator, so the statement itself only did a fast lookup and reads
-            # as cheap COMPUTED work. Credit it here, from the same
-            # drained call log the badge uses. No double-count risk: a decorator
-            # is only invoked when the statement EXECUTES, so a RESTORED statement
-            # (whose ``saved_time`` already covers the whole compute) carries no
-            # decorator_calls to add.
-            self._credit_decorator_calls(m.get("decorator_calls"), stats, floor)
-        # Overhead = cell wall time minus the user compute that ran this cell.
-        # Floor at 0: the wall time always covers the compute it contains, but
-        # clamp defensively against clock skew / partial timing.
-        stats["total_overhead"] += max(0.0, cell_total_time - cell_compute_time)
-        # A write after a cell that measured something worth keeping, since a
-        # Restart & Run All kills the kernel and no exit hook runs; cheap
-        # measurements are written every few seconds, not after every cell.
-        baselines.flush_soon()
-
-    def _credit_decorator_calls(
-        self,
-        decorator_calls: "list[dict[str, Any]] | None",
-        stats: dict[str, Any],
-        floor: float,
-    ) -> None:
-        """Fold ``@cash.cache`` call metrics into the session totals.
-
-        Without this, a session whose expensive work sits behind the decorator —
-        the docs' own recommendation for training — reported the exact inverse of
-        cash's value: ``%cash_stats`` counted only statement restores, so a warm
-        pass that avoided a 30s fit via a decorator hit read as a net *cost*.
-
-        A **miss** records this session's measured compute for that key, so a
-        later hit can be credited as VERIFIED rather than merely gross. It is NOT
-        added to compute totals: the enclosing statement's ``execution_time``
-        already contains it, and adding it here would double-count.
-
-        A **hit** credits ``time_saved`` to gross, mirrors CacheStatus.RESTORED:
-        gross always, verified only under the min-rule when this session
-        measured the same key's compute, and the cacheable-hit denominator when
-        the saving cleared the floor.
-        """
-        if not decorator_calls:
-            return
-        measured = self._session.measured_decorator_compute
-        baselines = self._baselines()
-        for call in decorator_calls:
-            if call.get("ran_plain"):
-                continue  # run without the cache: neither a hit nor a measured miss
-            key = call.get("cache_key")
-            if call.get("cache_hit"):
-                saved = call.get("time_saved", 0.0) or 0.0
-                stats["total_time_saved"] += saved
-                if saved >= floor:
-                    stats["statements_cacheable_hit"] += 1
-                today = measured.get(key)
-                if today is not None:
-                    stats["total_verified_saved"] += min(saved, today)
-                else:
-                    before = baselines.get(f"call:{key}") if key is not None else None
-                    if before is not None:
-                        stats["total_measured_saved"] += min(saved, before)
-            else:
-                # A miss's execution_time IS the measured compute for this key.
-                if key is not None:
-                    measured[key] = call.get("execution_time", 0.0) or 0.0
-                    baselines.record(f"call:{key}", call.get("execution_time", 0.0) or 0.0)
-                if (call.get("execution_time", 0.0) or 0.0) >= floor:
-                    stats["statements_cacheable_miss"] += 1
-
-    def _record_provenance(self, all_metrics: list[ProcessResult]) -> None:
-        """Record a provenance entry per output variable of each statement in *all_metrics*."""
-        for m in all_metrics:
-            code = m.get("code", "")
-            status = m.get("status", "computed")
-            duration_ms = m.get("execution_time", 0.0) * 1000
-            # ``rich_outputs`` holds IPython rich-display objects, NOT variable
-            # names — never source variable names from it.
-            outputs = m.get("restored_vars", []) or m.get("evaluated_vars", [])
-            inputs_list = list(m.get("inputs", []))
-            # Outputs may contain rich-display dicts; provenance only cares
-            # about string variable names.
-            var_names = [o for o in (outputs or []) if isinstance(o, str)]
-
-            provenance_status = str(status).lower() if status else "computed"
-            for out_var in var_names:
-                self._session.provenance.record(
-                    variable=out_var,
-                    code=code,
-                    inputs=inputs_list,
-                    status=provenance_status,
-                    duration_ms=duration_ms,
-                    lineage_hash=self.tracking_state.variable_lineage.get(out_var, ""),
-                    file_deps=list(self.tracking_state.executed_file_deps.get(out_var, [])),
-                )
