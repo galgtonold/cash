@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from ..config import CashConfig
     from .arg_hashing import ArgHasher
     from .frozen import FrozenResults
+    from .global_reads import GlobalReads
     from .globals_fold import GlobalsFold
     from .registry import FunctionRegistry
     from .reporting import Notices
@@ -251,6 +252,7 @@ class PurityChecks:
         args: ArgHasher,
         frozen: FrozenResults,
         globals_fold: GlobalsFold,
+        reads: GlobalReads,
         mutations: LearnedMutations,
         notices: Notices,
     ) -> None:
@@ -259,6 +261,7 @@ class PurityChecks:
         self._args = args
         self._frozen = frozen
         self._globals = globals_fold
+        self._reads = reads
         self._mutations = mutations
         self._notices = notices
         # Functions the STATIC pass already reported on. The runtime effect
@@ -774,7 +777,7 @@ class PurityChecks:
             # common settings pattern there is.
             return True
         try:
-            if name not in self._globals.read_global_data_names(reader):
+            if name not in self._reads.read_global_data_names(reader):
                 return False
         except Exception:  # noqa: BLE001 - user source; a heuristic must not break a call
             return False

@@ -1,6 +1,6 @@
 """A global OR closure capture passed to a call must still invalidate.
 
-`GlobalsFold.read_global_data_names` folds module globals a function reads, so reassigning
+`GlobalReads.read_global_data_names` folds module globals a function reads, so reassigning
 one invalidates. But it subtracted `unsafe_uses_of`, which disqualified any
 name **passed as a bare argument to any call** — the callee might mutate it, and
 folding a mutated global would key the entry on the function's own output and

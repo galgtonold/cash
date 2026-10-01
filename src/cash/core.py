@@ -58,6 +58,7 @@ from .decorator.explain import (
 from .decorator.file_deps import FileDeps
 from .decorator.frozen import FrozenResults
 from .decorator.function_identity import OwnSourcePins, func_key, hash_callable_source
+from .decorator.global_reads import GlobalReads
 from .decorator.globals_fold import GlobalsFold
 from .decorator.method_deps import MethodClassDeps
 from .decorator.purity_checks import LearnedMutations, PurityChecks
@@ -376,8 +377,16 @@ class Cash:
             declared_dep_resolver=self._registry.resolve_declared_dep_hash,
             reached_callee=self._registry.reached_callee,
         )
+        self._reads = GlobalReads()
         self._globals = GlobalsFold(
-            self._args, self._code, self._helpers, self._registry, self._state_hasher, self._mutations, self._notices
+            self._args,
+            self._reads,
+            self._code,
+            self._helpers,
+            self._registry,
+            self._state_hasher,
+            self._mutations,
+            self._notices,
         )
         self._closures = ClosureFold(
             self._args, self._captures, self._helpers, self._globals, self._mutations, self._notices
@@ -386,7 +395,14 @@ class Cash:
         self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
         self._files = FileDeps(self._registry, self._notices)
         self._purity = PurityChecks(
-            self.config, self._registry, self._args, self._frozen, self._globals, self._mutations, self._notices
+            self.config,
+            self._registry,
+            self._args,
+            self._frozen,
+            self._globals,
+            self._reads,
+            self._mutations,
+            self._notices,
         )
         self._keys = KeyBuilder(
             self._registry,

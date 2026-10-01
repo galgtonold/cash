@@ -348,7 +348,7 @@ class CaptureAnalysis:
             )
             suspected = unsafe_uses_of(tree, freevars) - result
             provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func, tree))
-            # Only on waived lines: as for globals (`GlobalsFold.read_global_data_names`).
+            # Only on waived lines: as for globals (`GlobalReads.read_global_data_names`).
             result = result | (suspected - provisional)
         self._use_cache[code] = (result, provisional)
         return result
