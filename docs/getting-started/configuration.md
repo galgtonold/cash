@@ -236,7 +236,7 @@ from cash import Cash
 app = Cash(config_path="./my_special_config.toml")
 ```
 
-<!-- claim: cash/config/resolve.py:_resolve_config @1bb37f57 -->
+<!-- claim: cash/config/resolve.py:_layers @e199f8bf, cash/config/resolve.py:_merge_layers @b261ee82 -->
 The named file ranks above the project and user files and below environment
 variables and code. That lets an installed package ship its own settings: put
 a TOML file inside the package and pass
@@ -244,7 +244,7 @@ a TOML file inside the package and pass
 `[cash]` or `[tool.cash]`. A relative `cache_dir` in it is relative to the
 file, and `~` is your home directory.
 
-<!-- claim: cash/config/resolve.py:_resolve_config @1bb37f57 -->
+<!-- claim: cash/config/resolve.py:_resolve_config @75ccfd52, cash/config/resolve.py:_warn_named_file_missing @fa72ccc3 -->
 A missing file warns [`CONFIG-FILE-MISSING`](../warnings.md#config-file-missing).
 `cash info --config path/to/cash.toml` shows what a file resolves to.
 

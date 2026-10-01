@@ -166,30 +166,53 @@ def _resolve_config(
     Returns:
         The merged `CashConfig`.
     """
-    sources: list[str] = []
-    #: setting -> the layer that set it last (the one that won).
-    origins: dict[str, str] = {}
     #: every config file looked for, and what was in it.
     files: list[tuple[str, str, str]] = []
-
-    def file_layer(layer: str, path: Any) -> dict[str, Any]:
-        data, found = load_toml_layer(Path(path))
-        files.append((layer, str(path), found))
-        return _validated_layer(data, str(path), strict=False, unknown_keys=found == TOML_SECTION)
-
     if config_path is not None and not Path(config_path).exists():
-        # Named in code, so it was meant to exist: a tool that forgot to ship
-        # its config file would otherwise run on defaults without a word.
-        config_notice(
-            "CONFIG-FILE-MISSING",
-            f"Cash(config_path=...) names {config_path}, a file that does not "
-            f"exist, so none of its settings apply: cash is running on the "
-            f"other layers and its defaults.",
-            "check the path -- for a packaged tool, that the file is included "
-            "in the package (package data) and located relative to the module "
-            "(Path(__file__).parent / 'cash.toml'), not the working directory.",
-        )
+        _warn_named_file_missing(config_path)
+    layers = _layers(config_path, user_config_path, project_config_path, overrides, anchor, files)
+    merged, sources, origins = _merge_layers(layers, anchor)
+    cfg = _build_config(merged, source=",".join(sources) if sources else "defaults")
+    cfg._origins = origins
+    cfg._files = files
+    return cfg
 
+
+#: One configuration layer: (source label, settings, where each setting came
+#: from -- None for the environment, which names each variable -- and what a
+#: relative path in it is relative to).
+_Layer = tuple[str, dict[str, Any], Any, Any]
+
+
+def _warn_named_file_missing(config_path: str | Path) -> None:
+    """Named in code, so it was meant to exist: a tool that forgot to ship
+    its config file would otherwise run on defaults without a word."""
+    config_notice(
+        "CONFIG-FILE-MISSING",
+        f"Cash(config_path=...) names {config_path}, a file that does not "
+        f"exist, so none of its settings apply: cash is running on the "
+        f"other layers and its defaults.",
+        "check the path -- for a packaged tool, that the file is included "
+        "in the package (package data) and located relative to the module "
+        "(Path(__file__).parent / 'cash.toml'), not the working directory.",
+    )
+
+
+def _layers(
+    config_path: str | Path | None,
+    user_config_path: Any,
+    project_config_path: Any,
+    overrides: dict[str, Any] | None,
+    anchor: Path | None,
+    files: list[tuple[str, str, str]],
+) -> list[_Layer]:
+    """Every layer `_resolve_config` merges, lowest priority first.
+
+    A file named in code outranks the pyproject.toml found by walking up, so a
+    package can ship its own settings; the environment and Cash(...)
+    arguments outrank both, and their paths are relative to the cwd. Each
+    config file looked for is appended to *files*.
+    """
     user_path = default_user_config_path() if user_config_path is _USE_DEFAULT_PATH else user_config_path
     project_path = (
         default_project_config_path(anchor) if project_config_path is _USE_DEFAULT_PATH else project_config_path
@@ -197,25 +220,34 @@ def _resolve_config(
     env_data = load_env_config()
     kwarg_data = _validated_layer(overrides, "Cash(...) arguments", strict=True) if overrides else {}
 
-    # The layers, lowest priority first: (source label, settings, where each
-    # setting came from, what a relative cache_dir in it is relative to). A
-    # file named in code outranks the pyproject.toml found by walking up, so a
-    # package can ship its own settings; the environment and Cash(...)
-    # arguments outrank both, and their paths are relative to the cwd.
-    layers: list[tuple[str, dict[str, Any], Any, Path | object]] = []
+    layers: list[_Layer] = []
     for layer, path, label in (
         ("user", user_path, "user"),
         ("project", project_path, "project"),
         ("config_path", config_path, "file"),
     ):
         if path is not None:
-            layers.append((f"{label}:{path}", file_layer(layer, path), str(path), Path(path).parent))
+            data, found = load_toml_layer(Path(path))
+            files.append((layer, str(path), found))
+            data = _validated_layer(data, str(path), strict=False, unknown_keys=found == TOML_SECTION)
+            layers.append((f"{label}:{path}", data, str(path), Path(path).parent))
     # Relative to the cwd -- or, for a given anchor, to it: the directory a
     # process anchored there (a notebook's kernel) runs in.
     here: Path | object = _CALLER_RELATIVE if anchor is None else Path(anchor)
     layers.append(("env", env_data, None, here))
     layers.append(("kwargs", kwarg_data, "Cash(...)", here))
+    return layers
 
+
+def _merge_layers(layers: list[_Layer], anchor: Path | None) -> tuple[dict[str, Any], list[str], dict[str, str]]:
+    """The defaults with each of *layers* applied in turn, ``cache_dir`` anchored.
+
+    Returns the merged settings, the label of each layer that set something,
+    and for each setting the layer that won.
+    """
+    sources: list[str] = []
+    #: setting -> the layer that set it last (the one that won).
+    origins: dict[str, str] = {}
     merged: dict[str, Any] = {
         f.name: getattr(CashConfig(), f.name) for f in fields(CashConfig) if not f.name.startswith("_")
     }
@@ -251,12 +283,7 @@ def _resolve_config(
             sources.append("entry-point")
             origins["cache_dir"] = "installed tool, run outside any project"
     merged["cache_dir"] = _anchor_cache_dir(merged.get("cache_dir"), cache_dir_origin)
-
-    # Materialise the dict into a CashConfig.
-    cfg = _build_config(merged, source=",".join(sources) if sources else "defaults")
-    cfg._origins = origins
-    cfg._files = files
-    return cfg
+    return merged, sources, origins
 
 
 def _validated_layer(data: dict[str, Any], label: str, *, strict: bool, unknown_keys: bool = False) -> dict[str, Any]:

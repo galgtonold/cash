@@ -504,7 +504,7 @@ A setting cash found but could not act on. Every code here starts `CONFIG-`.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config/resolve.py:_resolve_config @1bb37f57 -->
+<!-- claim: cash/config/resolve.py:_resolve_config @75ccfd52, cash/config/resolve.py:_warn_named_file_missing @fa72ccc3 -->
 **What happened.** Your code passed `Cash(config_path=...)` naming a file that
 does not exist. cash used the other configuration layers.
 
