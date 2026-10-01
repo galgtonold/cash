@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 from cash.analysis.ast_util import parse_cached
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import NotebookSimulator
-from cash.notebook.upstream.virtual_lineage import VirtualLineage
+from cash.notebook.upstream.cache_probe import CacheProbe
 
 
 def _make_simulator() -> NotebookSimulator:
@@ -72,18 +72,18 @@ class TestStaticHelpers:
     """
 
     def test_validate_file_freshness_empty(self):
-        assert VirtualLineage._validate_file_freshness({}) is True
+        assert CacheProbe.files_fresh({}) is True
 
     def test_validate_file_freshness_missing_is_stale(self, tmp_path):
         missing = str(tmp_path / "absent.csv")
-        assert VirtualLineage._validate_file_freshness({missing: 0.0}) is False
+        assert CacheProbe.files_fresh({missing: 0.0}) is False
 
     def test_stat_file_deps_empty(self):
-        assert VirtualLineage._stat_file_deps({}) == {}
+        assert CacheProbe.stat_file_deps({}) == {}
 
     def test_stat_file_deps_excludes_missing(self, tmp_path):
         missing = str(tmp_path / "absent.csv")
-        result = VirtualLineage._stat_file_deps({missing: 0.0})
+        result = CacheProbe.stat_file_deps({missing: 0.0})
         assert missing not in result
 
 

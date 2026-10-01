@@ -16,7 +16,7 @@ import pytest
 
 from cash.notebook import run_memo
 from cash.notebook.run_memo import forget_file_state_this_run
-from cash.notebook.upstream.virtual_lineage import VirtualLineage
+from cash.notebook.upstream.cache_probe import CacheProbe
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 from tests._cell_driver import run_cash_cell
@@ -71,7 +71,7 @@ def _edit_keeping_size_and_time(path):
 def test_entries_sharing_files_check_them_once_per_run(tmp_path, checks):
     deps = _inputs(tmp_path)
     for key in ("stmt:a", "stmt:b", "stmt:c"):  # three entries, one set of files
-        assert VirtualLineage._validate_file_freshness(deps, memo_key=key)
+        assert CacheProbe.files_fresh(deps, memo_key=key)
     assert len(checks) == N, f"{len(checks)} checks of {N} files for three entries"
 
 
@@ -82,32 +82,32 @@ def test_entries_sharing_files_check_them_once_per_run(tmp_path, checks):
 )
 def test_the_next_run_looks_again(tmp_path, checks):
     deps = _inputs(tmp_path)
-    assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
+    assert CacheProbe.files_fresh(deps, memo_key="stmt:a")
     _edit_keeping_size_and_time(next(iter(deps)))
     file_dep_snapshot.end_file_state_epoch()
     file_dep_snapshot.begin_file_state_epoch()
-    assert not VirtualLineage._validate_file_freshness(deps, memo_key="stmt:b")
+    assert not CacheProbe.files_fresh(deps, memo_key="stmt:b")
 
 
 def test_a_write_in_the_run_is_seen_by_what_is_checked_after_it(tmp_path, checks):
     """An ordinary write -- it moves the size or the time. (One that keeps both
     is the documented same-stat limitation, bounded by the cell run.)"""
     deps = _inputs(tmp_path)
-    assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
+    assert CacheProbe.files_fresh(deps, memo_key="stmt:a")
     with open(next(iter(deps)), "a", encoding="utf-8") as fh:
         fh.write("appended\n")
     forget_file_state_this_run()  # a file-writing statement ran
-    assert not VirtualLineage._validate_file_freshness(deps, memo_key="stmt:b")
+    assert not CacheProbe.files_fresh(deps, memo_key="stmt:b")
 
 
 def test_without_a_write_the_answer_holds_for_the_run(tmp_path, checks):
     """No file-writing statement in between: a later entry in the same run
     shares the answer -- the trust whole entries already had in their run."""
     deps = _inputs(tmp_path)
-    assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:a")
+    assert CacheProbe.files_fresh(deps, memo_key="stmt:a")
     with open(next(iter(deps)), "a", encoding="utf-8") as fh:
         fh.write("appended\n")
-    assert VirtualLineage._validate_file_freshness(deps, memo_key="stmt:b")
+    assert CacheProbe.files_fresh(deps, memo_key="stmt:b")
 
 
 def test_mtimes_are_read_once_per_run(tmp_path, monkeypatch):
@@ -115,8 +115,8 @@ def test_mtimes_are_read_once_per_run(tmp_path, monkeypatch):
     looked: list[str] = []
     real = os.path.getmtime
     monkeypatch.setattr(os.path, "getmtime", lambda p: looked.append(p) or real(p))
-    first = VirtualLineage._stat_file_deps(deps)
-    second = VirtualLineage._stat_file_deps(deps)
+    first = CacheProbe.stat_file_deps(deps)
+    second = CacheProbe.stat_file_deps(deps)
     assert first == second and len(first) == N
     assert len(looked) <= N, "the mtimes were read again within one run"
 
@@ -124,8 +124,8 @@ def test_mtimes_are_read_once_per_run(tmp_path, monkeypatch):
 def test_outside_a_run_nothing_is_kept(tmp_path, checks):
     file_dep_snapshot.end_file_state_epoch()
     deps = _inputs(tmp_path)
-    assert VirtualLineage._validate_file_freshness(deps)
-    assert VirtualLineage._validate_file_freshness(deps)
+    assert CacheProbe.files_fresh(deps)
+    assert CacheProbe.files_fresh(deps)
     assert len(checks) == 2 * N
     file_dep_snapshot.begin_file_state_epoch()
 

@@ -69,6 +69,6 @@ def test_runtime_and_simulation_pick_the_same_mutated_vars(
     assert runtime, "the runtime never collected the loop's mutations"
 
     simulation = NotebookSimulator(mock_shell, cash_instance, cash_magics.tracking_state).virtual_lineage
-    simulated = simulation._collect_loop_mutation_info(node, set(), set())
+    simulated = simulation.controls.collect_mutations(node, set(), set())
 
     assert runtime[-1] == simulated == expected

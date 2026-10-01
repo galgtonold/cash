@@ -30,11 +30,18 @@ from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
 from ..tracking_state import TrackingState
-from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult
+from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
+from .cache_probe import CacheProbe
+from .cache_restore import CacheRestorer
+from .control_simulation import ControlSimulation
+from .loop_rules import LoopRules
 from .mismatch_classifier import MismatchClassifier
 from .read_scope import ReadScope
 from .reexecution_planner import ReexecutionPlanner
+from .simulated_callables import SimulatedCallables
 from .stale_values import StaleValueGuard
+from .statement_lineage import StatementLineage
+from .unsaved_edits import UnsavedEdits
 from .virtual_lineage import VirtualLineage, loop_derived_vars
 
 __all__ = ["NotebookSimulator"]
@@ -65,6 +72,9 @@ class NotebookSimulator:
         self.shell = shell
         self.cash_instance = cash_instance
         self.compute_hash_fn = compute_hash_fn
+        #: The runtime's tracker, so the simulation hashes called functions
+        #: and modules exactly as the statement processor does.
+        self.function_tracker = function_tracker
 
         #: The checker's, shared with the statement processor.
         self.tracking_state = tracking_state
@@ -73,34 +83,55 @@ class NotebookSimulator:
         #: The previous simulation's per-cell snapshots, where the next one starts.
         self.cache = SimulationCache()
 
-        # Phase-1 simulator. Shares ``shell``/``cash_instance``/tracking-state
-        # references with us so writes are visible on both sides.
+        #: Metadata and file-freshness reads from the backend.
+        self.probe = CacheProbe(cash_instance)
+        #: Defs and imported callables the kernel does not hold yet.
+        self.callables = SimulatedCallables(shell, tracking_state, self.probe, function_tracker)
+        #: The key and output lineages of one statement.
+        self.statements = StatementLineage(
+            shell, tracking_state, self.probe, self.callables, compute_hash_fn, function_tracker
+        )
+        #: Restores from the cache, keyed as simulated.
+        self.restorer = CacheRestorer(shell, tracking_state, self.probe, self.statements)
+        #: Loop and accumulator rules.
+        self.loop_rules = LoopRules(shell, tracking_state)
+        #: Unsaved edits: which are kept, which taint a name.
+        self.unsaved_edits = UnsavedEdits(tracking_state, self.statements)
+
+        # Phase 1: forward simulation.
         self.virtual_lineage = VirtualLineage(
-            shell=shell,
-            cash_instance=cash_instance,
-            tracking_state=tracking_state,
-            compute_hash_fn=compute_hash_fn,
-            function_tracker=function_tracker,
+            shell,
+            tracking_state,
+            statements=self.statements,
+            controls=ControlSimulation(tracking_state, self.probe, self.statements),
+            callables=self.callables,
             cache=self.cache,
         )
-
-        # Phase-2 classifier. Shares tracking-state references and routes
-        # back to ``virtual_lineage`` for cache-probing helpers.
+        # Phase 2: which names are broken.
         self.classifier = MismatchClassifier(
-            virtual_lineage=self.virtual_lineage,
-            tracking_state=tracking_state,
+            shell,
+            tracking_state,
+            simulation=self.virtual_lineage,
+            restorer=self.restorer,
+            loop_rules=self.loop_rules,
+            unsaved_edits=self.unsaved_edits,
+            callables=self.callables,
         )
-
-        # Phase-3 planner. Routes into VL + Classifier for helpers that
-        # still live on those phases.
+        # Phase 3: what to re-run.
         self.planner = ReexecutionPlanner(
-            virtual_lineage=self.virtual_lineage,
+            shell,
+            tracking_state,
             classifier=self.classifier,
+            restorer=self.restorer,
+            loop_rules=self.loop_rules,
+            unsaved_edits=self.unsaved_edits,
+            callables=self.callables,
+            probe=self.probe,
         )
         #: Inputs stale in memory though their lineage matches.
-        self.stale_values = StaleValueGuard(shell, tracking_state, self.virtual_lineage, compute_hash_fn)
+        self.stale_values = StaleValueGuard(shell, tracking_state, self.unsaved_edits, compute_hash_fn)
         #: The files the checked cell depends on.
-        self.read_scope = ReadScope(shell, tracking_state, self.virtual_lineage)
+        self.read_scope = ReadScope(shell, tracking_state, self.probe)
 
     def reset_caches(self) -> None:
         """Forget the previous simulation.
@@ -108,7 +139,8 @@ class NotebookSimulator:
         Called only by ``%cash_on``, so it also arms the one adoption of
         untracked names -- see ``_adopt_untracked_names``.
         """
-        self.virtual_lineage.reset_caches()
+        self.cache.reset()
+        self.probe.reset()
         self._adopt_untracked_pending = True
 
     def _track_modules_bound_before_cash_on(self) -> None:
@@ -123,7 +155,7 @@ class NotebookSimulator:
         Done before pass 1, so this very simulation already
         keys the module's readers on its source.
         """
-        ft = self.virtual_lineage.function_tracker
+        ft = self.function_tracker
         user_ns = self.shell.user_ns
         if ft is None or not user_ns:
             return
@@ -185,7 +217,7 @@ class NotebookSimulator:
         if not user_ns:
             return
         runtime = self.tracking_state.variable_lineage
-        imported = self.virtual_lineage.propagated_imports
+        imported = self.statements.propagated_imports
         binder: dict[str, str] = {}
         for entry in simulation_trace or ():
             for out in entry.outputs or ():
@@ -238,7 +270,7 @@ class NotebookSimulator:
         """Restore *stmt_code*'s outputs from the cache entry its simulated
         inputs key; the names restored (none when the entry is missing, stale
         or for other lineages)."""
-        restored, _restore_time, _saved_time = self.virtual_lineage.restorer.try_virtual_restore(
+        restored, _restore_time, _saved_time = self.restorer.try_virtual_restore(
             stmt_code, outputs, inputs, input_hashes, virtual_modules, expected_lineages
         )
         return restored
@@ -370,7 +402,7 @@ class NotebookSimulator:
             # A current-cell statement that is a cache hit restores what it
             # reads as well as what it writes: a broken ``df`` that the cell's
             # first ``df[...] = f(df)`` restores needs nothing upstream.
-            self.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
+            self.restorer.eliminate_broken_vars_via_current_cell_probe(
                 broken_vars,
                 notebook_cells,
                 current_cell_idx,
@@ -529,7 +561,7 @@ class NotebookSimulator:
                             p
                             for i in run
                             for v in (trace[i].inputs or ())
-                            if (p := planner.latest_producer(trace, v, before=i)) is not None
+                            if (p := latest_producer(trace, v, before=i)) is not None
                         }
                     )
                     run = planner.complete_later_producers(run, trace)
@@ -659,7 +691,7 @@ class NotebookSimulator:
         # such accumulators so they follow the baseline lineage-mismatch path
         # (which re-executes correctly); a constant-init accumulator keeps the
         # new trust so one-shot iterables are not re-drained.
-        externally_tainted = self.virtual_lineage.loop_rules.loop_accumulators_with_external_init(
+        externally_tainted = self.loop_rules.loop_accumulators_with_external_init(
             sim.vars_mutated_by_loops, sim.trace, sim.loop_target_vars
         )
         if externally_tainted:
@@ -673,7 +705,7 @@ class NotebookSimulator:
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.
-        changed_loops = self.virtual_lineage.loop_rules.loops_reading_changed_data(
+        changed_loops = self.loop_rules.loops_reading_changed_data(
             sim.vars_mutated_by_loops,
             sim.trace,
             sim.loop_target_vars,

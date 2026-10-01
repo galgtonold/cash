@@ -16,12 +16,10 @@ from dataclasses import dataclass, field
 
 from cash.control_markers import strip_markers
 
-from ...analysis.cacheability import analyze_statement
-from ...analysis.cacheability_decision import is_lineage_exempt, receiver_is_identity_coupled
+from ...analysis.cacheability_decision import is_lineage_exempt
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.namespace_effects import is_estimator
-from ...lineage_tag import own_tag
 from ...value_types import BUILTIN_NAMES
+from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
@@ -32,6 +30,11 @@ from ._types import (
     SimulationResult,
     normalize_stmt,
 )
+from .cache_restore import CacheRestorer
+from .library_rules import self_call_resets_lineage
+from .loop_rules import LoopRules
+from .simulated_callables import SimulatedCallables
+from .unsaved_edits import UnsavedEdits
 from .virtual_lineage import VirtualLineage
 
 __all__ = ["MismatchClassifier"]
@@ -58,6 +61,29 @@ def import_only(stmt_code: str) -> bool:
 
 
 @dataclass
+class _Mismatch:
+    """One variable whose live lineage differs from the simulated one."""
+
+    var_name: str
+    actual_lineage: str
+    final_virtual_hash: str
+    sim: SimulationResult
+    check: CellCheck
+    broken_vars: set[str]
+
+    @property
+    def required(self) -> bool:
+        """The checked cell reads it."""
+        return bool(self.check.required_inputs) and self.var_name in self.check.required_inputs
+
+    @property
+    def cell_output(self) -> bool:
+        """The checked cell writes it."""
+        outputs = self.check.current_cell_outputs
+        return bool(outputs) and self.var_name in outputs
+
+
+@dataclass
 class _BackwardScan:
     """Progress of one backward scan over the trace."""
 
@@ -74,24 +100,29 @@ class _BackwardScan:
 class MismatchClassifier:
     """Phase 2 of NotebookSimulator: classify broken / tainted variables.
 
-    Restores through, and asks trace questions of, the :class:`VirtualLineage`
-    it is given. A lineage reset goes to ``TrackingState`` at once, so the
-    names classified after it see it.
+    Re-simulates a cell through the :class:`VirtualLineage` it is given and
+    restores through the :class:`CacheRestorer`. A lineage reset goes to
+    ``TrackingState`` at once, so the names classified after it see it.
     """
 
     def __init__(
         self,
-        virtual_lineage: VirtualLineage,
+        shell: ShellProtocol,
         tracking_state: TrackingState,
+        *,
+        simulation: VirtualLineage,
+        restorer: CacheRestorer,
+        loop_rules: LoopRules,
+        unsaved_edits: UnsavedEdits,
+        callables: SimulatedCallables,
     ) -> None:
-        self.virtual_lineage = virtual_lineage
+        self.shell = shell
         self.tracking_state = tracking_state
-
-    # --- shell/cash convenience accessors (read-through to VirtualLineage) ---
-
-    @property
-    def shell(self):
-        return self.virtual_lineage.shell
+        self.simulation = simulation
+        self.restorer = restorer
+        self.loop_rules = loop_rules
+        self.unsaved_edits = unsaved_edits
+        self.callables = callables
 
     def _check_loop_var_inputs_changed(
         self,
@@ -252,14 +283,12 @@ class MismatchClassifier:
         if var_name not in self.tracking_state.executed_cell_codes:
             return False
         mem_code = self.tracking_state.executed_cell_codes[var_name]
-        if not self.virtual_lineage.unsaved_edits.is_valid_extension(
+        if not self.unsaved_edits.is_valid_extension(
             mem_code, actual_lineage, sim.virtual_lineage, required_dependency=var_name
         ):
             return False
         if sim.upstream_has_modifications:
-            code_still_in_notebook = self.virtual_lineage.unsaved_edits.code_exists_in_notebook(
-                mem_code, notebook_cells
-            )
+            code_still_in_notebook = self.unsaved_edits.code_exists_in_notebook(mem_code, notebook_cells)
             if code_still_in_notebook:
                 logger.debug("[UPSTREAM_DEBUG]   -> Valid extension (code still exists in notebook), keeping")
                 return True
@@ -422,25 +451,6 @@ class MismatchClassifier:
 
         self._handle_lineage_mismatch(var_name, actual_lineage, final_virtual_hash, sim, check, result)
 
-    def _is_saved_figure(self, var_name: str) -> bool:
-        """Whether *var_name* holds a live figure whose last change was a bare
-        ``var_name.savefig(...)``."""
-        try:
-            if not receiver_is_identity_coupled(self.shell.user_ns.get(var_name)):
-                return False
-            body = ast.parse((self.tracking_state.executed_cell_codes.get(var_name) or "").strip()).body
-        except (SyntaxError, ValueError, TypeError, AttributeError):
-            return False
-        if len(body) != 1 or not isinstance(body[0], ast.Expr) or not isinstance(body[0].value, ast.Call):
-            return False
-        func = body[0].value.func
-        return (
-            isinstance(func, ast.Attribute)
-            and func.attr == "savefig"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == var_name
-        )
-
     def _handle_mismatch_prereqs(
         self,
         var_name: str,
@@ -450,159 +460,139 @@ class MismatchClassifier:
         check: CellCheck,
         broken_vars: set[str],
     ) -> bool:
-        """Check early-exit conditions for a lineage mismatch.
+        """Settle a lineage mismatch by the first of the rules below that applies.
 
         Returns True if the caller should stop processing this variable
         (it was already handled — marked broken, kept, or lineage reset).
         """
-        required_inputs = check.required_inputs
-        current_cell_outputs = check.current_cell_outputs
-        upstream_has_modifications = sim.upstream_has_modifications
-        # a bare ``est.fit(X, y)`` receiver has a SELF-REFERENTIAL
-        # key. cash adds it to the statement's OUTPUTS (so the fit bumps its
-        # lineage) while it is also an INPUT (its pre-fit lineage pins the key).
-        # On a warm isolated re-run the bumped lineage is "ahead" of the virtual
-        # (constructor) lineage exactly like the downstream-advancement case, but
-        # the receiver has no Store target so it is NOT in ``current_cell_outputs``
-        # -> without this branch it hits the "read-only input: reject" path below,
-        # whose reset-to-L0 is an incidental side effect of a full upstream
-        # re-derivation. That side channel DESYNCS for a pandas / sampled-file input, so
-        # the fit perpetually MISSES and re-serialises the model every run. Reset
-        # the receiver's lineage to the virtual (simulated-constructor) lineage:
-        # CHEAP and deterministic, so the key is stable across warm re-runs (HIT),
-        # yet a constructor EDIT changes the virtual lineage and still forces a
-        # re-fit. Gated on ``not upstream_has_modifications`` so a real upstream /
-        # constructor edit falls through to the value-refreshing re-derivation
-        # (a lineage-only reset there would leave the STALE estimator object in
-        # ``user_ns`` and serve a wrong result). Fit-only: ``partial_fit`` is
-        # cumulative, so a lineage-only reset would double-count on a miss -- it
-        # keeps the value-safe path.
-        if (
-            required_inputs
-            and var_name in required_inputs
-            and not upstream_has_modifications
-            and self._is_estimator_fit_selfref(var_name)
+        mismatch = _Mismatch(var_name, actual_lineage, final_virtual_hash, sim, check, broken_vars)
+        return any(
+            rule(mismatch)
+            for rule in (
+                self._own_call_explains_lineage,
+                self._reject_read_only_input,
+                self._keep_valid_extension,
+                self._rerun_on_stale_files,
+                self._rerun_single_unit_loop_output,
+                self._reset_downstream_advancement,
+            )
+        )
+
+    def _own_call_explains_lineage(self, m: _Mismatch) -> bool:
+        """A required input whose last change was a call on itself that
+        leaves its value current (``library_rules.SELF_CALL_LINEAGE_RESETS``):
+        reset its lineage to the simulated one.
+
+        Such a call puts its receiver among the statement's outputs but binds
+        no name, so the receiver is not a current-cell output and would
+        otherwise be rejected below as a read-only input, rebuilding the value
+        every time the cell ran again. The reset is cheap and keeps the key
+        stable across re-runs, while an edit upstream still changes the
+        simulated lineage. Only without an upstream modification: after one,
+        the live value itself is stale and must be rebuilt.
+        """
+        if not m.required or m.sim.upstream_has_modifications:
+            return False
+        last_code = self.tracking_state.executed_cell_codes.get(m.var_name)
+        if not self_call_resets_lineage(m.var_name, last_code, self.shell.user_ns.get(m.var_name)):
+            return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> '%s' was last changed by a call on itself that leaves it current. "
+            "Resetting lineage from %s to virtual %s.",
+            m.var_name,
+            m.actual_lineage[:8],
+            m.final_virtual_hash[:8],
+        )
+        self.tracking_state.lineage.reset_to(m.var_name, m.final_virtual_hash)
+        return True
+
+    def _reject_read_only_input(self, m: _Mismatch) -> bool:
+        """A required input the cell does not write: a downstream mutation
+        (``df['SMA'] = ...``) is rejected, and the input restored to its
+        upstream state."""
+        outputs = m.check.current_cell_outputs
+        if not m.required or outputs is None or m.var_name in outputs:
+            return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> '%s' is a READ-ONLY required input "
+            "(not in current cell outputs). Rejecting downstream extension "
+            "to force restoration to upstream state.",
+            m.var_name,
+        )
+        m.broken_vars.add(m.var_name)
+        return True
+
+    def _keep_valid_extension(self, m: _Mismatch) -> bool:
+        """The live value is a valid extension of the notebook's state."""
+        return self._check_var_extension_valid(m.var_name, m.actual_lineage, m.sim, m.check.notebook_cells)
+
+    def _rerun_on_stale_files(self, m: _Mismatch) -> bool:
+        """A file behind the variable changed: rebuild it."""
+        if m.var_name not in m.sim.vars_with_stale_files:
+            return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> Variable '%s' has stale file dependencies. Forcing re-execution.", m.var_name
+        )
+        logger.debug("[UPSTREAM] Variable '%s' has stale file dependencies. Must re-execute.", m.var_name)
+        m.broken_vars.add(m.var_name)
+        return True
+
+    def _rerun_single_unit_loop_output(self, m: _Mismatch) -> bool:
+        """The cell's own ``while``/``with`` loop output with no lineage of its
+        own (``LoopRules.single_unit_loop_self_modifies``): rebuild it.
+
+        Its recorded lineage is ahead because the cell ran the loop, but the
+        runtime's value-based loop lineage does not match the simulation's
+        projection, so the downstream-advancement reset below would put the
+        recorded lineage back to the cell-entry base. The stale-value guard
+        would then see nothing to restore, and the loop would accumulate on top
+        of its last result. Marked broken, its producer restores the
+        cell-entry base and the loop starts from it. Scoped to a name the cell
+        both reads and writes, so a downstream reader never triggers it.
+        """
+        if not (m.required and m.cell_output and self.loop_rules.single_unit_loop_self_modifies(m.var_name)):
+            return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> '%s' is a no-lineage self-modifying "
+            "output of a single-unit (while/with) loop. Marking broken so the "
+            "loop recomputes from its cell-entry base on isolated re-run.",
+            m.var_name,
+        )
+        m.broken_vars.add(m.var_name)
+        return True
+
+    def _reset_downstream_advancement(self, m: _Mismatch) -> bool:
+        """A required input the cell also writes is ahead because the cell
+        ran: reset its lineage to the simulated one.
+
+        Only when the cell's own last run explains the gap. After an upstream
+        edit the live value may be the cell's output built on the old
+        upstream value, and keeping it would serve rows an edited filter
+        removed: then it is rebuilt.
+        """
+        if not (m.required and m.cell_output):
+            return False
+        if m.sim.upstream_has_modifications and not self._current_cell_reproduces(
+            m.var_name, m.actual_lineage, m.sim, m.check.cell_code
         ):
             logger.debug(
-                "[UPSTREAM_DEBUG]   -> '%s' is a bare estimator .fit() receiver "
-                "(self-referential key). Resetting lineage from %s to "
-                "virtual %s for a stable warm-re-run cache hit.",
-                var_name,
-                actual_lineage[:8],
-                final_virtual_hash[:8],
+                "[UPSTREAM_DEBUG]   -> '%s' is written by the current cell, "
+                "but re-running it on the edited upstream state does not give "
+                "its live lineage. Marking broken.",
+                m.var_name,
             )
-            self.tracking_state.lineage.reset_to(var_name, final_virtual_hash)
+            m.broken_vars.add(m.var_name)
             return True
-
-        # A figure this cell saved (``fig.savefig(...)``) is ahead of its
-        # simulated lineage for the same reason: the save counts as a change so
-        # an edit to the plotted data still redraws and resaves, and the
-        # simulation stops before the cell doing it. Taken as a downstream
-        # change, the figure was rebuilt every time the cell ran again. Saving
-        # draws nothing, so the live figure is current. A draw (``ax.plot``)
-        # still rebuilds: re-running it would add artists.
-        if (
-            required_inputs
-            and var_name in required_inputs
-            and not upstream_has_modifications
-            and self._is_saved_figure(var_name)
-        ):
-            self.tracking_state.lineage.reset_to(var_name, final_virtual_hash)
-            return True
-
-        # Read-only input: reject downstream mutations (e.g., df['SMA']=...)
-        if (
-            required_inputs
-            and var_name in required_inputs
-            and current_cell_outputs is not None
-            and var_name not in current_cell_outputs
-        ):
-            logger.debug(
-                "[UPSTREAM_DEBUG]   -> '%s' is a READ-ONLY required input "
-                "(not in current cell outputs). Rejecting downstream extension "
-                "to force restoration to upstream state.",
-                var_name,
-            )
-            broken_vars.add(var_name)
-            return True
-
-        if self._check_var_extension_valid(var_name, actual_lineage, sim, check.notebook_cells):
-            return True
-
-        if var_name in sim.vars_with_stale_files:
-            logger.debug(
-                "[UPSTREAM_DEBUG]   -> Variable '%s' has stale file dependencies. Forcing re-execution.", var_name
-            )
-            logger.debug("[UPSTREAM] Variable '%s' has stale file dependencies. Must re-execute.", var_name)
-            broken_vars.add(var_name)
-            return True
-
-        # Self-modifying no-lineage output of a single-unit (while / with) loop
-        # in the current cell. Its recorded lineage is legitimately "ahead" — it
-        # is the cell's OWN loop output, not downstream advancement — but unlike
-        # a regular self-assign the runtime's value-based loop lineage does not
-        # match the simulator's projection, so the collapse branch below would
-        # reset the recorded lineage to the cell-entry base. For a no-lineage var
-        # (int / list / set: no ``_cash_lineage_hash`` escape hatch) that makes
-        # ``executed_input_lineages[var][var] == variable_lineage[var]`` and the
-        # downstream stale-value guard then declines, so the loop re-accumulates
-        # (or, with a control var pinned, never re-runs) on an isolated re-run.
-        # Mark it broken directly so its producer restores the cell-entry base
-        # and the loop recomputes from scratch — mirroring the for-loop path,
-        # whose per-iteration capture keeps the guard's base distinct. Scoped to
-        # input∩output, so it fires only when re-running the loop cell itself,
-        # never when a downstream cell merely reads the var.
-        if (
-            required_inputs
-            and var_name in required_inputs
-            and current_cell_outputs
-            and var_name in current_cell_outputs
-            and self._is_singleunit_loop_nolineage_selfmod(var_name)
-        ):
-            logger.debug(
-                "[UPSTREAM_DEBUG]   -> '%s' is a no-lineage self-modifying "
-                "output of a single-unit (while/with) loop. Marking broken so the "
-                "loop recomputes from its cell-entry base on isolated re-run.",
-                var_name,
-            )
-            broken_vars.add(var_name)
-            return True
-
-        # Downstream advancement: if var is also a current-cell output reset lineage.
-        if (
-            required_inputs
-            and var_name in required_inputs
-            and current_cell_outputs
-            and var_name in current_cell_outputs
-        ):
-            # ...but only when the cell's own last run explains the gap. After an
-            # upstream edit the live value may be the cell's output built on the
-            # OLD upstream frame: resetting its lineage to the new virtual one
-            # kept that value, and ``docs['n_chars'] = ...`` printed the rows an
-            # edited filter had removed.
-            if upstream_has_modifications and not self._current_cell_reproduces(
-                var_name, actual_lineage, sim, check.cell_code
-            ):
-                logger.debug(
-                    "[UPSTREAM_DEBUG]   -> '%s' is written by the current cell, "
-                    "but re-running it on the edited upstream state does not give "
-                    "its live lineage. Marking broken.",
-                    var_name,
-                )
-                broken_vars.add(var_name)
-                return True
-            logger.debug(
-                "[UPSTREAM_DEBUG]   -> '%s' is also an OUTPUT of the current cell. "
-                "Lineage is ahead due to downstream advancement. "
-                "Resetting lineage from %s to virtual %s.",
-                var_name,
-                actual_lineage[:8],
-                final_virtual_hash[:8],
-            )
-            self.tracking_state.lineage.reset_to(var_name, final_virtual_hash)
-            return True
-
-        return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> '%s' is also an OUTPUT of the current cell. "
+            "Lineage is ahead due to downstream advancement. "
+            "Resetting lineage from %s to virtual %s.",
+            m.var_name,
+            m.actual_lineage[:8],
+            m.final_virtual_hash[:8],
+        )
+        self.tracking_state.lineage.reset_to(m.var_name, m.final_virtual_hash)
+        return True
 
     def _current_cell_reproduces(
         self,
@@ -619,92 +609,11 @@ class MismatchClassifier:
             return True
         scratch = SimulationResult(virtual_lineage=dict(sim.virtual_lineage), virtual_modules=set(sim.virtual_modules))
         try:
-            self.virtual_lineage.simulate_one_cell(scratch, -1, code)
+            self.simulation.simulate_one_cell(scratch, -1, code)
         except Exception:  # noqa: BLE001 - cannot tell: treat as not reproduced
             logger.debug("[UPSTREAM] could not re-simulate the current cell for '%s'", var_name)
             return False
         return scratch.virtual_lineage.get(var_name) == actual_lineage
-
-    def _is_singleunit_loop_nolineage_selfmod(self, var_name: str) -> bool:
-        """True if *var_name* is a no-lineage var self-modified by a single-unit loop.
-
-        Detects the shape: the variable's producing statement is a
-        ``while`` or ``with`` block (executed as one opaque unit, unlike a ``for``
-        loop's per-iteration replay) that writes the variable in place or
-        re-binds it each pass — ``n += 1``, ``total += n``, ``acc.append(..)``,
-        or a walrus in the condition (``while (n := n + 1) <= 5``) — AND the live
-        value carries no ``_cash_lineage_hash``. Lineage-carrying receivers
-        (DataFrame / Series) are excluded — they reset correctly through the
-        value-lineage path and must keep it.
-
-        The caller only reaches this for a var that is already both a required
-        input and a current-cell output, so for a single-unit loop the var is
-        genuinely self-referential across iterations. We confirm the loop writes
-        it via ``all_mutated_vars`` (in-place mutation, incl. method receivers
-        the output analysis misses) OR the static output set (Name re-bind /
-        walrus target the mutation visitor misses).
-        """
-        live = self.shell.user_ns.get(var_name)
-        if own_tag(live) is not None:
-            return False
-        code = self.tracking_state.executed_cell_codes.get(var_name)
-        if not code:
-            return False
-        try:
-            tree = ast.parse(code.strip())
-        except (SyntaxError, ValueError):
-            return False
-        if len(tree.body) != 1 or not isinstance(tree.body[0], (ast.While, ast.With)):
-            return False
-        try:
-            if var_name in analyze_statement(code, None).all_mutated_vars:
-                return True
-            _, outputs = CodeAnalyzer.analyze_code_block(code)
-            return var_name in outputs
-        except (SyntaxError, ValueError, TypeError):
-            return False
-
-    def _is_estimator_fit_selfref(self, var_name: str) -> bool:
-        """True if *var_name* was last produced by a bare ``var_name.fit(...)`` on
-        a live sklearn-style estimator.
-
-        A bare ``clf.fit(X, y)`` is routed to CACHING with a self-referential key:
-        cash adds ``clf`` to the statement's outputs (so the fit bumps its
-        lineage) while ``clf`` is also an input (its pre-fit lineage pins the key),
-        so ``executed_cell_codes['clf']`` records the bare-fit statement. The
-        caller only reaches here on a lineage mismatch with the upstream
-        UNMODIFIED, which for a fit-produced receiver can only happen when the
-        current cell IS that bare fit -- a downstream reader would have the fit in
-        its simulated upstream, so its virtual lineage would already match. That
-        makes the recorded-code check a reliable "is the current cell a bare
-        estimator fit" signal without threading a new current-cell parameter.
-
-        Scoped to ``fit`` ONLY. ``fit`` overwrites the estimator (re-running is
-        idempotent) so a lineage-only reset is safe; ``partial_fit`` is CUMULATIVE,
-        so a lineage-only reset while the partially-fitted object survives in
-        ``user_ns`` would double-count on a miss -- it keeps the value-safe
-        full-re-derivation path. The estimator is the runtime's
-        (``is_estimator``).
-        """
-        code = self.tracking_state.executed_cell_codes.get(var_name)
-        if not code:
-            return False
-        try:
-            tree = ast.parse(code.strip())
-        except (SyntaxError, ValueError):
-            return False
-        if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
-            return False
-        call = tree.body[0].value
-        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
-            return False
-        if call.func.attr != "fit":
-            return False
-        # Receiver must be the bare name itself (``clf.fit`` -> base 'clf'); a
-        # chained/attribute receiver (``obj.model.fit``) is not this var.
-        if not isinstance(call.func.value, ast.Name) or call.func.value.id != var_name:
-            return False
-        return is_estimator(self.shell.user_ns.get(var_name))
 
     def _handle_lineage_mismatch(
         self,
@@ -760,10 +669,10 @@ class MismatchClassifier:
         required_inputs = check.required_inputs
         vars_to_check = {name for name in required_inputs or () if name in self.tracking_state.variable_lineage}
 
-        trace_codes = self.virtual_lineage.build_simulation_trace_codes(sim.trace)
+        trace_codes = self.simulation.build_simulation_trace_codes(sim.trace)
         tainted: set[str] = set()
         if not sim.upstream_has_modifications:
-            tainted = self.virtual_lineage.unsaved_edits.compute_tainted_vars_from_unsaved_edits(
+            tainted = self.unsaved_edits.compute_tainted_vars_from_unsaved_edits(
                 virtual_lineage,
                 sim.trace,
                 trace_codes,
@@ -774,13 +683,13 @@ class MismatchClassifier:
             broken_vars=set(),
             tainted_vars=tainted,
             trace_codes=trace_codes,
-            loop_derived_trust_overridden=self.virtual_lineage.loop_rules.check_loop_derived_trust_override(
+            loop_derived_trust_overridden=self.loop_rules.check_loop_derived_trust_override(
                 sim.upstream_has_modifications,
                 sim.vars_mutated_by_loops,
                 trace_codes,
             ),
         )
-        loop_var_input_lineages = self.virtual_lineage.loop_rules.build_loop_var_input_lineages(
+        loop_var_input_lineages = self.loop_rules.build_loop_var_input_lineages(
             sim.trace,
             sim.vars_derived_from_loops,
             virtual_lineage,
@@ -976,9 +885,7 @@ class MismatchClassifier:
         stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         # A callee's globals are inputs too, once the statement runs; the ones
         # missing from the kernel must be rebuilt first (absent_callee_globals).
-        callee_names = self.virtual_lineage.absent_callee_globals(
-            set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules
-        )
+        callee_names = self.callables.absent_callee_globals(set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules)
         for inp in [*stmt_inputs, *sorted(callee_names - set(stmt_inputs))]:
             if inp in scan.resolved or inp in scan.needed:
                 continue
@@ -1028,7 +935,7 @@ class MismatchClassifier:
                 if self._resolve_tainted_stmt(i, stmt_code, outputs, needed_outputs_pre, sim, result, scan):
                     continue
             elif not import_only(stmt_code):  # an import is re-run, never restored: see `import_only`
-                restored_vars, restore_time, saved_time = self.virtual_lineage.restorer.try_virtual_restore(
+                restored_vars, restore_time, saved_time = self.restorer.try_virtual_restore(
                     stmt_code,
                     outputs,
                     entry.inputs,

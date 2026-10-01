@@ -15,13 +15,12 @@ from __future__ import annotations
 import builtins
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from cash.analysis.cacheability_decision import _coupled_kind
 from cash.notebook.stateful_carriers import stateful_carrier_kind
-from cash.notebook.upstream.virtual_lineage import VirtualLineage
+from cash.notebook.upstream.statement_lineage import unbound_builtin
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
@@ -45,12 +44,11 @@ def test_no_module_keeps_its_own_copy():
 
 
 def test_a_name_the_user_bound_is_not_a_builtin_to_the_simulation():
-    sim = SimpleNamespace(tracking_state=SimpleNamespace(variable_lineage={"max": "lineage-of-max"}))
-    unbound = VirtualLineage._unbound_builtin
-    assert unbound(sim, "abs")
-    assert not unbound(sim, "max"), "the kernel holds a max of the user's"
-    assert not unbound(sim, "id", {"id": "bound-above"}), "a statement above binds id"
-    assert not unbound(sim, "frame")
+    kernel = {"max": "lineage-of-max"}
+    assert unbound_builtin("abs", kernel)
+    assert not unbound_builtin("max", kernel), "the kernel holds a max of the user's"
+    assert not unbound_builtin("id", kernel, {"id": "bound-above"}), "a statement above binds id"
+    assert not unbound_builtin("frame", kernel)
 
 
 def test_the_mro_matcher_names_the_first_listed_class():

@@ -64,6 +64,14 @@ def key_inputs(inputs: set[str], input_hashes: dict[str, str]) -> set[str]:
     return set(inputs) | set(hidden) if hidden else set(inputs)
 
 
+def latest_producer(simulation_trace: list, var: str, before: int) -> int | None:
+    """Index of the LAST statement before *before* that outputs *var*."""
+    for p in range(before - 1, -1, -1):
+        if var in simulation_trace[p].outputs:
+            return p
+    return None
+
+
 class SimulationCacheEntry(NamedTuple):
     """Per-cell snapshot stored in the incremental simulation cache.
 

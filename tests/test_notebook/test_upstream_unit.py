@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.upstream.cache_probe import CacheProbe
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
@@ -25,26 +26,26 @@ class TestUpstreamCheckerImport:
 
 
 class TestValidateFileFreshness:
-    """Test the static _validate_file_freshness helper of the simulation phase."""
+    """``CacheProbe.files_fresh``: whether the files an entry recorded are unchanged."""
 
     def test_empty_files_is_fresh(self):
-        assert VirtualLineage._validate_file_freshness({}) is True
+        assert CacheProbe.files_fresh({}) is True
 
     def test_missing_file_is_stale(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        assert VirtualLineage._validate_file_freshness({missing: {"mtime": 0.0}}) is False
+        assert CacheProbe.files_fresh({missing: {"mtime": 0.0}}) is False
 
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2", encoding="utf-8")
-        assert VirtualLineage._validate_file_freshness(snapshot_file_deps({str(test_file)})) is True
+        assert CacheProbe.files_fresh(snapshot_file_deps({str(test_file)})) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2", encoding="utf-8")
         snapshot = snapshot_file_deps({str(test_file)})
         test_file.write_text("a,b\n1,2\n3,4", encoding="utf-8")
-        assert VirtualLineage._validate_file_freshness(snapshot) is False
+        assert CacheProbe.files_fresh(snapshot) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
@@ -53,7 +54,7 @@ class TestValidateFileFreshness:
         f1.write_text("data1", encoding="utf-8")
         f2.write_text("data2", encoding="utf-8")
         files = snapshot_file_deps({str(f1), str(f2)})
-        assert VirtualLineage._validate_file_freshness(files) is True
+        assert CacheProbe.files_fresh(files) is True
 
     def test_multiple_files_one_stale(self, tmp_path):
         """If any file is stale, the result should be False."""
@@ -63,7 +64,7 @@ class TestValidateFileFreshness:
         f2.write_text("data2", encoding="utf-8")
         files = snapshot_file_deps({str(f1), str(f2)})
         f2.write_text("data2 changed", encoding="utf-8")
-        assert VirtualLineage._validate_file_freshness(files) is False
+        assert CacheProbe.files_fresh(files) is False
 
 
 class TestIterBodyNodes:
@@ -275,7 +276,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.restorer.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,
@@ -301,7 +302,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.restorer.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,
@@ -328,7 +329,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {"df": "lineage_hash_abc"}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator.virtual_lineage.restorer.eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator.restorer.eliminate_broken_vars_via_current_cell_probe(
             broken,
             cells,
             1,

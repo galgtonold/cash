@@ -887,7 +887,7 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
     never surfaces them as *outputs* and their lineage is left frozen — a
     cached downstream consumer then serves a stale value after the mutation is
     edited.  Both the runtime (``StatementProcessor.process_statement``) and the
-    upstream simulation (``VirtualLineage._update_virtual_lineage``) union this
+    upstream simulation (``StatementLineage.apply``) union this
     set into the statement's outputs so the receiver gets a fresh, source-based
     lineage identically on both sides.
 

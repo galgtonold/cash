@@ -20,11 +20,11 @@ from cash.exceptions import CashWarning
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
+from cash.notebook.upstream.simulator import NotebookSimulator
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=TrackingState())
-    return ReexecutionPlanner(vl, classifier=None)
+    return NotebookSimulator(types.SimpleNamespace(user_ns=user_ns), None, TrackingState()).planner
 
 
 def _entry(stmt, outputs=(), inputs=()):
@@ -62,7 +62,7 @@ class TestVulnerableShapeRefused:
 
         # The vulnerable plan: the write [2] is scheduled, its producer [0] is not.
         with pytest.warns(CashWarning, match="refused to re-run a plt.savefig"):
-            remaining, restored = planner._guard_global_figure_writes(
+            remaining, restored = planner.figure_writes.guard_global_writes(
                 [2],
                 trace,
                 [],
@@ -83,7 +83,7 @@ class TestVulnerableShapeRefused:
         ]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            remaining, restored_out = planner._guard_global_figure_writes([2], trace, restored)
+            remaining, restored_out = planner.figure_writes.guard_global_writes([2], trace, restored)
         assert remaining == []
         assert all(i.get("code") != "plt.savefig('chart.png')" for i in restored_out)
         assert any(i.get("code") == "something else" for i in restored_out)
@@ -98,7 +98,7 @@ class TestVulnerableShapeRefused:
         trace = [_entry("plt.savefig('x.png')", inputs=("plt",))]
         planner = _planner(ns)
         with pytest.warns(CashWarning):
-            remaining, _ = planner._guard_global_figure_writes([0], trace, [])
+            remaining, _ = planner.figure_writes.guard_global_writes([0], trace, [])
         assert remaining == []
 
 
@@ -115,7 +115,7 @@ class TestHealthyShapeUntouched:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", CashWarning)  # any CashWarning fails the test
-            remaining, restored = planner._guard_global_figure_writes(
+            remaining, restored = planner.figure_writes.guard_global_writes(
                 [0, 1, 2],
                 trace,
                 [],
@@ -136,12 +136,12 @@ class TestHealthyShapeUntouched:
         planner = _planner(ns)
         with warnings.catch_warnings():
             warnings.simplefilter("error", CashWarning)
-            remaining, _ = planner._guard_global_figure_writes([1], trace, [])
+            remaining, _ = planner.figure_writes.guard_global_writes([1], trace, [])
         assert remaining == [1], "fig.savefig must not be refused by the global-write guard"
 
     def test_empty_plan_is_a_noop(self):
         planner = _planner({})
-        assert planner._guard_global_figure_writes([], [], []) == ([], [])
+        assert planner.figure_writes.guard_global_writes([], [], []) == ([], [])
 
     def test_no_user_ns_falls_back_to_textual_and_still_guards(self):
         """With no live namespace the receiver check falls back to the ``plt``
@@ -150,16 +150,15 @@ class TestHealthyShapeUntouched:
             _entry("fig, ax = plt.subplots()", outputs=("fig", "ax")),
             _entry("plt.savefig('x.png')", inputs=("plt",)),
         ]
-        vl = types.SimpleNamespace(shell=types.SimpleNamespace(user_ns=None), tracking_state=TrackingState())
-        planner = ReexecutionPlanner(vl, classifier=None)
+        planner = NotebookSimulator(types.SimpleNamespace(user_ns=None), None, TrackingState()).planner
         # producer [0] not scheduled -> refuse the write [1]
         with pytest.warns(CashWarning):
-            remaining, _ = planner._guard_global_figure_writes([1], trace, [])
+            remaining, _ = planner.figure_writes.guard_global_writes([1], trace, [])
         assert remaining == []
         # producer [0] scheduled -> allow
         with warnings.catch_warnings():
             warnings.simplefilter("error", CashWarning)
-            remaining2, _ = planner._guard_global_figure_writes([0, 1], trace, [])
+            remaining2, _ = planner.figure_writes.guard_global_writes([0, 1], trace, [])
         assert remaining2 == [0, 1]
 
 

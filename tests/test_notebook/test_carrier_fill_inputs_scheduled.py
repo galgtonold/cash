@@ -36,13 +36,13 @@ import pytest
 
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
+from cash.notebook.upstream.simulator import NotebookSimulator
 
 
 def _planner(user_ns: dict) -> ReexecutionPlanner:
-    vl = types.SimpleNamespace(
-        shell=types.SimpleNamespace(user_ns=user_ns), tracking_state=types.SimpleNamespace(variable_lineage={})
-    )
-    return ReexecutionPlanner(vl, classifier=None)
+    return NotebookSimulator(
+        types.SimpleNamespace(user_ns=user_ns), None, types.SimpleNamespace(variable_lineage={})
+    ).planner
 
 
 def _entry(stmt, outputs=(), inputs=()):

@@ -5,7 +5,7 @@ from cash.notebook.cache_status import CacheStatus
 from cash.notebook.upstream import UpstreamChecker
 
 
-# Stands in for CodeAnalyzer inside the _update_virtual_lineage side effect.
+# Stands in for CodeAnalyzer inside the StatementLineage.apply side effect.
 class MockCodeAnalyzer:
     @staticmethod
     def strip_magics(code):
@@ -42,8 +42,8 @@ class TestIssueReproduction(unittest.TestCase):
         mock_get_cells.return_value = [cell1_code, cell2_code]
 
         # 2. Setup Memory Lineage (Actual)
-        with patch.object(self.checker.simulator.virtual_lineage, "_update_virtual_lineage") as mock_update:
-            # Side effect for _update_virtual_lineage(stmt, lineage, modules)
+        with patch.object(self.checker.simulator.statements, "apply") as mock_update:
+            # Side effect for StatementLineage.apply(stmt, lineage, modules)
             # Returns (outputs, lookup_time, files_stale, file_deps)
             def side_effect(stmt, lineage, modules, occurrence_index=0):
                 input_set, output_set = MockCodeAnalyzer.analyze_code_block(stmt)
@@ -71,7 +71,7 @@ class TestIssueReproduction(unittest.TestCase):
             required_inputs = {"ticker_stats"}
 
             # We also need try_virtual_restore to work so it reports success if attempted
-            with patch.object(self.checker.simulator.virtual_lineage.restorer, "try_virtual_restore") as mock_restore:
+            with patch.object(self.checker.simulator.restorer, "try_virtual_restore") as mock_restore:
                 mock_restore.return_value = ({"stats", "ticker_stats"}, 0.1, 0.1)
 
                 # Only the producer's simulation is stubbed; the cells parse
