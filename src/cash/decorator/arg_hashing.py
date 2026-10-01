@@ -1069,45 +1069,30 @@ class ArgHasher:
                 return hashlib.sha256(fast).hexdigest()
 
         def get_arg_hash(arg):
-            # Content-authoritative builtin hashers FIRST. pandas /
-            # numpy / polars / pyarrow / modin / dask hash the argument's
-            # *content*, which is byte-stable across processes and kernel
-            # restarts. The notebook's in-memory ``_cash_lineage_hash`` (checked
-            # next) is recomputed per session and is NOT reproducible across a
-            # restart -- keying a persisted @cash.cache entry on it makes the
-            # decorator miss after a restart even though the argument is
-            # byte-identical (re-training the model the docs promise survives a
-            # restart). A value that has a content hash must key on content so
-            # the entry survives; the modest extra hashing cost is the price of
-            # the flagship "restart-and-run-all in seconds" guarantee. Mirrors
-            # principle: the reproducible signal, not the volatile
-            # in-memory one, is authoritative.
-            # Fast path: skip re-hashing a possibly-huge argument we already
-            # content-hashed this session, when it is provably the SAME,
-            # unmutated object. Keyed on ``id`` (NOT lineage): two *different*
-            # objects that happen to share a lineage string must still be
-            # distinguished by content -- an explicit invariant
-            # (test_arg_hash_restart_stable) -- and distinct live objects have
-            # distinct ids. The entry is validated on read by BOTH a weakref
-            # identity check (guards id reuse after GC) AND the object's
-            # ``_cash_lineage_hash`` being unchanged (cash's own mutation signal,
-            # the same one it trusts to cache every notebook statement). The
-            # stored value is still the reproducible content hash, so the cache
-            # key is byte-identical and restart-safe; the memo is a pure
-            # within-session speedup, empty after a restart.
-            #
-            # Trusted only where something KEEPS it current: the notebook's
-            # statement layer re-tags a variable on every assignment and
-            # mutation. The decorator also tags what it returns, and nothing
-            # ever moves that tag -- in a script, `q.F = 0.03; run(q)` or
-            # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
-            # and the tag-as-identity shortcut further down served the result
-            # for the unmutated object.
-            # The class's own ``__cash_key__``, ahead of anything that reads
-            # the value: the user has said what identifies it, and that id
-            # holds across restarts, which an in-memory tag does not. A
-            # hasher registered for the type still wins; it is the more
-            # specific, outside choice.
+            """One argument's key part. The first step that answers wins:
+
+            1. The class's ``__cash_key__``, unless a registered hasher
+               covers the type: the user said what identifies the value,
+               and that holds across restarts.
+            2. A frozen array or container (``frozen=True`` results): its
+               audited digest, without reading the content again.
+            3. The content digest memoised for this very object, while its
+               statement or frozen lineage tag is unchanged (`_memo`): a
+               within-session speedup that returns the content digest, never
+               the tag. The decorator's own tags are not trusted here, since
+               nothing moves them when the object is mutated.
+            4. A pandas copy-on-write frame's memoised digest, checked
+               exactly (`_frame_memo_lookup`).
+            5. A hasher registered with ``override=True``: the user's
+               identity beats reading the content.
+            6. A builtin content hasher (pandas, numpy, polars, pyarrow,
+               ...): byte-stable across processes, so a persisted entry
+               survives a restart where a session tag would not.
+            7. The statement or frozen lineage tag, for a value with no
+               content hasher: cheap and current within the session.
+            8. A hasher registered for the type.
+            9. The value itself, which the payload walk pickles.
+            """
             method = cash_key_method(arg)
             if method is not None and not (
                 (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
