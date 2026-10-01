@@ -55,7 +55,11 @@ storage backends and the effect vocabulary (`effects.py`), not a key builder.
   decorator and the notebook share. `tracking/` records what a computation depends
   on at run time (file reads and snapshots, function source, randomness);
   `analysis/` is static analysis (statement inputs and outputs, `# @cash:`
-  annotations, cacheability, the purity analysis of a decorated function). `effects.py` names the calls that write files,
+  annotations, cacheability, the purity analysis of a decorated function).
+  The purity analysis is `purity_analyzer.py` (the report memo) running
+  `helper_walk.py` (the walk that keys and audits each helper), with the body
+  rules in `purity_visitor.py` and the report types in `purity_report.py`.
+  `effects.py` names the calls that write files,
   send requests, read the clock or the environment; the decorator warns on
   them and the notebook refuses to cache them.
 - **`src/cash/notebook/`**: the notebook subsystem. Its large parts are packages:
