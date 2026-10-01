@@ -402,6 +402,15 @@ def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyB
     )
 
 
+# Cells the compiler adds for a class body, never ones the user wrote: on
+# Python 3.14 an annotated class's ``__annotate__`` closes over
+# ``__classdict__``, the class's own namespace, whose methods are keyed as
+# helpers already. Hashing it raised KEY-UNHASHABLE-CAPTURE (it holds
+# descriptors), so every function reaching an annotated class -- any
+# dataclass -- ran uncached.
+_CLASS_BODY_CELLS = frozenset({"__class__", "__classdict__", "__classdictcell__"})
+
+
 class HelperIdentity:
     """A helper's identity for the key: its code, its parameter defaults and
     the immutable values its closure captured."""
@@ -438,7 +447,7 @@ class HelperIdentity:
         unsafe: frozenset | None = None
         captures = []
         for name, cell in zip(code.co_freevars, closure):
-            if name in written:
+            if name in written or name in _CLASS_BODY_CELLS:
                 continue
             try:
                 value = cell.cell_contents
