@@ -162,6 +162,42 @@ class _ExitWork:
             backend.shutdown()
 
 
+def _constructor_overrides(
+    backend: CacheBackend | str | None,
+    use_locking: bool,
+    config_overrides: dict[str, Any],
+    **convenience: Any,
+) -> tuple[CacheBackend | None, bool]:
+    """Check `Cash`'s arguments and fold the settings among them into
+    *config_overrides*; return the backend instance (if one was given) and
+    ``use_locking`` as a bool.
+
+    *convenience* is the named settings `Cash` takes as its own keywords
+    (``cache_dir``, ``compress``, ``debug``, ``verbose``).
+    """
+    # ``backend`` is also the name of a setting ("tiered", "file",
+    # "sqlite", ...), and a setting may be passed by name: a string is
+    # that setting, never a backend instance.
+    if isinstance(backend, str):
+        config_overrides.setdefault("backend", backend)
+        backend = None
+    elif backend is not None and not isinstance(backend, CacheBackend):
+        raise TypeError(
+            f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
+            f"not {type(backend).__name__}"
+        )
+    if not isinstance(use_locking, bool) and use_locking not in (0, 1):
+        raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
+    use_locking = bool(use_locking)
+    # Map the explicit convenience kwargs (cache_dir, compress, debug)
+    # into the overrides dict so the config layer treats them with the
+    # same priority as any other constructor-supplied override (highest).
+    for key, val in convenience.items():
+        if val is not None:
+            config_overrides.setdefault(key, val)
+    return backend, use_locking
+
+
 def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
     """Print the run summary if the ``summary`` setting is on NOW: read at
     exit, so ``cash.configure(summary=...)`` after the instance was built
@@ -267,30 +303,31 @@ class Cash:
         verbose: bool | None = None,
         **config_overrides: Any,
     ) -> None:
-        # ``backend`` is also the name of a setting ("tiered", "file",
-        # "sqlite", ...), and a setting may be passed by name: a string is
-        # that setting, never a backend instance.
-        if isinstance(backend, str):
-            config_overrides.setdefault("backend", backend)
-            backend = None
-        elif backend is not None and not isinstance(backend, CacheBackend):
-            raise TypeError(
-                f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
-                f"not {type(backend).__name__}"
-            )
-        if not isinstance(use_locking, bool) and use_locking not in (0, 1):
-            raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
-        use_locking = bool(use_locking)
-        # Map the explicit convenience kwargs (cache_dir, compress, debug)
-        # into the overrides dict so the config layer treats them with the
-        # same priority as any other constructor-supplied override (highest).
-        for key, val in (("cache_dir", cache_dir), ("compress", compress), ("debug", debug), ("verbose", verbose)):
-            if val is not None:
-                config_overrides.setdefault(key, val)
+        backend, use_locking = _constructor_overrides(
+            backend, use_locking, config_overrides, cache_dir=cache_dir, compress=compress, debug=debug, verbose=verbose
+        )
         self.config = get_config(config_path=config_path, overrides=config_overrides or None)
+        self._init_infrastructure(backend, backends)
+        self.use_locking = use_locking
+        # Asking for debug output has to produce some, also in a script that
+        # configured no logging.
+        debug, verbose = self.config.debug, self.config.verbose
+        if debug or verbose:
+            _log.enable(logging.DEBUG if debug else logging.INFO)
+        self._init_key_path()
+        self._init_call_path()
 
-        debug = self.config.debug
+        atexit.register(self._exit_work.run)
 
+        # register_magic=None (default) auto-detects: only register when an
+        # active IPython session exists.  True forces registration; False skips.
+        if register_magic is True or (register_magic is None and get_ipython() is not None):
+            self.register_magic()
+
+    def _init_infrastructure(self, backend: CacheBackend | None, backends: list[CacheBackend] | None) -> None:
+        """The backend slot, the registries, the record of stored keys and
+        what reports to the user: what both the key path and the call path
+        are built over."""
         # An explicit backend (or list of backends) wins over the config: those
         # are concrete objects, not settings, and the factory is skipped.
         if backend is None and backends:
@@ -318,6 +355,9 @@ class Cash:
         self._calls = CallLog(self.config, self._registry.cached, self._misses, effectiveness)
         self._exit_work = _ExitWork(self._backend_slot, self._stored_keys, effectiveness)
         self._frozen = FrozenResults(self.config, self._notices)
+
+    def _init_key_path(self) -> None:
+        """The steps that turn a call into its cache key."""
         self._args = ArgHasher(
             self._registry.cached,
             self._frozen,
@@ -329,13 +369,6 @@ class Cash:
         self._captures = CaptureAnalysis()
         self._helpers = HelperIdentity(self._args, self._captures)
         self._mutations = LearnedMutations()
-        self.use_locking = use_locking
-        verbose = self.config.verbose
-        # Asking for debug output has to produce some, also in a script that
-        # configured no logging.
-        if debug or verbose:
-            _log.enable(logging.DEBUG if debug else logging.INFO)
-
         # Deep seam over the registries above: folds source/dependency/
         # helper state into the cache key's ``state_hash`` segment. Borrows
         # the registry dicts by reference so later registrations are seen.
@@ -397,6 +430,10 @@ class Cash:
             self._misses,
             self._notices,
         )
+
+    def _init_call_path(self) -> None:
+        """The steps a call runs through: lookup, body, store, and the
+        wrappers ``cache`` hands back."""
         self._store = ResultStore(
             self._registry,
             self._backend_slot,
@@ -444,13 +481,6 @@ class Cash:
             self._maintenance,
             self._notices,
         )
-
-        atexit.register(self._exit_work.run)
-
-        # register_magic=None (default) auto-detects: only register when an
-        # active IPython session exists.  True forces registration; False skips.
-        if register_magic is True or (register_magic is None and get_ipython() is not None):
-            self.register_magic()
 
     @property
     def backend(self) -> CacheBackend:
