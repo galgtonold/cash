@@ -5,7 +5,7 @@ name: Nightly integration
 # night and by hand from the Actions tab, split into shards that run in
 # parallel. tools/test_selection/shard.py assigns each test to one shard by a
 # stable hash of its node id, so the shards never overlap and together run
-# every test.
+# every test. The wheel-gate job runs alongside the shards.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -44,3 +44,31 @@ jobs:
           -p tools.test_selection.shard
           --shard=${{ matrix.shard }}/${{ strategy.job-total }}
           -n auto --tb=short -q
+
+  # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
+  # a fresh venv and drives a real Jupyter server through kernel restarts. The
+  # unit and integration suites run the editable install through nbclient, so
+  # they cannot see wheel-layout or real-restart bugs; this job is what does.
+  wheel-gate:
+    name: Wheel gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" build
+
+      - name: Run the wheel gate
+        env:
+          CASH_WHEEL_GATE: "1"
+          CASH_WHEELGATE_ROOT: ${{ runner.temp }}/wheelgate
+        run: python -m pytest -m wheel_gate tests/test_wheel_gate -n 0 -q -rs

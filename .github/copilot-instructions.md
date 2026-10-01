@@ -392,11 +392,19 @@ ls dist/                # exactly two files, both X.Y.Z: the wheel and the sdist
 
 - `pytest tests/test_notebook -x`
 - `twine check dist/*`
+- The wheel gate, against that wheel:
+  `python scripts/wheel_gate.py --wheel dist/cash_lib-X.Y.Z-py3-none-any.whl`
+  (or `CASH_WHEEL_GATE=1 pytest -m wheel_gate tests/test_wheel_gate -n 0`). It
+  installs the wheel into a fresh venv and drives a real Jupyter server through
+  kernel restarts, which no other suite does. It exits 0 only when every
+  scenario matches its recorded baseline. The nightly workflow runs it too;
+  check that its last run on the commit you tag is green.
 - In a fresh venv, `pip install dist/cash_lib-X.Y.Z-py3-none-any.whl`, then
   `python -c "import cash; print(cash.__version__)"` prints `X.Y.Z`.
 - In that venv, `pip install "jupyterlab>=4,<5"` and `jupyter labextension list`
-  must show `cash-live-cells ... enabled OK (python, cash-lib)`. Nothing else
-  catches a wheel that installs but registers no extension.
+  must show `cash-live-cells ... enabled OK (python, cash-lib)`. `publish.yml`
+  repeats both checks on the wheel it builds and uploads nothing if either
+  fails, or if `__version__` does not match the release tag.
 
 ### 6. Commit and tag
 

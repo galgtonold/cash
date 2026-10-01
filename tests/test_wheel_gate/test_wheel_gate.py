@@ -21,9 +21,10 @@ recorded in ``scripts/wheel_gate.py``: currently **all seven scenarios GREEN**
 (S1-S7). The scenario table at the top of that script says what each one
 guards.
 
-No CI workflow runs this test: ci.yml ignores this directory and publish.yml
-does not run it, so run it by hand before a release. It asserts the harness's
-exit code, so a scenario flipping either way fails it:
+ci.yml ignores this directory; the ``wheel-gate`` job in nightly.yml runs it
+every night and from the Actions tab, and the release checklist runs it before
+tagging. It asserts the harness's exit code, so a scenario flipping either way
+fails it:
 
   * an invariant regressing to RED means a shipped fix broke, and
   * a scenario unexpectedly changing state means the baseline is stale and the

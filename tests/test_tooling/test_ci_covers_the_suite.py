@@ -38,6 +38,7 @@ import pytest
 REPO_ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").is_file())
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 NIGHTLY_YML = REPO_ROOT / ".github" / "workflows" / "nightly.yml"
+PUBLISH_YML = REPO_ROOT / ".github" / "workflows" / "publish.yml"
 CORE_SET = REPO_ROOT / "tools" / "test_selection" / "core_set.txt"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 INTEGRATION = "tests/test_notebook_integration"
@@ -49,7 +50,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # makes test_every_test_directory_is_accounted_for fail.
 EXPECTED_EXCLUSIONS = {
     "test_notebook_integration",  # starts real kernels; the core set and the nightly shards run it
-    "test_wheel_gate",  # builds a wheel + real Jupyter server; run by hand before a release
+    "test_wheel_gate",  # builds a wheel + real Jupyter server; the nightly workflow runs it
     "docs",  # dedicated docs-parity job (needs docs-test extras)
 }
 
@@ -275,3 +276,31 @@ class TestTheIntegrationSuiteRuns:
         assert keys == ["shard"], f"the nightly matrix must hold only `shard`, found {keys}"
         values = [int(v) for v in re.search(r"shard:\s*\[([^\]]+)\]", m.group("body")).group(1).split(",")]
         assert values == list(range(1, len(values) + 1)), values
+
+
+def _job(text: str, name: str) -> str:
+    """The body of the top-level job called *name*, up to the next job."""
+    m = re.search(rf"^  {re.escape(name)}:\n(?P<body>(?:(?:    .*|\s*)\n)+)", text + "\n", re.MULTILINE)
+    assert m, f"no job {name!r}"
+    return m.group("body")
+
+
+class TestTheWheelIsChecked:
+    """The suites run the editable install; only these jobs see the built wheel."""
+
+    def test_the_nightly_workflow_runs_the_wheel_gate(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "wheel-gate")
+        assert 'CASH_WHEEL_GATE: "1"' in job, job
+        assert re.search(r"pytest\s+-m wheel_gate tests/test_wheel_gate", job), job
+
+    def test_nothing_is_uploaded_before_the_wheel_is_verified(self):
+        text = PUBLISH_YML.read_text(encoding="utf-8")
+        for name in ("publish", "publish-test"):
+            needs = re.search(r"^    needs: (.+)$", _job(text, name), re.MULTILINE)
+            assert needs and "verify-wheel" in needs.group(1), f"{name} can upload an unverified wheel"
+
+    def test_the_verification_checks_version_and_extension(self):
+        job = _job(PUBLISH_YML.read_text(encoding="utf-8"), "verify-wheel")
+        assert "python -m venv" in job
+        assert "GITHUB_REF_NAME#v" in job and "cash.__version__" in job
+        assert "labextension list" in job and "cash-live-cells" in job
