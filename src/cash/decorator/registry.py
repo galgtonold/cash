@@ -14,7 +14,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..analysis.code_analyzer import CodeAnalyzer
-from ..analysis.purity_analyzer import bindings_changed, get_analyzer, resolve_binding
+from ..analysis.helper_bindings import bindings_changed, resolve_binding
+from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic

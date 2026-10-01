@@ -17,7 +17,7 @@ from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.cacheability_decision import identity_coupled_reason
-from ..analysis.purity_analyzer import resolve_binding
+from ..analysis.helper_bindings import resolve_binding
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,

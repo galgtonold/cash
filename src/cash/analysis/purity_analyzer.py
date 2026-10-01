@@ -39,8 +39,6 @@ import builtins
 import dataclasses
 import functools
 import hashlib
-import importlib
-import importlib.util
 import inspect
 import logging
 import operator
@@ -72,7 +70,7 @@ from ..effects import (
     environment_input,
 )
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
-from ..install_paths import in_own_package, is_user_code_file, top_package
+from ..install_paths import is_user_code_file
 from ..purity import (
     KNOWN_PURE_BUILTINS,
     is_pure,
@@ -88,12 +86,24 @@ from ..source_norm import (
     settled_source_version,
     source_version_unchanged,
 )
-from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, called_names, resolve_callee
 from .callee_effects import module_function_global_changes, scope_locals
 from .file_effects import get_base_name, get_call_module, get_call_name
+from .helper_bindings import (
+    binding_path,
+    bindings_changed,
+    build_namespace,
+    called_names_in_tree,
+    callee_chain,
+    held_ref,
+    local_import_map,
+    resolve_binding,
+    resolve_callee_chain,
+    resolve_in_class_namespaces,
+    resolve_local_import,
+)
 from .helper_code import UnwalkableLayers, callable_layers, is_mock, is_user_code, own_code_is_user, qualname_of
 from .mutations import PANDAS_INPLACE_METHODS
 from .purity_flow import (
@@ -830,7 +840,7 @@ class _PurityVisitor(ast.NodeVisitor):
     def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
         if func_node.attr not in MUTATOR_METHODS or not self._namespace:
             return False
-        chain = _callee_chain(func_node.value)
+        chain = callee_chain(func_node.value)
         if not chain or chain[0] not in self._namespace:
             return False
         obj: Any = self._namespace[chain[0]]
@@ -849,7 +859,7 @@ class _PurityVisitor(ast.NodeVisitor):
         as `discarded_call`, a label documented for calls made for an effect."""
         if isinstance(func_node, ast.Name) and func_node.id in self._log_helpers:
             return True
-        chain = _callee_chain(func_node)
+        chain = callee_chain(func_node)
         if not chain or not self._namespace or chain[0] not in self._namespace:
             return False
         obj: Any = self._namespace[chain[0]]
@@ -1055,104 +1065,6 @@ class _PurityVisitor(ast.NodeVisitor):
     visit_AsyncFor = visit_For
 
 
-def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple[str, ...]]]:
-    """``local name -> (module, attribute prefix)`` for imports in a function body.
-
-    ``from helpmod import scale`` inside the body binds a LOCAL, so the helper
-    walk, which resolves names in the module's globals, found nothing and an
-    edit to ``scale`` was served stale -- in the common shape of an
-    import moved into the function to break an import cycle. Each import runs
-    on every call, so the binding it makes is ``helpmod.scale`` as the module
-    holds it at call time: that is the path recorded for the per-call check.
-    """
-    package = None
-    g = getattr(func, "__globals__", None)
-    if isinstance(g, dict):
-        package = g.get("__package__")
-    if package is None:
-        package = (getattr(func, "__module__", "") or "").rpartition(".")[0]
-    found: dict[str, tuple[str, tuple[str, ...]]] = {}
-    for node in ast.walk(func_def):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.asname:
-                    found[alias.asname] = (alias.name, ())
-                else:
-                    top = alias.name.split(".")[0]
-                    found[top] = (top, ())
-        elif isinstance(node, ast.ImportFrom):
-            if node.level:
-                try:
-                    module = importlib.util.resolve_name("." * node.level + (node.module or ""), package or None)
-                except (ImportError, ValueError):
-                    continue
-            else:
-                module = node.module or ""
-            if not module:
-                continue
-            for alias in node.names:
-                if alias.name != "*":
-                    found[alias.asname or alias.name] = (module, (alias.name,))
-    return found
-
-
-def _module_is_user_code(module_name: str, root_module: str | None) -> bool:
-    """Is *module_name* user code, decided WITHOUT importing it?
-
-    The top-level package is checked first, with a spec lookup that imports
-    nothing, so a library imported inside a function to defer its cost
-    (``import torch``) is never imported early on its behalf.
-    """
-    if in_own_package(module_name, top_package(root_module)):
-        return True
-    top = top_package(module_name)
-    if top is None:
-        return False
-    try:
-        spec = importlib.util.find_spec(top)
-    except (ImportError, ValueError):
-        return False
-    origin = getattr(spec, "origin", None) if spec is not None else None
-    if not origin or origin in ("built-in", "frozen"):
-        return False
-    return is_local_module(types.SimpleNamespace(__file__=origin))
-
-
-def resolve_local_import(module_name: str, prefix: tuple[str, ...], root_module: str | None) -> Any:
-    """The object a function-body import binds, importing a USER module if the
-    body has not run yet. That import is the one the body is about to make;
-    doing it now is what lets the first call's key see the helper. A library
-    module is only read if it is already loaded."""
-    module = sys.modules.get(module_name)
-    if module is None:
-        if not _module_is_user_code(module_name, root_module):
-            return None
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:  # noqa: BLE001 - the body will raise it, not the analysis
-            return None
-    obj: Any = module
-    for attr in prefix:
-        obj = getattr(obj, attr, None)
-        if obj is None:
-            return None
-    return obj
-
-
-def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
-    """The name chain a call site uses: ``_sieve`` -> ``("_sieve",)``,
-    ``mod.sub.f`` -> ``("mod", "sub", "f")``; None for anything else."""
-    parts: list[str] = []
-    cur = node
-    while isinstance(cur, ast.Attribute):
-        parts.append(cur.attr)
-        cur = cur.value
-    if not isinstance(cur, ast.Name):
-        return None
-    parts.append(cur.id)
-    return tuple(reversed(parts))
-
-
 #: Prefix of the name a ``sys.modules["pkg.mod"]`` lookup is spelled as
 #: (`spell_static_dispatch`): ``<module pkg.mod>``, bound in the namespace.
 _MODULE_NAME_PREFIX = "<module "
@@ -1313,7 +1225,7 @@ def _ambient_call(node: ast.Call, namespace: dict[str, Any] | None) -> str | Non
     if helper is not None:
         inner = _clock_helper_read(helper)
         shown = inner if inner.endswith(")") else f"{inner}()"  # type: ignore[union-attr]
-        return f"{'.'.join(_callee_chain(node.func) or ())}() (which returns {shown})"
+        return f"{'.'.join(callee_chain(node.func) or ())}() (which returns {shown})"
     return None
 
 
@@ -1325,7 +1237,7 @@ def _clock_helper_of(node: ast.Call, namespace: dict[str, Any] | None) -> Any:
     bare name was judged, and the helper's own read is left to the call site,
     so every dotted spelling froze the clock with no warning.
     """
-    chain = _callee_chain(node.func)
+    chain = callee_chain(node.func)
     if not namespace or not chain or chain[0] not in namespace:
         return None
     if len(chain) == 1:
@@ -1425,175 +1337,6 @@ def _clock_helper_read(value: Any) -> str | None:
 _CLOCK_HELPER_CACHE: LruMemo[Any, str | None] = LruMemo(CODE_OBJECTS)
 #: A miss in `_CLOCK_HELPER_CACHE`, whose entries may be None.
 _NOT_JUDGED = object()
-
-
-def _binding_path(caller: Any, chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
-    """``(module_name, chain)`` when *chain* starts at a name *caller* looks up
-    in its module's globals, so ``sys.modules[module_name]`` + the chain finds
-    what the call site finds. None for a closure cell or a namespace that is
-    not a registered module (``exec``, a class body)."""
-    if not chain:
-        return None
-    code = getattr(caller, "__code__", None)
-    if code is not None and chain[0] in (getattr(code, "co_freevars", ()) or ()):
-        return None
-    module_name = getattr(caller, "__module__", None)
-    module = sys.modules.get(module_name or "")
-    if module is None or getattr(module, "__dict__", None) is not getattr(caller, "__globals__", None):
-        return None
-    return module_name, chain
-
-
-def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> Any:
-    """What *chain* names in *namespace*, through modules only; None if nothing."""
-    obj = namespace.get(chain[0])
-    for part in chain[1:]:
-        if not isinstance(obj, types.ModuleType):
-            return None
-        obj = getattr(obj, part, None)
-    return obj
-
-
-def _ref(obj: Any) -> Callable[[], Any]:
-    """A weak reference where the object allows one, a strong one otherwise."""
-    try:
-        return weakref.ref(obj)
-    except TypeError:
-        return lambda: obj
-
-
-_UNRESOLVED = object()
-
-
-def resolve_binding(module_name: str, chain: tuple[str, ...]) -> Any:
-    """What ``sys.modules[module_name]`` + *chain* holds now, or ``_UNRESOLVED``."""
-    obj: Any = sys.modules.get(module_name)
-    if obj is None:
-        return _UNRESOLVED
-    for attr in chain:
-        obj = getattr(obj, attr, _UNRESOLVED)
-        if obj is _UNRESOLVED:
-            return _UNRESOLVED
-    return obj
-
-
-def bindings_changed(report: PurityReport) -> bool:
-    """Does any call-site binding the report followed hold a different object now?
-
-    A module that has left ``sys.modules`` proves nothing either way and is
-    skipped. Identity, not equality: a re-created function with the same
-    code is still a different object, whose globals may differ.
-    """
-    for module_name, chain, ref in report.helper_bindings:
-        live = resolve_binding(module_name, chain)
-        if live is _UNRESOLVED:
-            continue
-        if live is not ref():
-            return True
-    return False
-
-
-def _called_names_in_tree(tree: ast.AST) -> list[str]:
-    """Bare names called anywhere in *tree*, including inside lambdas.
-
-    Used for a CLASS body, where the interesting call can sit inside a
-    default-factory lambda: ``field(default_factory=lambda: B(0))``. Only
-    ``ast.Name`` callees -- an attribute call (``mod.f()``) is resolved by
-    the ordinary callee machinery, not here.
-    """
-    names: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            names.append(node.func.id)
-    return names
-
-
-def _class_namespaces(cls: type) -> list[dict[str, Any]]:
-    """Every globals dict in which *cls*'s body names might resolve.
-
-    Returns a LIST, and callers must try all of them, because no single one
-    is reliably right:
-
-    * The defining module is the obvious candidate, but a class built by
-      ``exec`` into a namespace that never reaches ``sys.modules`` (notebook
-      cell, REPL) has none.
-    * A member's ``__globals__`` covers that case -- but picking the FIRST
-      member with one is wrong. A dataclass's GENERATED methods carry the
-      ``dataclasses`` machinery's globals, not the user's, and whether such
-      a method comes first in ``vars(cls)`` varies by Python version. On
-      3.13 it does, so ``B`` in ``field(default_factory=lambda: B(10))``
-      resolved against the wrong namespace and the class was never folded;
-      on 3.14 it happened to work. CI caught it on all three 3.13 runners.
-
-    Ordering is best-first (module, then member globals), but correctness
-    does not depend on it -- the caller searches until a name resolves.
-    """
-    namespaces: list[dict[str, Any]] = []
-    seen: set[int] = set()
-
-    def add(candidate: Any) -> None:
-        if isinstance(candidate, dict) and id(candidate) not in seen:
-            seen.add(id(candidate))
-            namespaces.append(candidate)
-
-    module = sys.modules.get(getattr(cls, "__module__", "") or "")
-    add(getattr(module, "__dict__", None))
-
-    members: list[Any] = list(vars(cls).values())
-    fields_map = getattr(cls, "__dataclass_fields__", None)
-    if isinstance(fields_map, dict):
-        for fld in fields_map.values():
-            factory = getattr(fld, "default_factory", None)
-            if factory is not None and factory is not dataclasses.MISSING:
-                # Put field factories FIRST among members: a factory lambda is
-                # written in the user's module, while a generated __init__ is
-                # not, so it is the more likely place for the name to resolve.
-                members.insert(0, factory)
-    for member in members:
-        if isinstance(member, (classmethod, staticmethod)):
-            member = member.__func__
-        add(getattr(member, "__globals__", None))
-    return namespaces
-
-
-def _resolve_in_class_namespaces(cls: type, name: str) -> Any:
-    """First binding of *name* across *cls*'s candidate namespaces, else None."""
-    for namespace in _class_namespaces(cls):
-        if name in namespace:
-            return namespace[name]
-    return None
-
-
-def build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
-    """Return a merged ``__globals__`` + closure-cell namespace for *func*.
-
-    Lets :func:`~cash.analysis.ast_util.resolve_callee` see helpers defined as closures
-    (nested function definitions) - not just module-level names.
-    Without this, a ``@cash.cache``d function inside another
-    function couldn't recurse into its sibling helpers, and any
-    impurity those helpers contained would be missed.
-
-    Closure cells are pulled from ``func.__code__.co_freevars`` paired
-    with ``func.__closure__``. An empty cell (rare - happens when a
-    closure variable is never assigned) is silently skipped.
-
-    The returned dict is a shallow copy of ``__globals__`` with
-    closure entries layered on top - same-name closure variables
-    shadow globals, matching Python's normal scoping.
-    """
-    ns = dict(getattr(func, "__globals__", None) or {})
-    code = getattr(func, "__code__", None)
-    closure = getattr(func, "__closure__", None) or ()
-    if code is not None and closure:
-        freevars = getattr(code, "co_freevars", ()) or ()
-        for name, cell in zip(freevars, closure):
-            try:
-                ns[name] = cell.cell_contents
-            except ValueError:
-                # Cell exists but has no value yet (forward reference
-                # in mutually-recursive closures). Skip.
-                continue
-    return ns
 
 
 class PurityAnalyzer:
@@ -1728,7 +1471,7 @@ class PurityAnalyzer:
         def _note_cached(callee: Any) -> None:
             if id(callee) not in cached_seen:
                 cached_seen.add(id(callee))
-                cached_callees.append(_ref(callee))
+                cached_callees.append(held_ref(callee))
 
         #: Clock helpers judged at a call site: their own read is not reported.
         judged_helpers: set[Any] = set()
@@ -1737,7 +1480,7 @@ class PurityAnalyzer:
             if path is None or path in seen_bindings:
                 return
             seen_bindings.add(path)
-            bindings.append((path[0], path[1], _ref(callee)))
+            bindings.append((path[0], path[1], held_ref(callee)))
 
         def _record_resolution_path(func: Callable[..., Any], qualname: str) -> None:
             """Note where to re-resolve *func* from ``sys.modules`` per call.
@@ -1802,8 +1545,8 @@ class PurityAnalyzer:
             """Queue user-code objects a CLASS body constructs, hash-only."""
             if not isinstance(cls, type):
                 return
-            for called in _called_names_in_tree(tree):
-                _queue_hash_only(_resolve_in_class_namespaces(cls, called), cls, depth)
+            for called in called_names_in_tree(tree):
+                _queue_hash_only(resolve_in_class_namespaces(cls, called), cls, depth)
             _queue_annotation_refs(cls, depth)
 
         # Each entry is (callable, depth, hash_only, reported). Every entry is
@@ -1922,7 +1665,7 @@ class PurityAnalyzer:
                             continue
                         if not own_code_is_user(callee, root_module):
                             continue
-                        path = _binding_path(func, chain)
+                        path = binding_path(func, chain)
                         _note_binding(callee, path)
                         if path is not None:
                             caller_paths.setdefault(id(callee), path)
@@ -2069,7 +1812,7 @@ class PurityAnalyzer:
                 if chain and chain[0] in local_imports:  # loop var, used within iteration
                     module_name, prefix = local_imports[chain[0]]
                     return (module_name, prefix + chain[1:]) if module_name in sys.modules else None
-                return _binding_path(func, chain)
+                return binding_path(func, chain)
 
             def _queue_helper(callee: Any, line: int, path: tuple[str, tuple[str, ...]] | None = None) -> None:
                 if callee is None or not callable(callee):
@@ -2165,7 +1908,7 @@ class PurityAnalyzer:
                     stack.append((layer, depth + 1, False, reported))
 
             for call_node in visitor.called_callable_nodes + visitor.impure_call_nodes:
-                site_path = _call_site_path(_callee_chain(call_node.func))
+                site_path = _call_site_path(callee_chain(call_node.func))
                 if site_path is not None:
                     start = getattr(call_node, "lineno", 0)
                     end = getattr(call_node, "end_lineno", None) or start
@@ -2204,7 +1947,7 @@ class PurityAnalyzer:
             # the name is bound to, not a local or parameter that shadows it.
             shadowed = (param_names | scope_locals(func_def)) - local_imports.keys()
             for _node in visitor.read_attributes:
-                _chain = _callee_chain(_node)
+                _chain = callee_chain(_node)
                 if _chain is None or _chain[0] in shadowed:
                     continue
                 if not isinstance(namespace.get(_chain[0]), (types.ModuleType, type)):

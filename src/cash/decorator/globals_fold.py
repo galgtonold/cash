@@ -17,8 +17,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.helper_bindings import local_import_map, resolve_binding, resolve_local_import
 from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user
-from ..analysis.purity_analyzer import get_analyzer, local_import_map, resolve_binding, resolve_local_import
+from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..analysis.purity_report import PurityReport
 from ..dependency_state import SysModulesHelperResolver, ledger_note
