@@ -1,13 +1,23 @@
-"""Wrappers on the readers that raise no audit event.
+"""Wrappers on the calls that raise no audit event.
 
-Readers that open files in C (pyarrow, polars, sqlite3, some pandas readers),
-existence probes and ``Path.stat`` raise no audit event, so they are wrapped
-while a tracker is open: `FileDependencyRegistry` says which functions and
-how, and a meta-path hook wraps a registered module imported meanwhile. The
-executor ``submit`` methods are wrapped too, to carry the tracker into worker
-threads and bring back what worker processes read. Every wrapper looks the
-tracker up in `active_tracker` at call time, so one install serves every
-tracker.
+These are wrapped while a tracker is open; this list is the one place that
+names them:
+
+- readers that open files in C: pandas, polars, pyarrow and ``sqlite3``
+  (`FileDependencyRegistry` says which functions and how, and a meta-path
+  hook wraps a registered module imported meanwhile);
+- existence probes: ``os.path.exists``, ``lexists``, ``isfile``, ``isdir``
+  and ``os.access``;
+- metadata calls: ``Path.stat``, ``os.stat``, ``os.lstat``,
+  ``os.path.getsize``, ``getmtime``, ``getctime`` and the entries of
+  ``os.scandir``;
+- ``linecache.getline`` and ``getlines``, which read source files;
+- the ``submit`` of thread and process pool executors and
+  ``multiprocessing.Pool``, to carry the tracker into worker threads and
+  bring back what worker processes read.
+
+Every wrapper looks the tracker up in `active_tracker` at call time, so one
+install serves every tracker.
 """
 
 from __future__ import annotations

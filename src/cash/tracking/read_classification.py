@@ -46,9 +46,9 @@ __all__ = [
 # reliable trigger — it writes one entry per chunk plus a manifest, so a
 # 10-chunk result crosses the eviction-check threshold inside a single call.
 #
-# Same shape as cash's own ``open`` shim poisoning its cache key: the tracker cannot tell cash's internal reads from the user's, so paths that
-# are definitionally not data get excluded here. Linux-only in effect; on
-# Windows these prefixes never match.
+# The tracker cannot tell cash's internal reads from the user's, so paths
+# that are definitionally not data are excluded here. Linux-only in effect;
+# on Windows these prefixes never match.
 _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
 
 

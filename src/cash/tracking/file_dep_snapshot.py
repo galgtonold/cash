@@ -6,25 +6,15 @@ remote and absent entries). These are not pure functions: they stat and hash
 files, keep short-lived memos of both (``begin_file_state_epoch``,
 :class:`FreshnessMemo`), and do their own reads outside every tracker
 (``untracked``). A file's content is always hashed in full, never sampled.
-Consumed by:
 
-- ``src/cash/core.py`` — the decorator subsystem, when recording file deps for
-  a cached function call.
-- :class:`cash.notebook.Restorer` (``restore.py``) — when validating that
-  cached file deps still match.
-- :class:`cash.notebook.upstream.VirtualLineage` — when checking file
-  freshness during upstream simulation.
-- :class:`cash.notebook.statement.CacheFreshnessChecker` — the post-execution
-  freshness check for statement-level caching.
-
-They live here, outside the notebook's ``statement/`` package, so the
-decorator and other callers never import
-``cash.notebook.statement.freshness`` for them.
+Used by the decorator (``decorator/file_deps.py``, ``explain``) and by the
+notebook, so it lives outside the notebook package and the decorator never
+imports the notebook for it.
 
 **Content-hash freshness.** ``(mtime, size)`` alone is an
 ambiguous freshness signal and fails two opposite ways: a touch-only change
-(identical content + size, only the mtime bumped) spuriously invalidates
-, and a same-size edit under a mtime the coarse check can't tell apart
+(identical content + size, only the mtime bumped) spuriously invalidates,
+and a same-size edit under a mtime the coarse check can't tell apart
 (sub-resolution / same-second write) is missed. We therefore record a
 content hash at snapshot time and treat CONTENT as authoritative whenever the
 size matches: the cheap size check runs first (and never hashes on the

@@ -62,9 +62,10 @@ class FileAccessTracker:
     statement reads.
 
     **ContextVar dispatch**: Python-level opens and directory listings
-    arrive as audit events (:mod:`cash.tracking.io_watch`); readers that open
-    in C, existence probes and ``Path.stat`` get dispatcher wrappers, plus a
-    meta-path import hook for libraries loaded later. Both consult a
+    arrive as audit events (:mod:`cash.tracking.io_watch`); the calls that
+    raise none get dispatcher wrappers (listed in
+    :mod:`cash.tracking.reader_patches`), plus a meta-path import hook for
+    libraries loaded later. Both consult a
     ``ContextVar`` (``active_tracker``) at *call* time to decide whether to
     record the access. ``__enter__`` sets that ContextVar to ``self`` and
     stores the token; ``__exit__`` ``reset()``s it.

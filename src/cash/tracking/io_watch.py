@@ -15,10 +15,9 @@ and cannot be removed, so it is gated: it dispatches only the events some
 consumer currently needs, and one dictionary lookup decides that for every
 other audited event in the process.
 
-**Monkeypatches only where no event exists.** Readers that open files in
-C/C++/Rust (pyarrow, polars, sqlite3, some pandas readers), existence probes
-and ``Path.stat`` (``os.stat`` raises no event), and the executor ``submit``
-methods that carry a tracker into worker threads and processes. Those are
+**Monkeypatches only where no event exists**: readers that open files in
+C, existence probes, metadata calls such as ``os.stat`` and the pool
+``submit`` methods, listed in :mod:`cash.tracking.reader_patches`. Those are
 installed when the first observation scope opens and the originals are put
 back when the last one closes; ``%cash_on`` holds a scope for as long as it is
 on, so a notebook does not reinstall them for every statement.
