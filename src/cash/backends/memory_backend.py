@@ -461,7 +461,7 @@ class InMemoryBackend(CacheBackend):
             self._pressure_floor = None
             self._pressure_percent = None
 
-    def _evict(self, mem: Any = None) -> None:
+    def _evict(self, mem: Any) -> None:
         """Give back this tier's SHARE of the machine's memory pressure.
 
         Same order as the byte cap (`_evict_to_byte_cap`): least value per
@@ -484,49 +484,18 @@ class InMemoryBackend(CacheBackend):
         episode only hold the tier at that level: new entries displace the
         least valuable old ones rather than the tier shrinking again. The
         episode ends at the first check that finds no pressure.
-
-        Falls back to the old drain-to-target when the reading carries no
-        ``total`` -- psutil always provides it, so that is only ever a test
-        double -- because the share cannot be computed without it.
         """
-        target_percent = self.max_memory_percent * 0.9
-        share = self._pressure_share(mem, target_percent)
-        if share is not None:
-            self._shed(share)
-            return
+        self._shed(self._pressure_share(mem, self.max_memory_percent * 0.9))
 
-        items = [
-            (self._gdsf_priority(key, meta), self._seq_by_key.get(key, 0), key)
-            for key, (meta, _val) in self._store.items()
-        ]
-        items.sort()
-
-        evicted_count = 0
-
-        for priority, _seq, key in items:
-            if key in self._store:
-                self._drop(key)
-                self._gdsf_clock = max(self._gdsf_clock, priority)
-                evicted_count += 1
-
-                mem = _memory_reading()
-                if mem is None or mem.percent / 100.0 <= target_percent:
-                    break
-
-        if evicted_count > 0:
-            self._try_malloc_trim()
-
-    def _pressure_share(self, mem: Any, target_percent: float) -> float | None:
-        """Bytes this tier should give back now, or None when it cannot tell.
+    def _pressure_share(self, mem: Any, target_percent: float) -> float:
+        """Bytes this tier should give back now.
 
         The first check of a pressure episode: its proportional share of the
         overshoot. Every later one: whatever it has grown past the level the
         first one left. Neither goes below `_PRESSURE_KEEPS_BYTES`.
         """
-        total = getattr(mem, "total", None)
-        percent = getattr(mem, "percent", None)
-        if not isinstance(total, (int, float)) or not isinstance(percent, (int, float)) or total <= 0:
-            return None
+        total = mem.total
+        percent = mem.percent
         own = self._current_size_bytes
         worsening = (
             self._pressure_percent is not None and percent > self._pressure_percent + self._PRESSURE_WORSENED_POINTS
@@ -660,9 +629,11 @@ def _memory_reading() -> Any | None:
                 exc,
             )
         return None
-    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
-        return None
-    return mem
+    total = getattr(mem, "total", None)
+    for number in (percent, total):
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            return None
+    return mem if total > 0 else None
 
 
 _COW: list[bool] = []
