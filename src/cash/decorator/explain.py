@@ -24,7 +24,7 @@ from .cached_function import CachedFunction
 from .call_state import PROCESS_STARTED, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 
 if TYPE_CHECKING:
-    from ..config import CashConfig
+    from ..config.schema import CashConfig
     from .arg_hashing import ArgHasher
     from .backend_slot import BackendSlot
     from .frozen import FrozenResults

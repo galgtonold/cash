@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import _active, _log
 from .backends.factory import apply_persistence_settings, build_backend_from_config, built_from_config, tier_specs
-from .config import validated_overrides
+from .config.resolve import validated_overrides
 
 if TYPE_CHECKING:
     from .core import Cash

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from ..analysis.purity_analyzer import UnwalkableLayers, callable_layers
+from ..analysis.helper_code import UnwalkableLayers, callable_layers
 from ..canonical_form import stable_key_repr
 from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
 from ..content_hashers import BUILTIN_CONTENT
@@ -304,7 +304,7 @@ def code_fingerprint(code: types.CodeType) -> str:
 #: building a function per lookup), where the walk would never end. Past it
 #: the key would leave code out, so the call runs uncached instead
 #: (KEY-HELPERS-UNWALKABLE), as the helper walk does
-#: (``PurityAnalyzer._WALK_LIMIT``).
+#: (``HelperWalk.WALK_LIMIT``).
 MAX_CODE_REF_TARGETS = 5_000
 
 

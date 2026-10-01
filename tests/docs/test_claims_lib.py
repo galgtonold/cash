@@ -130,12 +130,12 @@ def test_resolves_a_module_level_function():
 
 
 def test_resolves_a_dataclass_field_to_its_annassign():
-    nodes, _ = resolve(Target("cash/config.py", "CashConfig.compress"))
+    nodes, _ = resolve(Target("cash/config/schema.py", "CashConfig.compress"))
     assert isinstance(nodes[-1], ast.AnnAssign)
 
 
 def test_no_symbol_resolves_to_the_module():
-    nodes, _ = resolve(Target("cash/config.py", None))
+    nodes, _ = resolve(Target("cash/config/schema.py", None))
     assert isinstance(nodes[-1], ast.Module)
 
 

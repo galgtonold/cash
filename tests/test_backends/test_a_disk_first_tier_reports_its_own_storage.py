@@ -10,7 +10,7 @@ read "only RAM" off it as "gone at the next restart".
 from __future__ import annotations
 
 from cash.backends.factory import build_backend_from_config
-from cash.config import CashConfig, TierConfig
+from cash.config.schema import CashConfig, TierConfig
 
 
 def test_a_file_first_tier_is_reported_as_disk(tmp_path):

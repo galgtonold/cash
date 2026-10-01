@@ -21,7 +21,7 @@ from typing import Any, NamedTuple
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
-from ..config import CashConfig
+from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, entry_expired

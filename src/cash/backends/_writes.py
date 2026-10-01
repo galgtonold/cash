@@ -22,7 +22,8 @@ from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.tracking.tracker_context import untracked
 
-from ..config import CashConfig, get_config
+from ..config.resolve import get_config
+from ..config.schema import CashConfig
 
 logger = logging.getLogger(__name__)
 

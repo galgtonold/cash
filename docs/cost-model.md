@@ -15,7 +15,7 @@ decision to cache it, and its results are always written to disk (see the
 
 ## The thresholds
 
-<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/config/schema.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
 | Compute time | What cash does | Survives a restart? |
 |---|---|---|
 | under 10 ms | nothing: the statement runs every time | — |
@@ -102,7 +102,7 @@ cash.configure(
 %cash_on
 ```
 
-<!-- claim: cash/config.py:CashConfig.min_cache_savings_pct == 0.20, cash/config.py:CashConfig.min_cache_fixed_budget_seconds == 0.05 -->
+<!-- claim: cash/config/schema.py:CashConfig.min_cache_savings_pct == 0.20, cash/config/schema.py:CashConfig.min_cache_fixed_budget_seconds == 0.05 -->
 | Setting | Environment variable | Default | Effect |
 |---|---|---|---|
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | How much faster reading back must be than computing. Higher means fewer values stored. |

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.annotations import assume_safe_block_lines
-from ..analysis.purity_analyzer import REPORTED_METHODS
+from ..analysis.purity_policy import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..source_reading import getsource, getsourcelines

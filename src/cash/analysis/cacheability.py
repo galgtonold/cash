@@ -19,13 +19,13 @@ from typing import Any
 
 from .._memo import STATEMENTS, LruMemo
 from ..effects import EffectKind
-from .aliases import aliased_sources, bare_alias_targets, cell_alias_map, reference_alias_targets
+from .aliases import bare_alias_targets, reference_alias_targets
 from .ast_util import called_names
 from .callee_effects import callee_global_mutations
 from .file_effects import WRITE_TEXT_MARKERS, SideEffectInfo, SideEffectVisitor
 from .mutations import ACCUMULATOR_METHODS, MutationVisitor
 
-__all__ = ["statement_writes_files", "StatementAnalysis", "alias_mutation_sources", "analyze_statement"]
+__all__ = ["statement_writes_files", "StatementAnalysis", "analyze_statement"]
 
 
 def statement_writes_files(code: str, tree: "ast.Module | None" = None) -> bool:
@@ -128,37 +128,6 @@ class StatementAnalysis:
         if side_effects:
             reasons.extend(f"Side effect: {e.description} ({e.kind})" for e in self.side_effects)
         return reasons
-
-
-def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
-    """Upstream variables whose object is mutated in place through an alias.
-
-    A bare ``Name = Name`` binding (``y = x``) makes ``y`` share ``x``'s object,
-    so a later in-place mutation through ``y`` (``y.append(..)``, ``y[0] += 1``)
-    also mutates ``x``. The mutation analysis attributes the change to the alias
-    ``y`` — which is created in the cell and has no producer to restore from —
-    so the upstream holder ``x`` is never marked for reset and the mutation
-    accumulates on an isolated re-run. This resolves each mutated name back
-    through the (transitive) alias map and returns the root source names, which
-    the checker unions into ``current_cell_mutated`` so the source resets.
-
-    Scope: top-level (``tree.body``) ``Name = Name`` aliases only; the RHS must be
-    a bare ``Name`` (``y = x.copy()`` / ``y = x[:]`` are copies, not aliases, and
-    are correctly excluded). Flow-insensitive — an alias re-bound before the
-    mutation still maps back, but resetting an un-mutated source to its identical
-    base is a correctness-safe no-op. A mutated name that is not an alias maps to
-    nothing and is left to the existing in-place-mutation reset.
-    """
-    if tree is None:
-        return frozenset()
-    alias_map = cell_alias_map(tree)
-    if not alias_map:
-        return frozenset()
-    try:
-        mutated = set(analyze_statement(ast.unparse(tree), None).all_mutated_vars)
-    except (SyntaxError, ValueError, TypeError):
-        return frozenset()
-    return aliased_sources(tree, mutated)
 
 
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.

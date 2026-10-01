@@ -848,7 +848,11 @@ class StatementProcessor:
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
-        start_time = _perf_counter()
+        # Only the statement's own run is timed. Setting up the observation
+        # around it is cash's cost, not the statement's, and the first setup
+        # in a process installs the reader patches: counted, a trivial first
+        # statement would look worth storing.
+        wall_time = 0.0
         if run.annotation is not None and run.annotation.no_cache:
             self._randomness.resume_live_stream(code)
         # Snapshot the global RNG streams around execution so a before/after
@@ -859,7 +863,11 @@ class StatementProcessor:
             with make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured:
                 execution.captured = captured
                 with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
-                    yield runner
+                    start_time = _perf_counter()
+                    try:
+                        yield runner
+                    finally:
+                        wall_time = _perf_counter() - start_time
                 execution.accessed_files = file_tracker.get_accessed_files()
                 execution.written_paths = frozenset(written_paths)
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls()
@@ -871,7 +879,7 @@ class StatementProcessor:
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
         self._forget_file_answers_if_it_wrote(code, execution)
-        execution.wall_time = _perf_counter() - start_time
+        execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
 

@@ -17,8 +17,8 @@ import warnings
 
 import pytest
 
-from cash import config as cash_config
-from cash.config import get_config
+from cash.config import notices as cash_config
+from cash.config.resolve import get_config
 from tests._cli_args import cli_args
 
 pytestmark = [pytest.mark.core]

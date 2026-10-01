@@ -30,7 +30,8 @@ from pathlib import Path
 
 import pytest
 
-from cash import _location, config
+from cash import _location
+from cash.config.resolve import get_config
 
 pytestmark = pytest.mark.core
 
@@ -59,7 +60,7 @@ def _no_project_above(path: Path) -> bool:
 def _config_cache_dir() -> str:
     # user config skipped: a real XDG file on the machine running the suite
     # must not decide the answer.
-    return str(config.get_config(user_config_path=None).cache_dir)
+    return str(get_config(user_config_path=None).cache_dir)
 
 
 def test_cash_itself_never_takes_the_per_user_cache(launched_as, tmp_path, monkeypatch):

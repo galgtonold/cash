@@ -13,20 +13,20 @@ import warnings
 
 import pytest
 
-from cash import config as config_module
+from cash.config import notices, sources
 
 pytestmark = pytest.mark.core
 
 
 @pytest.fixture(autouse=True)
 def _fresh_notices(monkeypatch):
-    monkeypatch.setattr(config_module, "_CONFIG_NOTICES", set())
+    monkeypatch.setattr(notices, "_CONFIG_NOTICES", set())
 
 
 def _notices(path):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        assert config_module._load_toml_config(path) == {}
+        assert sources._load_toml_config(path) == {}
     return [str(w.message) for w in rec if "CONFIG-INVALID" in str(w.message) and "not valid TOML" in str(w.message)]
 
 

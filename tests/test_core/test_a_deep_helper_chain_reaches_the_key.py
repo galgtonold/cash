@@ -25,7 +25,8 @@ import pytest
 
 import cash
 from cash import Cash
-from cash.analysis.purity_analyzer import PurityAnalyzer, get_analyzer
+from cash.analysis.helper_walk import HelperWalk
+from cash.analysis.purity_analyzer import get_analyzer
 from cash.exceptions import CashWarning
 
 pytestmark = [pytest.mark.core]
@@ -151,7 +152,7 @@ def total(x):
 def test_a_walk_with_no_end_runs_uncached_with_a_warning(tmp_path, monkeypatch):
     """Each read of ``step`` makes a new function that reads ``step``: the
     walk can never finish, so the call is not keyed by the part it saw."""
-    monkeypatch.setattr(PurityAnalyzer, "_WALK_LIMIT", 40)  # the real bound only costs time
+    monkeypatch.setattr(HelperWalk, "WALK_LIMIT", 40)  # the real bound only costs time
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_endless_{tmp_path.name}"
     monkeypatch.delitem(sys.modules, name, raising=False)

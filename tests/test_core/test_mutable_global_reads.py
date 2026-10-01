@@ -11,11 +11,9 @@ import warnings
 import pytest
 
 from cash import CashImpurityWarning
-from cash.analysis.purity_analyzer import (
-    ISSUE_MUTABLE_GLOBAL,
-    _module_modified_globals,
-    get_analyzer,
-)
+from cash.analysis.mutable_globals import module_modified_globals
+from cash.analysis.purity_analyzer import get_analyzer
+from cash.analysis.purity_report import ISSUE_MUTABLE_GLOBAL
 from tests.test_core import _global_read_fixture as gf
 
 
@@ -25,7 +23,7 @@ def _global_flags(func):
 
 
 def test_scanner_finds_only_modified_globals():
-    modified = _module_modified_globals(gf)
+    modified = module_modified_globals(gf)
     assert "CONFIG" in modified  # in-place mutated (inside a function)
     assert "COUNTER" in modified  # reassigned via `global`
     assert "TABLE" not in modified  # constant (local shadow doesn't count)
@@ -98,11 +96,11 @@ def test_an_edited_module_is_scanned_again(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(tmp_path))
     mod = importlib.import_module("edited_globals_mod")
     try:
-        assert "SEEN" not in _module_modified_globals(mod)
+        assert "SEEN" not in module_modified_globals(mod)
 
         path.write_text("SEEN = []\n\ndef f():\n    SEEN.append(1)\n", encoding="utf-8")
         st = path.stat()
         os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-        assert "SEEN" in _module_modified_globals(mod)
+        assert "SEEN" in module_modified_globals(mod)
     finally:
         sys.modules.pop("edited_globals_mod", None)

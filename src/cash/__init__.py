@@ -26,7 +26,9 @@ from typing import Any
 from . import _active
 from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.sqlite_backend import SQLiteBackend
-from .config import CashConfig, create_default_config, get_config
+from .config.resolve import get_config
+from .config.schema import CashConfig
+from .config.template import create_default_config
 from .core import CacheExplanation, Cash
 from .data_source import DataSource
 from .effect_observer import assume_safe
@@ -63,7 +65,7 @@ def _watch_reads_from_import() -> None:
     recorded no file, and an edit to the file was served the old result.
     Not with ``CASH_DISABLE`` set: caching off promises nothing is watched.
     """
-    from .config import validate_value
+    from .config.schema import validate_value
 
     try:
         if validate_value("disable", os.environ.get("CASH_DISABLE", "").strip() or "0"):
