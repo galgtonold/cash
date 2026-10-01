@@ -34,13 +34,7 @@ import warnings
 
 import pytest
 
-from cash import Cash
 from cash.tracking import file_dep_snapshot
-
-
-@pytest.fixture
-def cash_instance(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _aged_file(tmp_path, name="input.csv", mib=1):
@@ -64,7 +58,7 @@ def _reader(c, runs, path):
     return read
 
 
-def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch):
+def test_a_burst_of_checks_shares_a_digest(disk_cash, tmp_path, monkeypatch):
     """The memo, asserted where it is decided rather than by a stopwatch: an
     aggregate whose cached helpers all depend on one input hashes it at most
     once, not once per helper (the motivating pipeline: fifty inputs, ten
@@ -74,9 +68,9 @@ def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch)
 
     path = _aged_file(tmp_path)
     runs: list[str] = []
-    read = _reader(cash_instance, runs, path)
+    read = _reader(disk_cash, runs, path)
 
-    @cash_instance.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def aggregate(n):
         return sum(read(str(i)) for i in range(n))
 
@@ -96,7 +90,7 @@ def test_a_burst_of_checks_shares_a_digest(cash_instance, tmp_path, monkeypatch)
     strict=True,
     reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
 )
-def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(cash_instance, tmp_path, monkeypatch):
+def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(disk_cash, tmp_path, monkeypatch):
     """A documented limitation: in a running process, an
     edit that leaves the size and every timestamp alone (an np.memmap write on
     Windows; a write + os.utime back) is not seen while the digest is being
@@ -107,7 +101,7 @@ def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(cash_i
     path = _aged_file(tmp_path)
     runs: list[str] = []
 
-    @cash_instance.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def first_byte(tag):
         runs.append(tag)
         with open(path, "rb") as fh:
@@ -131,7 +125,7 @@ def test_an_edit_that_keeps_size_and_mtime_is_seen_once_the_window_passes(cash_i
     strict=True,
     reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
 )
-def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_instance, tmp_path):
+def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(disk_cash, tmp_path):
     """An np.memmap write landed while a cached step was
     computing. The result, computed from the old bytes, was stored with the
     fingerprint of the NEW file -- taken at store time, and the stat that
@@ -140,7 +134,7 @@ def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_ins
     path = _aged_file(tmp_path)
     before = os.stat(path)
 
-    @cash_instance.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def first_byte(tag):
         with open(path, "rb") as fh:
             got = fh.read(1)
@@ -159,11 +153,11 @@ def test_a_file_changed_during_the_call_is_recorded_as_the_body_read_it(cash_ins
     assert first_byte("a") == b"Z", "the entry recorded the new file for the old result"
 
 
-def test_an_edit_still_invalidates_with_the_memo_warm(cash_instance, tmp_path):
+def test_an_edit_still_invalidates_with_the_memo_warm(disk_cash, tmp_path):
     """The control that matters: speed must not cost correctness."""
     path = _aged_file(tmp_path)
     runs: list[str] = []
-    read = _reader(cash_instance, runs, path)
+    read = _reader(disk_cash, runs, path)
 
     assert read("a") == 1024 * 1024
     with open(path, "ab") as fh:  # ordinary edit: size and mtime move
@@ -173,7 +167,7 @@ def test_an_edit_still_invalidates_with_the_memo_warm(cash_instance, tmp_path):
     assert len(runs) == 2
 
 
-def test_a_freshly_written_file_is_not_memoized(cash_instance, tmp_path):
+def test_a_freshly_written_file_is_not_memoized(disk_cash, tmp_path):
     """A file written moments ago is the one that may still be changing."""
     path = str(tmp_path / "fresh.csv")
     with open(path, "wb") as fh:
@@ -190,7 +184,7 @@ def test_a_freshly_written_file_is_not_memoized(cash_instance, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_expensive_local_validation_is_reported(cash_instance, tmp_path, monkeypatch):
+def test_expensive_local_validation_is_reported(disk_cash, tmp_path, monkeypatch):
     """Slow checking is now visible, with the same rule the remote path uses.
 
     The delay is injected rather than provoked: reaching the threshold for real
@@ -200,7 +194,7 @@ def test_expensive_local_validation_is_reported(cash_instance, tmp_path, monkeyp
     """
     path = _aged_file(tmp_path)
     runs: list[str] = []
-    read = _reader(cash_instance, runs, path)
+    read = _reader(disk_cash, runs, path)
     read("a")
 
     real = file_dep_snapshot.file_dep_is_fresh
@@ -220,11 +214,11 @@ def test_expensive_local_validation_is_reported(cash_instance, tmp_path, monkeyp
     assert "1 tracked file" in text, text
 
 
-def test_ordinary_validation_says_nothing(cash_instance, tmp_path):
+def test_ordinary_validation_says_nothing(disk_cash, tmp_path):
     """The control: the warning must be rare enough to mean something."""
     path = _aged_file(tmp_path)
     runs: list[str] = []
-    read = _reader(cash_instance, runs, path)
+    read = _reader(disk_cash, runs, path)
     read("a")
 
     with warnings.catch_warnings(record=True) as rec:

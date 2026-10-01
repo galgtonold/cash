@@ -23,17 +23,12 @@ import warnings
 
 import pytest
 
-from cash import Cash, content_hashers
+from cash import content_hashers
 from tests._scripts import run_python
 
 np = pytest.importorskip("numpy")
 
 pytestmark = pytest.mark.core
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 class Model:
@@ -43,12 +38,12 @@ class Model:
         self.weights = list(weights)
 
 
-def test_a_frozen_result_is_keyed_without_hashing_it(c, monkeypatch):
-    @c.cache(frozen=True)
+def test_a_frozen_result_is_keyed_without_hashing_it(disk_cash, monkeypatch):
+    @disk_cash.cache(frozen=True)
     def train():
         return Model(range(100_000))
 
-    @c.cache
+    @disk_cash.cache
     def score(model, x):
         return sum(model.weights[:x])
 
@@ -81,14 +76,14 @@ def test_a_frozen_result_is_keyed_without_hashing_it(c, monkeypatch):
     assert sizes and max(sizes) < 4096, f"the frozen model was pickled into the key: {sizes}"
 
 
-def test_an_unfrozen_result_is_keyed_by_content(c):
+def test_an_unfrozen_result_is_keyed_by_content(disk_cash):
     """The control: without the declaration, a mutation reaches the key."""
 
-    @c.cache
+    @disk_cash.cache
     def train():
         return Model([1, 2, 3])
 
-    @c.cache
+    @disk_cash.cache
     def total(model):
         return sum(model.weights)
 
@@ -130,7 +125,7 @@ def test_a_frozen_result_hits_across_processes(tmp_path):
     assert "[RUN]" in runs[0].stderr and "[RUN]" not in runs[1].stderr
 
 
-def test_an_unpicklable_frozen_result_can_still_be_passed_on(c):
+def test_an_unpicklable_frozen_result_can_still_be_passed_on(disk_cash):
     """Content hashing cannot key an object holding a lock; its producer's
     identity can, which is what made this work before results were keyed by
     content."""
@@ -140,13 +135,13 @@ def test_an_unpicklable_frozen_result_can_still_be_passed_on(c):
             self.lock = threading.Lock()
             self.n = 3
 
-    @c.cache(frozen=True)
+    @disk_cash.cache(frozen=True)
     def make():
         return Holder()
 
     calls = []
 
-    @c.cache
+    @disk_cash.cache
     def use(h):
         calls.append(1)
         return h.n * 2
@@ -160,8 +155,8 @@ def test_an_unpicklable_frozen_result_can_still_be_passed_on(c):
     assert not [w for w in rec if "KEY-UNHASHABLE-ARG" in str(w.message)]
 
 
-def test_a_frozen_numpy_result_comes_back_read_only(c):
-    @c.cache(frozen=True)
+def test_a_frozen_numpy_result_comes_back_read_only(disk_cash):
+    @disk_cash.cache(frozen=True)
     def grid(n):
         return np.arange(float(n))
 
@@ -173,7 +168,7 @@ def test_a_frozen_numpy_result_comes_back_read_only(c):
     assert not b.flags.writeable
 
 
-def test_a_frozen_numpy_result_is_hashed_once(c, monkeypatch):
+def test_a_frozen_numpy_result_is_hashed_once(disk_cash, monkeypatch):
     calls = []
     real = content_hashers.hash_numpy
 
@@ -181,11 +176,11 @@ def test_a_frozen_numpy_result_is_hashed_once(c, monkeypatch):
         calls.append(1)
         return real(value)
 
-    @c.cache(frozen=True)
+    @disk_cash.cache(frozen=True)
     def grid(n):
         return np.arange(float(n))
 
-    @c.cache
+    @disk_cash.cache
     def total(a):
         return float(a.sum())
 
@@ -196,16 +191,16 @@ def test_a_frozen_numpy_result_is_hashed_once(c, monkeypatch):
     assert len(calls) == 1
 
 
-def test_mutating_a_frozen_result_is_caught_by_the_audit(c, monkeypatch):
+def test_mutating_a_frozen_result_is_caught_by_the_audit(disk_cash, monkeypatch):
     """The declaration can be wrong: `model.fit(...)` downstream on a model from a
     frozen step. Under CASH_DEBUG every use is audited."""
     monkeypatch.setenv("CASH_DEBUG", "1")
 
-    @c.cache(frozen=True)
+    @disk_cash.cache(frozen=True)
     def train():
         return Model([1, 2, 3])
 
-    @c.cache
+    @disk_cash.cache
     def total(model):
         return sum(model.weights)
 
@@ -221,12 +216,12 @@ def test_mutating_a_frozen_result_is_caught_by_the_audit(c, monkeypatch):
     assert "train" in str(found[0].message)
 
 
-def test_explain_names_an_argument_keyed_as_frozen(c):
-    @c.cache(frozen=True)
+def test_explain_names_an_argument_keyed_as_frozen(disk_cash):
+    @disk_cash.cache(frozen=True)
     def train():
         return Model([1, 2, 3])
 
-    @c.cache
+    @disk_cash.cache
     def total(model):
         return sum(model.weights)
 

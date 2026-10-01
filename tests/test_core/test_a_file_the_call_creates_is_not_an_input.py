@@ -18,14 +18,7 @@ import zipfile
 
 import pytest
 
-from cash import Cash
-
 pytestmark = pytest.mark.core
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _codes(fn, *args):
@@ -42,10 +35,10 @@ def _archive(tmp_path):
     return str(archive)
 
 
-def test_unzipping_into_a_temporary_directory_caches(c, tmp_path):
+def test_unzipping_into_a_temporary_directory_caches(disk_cash, tmp_path):
     archive = _archive(tmp_path)
 
-    @c.cache
+    @disk_cash.cache
     def unzip_and_read(path):
         with tempfile.TemporaryDirectory() as d:
             with zipfile.ZipFile(path) as z:
@@ -59,10 +52,10 @@ def test_unzipping_into_a_temporary_directory_caches(c, tmp_path):
     assert unzip_and_read.cache_info()["hits"] == 1
 
 
-def test_a_scratch_file_written_read_and_removed_caches(c, tmp_path):
+def test_a_scratch_file_written_read_and_removed_caches(disk_cash, tmp_path):
     scratch = tmp_path / "scratch.txt"
 
-    @c.cache
+    @disk_cash.cache
     def round_trip(text):
         with open(scratch, "w", encoding="utf-8") as fh:  # @cash:assume-safe
             fh.write(text.upper())
@@ -76,8 +69,8 @@ def test_a_scratch_file_written_read_and_removed_caches(c, tmp_path):
     assert round_trip.cache_info()["hits"] == 1
 
 
-def test_a_mkstemp_file_caches(c):
-    @c.cache
+def test_a_mkstemp_file_caches(disk_cash):
+    @disk_cash.cache
     def via_mkstemp(text):
         fd, path = tempfile.mkstemp()
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -92,12 +85,12 @@ def test_a_mkstemp_file_caches(c):
     assert via_mkstemp.cache_info()["hits"] == 1
 
 
-def test_a_file_read_before_the_call_rewrites_it_is_still_an_input(c, tmp_path):
+def test_a_file_read_before_the_call_rewrites_it_is_still_an_input(disk_cash, tmp_path):
     """Control: read first, then rewritten -- which version was it computed from?"""
     data = tmp_path / "data.txt"
     data.write_text("1", encoding="utf-8")
 
-    @c.cache
+    @disk_cash.cache
     def read_then_bump():
         value = data.read_text(encoding="utf-8")
         with open(data, "w", encoding="utf-8") as fh:  # @cash:assume-safe

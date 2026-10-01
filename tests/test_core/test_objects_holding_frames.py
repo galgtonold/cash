@@ -12,7 +12,6 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import cash
 from cash.decorator import arg_hashing
 
 pytestmark = pytest.mark.core
@@ -27,14 +26,9 @@ class Bundle:
         self.extra = [pd.Series(range(n))]
 
 
-@pytest.fixture
-def c(tmp_path):
-    return cash.Cash(cache_dir=str(tmp_path / "cache"))
-
-
 @pytest.mark.skipif(not COW, reason="the memo needs pandas copy-on-write")
-def test_a_repeat_call_does_not_read_unchanged_frames_again(c, monkeypatch):
-    @c.cache
+def test_a_repeat_call_does_not_read_unchanged_frames_again(disk_cash, monkeypatch):
+    @disk_cash.cache
     def total(b):
         return int(b.frames["a"]["x"].sum())
 

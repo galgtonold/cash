@@ -16,13 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from cash import Cash
 from cash.effects import environment_input
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def by_abspath():
@@ -48,8 +42,8 @@ def by_absolute(p):
 @pytest.mark.parametrize(
     "fn", [by_abspath, by_path_cwd, by_realpath, by_resolve, by_absolute], ids=lambda f: f.__name__
 )
-def test_another_directory_is_another_entry(c, monkeypatch, tmp_path, fn):
-    cached = c.cache(fn)
+def test_another_directory_is_another_entry(disk_cash, monkeypatch, tmp_path, fn):
+    cached = disk_cash.cache(fn)
     args = ("results",) if fn is by_absolute else ()
     (tmp_path / "jobA").mkdir()
     (tmp_path / "jobB").mkdir()

@@ -31,14 +31,7 @@ import warnings
 
 import pytest
 
-from cash import Cash
-
 pytestmark = pytest.mark.core
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _write(path, text):
@@ -78,14 +71,14 @@ def _stored_warnings(rec):
     return [w for w in rec if "STORE-INPUT-CHANGED" in str(w.message)]
 
 
-def test_a_file_rewritten_during_the_call_is_not_cached(c, tmp_path):
+def test_a_file_rewritten_during_the_call_is_not_cached(disk_cash, tmp_path):
     """THE BUG: the patch was fingerprinted as if it were what was read."""
     data = tmp_path / "data.txt"
     _write(data, "1\n2\n3\n")
     runs = []
     writer = _Writer(data, "1\n2\n9\n")  # sync job lands mid-call
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def total(path):
         runs.append(1)
         with open(path, encoding="utf-8") as fh:
@@ -105,7 +98,7 @@ def test_a_file_rewritten_during_the_call_is_not_cached(c, tmp_path):
     assert len(runs) == 2
 
 
-def test_the_nested_form_is_not_cached_either(c, tmp_path):
+def test_the_nested_form_is_not_cached_either(disk_cash, tmp_path):
     """An outer aggregate must not re-fingerprint a file its inner call read."""
     a, b = tmp_path / "a.txt", tmp_path / "b.txt"
     _write(a, "1\n")
@@ -113,7 +106,7 @@ def test_the_nested_form_is_not_cached_either(c, tmp_path):
     writer = _Writer(a, "5\n")  # lands while inner(b) runs
     outer_runs = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def inner(path):
         with open(path, encoding="utf-8") as fh:
             value = int(fh.read())
@@ -122,7 +115,7 @@ def test_the_nested_form_is_not_cached_either(c, tmp_path):
         time.sleep(0.2)
         return value
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def outer(folder):
         outer_runs.append(1)
         return inner(str(tmp_path / "a.txt")) + inner(str(tmp_path / "b.txt"))
@@ -139,13 +132,13 @@ def test_the_nested_form_is_not_cached_either(c, tmp_path):
     assert len(outer_runs) == 2
 
 
-def test_an_unchanged_file_still_stores_and_hits(c, tmp_path):
+def test_an_unchanged_file_still_stores_and_hits(disk_cash, tmp_path):
     """The control that matters: the check must not cost ordinary caching."""
     data = tmp_path / "data.txt"
     _write(data, "1\n2\n3\n")
     runs = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def total(path):
         runs.append(1)
         with open(path, encoding="utf-8") as fh:
@@ -162,7 +155,7 @@ def test_an_unchanged_file_still_stores_and_hits(c, tmp_path):
     assert not _stored_warnings(rec)
 
 
-def test_writing_into_a_listed_directory_still_caches(c, tmp_path):
+def test_writing_into_a_listed_directory_still_caches(disk_cash, tmp_path):
     """Directories are left out on purpose.
 
     A function that lists a folder and writes its output into it moves the
@@ -177,7 +170,7 @@ def test_writing_into_a_listed_directory_still_caches(c, tmp_path):
     _write(folder / "x.csv", "1\n")
     runs = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def summarise(path):
         runs.append(1)
         names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(path, "*.csv")))

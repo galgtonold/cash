@@ -17,22 +17,16 @@ import warnings
 
 import pytest
 
-from cash import Cash
 from cash.effectiveness import EffectivenessLedger
 
 pytestmark = pytest.mark.core
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
-def test_changing_an_argument_in_place_says_what_a_hit_does(c):
+def test_changing_an_argument_in_place_says_what_a_hit_does(disk_cash):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
 
-        @c.cache
+        @disk_cash.cache
         def winsorize(feats):
             feats["x"] = 0
             return len(feats)
@@ -44,14 +38,14 @@ def test_changing_an_argument_in_place_says_what_a_hit_does(c):
     assert "Fix: for a line that changes an argument in place, return a modified copy" in text
 
 
-def test_a_global_mutation_keeps_the_old_wording(c):
+def test_a_global_mutation_keeps_the_old_wording(disk_cash):
     """Control: only a PARAMETER is described as the caller's object."""
     registry = {}
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
 
-        @c.cache
+        @disk_cash.cache
         def register(k):
             registry[k] = 1
             return k
@@ -67,14 +61,14 @@ class Model:
         self.weights = [float(i) for i in range(n)]
 
 
-def test_net_loss_names_the_argument_and_suggests_frozen_on_its_producer(c):
-    c._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
+def test_net_loss_names_the_argument_and_suggests_frozen_on_its_producer(disk_cash):
+    disk_cash._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
 
-    @c.cache
+    @disk_cash.cache
     def train(n):
         return Model(n)
 
-    @c.cache
+    @disk_cash.cache
     def first_weight(model):
         return model.weights[0]
 

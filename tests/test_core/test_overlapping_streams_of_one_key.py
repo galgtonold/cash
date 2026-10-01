@@ -16,20 +16,11 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
-from cash import Cash
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
-def test_an_abandoned_stream_leaves_a_finished_one_intact(c):
+def test_an_abandoned_stream_leaves_a_finished_one_intact(disk_cash):
     runs = []
 
-    @c.cache(chunk_max_items=2, assume_safe=True)
+    @disk_cash.cache(chunk_max_items=2, assume_safe=True)
     def gen(n):
         runs.append(1)
         yield from range(n)
@@ -44,8 +35,8 @@ def test_an_abandoned_stream_leaves_a_finished_one_intact(c):
     assert runs == [], "the finished stream's entry was damaged by the abandoned one"
 
 
-def test_two_finished_streams_store_one_whole_run(c):
-    @c.cache(chunk_max_items=2, assume_safe=True)
+def test_two_finished_streams_store_one_whole_run(disk_cash):
+    @disk_cash.cache(chunk_max_items=2, assume_safe=True)
     def gen(n):
         run = time.perf_counter_ns()  # which run produced the items
         for i in range(n):
@@ -62,8 +53,8 @@ def test_two_finished_streams_store_one_whole_run(c):
     assert gen.cache_info()["hits"] == 1
 
 
-def test_a_replaced_entry_leaves_no_chunks_behind(c):
-    @c.cache(chunk_max_items=2, assume_safe=True)
+def test_a_replaced_entry_leaves_no_chunks_behind(disk_cash):
+    @disk_cash.cache(chunk_max_items=2, assume_safe=True)
     def gen(n):
         yield from range(n)
 
@@ -71,5 +62,5 @@ def test_a_replaced_entry_leaves_no_chunks_behind(c):
     list(a)
     list(b)  # replaces a's manifest
 
-    chunks = [e["key"] for e in c.backend.list_entries() if ":chunk_" in e["key"]]
+    chunks = [e["key"] for e in disk_cash.backend.list_entries() if ":chunk_" in e["key"]]
     assert len(chunks) == 3, chunks

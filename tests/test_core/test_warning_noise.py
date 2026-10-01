@@ -25,8 +25,6 @@ import warnings
 
 import pytest
 
-from cash import Cash
-
 pytestmark = [pytest.mark.core, pytest.mark.timeout(120)]
 
 _app_log = logging.getLogger("cash_test_app")
@@ -45,11 +43,6 @@ def _call(fn, *args):
         warnings.simplefilter("always")
         fn(*args)
     return rec
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 # -- 1. an observed effect is reported whatever the static pass said ---------
@@ -95,8 +88,8 @@ def _audited_marker_then_audited_fetch(url):
     return _fetch_audited(url)
 
 
-def test_a_network_read_is_reported_beside_a_static_finding(c, url):
-    rec = _call(c.cache(_marker_then_fetch), url)
+def test_a_network_read_is_reported_beside_a_static_finding(disk_cash, url):
+    rec = _call(disk_cash.cache(_marker_then_fetch), url)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
     observed = _message(rec, "KEY-NETWORK-READ")
     assert "socket connect" in observed, _codes(rec)
@@ -104,12 +97,12 @@ def test_a_network_read_is_reported_beside_a_static_finding(c, url):
     assert "# @cash:assume-safe" in observed, "the line-scoped waiver is not offered"
 
 
-def test_the_line_waiver_covers_an_observed_effect(c, url):
-    rec = _call(c.cache(_audited_marker_then_audited_fetch), url)
+def test_the_line_waiver_covers_an_observed_effect(disk_cash, url):
+    rec = _call(disk_cash.cache(_audited_marker_then_audited_fetch), url)
     assert "KEY-NETWORK-READ" not in _codes(rec), _message(rec, "KEY-NETWORK-READ")
 
 
-def test_an_effect_the_static_warning_named_is_not_repeated(c, tmp_path):
+def test_an_effect_the_static_warning_named_is_not_repeated(disk_cash, tmp_path):
     target = tmp_path / "out.txt"
 
     def write_it(path):
@@ -117,7 +110,7 @@ def test_an_effect_the_static_warning_named_is_not_repeated(c, tmp_path):
             f.write("x")
         return 1
 
-    rec = _call(c.cache(write_it), str(target))
+    rec = _call(disk_cash.cache(write_it), str(target))
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec)
     assert "IMPURE-OBSERVED-EFFECTS" not in _codes(rec), _message(rec, "IMPURE-OBSERVED-EFFECTS")
 
@@ -147,13 +140,13 @@ def _keeps_the_stamp(n):
     return n, stamp
 
 
-def test_a_timestamp_for_a_log_helper_is_not_an_ambient_read(c):
-    rec = _call(c.cache(_times_itself), 10)
+def test_a_timestamp_for_a_log_helper_is_not_an_ambient_read(disk_cash):
+    rec = _call(disk_cash.cache(_times_itself), 10)
     assert "KEY-AMBIENT-READ" not in _codes(rec), _message(rec, "KEY-AMBIENT-READ")
 
 
-def test_a_timestamp_that_is_returned_still_is(c):
-    rec = _call(c.cache(_keeps_the_stamp), 10)
+def test_a_timestamp_that_is_returned_still_is(disk_cash):
+    rec = _call(disk_cash.cache(_keeps_the_stamp), 10)
     assert "time.time()" in _message(rec, "KEY-AMBIENT-READ"), _codes(rec)
 
 
@@ -177,8 +170,8 @@ def _counted(xs):
     return len(xs)
 
 
-def test_a_setter_configured_global_is_not_reported(c):
-    flagged = c.cache(_flagged)
+def test_a_setter_configured_global_is_not_reported(disk_cash):
+    flagged = disk_cash.cache(_flagged)
     rec = _call(flagged, (0.05, 0.2))
     assert "mutable_global" not in _message(rec, "IMPURE-SIDE-EFFECTS"), _message(rec, "IMPURE-SIDE-EFFECTS")
     try:
@@ -188,8 +181,8 @@ def test_a_setter_configured_global_is_not_reported(c):
         _configure(0.10)
 
 
-def test_a_global_the_function_itself_mutates_still_is(c):
-    rec = _call(c.cache(_counted), (1, 2))
+def test_a_global_the_function_itself_mutates_still_is(disk_cash):
+    rec = _call(disk_cash.cache(_counted), (1, 2))
     assert "mutable_global" in _message(rec, "IMPURE-SIDE-EFFECTS"), _codes(rec)
 
 
@@ -204,8 +197,8 @@ def _applies(score, prep=None):
     return 1
 
 
-def test_an_opaque_callable_names_the_parameter_it_arrived_in(c):
-    applies = c.cache(_applies, assume_safe=True)
+def test_an_opaque_callable_names_the_parameter_it_arrived_in(disk_cash):
+    applies = disk_cash.cache(_applies, assume_safe=True)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         applies(_Opaque())

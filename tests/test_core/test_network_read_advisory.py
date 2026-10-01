@@ -25,7 +25,6 @@ import warnings
 
 import pytest
 
-from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer
 from cash.analysis.purity_report import ISSUE_NETWORK_READ
 from cash.exceptions import CashImpureFunctionError
@@ -62,11 +61,6 @@ def _call(fn, *args):
         warnings.simplefilter("always")
         fn(*args)
     return rec
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 @pytest.fixture(scope="module")
@@ -114,53 +108,53 @@ def test_the_analyzer_names_a_read_as_a_read():
     assert "what the server returns is not in the cache key" in issues[0].description
 
 
-def test_a_network_read_gets_the_ttl_advisory(c, url):
-    rec = _call(c.cache(fetch), url)
+def test_a_network_read_gets_the_ttl_advisory(disk_cash, url):
+    rec = _call(disk_cash.cache(fetch), url)
     assert _codes(rec) == ["KEY-NETWORK-READ"], _codes(rec)
     message = _message(rec, "KEY-NETWORK-READ")
     assert "urllib.request.urlopen()" in message
     assert "ttl=" in message
 
 
-def test_ttl_silences_it(c, url):
-    rec = _call(c.cache(fetch, ttl=3600), url)
+def test_ttl_silences_it(disk_cash, url):
+    rec = _call(disk_cash.cache(fetch, ttl=3600), url)
     assert _codes(rec) == [], _codes(rec)
 
 
-def test_the_line_waiver_silences_it(c, url):
-    rec = _call(c.cache(fetch_audited), url)
+def test_the_line_waiver_silences_it(disk_cash, url):
+    rec = _call(disk_cash.cache(fetch_audited), url)
     assert _codes(rec) == [], _codes(rec)
 
 
-def test_the_observer_does_not_repeat_the_connection(c, url):
+def test_the_observer_does_not_repeat_the_connection(disk_cash, url):
     """The first call opens a socket; the advisory already named that read."""
-    rec = _call(c.cache(fetch), url)
+    rec = _call(disk_cash.cache(fetch), url)
     assert "IMPURE-OBSERVED-EFFECTS" not in _codes(rec), _message(rec, "IMPURE-OBSERVED-EFFECTS")
 
 
-def test_nor_when_ttl_silenced_the_advisory(c, url):
-    rec = _call(c.cache(fetch, ttl=3600), url)
+def test_nor_when_ttl_silenced_the_advisory(disk_cash, url):
+    rec = _call(disk_cash.cache(fetch, ttl=3600), url)
     assert "IMPURE-OBSERVED-EFFECTS" not in _codes(rec), _message(rec, "IMPURE-OBSERVED-EFFECTS")
 
 
-def test_strict_mode_raises_on_it(c, url):
+def test_strict_mode_raises_on_it(disk_cash, url):
     with pytest.raises(CashImpureFunctionError) as exc:
-        c.cache(fetch, strict=True)(url)
+        disk_cash.cache(fetch, strict=True)(url)
     assert "urlopen" in str(exc.value)
 
 
-def test_strict_mode_accepts_it_with_a_ttl(c, url):
-    assert c.cache(fetch, strict=True, ttl=3600)(url) == 7
+def test_strict_mode_accepts_it_with_a_ttl(disk_cash, url):
+    assert disk_cash.cache(fetch, strict=True, ttl=3600)(url) == 7
 
 
-def test_a_post_is_still_a_side_effect(c, url):
-    rec = _call(c.cache(post), url)
+def test_a_post_is_still_a_side_effect(disk_cash, url):
+    rec = _call(disk_cash.cache(post), url)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
     assert "KEY-NETWORK-READ" not in _codes(rec)
 
 
-def test_ttl_does_not_silence_a_post(c, url):
-    rec = _call(c.cache(post, ttl=3600), url)
+def test_ttl_does_not_silence_a_post(disk_cash, url):
+    rec = _call(disk_cash.cache(post, ttl=3600), url)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
 
 
@@ -195,22 +189,22 @@ def db(tmp_path):
     return path
 
 
-def test_a_query_gets_the_ttl_advisory(c):
-    rec = _call(c.cache(query_elsewhere))
+def test_a_query_gets_the_ttl_advisory(disk_cash):
+    rec = _call(disk_cash.cache(query_elsewhere))
     assert _codes(rec) == ["KEY-NETWORK-READ"], _codes(rec)
     message = _message(rec, "KEY-NETWORK-READ")
     assert "execute() - what the database returns is not in the cache key" in message
 
 
-def test_ttl_silences_a_query(c):
-    rec = _call(c.cache(query_elsewhere, ttl=60))
+def test_ttl_silences_a_query(disk_cash):
+    rec = _call(disk_cash.cache(query_elsewhere, ttl=60))
     assert _codes(rec) == [], _codes(rec)
 
 
-def test_a_sqlite_file_the_body_opens_is_already_in_the_key(c, db):
+def test_a_sqlite_file_the_body_opens_is_already_in_the_key(disk_cash, db):
     """`sqlite3.connect(path)` is tracked as a read of that file, so the
     answer is keyed and there is nothing to advise."""
-    cached = c.cache(count_rows)
+    cached = disk_cash.cache(count_rows)
     rec = _call(cached, db)
     assert _codes(rec) == [], _codes(rec)
     with contextlib.closing(sqlite3.connect(db)) as con, con:
@@ -218,7 +212,7 @@ def test_a_sqlite_file_the_body_opens_is_already_in_the_key(c, db):
     assert cached(db) == 1
 
 
-def test_a_database_write_is_still_a_side_effect(c, db):
-    rec = _call(c.cache(add_row, ttl=60), db)
+def test_a_database_write_is_still_a_side_effect(disk_cash, db):
+    rec = _call(disk_cash.cache(add_row, ttl=60), db)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
     assert "KEY-NETWORK-READ" not in _codes(rec)

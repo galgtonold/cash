@@ -39,11 +39,6 @@ import pytest
 from cash import Cash
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 def _drain(make_iter):
     """Return (arrival times, items), timing from BEFORE the call.
 
@@ -58,7 +53,7 @@ def _drain(make_iter):
     return arrivals, items
 
 
-def test_the_producer_never_runs_ahead_of_the_consumer(c):
+def test_the_producer_never_runs_ahead_of_the_consumer(disk_cash):
     """The streaming assertion, without a clock.
 
     A wall-clock threshold is the one flake class this suite keeps
@@ -68,7 +63,7 @@ def test_the_producer_never_runs_ahead_of_the_consumer(c):
     """
     produced: list[int] = []
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         for i in range(5):
             produced.append(i)
@@ -86,12 +81,12 @@ def test_the_producer_never_runs_ahead_of_the_consumer(c):
     assert seen == [0, 1, 2, 3, 4]
 
 
-def test_the_first_item_arrives_before_the_last_is_produced(c):
+def test_the_first_item_arrives_before_the_last_is_produced(disk_cash):
     """The same property in wall-clock terms, kept because it is what a user
     actually feels. Generous threshold: it only has to separate 'streamed'
     from 'the whole 0.4s of work happened first'."""
 
-    @c.cache
+    @disk_cash.cache
     def slow_stream():
         for i in range(4):
             time.sleep(0.1)
@@ -112,10 +107,10 @@ def test_the_first_item_arrives_before_the_last_is_produced(c):
     )
 
 
-def test_the_replay_still_hits_and_is_complete(c):
+def test_the_replay_still_hits_and_is_complete(disk_cash):
     calls = []
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         calls.append(1)
         for i in range(4):
@@ -129,10 +124,10 @@ def test_the_replay_still_hits_and_is_complete(c):
     assert len(calls) == 1, "the second call must be served from cache"
 
 
-def test_a_partially_consumed_generator_stores_nothing(c):
+def test_a_partially_consumed_generator_stores_nothing(disk_cash):
     calls = []
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         calls.append(1)
         for i in range(6):
@@ -149,10 +144,10 @@ def test_a_partially_consumed_generator_stores_nothing(c):
     assert len(calls) == 2, "the abandoned run must not have been stored"
 
 
-def test_a_generator_that_raises_midway_stores_nothing(c):
+def test_a_generator_that_raises_midway_stores_nothing(disk_cash):
     calls = []
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         calls.append(1)
         yield 0
@@ -167,13 +162,13 @@ def test_a_generator_that_raises_midway_stores_nothing(c):
     assert len(calls) == 2, "a failed stream must not be cached"
 
 
-def test_a_lazily_read_file_is_still_a_dependency(c, tmp_path):
+def test_a_lazily_read_file_is_still_a_dependency(disk_cash, tmp_path):
     """The reason the old code buffered inside the tracker. Read between
     yields, so it only happens while the caller iterates."""
     data = tmp_path / "lazy.txt"
     data.write_text("v1", encoding="utf-8")
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         yield "start"
         time.sleep(0.12)
@@ -186,14 +181,14 @@ def test_a_lazily_read_file_is_still_a_dependency(c, tmp_path):
         assert list(stream()) == ["start", "v2"], "editing a file the generator reads lazily must invalidate"
 
 
-def test_the_callers_own_file_reads_are_not_attributed(c, tmp_path):
+def test_the_callers_own_file_reads_are_not_attributed(disk_cash, tmp_path):
     """The other half: keeping the tracker open across the caller's loop would
     make the caller's I/O a dependency of the cached function."""
     theirs = tmp_path / "callers.txt"
     theirs.write_text("a", encoding="utf-8")
     calls = []
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         calls.append(1)
         time.sleep(0.12)
@@ -209,11 +204,11 @@ def test_the_callers_own_file_reads_are_not_attributed(c, tmp_path):
     assert len(calls) == 1, "the caller's file must not invalidate the function"
 
 
-def test_a_slow_consumer_does_not_inflate_the_recorded_time(c):
+def test_a_slow_consumer_does_not_inflate_the_recorded_time(disk_cash):
     """Execution time drives the persistence decision, so it has to be the
     producer's, not wall-clock across a slow loop."""
 
-    @c.cache
+    @disk_cash.cache
     def quick_stream():
         yield from range(3)
 
@@ -233,7 +228,7 @@ def test_a_slow_consumer_does_not_inflate_the_recorded_time(c):
 # The rest of the hazard list. Each of these was named as a risk when the
 # change was designed; a named risk with no test is just a comment.
 # --------------------------------------------------------------------------
-def test_the_caller_keeps_items_received_before_an_exception(c):
+def test_the_caller_keeps_items_received_before_an_exception(disk_cash):
     """Streaming changes error semantics, and this pins the new ones.
 
     Buffering meant the caller saw nothing when the producer raised. It now
@@ -241,7 +236,7 @@ def test_the_caller_keeps_items_received_before_an_exception(c):
     generator does, and the whole point of not changing behaviour.
     """
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         yield 0
         yield 1
@@ -256,11 +251,11 @@ def test_the_caller_keeps_items_received_before_an_exception(c):
     assert seen == [0, 1], "items produced before the failure must reach the caller"
 
 
-def test_abandoning_a_multi_chunk_stream_leaves_no_chunks_behind(c):
+def test_abandoning_a_multi_chunk_stream_leaves_no_chunks_behind(disk_cash):
     """Chunks written before the caller gave up are unreferenced -- no manifest
     names them -- so they are dropped. Otherwise every abandoned run leaks."""
 
-    @c.cache(chunk_max_items=2)
+    @disk_cash.cache(chunk_max_items=2)
     def stream():
         yield from range(20)
 
@@ -271,16 +266,16 @@ def test_abandoning_a_multi_chunk_stream_leaves_no_chunks_behind(c):
             next(it)
         it.close()
 
-    leftover = [e for e in c.backend.list_entries() if "chunk_" in str(e.get("key", ""))]
+    leftover = [e for e in disk_cash.backend.list_entries() if "chunk_" in str(e.get("key", ""))]
     assert not leftover, f"orphan chunks left behind: {leftover}"
 
 
-def test_an_infinite_generator_streams_and_simply_never_caches(c):
+def test_an_infinite_generator_streams_and_simply_never_caches(disk_cash):
     """This used to be a documented footgun: 'the first call never returns',
     because caching drained it. It streams now; it just never commits."""
     calls = []
 
-    @c.cache
+    @disk_cash.cache
     def forever():
         calls.append(1)
         i = 0
@@ -297,19 +292,19 @@ def test_an_infinite_generator_streams_and_simply_never_caches(c):
     assert len(calls) == 2, "nothing can be cached -- it never finishes"
 
 
-def test_a_cached_generator_consuming_another_one_streams(c):
+def test_a_cached_generator_consuming_another_one_streams(disk_cash):
     """Nested cached generators. The tracker keeps a token stack, so the inner
     suspend/resume nests inside the outer one -- asserted rather than assumed.
     """
     inner_produced: list[int] = []
 
-    @c.cache
+    @disk_cash.cache
     def inner():
         for i in range(4):
             inner_produced.append(i)
             yield i
 
-    @c.cache
+    @disk_cash.cache
     def outer():
         for value in inner():
             yield value * 10
@@ -327,11 +322,11 @@ def test_a_cached_generator_consuming_another_one_streams(c):
         assert list(outer()) == [0, 10, 20, 30], "and it still caches"
 
 
-def test_argument_mutation_is_still_reported_for_a_generator(c):
+def test_argument_mutation_is_still_reported_for_a_generator(disk_cash):
     """`check_argument_mutation` used to run right after the call. It now runs
     at exhaustion, so it needs to be shown still running at all."""
 
-    @c.cache
+    @disk_cash.cache
     def stream(rows):
         rows.append("mutated")
         yield len(rows)
@@ -345,7 +340,7 @@ def test_argument_mutation_is_still_reported_for_a_generator(c):
     assert any("mutat" in m.lower() for m in messages), messages
 
 
-def test_a_write_inside_a_LIBRARY_is_still_observed(c, tmp_path):
+def test_a_write_inside_a_LIBRARY_is_still_observed(disk_cash, tmp_path):
     """Same move for the runtime effect observer: it reports at exhaustion now.
 
     Two things are load-bearing in the shape below. A writer the analyzer
@@ -360,7 +355,7 @@ def test_a_write_inside_a_LIBRARY_is_still_observed(c, tmp_path):
 
     target = tmp_path / "copied.zip"
 
-    @c.cache
+    @disk_cash.cache
     def stream():
         yield 1
         with zipfile.ZipFile(target, "w") as archive:

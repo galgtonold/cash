@@ -11,8 +11,6 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import cash
-
 pytestmark = pytest.mark.core
 
 
@@ -31,13 +29,8 @@ class Node:
         self.me = self
 
 
-@pytest.fixture
-def c(tmp_path):
-    return cash.Cash(cache_dir=str(tmp_path / "cache"))
-
-
-def test_equal_objects_share_an_entry_and_edits_are_seen(c):
-    @c.cache
+def test_equal_objects_share_an_entry_and_edits_are_seen(disk_cash):
+    @disk_cash.cache
     def total(b):
         return int(b.frames["a"]["x"].sum() + b.frames["b"]["y"].sum() + b.extra[0].sum())
 
@@ -54,9 +47,9 @@ def test_equal_objects_share_an_entry_and_edits_are_seen(c):
     assert total(first) == 499500 + 1000 + 1 + 499500 - 1
 
 
-def test_self_holding_frames_is_keyed_by_them(c):
+def test_self_holding_frames_is_keyed_by_them(disk_cash):
     class Holder(Bundle):
-        @c.cache
+        @disk_cash.cache
         def rows(self):
             return len(self.frames["a"])
 
@@ -66,10 +59,10 @@ def test_self_holding_frames_is_keyed_by_them(c):
     assert h.rows() == 10
 
 
-def test_an_object_that_reaches_itself_still_caches(c):
+def test_an_object_that_reaches_itself_still_caches(disk_cash):
     runs = []
 
-    @c.cache
+    @disk_cash.cache
     def f(node):
         runs.append(1)
         return int(node.frame["x"].sum())

@@ -29,11 +29,6 @@ from tests._cell_driver import run_cash_cell
 _VAR = "CASH_TEST_TENANT"
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 def _codes(fn, *args):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
@@ -77,8 +72,8 @@ _TENANT = _VAR
 
 
 @pytest.mark.parametrize("fn", [by_getenv, by_environ_get, by_literal_subscript], ids=lambda f: f.__name__)
-def test_a_new_value_is_a_new_entry(c, monkeypatch, fn):
-    cached = c.cache(fn)
+def test_a_new_value_is_a_new_entry(disk_cash, monkeypatch, fn):
+    cached = disk_cash.cache(fn)
     monkeypatch.setenv(_VAR, "acme")
     assert _codes(cached) == []
     assert cached() == fn()
@@ -89,16 +84,16 @@ def test_a_new_value_is_a_new_entry(c, monkeypatch, fn):
     assert cached.cache_info()["hits"] >= 1
 
 
-def test_a_read_in_a_helper_is_keyed(c, monkeypatch):
-    cached = c.cache(through_a_helper)
+def test_a_read_in_a_helper_is_keyed(disk_cash, monkeypatch):
+    cached = disk_cash.cache(through_a_helper)
     monkeypatch.setenv(_VAR, "acme")
     assert _codes(cached) == []
     monkeypatch.setenv(_VAR, "globex")
     assert cached() == "GLOBEX"
 
 
-def test_the_working_directory_is_an_input(c, monkeypatch, tmp_path):
-    cached = c.cache(in_the_working_directory)
+def test_the_working_directory_is_an_input(disk_cash, monkeypatch, tmp_path):
+    cached = disk_cash.cache(in_the_working_directory)
     (tmp_path / "one").mkdir()
     (tmp_path / "two").mkdir()
     monkeypatch.chdir(tmp_path / "one")
@@ -108,26 +103,26 @@ def test_the_working_directory_is_an_input(c, monkeypatch, tmp_path):
     assert cached() == "two"
 
 
-def test_a_name_only_known_at_run_time_still_warns(c, monkeypatch):
+def test_a_name_only_known_at_run_time_still_warns(disk_cash, monkeypatch):
     monkeypatch.setenv(_VAR, "acme")
-    assert "KEY-AMBIENT-READ" in _codes(c.cache(by_runtime_name), _VAR)
+    assert "KEY-AMBIENT-READ" in _codes(disk_cash.cache(by_runtime_name), _VAR)
     assert [i.kind for i in PurityAnalyzer().analyze(by_runtime_name).issues] == [ISSUE_AMBIENT_READ]
 
 
-def test_a_subscript_through_a_constant_name_is_keyed(c, monkeypatch):
+def test_a_subscript_through_a_constant_name_is_keyed(disk_cash, monkeypatch):
     """`os.environ[_TENANT]`: a capitalised module constant names the variable."""
     assert [i.kind for i in PurityAnalyzer().analyze(by_subscript).issues] == []
-    cached = c.cache(by_subscript)
+    cached = disk_cash.cache(by_subscript)
     monkeypatch.setenv(_VAR, "acme")
     assert _codes(cached) == []
     monkeypatch.setenv(_VAR, "globex")
     assert "globex" in cached()
 
 
-def test_a_constant_name_is_looked_up_on_every_call(c, monkeypatch):
+def test_a_constant_name_is_looked_up_on_every_call(disk_cash, monkeypatch):
     """Rebound at run time, the constant names another variable: that one's
     value is what the key must follow, though the analysis is reused."""
-    cached = c.cache(by_subscript)
+    cached = disk_cash.cache(by_subscript)
     monkeypatch.setenv(_VAR, "acme")
     monkeypatch.setenv("CASH_TEST_OTHER_TENANT", "initech")
     assert "acme" in cached()
@@ -143,15 +138,15 @@ def test_the_analyzer_lists_what_the_key_folds():
     assert PurityAnalyzer().analyze(by_getenv).issues == ()
 
 
-def test_a_read_in_a_cached_dependency_reaches_the_caller(c, monkeypatch):
+def test_a_read_in_a_cached_dependency_reaches_the_caller(disk_cash, monkeypatch):
     """The dependency's own key moves with the variable; the caller's stored
     result must not outlive it."""
-    tenant = c.cache(by_getenv)
+    tenant = disk_cash.cache(by_getenv)
 
     def headline():
         return tenant().upper()
 
-    cached = c.cache(headline, depends_on=[tenant])
+    cached = disk_cash.cache(headline, depends_on=[tenant])
     monkeypatch.setenv(_VAR, "acme")
     assert cached() == "REPORT FOR ACME"
     monkeypatch.setenv(_VAR, "globex")

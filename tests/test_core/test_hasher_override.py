@@ -37,11 +37,6 @@ import pytest
 import cash
 
 
-@pytest.fixture
-def c(tmp_path):
-    return cash.Cash(cache_dir=str(tmp_path / "cache"))
-
-
 def _register(instance, type_, fn, **kwargs):
     """Register, returning the warnings it produced."""
     with warnings.catch_warnings(record=True) as caught:
@@ -64,7 +59,7 @@ class Tagged:
 # ---------------------------------------------------------------------------
 
 
-def test_registering_on_a_content_hashed_type_raises(c):
+def test_registering_on_a_content_hashed_type_raises(disk_cash):
     """A warning was the first version, and it is not enough.
 
     This is not a suboptimal-but-working registration -- there is no
@@ -75,22 +70,22 @@ def test_registering_on_a_content_hashed_type_raises(c):
     which raises unless the user passes ``assume_safe=True``.
     """
     with pytest.raises(ValueError) as excinfo:
-        c.register_hasher(np.ndarray, lambda a: "v1")
+        disk_cash.register_hasher(np.ndarray, lambda a: "v1")
     text = str(excinfo.value)
     assert "numpy" in text
     assert "override=True" in text, "a refusal with no way forward is a wall"
     assert "drop the registration" in text, "removing it is the other remedy"
 
 
-def test_the_rejection_names_the_collision_it_is_protecting_against(c):
+def test_the_rejection_names_the_collision_it_is_protecting_against(disk_cash):
     """The message has to say what override COSTS, not just how to pass it."""
     with pytest.raises(ValueError) as excinfo:
-        c.register_hasher(np.ndarray, lambda a: "v1")
+        disk_cash.register_hasher(np.ndarray, lambda a: "v1")
     assert "share one cache entry" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("family", ["numpy", "pandas"])
-def test_every_content_hashed_family_is_rejected(c, family):
+def test_every_content_hashed_family_is_rejected(disk_cash, family):
     """Not a numpy special case -- the rule is the whole built-in table."""
     if family == "numpy":
         types = [np.ndarray]
@@ -99,27 +94,27 @@ def test_every_content_hashed_family_is_rejected(c, family):
         types = [pd.DataFrame, pd.Series]
     for type_ in types:
         with pytest.raises(ValueError, match=family):
-            c.register_hasher(type_, lambda v: "v1")
+            disk_cash.register_hasher(type_, lambda v: "v1")
 
 
-def test_a_rejected_registration_changes_nothing(c):
+def test_a_rejected_registration_changes_nothing(disk_cash):
     """Raise before mutating, or a refusal quietly drops a good registration."""
-    _register(c, np.ndarray, lambda a: "kept", override=True)
+    _register(disk_cash, np.ndarray, lambda a: "kept", override=True)
     with pytest.raises(ValueError):
-        c.register_hasher(np.ndarray, lambda a: "rejected")
+        disk_cash.register_hasher(np.ndarray, lambda a: "rejected")
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(arr):
         return arr[0, 0]
 
     f(np.zeros((4, 4)))
-    assert np.ndarray in c._args.override_hashers, "the refusal ate a valid override"
+    assert np.ndarray in disk_cash._args.override_hashers, "the refusal ate a valid override"
 
 
-def test_registering_on_an_ordinary_type_is_accepted(c):
+def test_registering_on_an_ordinary_type_is_accepted(disk_cash):
     """The control. A rule that rejects everything protects nothing."""
-    assert _register(c, Tagged, lambda t: str(t.payload)) == []
-    assert Tagged in c._args.type_hashers
+    assert _register(disk_cash, Tagged, lambda t: str(t.payload)) == []
+    assert Tagged in disk_cash._args.type_hashers
 
 
 @pytest.mark.parametrize(
@@ -142,7 +137,7 @@ def test_pyarrow_tables_are_claimed_too():
     assert cash.Cash.builtin_hashed_family(pa.RecordBatch) == "pyarrow"
 
 
-def test_a_subclass_in_your_own_module_is_still_yours(c):
+def test_a_subclass_in_your_own_module_is_still_yours(disk_cash):
     """The family check is by module PREFIX, and that is load-bearing.
 
     Cash claims ``numpy.ndarray`` itself, but a subclass defined in user code
@@ -154,7 +149,7 @@ def test_a_subclass_in_your_own_module_is_still_yours(c):
         pass
 
     assert cash.Cash.builtin_hashed_family(MyArray) is None
-    assert _register(c, MyArray, lambda a: "mine") == []
+    assert _register(disk_cash, MyArray, lambda a: "mine") == []
 
 
 # ---------------------------------------------------------------------------
@@ -162,11 +157,11 @@ def test_a_subclass_in_your_own_module_is_still_yours(c):
 # ---------------------------------------------------------------------------
 
 
-def test_override_makes_the_hasher_win(c):
+def test_override_makes_the_hasher_win(disk_cash):
     calls = []
-    _register(c, np.ndarray, lambda a: calls.append(1) or "v1", override=True)
+    _register(disk_cash, np.ndarray, lambda a: calls.append(1) or "v1", override=True)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(arr):
         return arr[0, 0]
 
@@ -174,21 +169,21 @@ def test_override_makes_the_hasher_win(c):
     assert calls, "override=True and the hasher still was not consulted"
 
 
-def test_override_does_not_warn(c):
+def test_override_does_not_warn(disk_cash):
     """You asked for it; saying so again on every registration is noise."""
-    assert _register(c, np.ndarray, lambda a: "v1", override=True) == []
+    assert _register(disk_cash, np.ndarray, lambda a: "v1", override=True) == []
 
 
-def test_override_really_replaces_the_content_hash(c):
+def test_override_really_replaces_the_content_hash(disk_cash):
     """The consequence, stated openly rather than left implicit.
 
     Two arrays that share nothing but the hasher's verdict share one entry.
     This is what the flag buys and what it costs; a test that avoided saying
     so would be pretending the trade is free.
     """
-    _register(c, np.ndarray, lambda a: "same-for-everything", override=True)
+    _register(disk_cash, np.ndarray, lambda a: "same-for-everything", override=True)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(arr):
         return float(arr.sum())
 
@@ -197,11 +192,11 @@ def test_override_really_replaces_the_content_hash(c):
     assert first == second == 0.0, "the override did not reach the cache key"
 
 
-def test_a_faithful_override_still_distinguishes_values(c):
+def test_a_faithful_override_still_distinguishes_values(disk_cash):
     """The other half: an honest hasher keeps distinct values distinct."""
-    _register(c, np.ndarray, lambda a: str(a.sum()), override=True)
+    _register(disk_cash, np.ndarray, lambda a: str(a.sum()), override=True)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(arr):
         return float(arr.sum())
 
@@ -209,11 +204,11 @@ def test_a_faithful_override_still_distinguishes_values(c):
     assert f(np.ones((4, 4))) == 16.0
 
 
-def test_editing_an_overriding_hasher_invalidates(c):
+def test_editing_an_overriding_hasher_invalidates(disk_cash):
     """The hasher's own source is part of the key, on this path too."""
-    _register(c, np.ndarray, lambda a: "v1", override=True)
+    _register(disk_cash, np.ndarray, lambda a: "v1", override=True)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(arr):
         return arr.sum()
 
@@ -223,22 +218,22 @@ def test_editing_an_overriding_hasher_invalidates(c):
     assert f.cache_info()["hits"] > hits_before
 
     # Same returned value, different hasher body: the entry must not be reused.
-    _register(c, np.ndarray, lambda a: "v1" + "", override=True)
+    _register(disk_cash, np.ndarray, lambda a: "v1" + "", override=True)
     hits = f.cache_info()["hits"]
     f(np.zeros((4, 4)))
     assert f.cache_info()["hits"] == hits, "a different hasher reused the old entry"
 
 
-def test_override_beats_a_lineage_hash(c):
+def test_override_beats_a_lineage_hash(disk_cash):
     """Documented ordering: overriding hashers come before everything.
 
     A notebook value short-circuits to its lineage hash ahead of ordinary
     registered hashers, so this is the one place the two rules could disagree.
     """
     calls = []
-    _register(c, Tagged, lambda t: calls.append(1) or str(t.payload), override=True)
+    _register(disk_cash, Tagged, lambda t: calls.append(1) or str(t.payload), override=True)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(value):
         return value.payload
 
@@ -251,18 +246,18 @@ def test_override_beats_a_lineage_hash(c):
 # ---------------------------------------------------------------------------
 
 
-def test_re_registering_without_override_drops_the_override(c):
+def test_re_registering_without_override_drops_the_override(disk_cash):
     """Otherwise the old entry keeps winning from the other registry.
 
     Uses an ordinary type: a plain re-registration on a content-hashed one is
     rejected outright, so this rule can only be observed where both forms are
     legal.
     """
-    _register(c, Tagged, lambda t: "override", override=True)
+    _register(disk_cash, Tagged, lambda t: "override", override=True)
     calls = []
-    _register(c, Tagged, lambda t: calls.append(1) or "plain")
+    _register(disk_cash, Tagged, lambda t: calls.append(1) or "plain")
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(value):
         return value.payload
 
@@ -270,21 +265,21 @@ def test_re_registering_without_override_drops_the_override(c):
     assert calls, "the discarded override was still being consulted"
 
 
-def test_re_registering_with_override_replaces_the_plain_one(c):
-    _register(c, Tagged, lambda t: "plain")
+def test_re_registering_with_override_replaces_the_plain_one(disk_cash):
+    _register(disk_cash, Tagged, lambda t: "plain")
     calls = []
-    _register(c, Tagged, lambda t: calls.append(1) or "override", override=True)
+    _register(disk_cash, Tagged, lambda t: calls.append(1) or "override", override=True)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(value):
         return value.payload
 
     f(Tagged(1))
     assert calls, "the plain registration shadowed the new override"
-    assert Tagged not in c._args.type_hashers
+    assert Tagged not in disk_cash._args.type_hashers
 
 
-def test_a_late_registration_is_not_shadowed_by_the_memo(c):
+def test_a_late_registration_is_not_shadowed_by_the_memo(disk_cash):
     """The arg-hash memo caches whichever hasher was in effect when it filled.
 
     Registering after a value has already been hashed once has to invalidate
@@ -292,7 +287,7 @@ def test_a_late_registration_is_not_shadowed_by_the_memo(c):
     user has been passing all along.
     """
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def f(value):
         return value.payload
 
@@ -300,7 +295,7 @@ def test_a_late_registration_is_not_shadowed_by_the_memo(c):
     f(value)
 
     calls = []
-    _register(c, Tagged, lambda t: calls.append(1) or str(t.payload), override=True)
+    _register(disk_cash, Tagged, lambda t: calls.append(1) or str(t.payload), override=True)
     f(value)
     assert calls, "the memo served a hash computed before the registration"
 

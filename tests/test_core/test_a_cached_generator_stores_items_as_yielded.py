@@ -12,17 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from cash import Cash
-
-
-@pytest.fixture
-def app(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"))
-
 
 @pytest.mark.parametrize("chunk_max_items", [2, 1000])
-def test_a_consumer_editing_its_rows_does_not_change_the_hit(app, chunk_max_items):
-    @app.cache(chunk_max_items=chunk_max_items)
+def test_a_consumer_editing_its_rows_does_not_change_the_hit(disk_cash, chunk_max_items):
+    @disk_cash.cache(chunk_max_items=chunk_max_items)
     def rows(n):
         for i in range(n):
             yield [i, i * i]
@@ -35,8 +28,8 @@ def test_a_consumer_editing_its_rows_does_not_change_the_hit(app, chunk_max_item
 
 
 @pytest.mark.parametrize("chunk_max_items", [3, 1000])
-def test_a_producer_reusing_one_buffer_is_stored_item_by_item(app, chunk_max_items):
-    @app.cache(chunk_max_items=chunk_max_items)
+def test_a_producer_reusing_one_buffer_is_stored_item_by_item(disk_cash, chunk_max_items):
+    @disk_cash.cache(chunk_max_items=chunk_max_items)
     def buffered(n):
         buf = [0, 0]
         for i in range(n):
@@ -49,10 +42,10 @@ def test_a_producer_reusing_one_buffer_is_stored_item_by_item(app, chunk_max_ite
     assert buffered.cache_info()["hits"] == 1
 
 
-def test_the_caller_receives_the_producers_own_object(app):
+def test_the_caller_receives_the_producers_own_object(disk_cash):
     shared = [1]
 
-    @app.cache
+    @disk_cash.cache
     def give():
         yield shared
 

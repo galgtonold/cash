@@ -15,7 +15,6 @@ import pytest
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
-from cash import Cash
 
 SHAPES = {
     "frame": lambda r: r,
@@ -36,15 +35,10 @@ def _tags(result, shape):
     return result["tags"]
 
 
-@pytest.fixture
-def app(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"))
-
-
 @pytest.mark.parametrize("shape", SHAPES)
 @pytest.mark.parametrize("edited", ["miss", "hit"])
-def test_an_edited_cell_does_not_reach_later_hits(app, shape, edited):
-    @app.cache
+def test_an_edited_cell_does_not_reach_later_hits(disk_cash, shape, edited):
+    @disk_cash.cache
     def load():
         frame = pd.DataFrame({"tags": [["a"], ["b"]], "rec": [{"k": 1}, {"k": 2}], "n": [1.0, 2.0]})
         return SHAPES[shape](frame)

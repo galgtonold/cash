@@ -25,7 +25,6 @@ import time
 
 import pytest
 
-from cash import Cash
 from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
@@ -109,17 +108,12 @@ def test_no_per_call_lines_without_being_asked(tmp_path):
 # -- what it says ------------------------------------------------------------
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
-def test_each_reason_is_named(c, tmp_path):
+def test_each_reason_is_named(disk_cash, tmp_path):
     data = tmp_path / "data.txt"
     data.write_text("abc", encoding="utf-8")
     g = {"FACTOR": 2}
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def length(path):
         with open(path, encoding="utf-8") as f:
             return len(f.read()) * g["FACTOR"]
@@ -136,7 +130,7 @@ def test_each_reason_is_named(c, tmp_path):
     assert length.cache_info()["miss_reasons"] == {"no entry yet": 1, "file changed": 1, "new arguments": 1}
 
 
-def test_a_changed_global_is_a_state_change(c, tmp_path, monkeypatch):
+def test_a_changed_global_is_a_state_change(disk_cash, tmp_path, monkeypatch):
     """A real file: a function with no retrievable source has no globals to fold."""
     (tmp_path / "why_mod.py").write_text(
         textwrap.dedent("""
@@ -151,7 +145,7 @@ def test_a_changed_global_is_a_state_change(c, tmp_path, monkeypatch):
     import why_mod
 
     try:
-        scaled = c.cache(assume_safe=True)(why_mod.scaled)
+        scaled = disk_cash.cache(assume_safe=True)(why_mod.scaled)
         scaled(3)
         why_mod.SCALE = 5
         assert scaled(3) == 15
@@ -160,8 +154,8 @@ def test_a_changed_global_is_a_state_change(c, tmp_path, monkeypatch):
         sys.modules.pop("why_mod", None)
 
 
-def test_a_result_that_was_not_stored_says_why_next_time(c):
-    @c.cache(assume_safe=True, cache_if=lambda r: r > 0)
+def test_a_result_that_was_not_stored_says_why_next_time(disk_cash):
+    @disk_cash.cache(assume_safe=True, cache_if=lambda r: r > 0)
     def maybe(x):
         return x
 
@@ -171,8 +165,8 @@ def test_a_result_that_was_not_stored_says_why_next_time(c):
     assert "cache_if returned False" in maybe.explain(0).details["why"]
 
 
-def test_a_ttl_expiry_is_a_ttl_expiry(c):
-    @c.cache(assume_safe=True, ttl=1)
+def test_a_ttl_expiry_is_a_ttl_expiry(disk_cash):
+    @disk_cash.cache(assume_safe=True, ttl=1)
     def short(x):
         return x
 
@@ -183,24 +177,24 @@ def test_a_ttl_expiry_is_a_ttl_expiry(c):
     assert short.cache_info()["miss_reasons"]["ttl expired"] == 1
 
 
-def test_the_summary_does_not_report_a_cheap_result_as_ram_only(c):
+def test_the_summary_does_not_report_a_cheap_result_as_ram_only(disk_cash):
     """This asserted the opposite while a compute floor kept quick results out
     of disk. Both of these are written now -- decorating a function is the
     decision to cache it -- so neither may be described as RAM-only, and no
     floor may be named: there is no setting behind that sentence any more."""
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def fast(n):
         return n
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def slow(n):
         time.sleep(0.25)
         return n
 
     fast(1)
     slow(1)
-    summary = c.run_summary()
+    summary = disk_cash.run_summary()
     blocks = _summary_blocks(summary)
     fast_notes = next(v for k, v in blocks.items() if k.endswith(".fast"))
     slow_notes = next(v for k, v in blocks.items() if k.endswith(".slow"))
@@ -209,7 +203,7 @@ def test_the_summary_does_not_report_a_cheap_result_as_ram_only(c):
     assert "persistence floor" not in summary, summary
 
 
-def test_cash_s_own_work_does_not_decide_where_a_result_lands(c, monkeypatch):
+def test_cash_s_own_work_does_not_decide_where_a_result_lands(disk_cash, monkeypatch):
     """Storing a decorated result depends on nothing that can be timed.
 
     This used to guard a subtle bug: the compute floor was judged on the call's
@@ -217,20 +211,20 @@ def test_cash_s_own_work_does_not_decide_where_a_result_lands(c, monkeypatch):
     function that returns at once got persisted and a quiet one did not. The
     floor is gone, which retires the bug -- and the test now pins the property
     that made it impossible: slow cash-side work, fast body, still stored."""
-    real = type(c._args).serialize_args
+    real = type(disk_cash._args).serialize_args
 
     def slow_key(self, *args, **kwargs):
         time.sleep(0.15)
         return real(self, *args, **kwargs)
 
-    monkeypatch.setattr(type(c._args), "serialize_args", slow_key)
+    monkeypatch.setattr(type(disk_cash._args), "serialize_args", slow_key)
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def fast(n):
         return n
 
     fast(1)
-    notes = next(v for k, v in _summary_blocks(c.run_summary()).items() if k.endswith(".fast"))
+    notes = next(v for k, v in _summary_blocks(disk_cash.run_summary()).items() if k.endswith(".fast"))
     assert "RAM only" not in notes, notes
 
 
@@ -250,8 +244,8 @@ def _summary_blocks(text: str) -> dict[str, str]:
 # -- explain() and inspect ---------------------------------------------------
 
 
-def test_explain_names_the_moved_part_of_the_key(c):
-    @c.cache(assume_safe=True)
+def test_explain_names_the_moved_part_of_the_key(disk_cash):
+    @disk_cash.cache(assume_safe=True)
     def f(x):
         return x
 
@@ -260,11 +254,11 @@ def test_explain_names_the_moved_part_of_the_key(c):
     assert why.startswith("new arguments"), why
 
 
-def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
+def test_explain_gives_the_entry_id_cash_clear_takes(disk_cash, tmp_path):
     data = tmp_path / "d.txt"
     data.write_text("abc", encoding="utf-8")
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def read(path):
         with open(path, encoding="utf-8") as f:
             return f.read()
@@ -275,7 +269,7 @@ def test_explain_gives_the_entry_id_cash_clear_takes(c, tmp_path):
     assert f"entry_id: {e.entry_id}" in str(e)
     assert any(str(data.name) in p for p in e.details["file_deps"]), e.details
 
-    c.shutdown()
+    disk_cash.shutdown()
     listing = subprocess.run(
         [sys.executable, "-m", "cash", "inspect", str(tmp_path / ".cash"), "--function", "read"],
         capture_output=True,

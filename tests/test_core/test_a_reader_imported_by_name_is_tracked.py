@@ -20,8 +20,6 @@ from sqlite3 import connect
 
 import pytest
 
-from cash import Cash
-
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 from pyarrow.parquet import read_table
@@ -37,11 +35,6 @@ def _settle(path):
 def _parquet(path, value):
     pq.write_table(pa.table({"x": [value]}), path)
     _settle(path)
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _recomputes_after_edit(c, path, write, read):
@@ -60,19 +53,21 @@ def _recomputes_after_edit(c, path, write, read):
     return load(str(path))
 
 
-def test_a_from_imported_reader_is_tracked(c, tmp_path):
-    got = _recomputes_after_edit(c, tmp_path / "d.parquet", _parquet, lambda p: read_table(p).column("x")[0].as_py())
-    assert got == 2
-
-
-def test_an_alias_under_another_name_is_tracked(c, tmp_path):
+def test_a_from_imported_reader_is_tracked(disk_cash, tmp_path):
     got = _recomputes_after_edit(
-        c, tmp_path / "d.parquet", _parquet, lambda p: read_parquet_table(p).column("x")[0].as_py()
+        disk_cash, tmp_path / "d.parquet", _parquet, lambda p: read_table(p).column("x")[0].as_py()
     )
     assert got == 2
 
 
-def test_a_from_imported_sqlite_connect_is_tracked(c, tmp_path):
+def test_an_alias_under_another_name_is_tracked(disk_cash, tmp_path):
+    got = _recomputes_after_edit(
+        disk_cash, tmp_path / "d.parquet", _parquet, lambda p: read_parquet_table(p).column("x")[0].as_py()
+    )
+    assert got == 2
+
+
+def test_a_from_imported_sqlite_connect_is_tracked(disk_cash, tmp_path):
     def write(path, value):
         conn = sqlite3.connect(path)
         conn.execute("create table if not exists t (x int)")
@@ -88,10 +83,10 @@ def test_a_from_imported_sqlite_connect_is_tracked(c, tmp_path):
         finally:
             conn.close()
 
-    assert _recomputes_after_edit(c, tmp_path / "d.db", write, read) == 2
+    assert _recomputes_after_edit(disk_cash, tmp_path / "d.db", write, read) == 2
 
 
-def test_a_reader_imported_by_a_helper_module_is_tracked(c, tmp_path, monkeypatch):
+def test_a_reader_imported_by_a_helper_module_is_tracked(disk_cash, tmp_path, monkeypatch):
     (tmp_path / "helper_by_name.py").write_text(
         textwrap.dedent("""
             from pyarrow.parquet import read_table
@@ -104,21 +99,21 @@ def test_a_reader_imported_by_a_helper_module_is_tracked(c, tmp_path, monkeypatc
     monkeypatch.syspath_prepend(str(tmp_path))
     helper = importlib.import_module("helper_by_name")
     try:
-        assert _recomputes_after_edit(c, tmp_path / "d.parquet", _parquet, helper.first) == 2
+        assert _recomputes_after_edit(disk_cash, tmp_path / "d.parquet", _parquet, helper.first) == 2
     finally:
         sys.modules.pop("helper_by_name", None)
 
 
-def test_parquet_file_is_tracked_and_still_a_class(c, tmp_path):
+def test_parquet_file_is_tracked_and_still_a_class(disk_cash, tmp_path):
     def read(p):
         f = pq.ParquetFile(p)
         assert isinstance(f, pq.ParquetFile)
         return f.read().column("x")[0].as_py()
 
-    assert _recomputes_after_edit(c, tmp_path / "d.parquet", _parquet, read) == 2
+    assert _recomputes_after_edit(disk_cash, tmp_path / "d.parquet", _parquet, read) == 2
 
 
-def test_an_arrow_ipc_file_read_through_a_memory_map_is_tracked(c, tmp_path):
+def test_an_arrow_ipc_file_read_through_a_memory_map_is_tracked(disk_cash, tmp_path):
     def write(path, value):
         table = pa.table({"x": [value]})
         with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
@@ -129,22 +124,22 @@ def test_an_arrow_ipc_file_read_through_a_memory_map_is_tracked(c, tmp_path):
         with pa.memory_map(p) as source:
             return pa.ipc.open_file(source).read_all().column("x")[0].as_py()
 
-    assert _recomputes_after_edit(c, tmp_path / "d.arrow", write, read) == 2
+    assert _recomputes_after_edit(disk_cash, tmp_path / "d.arrow", write, read) == 2
 
 
-def test_the_name_keys_the_same_inside_another_cached_call(c, tmp_path):
+def test_the_name_keys_the_same_inside_another_cached_call(disk_cash, tmp_path):
     """While a tracker is open the name holds cash's wrapper; a call nested in
     another cached call must still find the entry a top-level call stored."""
     path = tmp_path / "d.parquet"
     _parquet(path, 1)
     runs: list[str] = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def inner(p):
         runs.append("inner")
         return read_table(p).column("x")[0].as_py()
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def outer(p):
         runs.append("outer")
         return inner(p) + 1

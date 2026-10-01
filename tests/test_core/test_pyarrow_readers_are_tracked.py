@@ -19,16 +19,9 @@ import time
 
 import pytest
 
-from cash import Cash
-
 pa = pytest.importorskip("pyarrow")
 
 pytestmark = pytest.mark.core
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _write_csv(path, values):
@@ -65,14 +58,14 @@ def _write(path, suffix, values):
 
 
 @pytest.mark.parametrize("reader", sorted(_reader_suite()))
-def test_a_new_file_through_a_pyarrow_reader_recomputes(c, tmp_path, reader):
+def test_a_new_file_through_a_pyarrow_reader_recomputes(disk_cash, tmp_path, reader):
     """THE BUG: a new export read through pyarrow returned the old total."""
     suffix, read = _reader_suite()[reader]
     path = tmp_path / f"data{suffix}"
     _write(path, suffix, [1, 2, 3])
     runs = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def total(p):
         runs.append(1)
         time.sleep(0.2)
@@ -87,7 +80,7 @@ def test_a_new_file_through_a_pyarrow_reader_recomputes(c, tmp_path, reader):
     assert len(runs) == 2
 
 
-def test_a_reader_called_by_keyword_works_everywhere(c, tmp_path):
+def test_a_reader_called_by_keyword_works_everywhere(disk_cash, tmp_path):
     """The wrapper bug: keyword calls raised TypeError once any call had run."""
     import pandas as pd
     import pyarrow.parquet as pq
@@ -97,7 +90,7 @@ def test_a_reader_called_by_keyword_works_everywhere(c, tmp_path):
     parquet = tmp_path / "x.parquet"
     pq.write_table(pa.table({"v": [3, 4]}), str(parquet))
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def warm(p):
         time.sleep(0.2)
         return int(pd.read_csv(p)["v"].sum())
@@ -108,7 +101,7 @@ def test_a_reader_called_by_keyword_works_everywhere(c, tmp_path):
     assert pq.read_table(source=str(parquet)).num_rows == 2
 
 
-def test_a_keyword_path_is_still_tracked(c, tmp_path):
+def test_a_keyword_path_is_still_tracked(disk_cash, tmp_path):
     """And the keyword form records the dependency, not just survives."""
     import pyarrow.parquet as pq
 
@@ -116,7 +109,7 @@ def test_a_keyword_path_is_still_tracked(c, tmp_path):
     pq.write_table(pa.table({"v": [1, 2]}), str(parquet))
     runs = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def total(p):
         runs.append(1)
         time.sleep(0.2)

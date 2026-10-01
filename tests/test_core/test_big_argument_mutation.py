@@ -18,14 +18,7 @@ import time
 
 import pytest
 
-from cash import Cash
-
 pytestmark = [pytest.mark.core]
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
 
 
 def _tail(rows):
@@ -33,13 +26,13 @@ def _tail(rows):
 
 
 @pytest.mark.parametrize("n, frozen", [(300_000, False), (1_000, True)])
-def test_sorting_the_argument_in_place_is_not_stored(c, n, frozen):
-    @c.cache(frozen=frozen)
+def test_sorting_the_argument_in_place_is_not_stored(disk_cash, n, frozen):
+    @disk_cash.cache(frozen=frozen)
     def load(n):
         time.sleep(0.12)
         return [((i * 7919) % n, i) for i in range(n)]  # "file order" is i order
 
-    @c.cache
+    @disk_cash.cache
     def top(rows):
         time.sleep(0.12)
         rows.sort(reverse=True)  # the accident
@@ -51,17 +44,17 @@ def test_sorting_the_argument_in_place_is_not_stored(c, n, frozen):
     rows = load(n)
     top(rows)
     assert _tail(rows) == without_cash, "the warm run skipped the in-place sort"
-    outcome = next(o for k, o in c._misses.outcomes.items() if "top" in k)
+    outcome = next(o for k, o in disk_cash._misses.outcomes.items() if "top" in k)
     assert "in place" in (outcome.get("not_stored") or ""), outcome
 
 
-def test_rewriting_a_field_of_a_frozen_result_invalidates_its_later_consumers(c):
-    @c.cache(frozen=True)
+def test_rewriting_a_field_of_a_frozen_result_invalidates_its_later_consumers(disk_cash):
+    @disk_cash.cache(frozen=True)
     def load(n):
         time.sleep(0.12)
         return [[i, "/api/items" if i % 2 else "/login"] for i in range(n)]
 
-    @c.cache
+    @disk_cash.cache
     def per_path(rows):
         time.sleep(0.12)
         out: dict = {}
@@ -69,7 +62,7 @@ def test_rewriting_a_field_of_a_frozen_result_invalidates_its_later_consumers(c)
             out[r[1]] = out.get(r[1], 0) + 1
         return out
 
-    @c.cache
+    @disk_cash.cache
     def normalise(rows):
         time.sleep(0.12)
         for r in rows:
@@ -101,7 +94,7 @@ def _rewrites(rows):
         (_rewrites, "changes an element of the argument 'rows' in place"),
     ],
 )
-def test_the_static_finding_says_the_argument_is_changed(c, fn, says):
+def test_the_static_finding_says_the_argument_is_changed(disk_cash, fn, says):
     """Both read as the label a local list's `.sort()`
     gets ("write method", "subscript mutation"), the same as the false alarms
     beside them, so the one that mattered was not read."""
@@ -109,18 +102,18 @@ def test_the_static_finding_says_the_argument_is_changed(c, fn, says):
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        c.cache(fn)([[2], [1]])
+        disk_cash.cache(fn)([[2], [1]])
     text = "\n".join(str(w.message) for w in rec)
     assert says in text, text
     assert "return a modified copy" in text
 
 
-def test_a_big_list_that_is_only_read_still_stores(c):
+def test_a_big_list_that_is_only_read_still_stores(disk_cash):
     """Control: identity is compared, not content -- an untouched argument of
     any size keeps caching."""
     runs = []
 
-    @c.cache
+    @disk_cash.cache
     def total(rows):
         runs.append(1)
         time.sleep(0.12)
@@ -138,7 +131,7 @@ def _scale_in_place(values, factor):
     np.multiply(values, factor, out=values)  # a library writing through out=
 
 
-def test_a_big_array_changed_inside_a_library_is_not_stored(c, monkeypatch):
+def test_a_big_array_changed_inside_a_library_is_not_stored(disk_cash, monkeypatch):
     """``normalise(values)`` on an array whose key hash took over 50 ms
     retired the argument check for the function: a library writing into the
     array was stored, and the warm run returned without scaling it. The
@@ -149,7 +142,7 @@ def test_a_big_array_changed_inside_a_library_is_not_stored(c, monkeypatch):
 
     monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)
 
-    @c.cache
+    @disk_cash.cache
     def normalise(values):
         time.sleep(0.12)
         _scale_in_place(values, 2.0)
@@ -162,7 +155,7 @@ def test_a_big_array_changed_inside_a_library_is_not_stored(c, monkeypatch):
     assert second.tolist() == first.tolist(), "the warm run skipped the in-place scale"
 
 
-def test_a_big_array_only_read_still_stores(c, monkeypatch):
+def test_a_big_array_only_read_still_stores(disk_cash, monkeypatch):
     """Control: an array the call leaves alone is stored however costly."""
     import numpy as np
 
@@ -171,7 +164,7 @@ def test_a_big_array_only_read_still_stores(c, monkeypatch):
     monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)
     runs = []
 
-    @c.cache
+    @disk_cash.cache
     def total(values):
         runs.append(1)
         time.sleep(0.12)

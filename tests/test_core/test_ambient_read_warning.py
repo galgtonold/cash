@@ -28,15 +28,9 @@ from datetime import date, datetime
 
 import pytest
 
-from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer
 from cash.analysis.purity_report import ISSUE_AMBIENT_READ
 from cash.exceptions import CashImpureFunctionError, CashImpurityWarning
-
-
-@pytest.fixture
-def cash_instance(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _warnings_for(cash_instance, fn_factory):
@@ -130,38 +124,38 @@ def _wall_clock(c):
     ],
     ids=["datetime.now", "date.today", "uuid4", "time.time"],
 )
-def test_each_ambient_read_is_announced(cash_instance, factory):
-    got = _warnings_for(cash_instance, factory)
+def test_each_ambient_read_is_announced(disk_cash, factory):
+    got = _warnings_for(disk_cash, factory)
     assert got, "the ambient read was cached with no warning at all"
     text = "\n".join(str(w.message) for w in got)
     assert "KEY-AMBIENT-READ" in text, f"wrong diagnostic code:\n{text}"
 
 
 @pytest.mark.parametrize("factory", [_env_subscript, _env_getenv, _cwd], ids=["os.environ[]", "os.getenv", "os.getcwd"])
-def test_an_environment_read_is_keyed_not_announced(cash_instance, factory):
+def test_an_environment_read_is_keyed_not_announced(disk_cash, factory):
     """Its value is folded into the key (test_environment_is_an_input.py),
     so nothing is frozen and there is nothing to announce."""
-    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, factory))
+    text = "\n".join(str(w.message) for w in _warnings_for(disk_cash, factory))
     assert "KEY-AMBIENT-READ" not in text, text
 
 
-def test_the_advice_is_about_the_key_not_about_side_effects(cash_instance):
+def test_the_advice_is_about_the_key_not_about_side_effects(disk_cash):
     """The wrong text sends the reader hunting for a write that is not there."""
-    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, _clock))
+    text = "\n".join(str(w.message) for w in _warnings_for(disk_cash, _clock))
     assert "IMPURE-SIDE-EFFECTS" not in text
     assert "argument" in text, f"the fix must name passing it in:\n{text}"
 
 
-def test_the_message_does_not_list_the_working_directory(cash_instance):
+def test_the_message_does_not_list_the_working_directory(disk_cash):
     """``os.getcwd()`` is folded into the key and never reported, so a
     message naming it among the frozen reads tells the reader to pass in a
     value cash already keys on."""
-    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, _clock))
+    text = "\n".join(str(w.message) for w in _warnings_for(disk_cash, _clock))
     assert "KEY-AMBIENT-READ" in text, text
     assert "working directory" not in text, text
 
 
-def test_the_frozen_value_is_what_the_warning_is_about(cash_instance, monkeypatch):
+def test_the_frozen_value_is_what_the_warning_is_about(disk_cash, monkeypatch):
     """The hazard itself, so the warning is pinned to a real failure.
 
     Without this the tests above pass on a warning that describes nothing.
@@ -175,7 +169,7 @@ def test_the_frozen_value_is_what_the_warning_is_about(cash_instance, monkeypatc
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
 
-        @cash_instance.cache
+        @disk_cash.cache
         def bill(rows):
             return f"{uuid.uuid4()}:{rows}"
 
@@ -189,7 +183,7 @@ def test_the_frozen_value_is_what_the_warning_is_about(cash_instance, monkeypatc
 # --- controls -------------------------------------------------------------
 
 
-def test_a_pure_body_says_nothing(cash_instance):
+def test_a_pure_body_says_nothing(disk_cash):
     def factory(c):
         @c.cache
         def add():
@@ -197,10 +191,10 @@ def test_a_pure_body_says_nothing(cash_instance):
 
         return add
 
-    assert _warnings_for(cash_instance, factory) == []
+    assert _warnings_for(disk_cash, factory) == []
 
 
-def test_a_method_named_now_on_the_users_own_object_is_not_this(cash_instance):
+def test_a_method_named_now_on_the_users_own_object_is_not_this(disk_cash):
     """Matched dotted, always: `self.clock.now()` is not `datetime.now()`."""
 
     class Clock:
@@ -216,11 +210,11 @@ def test_a_method_named_now_on_the_users_own_object_is_not_this(cash_instance):
 
         return read
 
-    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, factory))
+    text = "\n".join(str(w.message) for w in _warnings_for(disk_cash, factory))
     assert "KEY-AMBIENT-READ" not in text, f"false positive:\n{text}"
 
 
-def test_an_argument_carrying_the_time_is_silent(cash_instance):
+def test_an_argument_carrying_the_time_is_silent(disk_cash):
     """The fix the warning recommends must actually silence it."""
 
     def factory(c):
@@ -230,7 +224,7 @@ def test_an_argument_carrying_the_time_is_silent(cash_instance):
 
         return lambda: report(date.today())
 
-    text = "\n".join(str(w.message) for w in _warnings_for(cash_instance, factory))
+    text = "\n".join(str(w.message) for w in _warnings_for(disk_cash, factory))
     assert "KEY-AMBIENT-READ" not in text, f"the recommended fix still warns:\n{text}"
 
 
@@ -248,7 +242,7 @@ def test_writing_the_environment_is_not_an_ambient_read():
 # --- waivers --------------------------------------------------------------
 
 
-def test_assume_safe_flag_silences_it(cash_instance):
+def test_assume_safe_flag_silences_it(disk_cash):
     def factory(c):
         @c.cache(assume_safe=True)
         def stamp():
@@ -256,13 +250,13 @@ def test_assume_safe_flag_silences_it(cash_instance):
 
         return stamp
 
-    assert _warnings_for(cash_instance, factory) == []
+    assert _warnings_for(disk_cash, factory) == []
 
 
-def test_strict_mode_raises_on_it(cash_instance):
+def test_strict_mode_raises_on_it(disk_cash):
     with pytest.raises(CashImpureFunctionError) as exc:
 
-        @cash_instance.cache(strict=True)
+        @disk_cash.cache(strict=True)
         def stamp():
             return datetime.now().year
 

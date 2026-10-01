@@ -15,8 +15,6 @@ import time
 
 import pytest
 
-from cash import Cash
-
 pytestmark = pytest.mark.core
 
 
@@ -50,13 +48,8 @@ def data(tmp_path):
     return d
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
-def test_an_edit_inside_a_declared_directory_recomputes(c, data):
-    @c.cache(file_depends_on=str(data))
+def test_an_edit_inside_a_declared_directory_recomputes(disk_cash, data):
+    @disk_cash.cache(file_depends_on=str(data))
     def by_dir():
         return _read(data / "sub" / "b.txt")
 
@@ -66,8 +59,8 @@ def test_an_edit_inside_a_declared_directory_recomputes(c, data):
     assert by_dir() == "w2"
 
 
-def test_a_new_file_in_a_declared_directory_recomputes(c, data):
-    @c.cache(file_depends_on=str(data))
+def test_a_new_file_in_a_declared_directory_recomputes(disk_cash, data):
+    @disk_cash.cache(file_depends_on=str(data))
     def count():
         return _files_seen_by_a_child(data)  # @cash:assume-safe
 
@@ -76,8 +69,8 @@ def test_a_new_file_in_a_declared_directory_recomputes(c, data):
     assert count() == 3
 
 
-def test_an_edit_to_a_glob_match_recomputes(c, data):
-    @c.cache(file_depends_on=str(data / "*.txt"))
+def test_an_edit_to_a_glob_match_recomputes(disk_cash, data):
+    @disk_cash.cache(file_depends_on=str(data / "*.txt"))
     def by_glob():
         return _read(data / "a.txt")
 
@@ -87,8 +80,8 @@ def test_an_edit_to_a_glob_match_recomputes(c, data):
     assert by_glob() == "v2"
 
 
-def test_a_new_glob_match_recomputes(c, data):
-    @c.cache(file_depends_on=str(data / "*.txt"))
+def test_a_new_glob_match_recomputes(disk_cash, data):
+    @disk_cash.cache(file_depends_on=str(data / "*.txt"))
     def count():
         return _files_seen_by_a_child(data)  # @cash:assume-safe
 

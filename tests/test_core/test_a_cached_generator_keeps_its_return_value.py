@@ -9,13 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from cash import Cash
-
-
-@pytest.fixture
-def app(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"))
-
 
 def _drive(gen):
     """The items *gen* yields and the value ``yield from gen`` evaluates to."""
@@ -34,8 +27,8 @@ def _drive(gen):
 
 
 @pytest.mark.parametrize("chunk_max_items", [1, 1000])
-def test_yield_from_gets_the_return_value_on_miss_and_hit(app, chunk_max_items):
-    @app.cache(chunk_max_items=chunk_max_items)
+def test_yield_from_gets_the_return_value_on_miss_and_hit(disk_cash, chunk_max_items):
+    @disk_cash.cache(chunk_max_items=chunk_max_items)
     def g(n):
         for i in range(n):
             yield i
@@ -46,8 +39,8 @@ def test_yield_from_gets_the_return_value_on_miss_and_hit(app, chunk_max_items):
     assert g.cache_info()["hits"] == 1
 
 
-def test_an_empty_generator_keeps_its_return_value(app):
-    @app.cache
+def test_an_empty_generator_keeps_its_return_value(disk_cash):
+    @disk_cash.cache
     def g():
         return "nothing"
         yield  # pragma: no cover - makes this a generator

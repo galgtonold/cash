@@ -14,10 +14,6 @@ import asyncio
 import functools
 import warnings
 
-import pytest
-
-from cash import Cash
-
 
 def retry(f):
     @functools.wraps(f)
@@ -27,15 +23,10 @@ def retry(f):
     return wrapper
 
 
-@pytest.fixture
-def app(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"))
-
-
-def test_a_coroutine_returned_by_a_sync_wrapper_is_not_stored_and_warns_once(app):
+def test_a_coroutine_returned_by_a_sync_wrapper_is_not_stored_and_warns_once(disk_cash):
     calls = []
 
-    @app.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     @retry
     async def fetch(x):
         calls.append(x)
@@ -54,11 +45,11 @@ def test_a_coroutine_returned_by_a_sync_wrapper_is_not_stored_and_warns_once(app
     assert not [c for c in codes if "STORE-FAILED" in c], codes
 
 
-def test_the_suggested_fix_caches(app):
+def test_the_suggested_fix_caches(disk_cash):
     calls = []
 
     @retry
-    @app.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     async def fetch(x):
         calls.append(x)
         return x * 2

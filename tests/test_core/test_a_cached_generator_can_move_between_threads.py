@@ -13,18 +13,9 @@ from __future__ import annotations
 import asyncio
 import threading
 
-import pytest
 
-from cash import Cash
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
-def test_advanced_through_asyncio_to_thread(c):
-    @c.cache
+def test_advanced_through_asyncio_to_thread(disk_cash):
+    @disk_cash.cache
     def rows(n):
         yield from range(n)
 
@@ -39,8 +30,8 @@ def test_advanced_through_asyncio_to_thread(c):
     assert rows.cache_info()["hits"] == 1
 
 
-def test_started_here_and_finished_on_another_thread(c):
-    @c.cache
+def test_started_here_and_finished_on_another_thread(disk_cash):
+    @disk_cash.cache
     def rows(n):
         yield from range(n)
 
@@ -63,11 +54,11 @@ def test_started_here_and_finished_on_another_thread(c):
     assert rows.cache_info()["hits"] == 1
 
 
-def test_a_file_read_on_the_other_thread_is_still_a_dependency(c, tmp_path):
+def test_a_file_read_on_the_other_thread_is_still_a_dependency(disk_cash, tmp_path):
     data = tmp_path / "data.txt"
     data.write_text("a\nb\n", encoding="utf-8")
 
-    @c.cache
+    @disk_cash.cache
     def lines(path):
         yield "start"
         with open(path, encoding="utf-8") as f:

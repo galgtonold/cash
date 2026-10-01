@@ -267,6 +267,15 @@ def cash_instance(clean_backend):
 
 
 @pytest.fixture
+def disk_cash(tmp_path):
+    """A Cash over a cache folder of this test's own (``tmp_path/.cash``), as
+    ``Cash(cache_dir=...)`` builds it: for decorator tests that need entries
+    on disk. ``cash_instance`` is the in-memory one. Nothing here deletes the
+    folder, so there is no background write to wait for."""
+    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+
+
+@pytest.fixture
 def cash_with_file_backend(file_backend):
     """Provide a Cash instance with FileBackend."""
     cash = Cash(backend=file_backend, register_magic=False)

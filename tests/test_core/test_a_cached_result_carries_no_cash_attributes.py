@@ -14,9 +14,6 @@ import enum
 import pickle
 import types
 
-import pytest
-
-from cash import Cash
 from cash.lineage_tag import own_tag
 
 
@@ -32,17 +29,12 @@ class Color(enum.Enum):
     RED = 1
 
 
-@pytest.fixture
-def app(tmp_path):
-    return Cash(cache_dir=str(tmp_path / "cache"))
-
-
-def test_a_result_is_unchanged_on_miss_and_hit(app):
-    @app.cache
+def test_a_result_is_unchanged_on_miss_and_hit(disk_cash):
+    @disk_cash.cache
     def make_ns(n):
         return types.SimpleNamespace(a=n)
 
-    @app.cache
+    @disk_cash.cache
     def make_point(n):
         return Point(n)
 
@@ -55,8 +47,8 @@ def test_a_result_is_unchanged_on_miss_and_hit(app):
     assert make_ns.cache_info()["hits"] >= 1
 
 
-def test_the_stored_value_holds_no_tag(app):
-    @app.cache
+def test_the_stored_value_holds_no_tag(disk_cash):
+    @disk_cash.cache
     def make_point(n):
         return Point(n)
 
@@ -65,8 +57,8 @@ def test_the_stored_value_holds_no_tag(app):
     assert vars(pickle.loads(pickle.dumps(hit))) == {"x": 2}
 
 
-def test_a_returned_argument_is_left_alone(app):
-    @app.cache
+def test_a_returned_argument_is_left_alone(disk_cash):
+    @disk_cash.cache
     def ident(o):
         return o
 
@@ -75,8 +67,8 @@ def test_a_returned_argument_is_left_alone(app):
     assert vars(mine) == {"x": 5}
 
 
-def test_an_enum_member_is_left_alone(app):
-    @app.cache
+def test_an_enum_member_is_left_alone(disk_cash):
+    @disk_cash.cache
     def pick():
         return Color.RED
 
@@ -85,10 +77,10 @@ def test_an_enum_member_is_left_alone(app):
     assert not [k for k in vars(Color.RED) if k.startswith("_cash")]
 
 
-def test_the_result_still_carries_its_lineage(app):
+def test_the_result_still_carries_its_lineage(disk_cash):
     """Positive control: the tag exists, beside the value."""
 
-    @app.cache
+    @disk_cash.cache
     def make_point(n):
         return Point(n)
 

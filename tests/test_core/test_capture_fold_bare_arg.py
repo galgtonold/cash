@@ -43,55 +43,48 @@ import warnings
 
 import pytest
 
-import cash
 from cash.exceptions import CashImpurityWarning
-
-
-@pytest.fixture()
-def c(tmp_path):
-    return cash.Cash(cache_dir=str(tmp_path / "cache"))
-
 
 # --- the four spellings that were broken ---------------------------------- #
 
 
-def test_a_global_passed_to_a_builtin_invalidates(c):
+def test_a_global_passed_to_a_builtin_invalidates(disk_cash):
     """`sum(G)` used to put G beyond the argument rule."""
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 
-    fn = _define(c, ns, "def f():\n    return sum(G)\n")
+    fn = _define(disk_cash, ns, "def f():\n    return sum(G)\n")
     assert fn() == 6
     ns["G"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     assert fn() == 55, "reassigning a global passed to sum() served stale"
 
 
-def test_a_global_passed_to_a_user_function_invalidates(c):
+def test_a_global_passed_to_a_user_function_invalidates(disk_cash):
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 
-    fn = _define(c, ns, "def f():\n    return helper(G)\n")
+    fn = _define(disk_cash, ns, "def f():\n    return helper(G)\n")
     assert fn() == 6
     ns["G"] = [1, 2, 3, 4]
     assert fn() == 10, "a global passed to a user helper served stale"
 
 
-def test_a_global_passed_to_a_method_invalidates(c):
+def test_a_global_passed_to_a_method_invalidates(disk_cash):
     """P2's real shape: X_test read as a free variable, handed to model.predict."""
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 
-    fn = _define(c, ns, "def f():\n    return model.predict(G)\n")
+    fn = _define(disk_cash, ns, "def f():\n    return model.predict(G)\n")
     assert fn() == 6
     ns["G"] = [1, 2, 3, 4]
     assert fn() == 10, "a global passed to a method served stale"
 
 
-def test_a_global_passed_to_len_invalidates(c):
+def test_a_global_passed_to_len_invalidates(disk_cash):
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 
-    fn = _define(c, ns, "def f():\n    return len(G)\n")
+    fn = _define(disk_cash, ns, "def f():\n    return len(G)\n")
     assert fn() == 3
     ns["G"] = [1, 2, 3, 4]
     assert fn() == 4
@@ -100,27 +93,27 @@ def test_a_global_passed_to_len_invalidates(c):
 # --- controls: these worked BEFORE the fix and must still work ------------- #
 
 
-def test_a_subscript_read_still_invalidates(c):
+def test_a_subscript_read_still_invalidates(disk_cash):
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 
-    fn = _define(c, ns, "def f():\n    return G[0] + G[1]\n")
+    fn = _define(disk_cash, ns, "def f():\n    return G[0] + G[1]\n")
     assert fn() == 3
     ns["G"] = [10, 20, 30]
     assert fn() == 30, "folding regressed for a spelling that already worked"
 
 
-def test_an_iteration_still_invalidates(c):
+def test_an_iteration_still_invalidates(disk_cash):
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
 
-    fn = _define(c, ns, "def f():\n    return sum(v for v in G)\n")
+    fn = _define(disk_cash, ns, "def f():\n    return sum(v for v in G)\n")
     assert fn() == 6
     ns["G"] = [1, 2, 3, 4]
     assert fn() == 10
 
 
-def test_an_unrelated_global_does_not_invalidate(c):
+def test_an_unrelated_global_does_not_invalidate(disk_cash):
     """Over-invalidation control: folding must stay scoped to what is READ."""
     ns = _make_module_ns()
     ns["G"] = [1, 2, 3]
@@ -128,7 +121,7 @@ def test_an_unrelated_global_does_not_invalidate(c):
     calls = []
 
     ns["_count"] = calls.append
-    fn = _define(c, ns, "def f():\n    _count(1)\n    return sum(G)\n")
+    fn = _define(disk_cash, ns, "def f():\n    _count(1)\n    return sum(G)\n")
     assert fn() == 6
     ns["UNRELATED"] = [7]
     assert fn() == 6
@@ -138,7 +131,7 @@ def test_an_unrelated_global_does_not_invalidate(c):
 # --- the regression the old exclusion existed to prevent ------------------- #
 
 
-def test_an_accumulator_converges_instead_of_missing_forever(c):
+def test_an_accumulator_converges_instead_of_missing_forever(disk_cash):
     """A callee that MUTATES the global must not miss forever.
 
     Folding a value the call itself moves would key every entry on the previous
@@ -152,7 +145,7 @@ def test_an_accumulator_converges_instead_of_missing_forever(c):
     ns = _make_module_ns()
     ns["ACC"] = []
 
-    fn = _define(c, ns, "def f():\n    return mutate(ACC)\n")
+    fn = _define(disk_cash, ns, "def f():\n    return mutate(ACC)\n")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         vals = [fn() for _ in range(5)]
@@ -254,23 +247,23 @@ def _make_closure(c, kind: str):
 
 
 @pytest.mark.parametrize("kind", ["bare", "method"])
-def test_a_capture_passed_to_a_call_invalidates(c, kind):
-    inner, setter = _make_closure(c, kind)
+def test_a_capture_passed_to_a_call_invalidates(disk_cash, kind):
+    inner, setter = _make_closure(disk_cash, kind)
     assert inner() == 6
     setter([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     assert inner() == 55, f"a capture passed via {kind} served stale"
 
 
 @pytest.mark.parametrize("kind,expected", [("subscript", 30), ("iterate", 55)])
-def test_a_capture_read_without_a_call_still_invalidates(c, kind, expected):
+def test_a_capture_read_without_a_call_still_invalidates(disk_cash, kind, expected):
     """Control: these spellings worked BEFORE the fix and must still work."""
-    inner, setter = _make_closure(c, kind)
+    inner, setter = _make_closure(disk_cash, kind)
     inner()
     setter([10, 20, 30] if kind == "subscript" else [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     assert inner() == expected
 
 
-def test_a_mutated_capture_converges_instead_of_missing_forever(c):
+def test_a_mutated_capture_converges_instead_of_missing_forever(disk_cash):
     """The closure twin of the accumulator control. Same trap, same fallback."""
     acc: list = []
 
@@ -278,7 +271,7 @@ def test_a_mutated_capture_converges_instead_of_missing_forever(c):
         x.append(len(x))
         return len(x)
 
-    @c.cache
+    @disk_cash.cache
     def inner():
         return bump(acc)
 
@@ -294,7 +287,7 @@ def test_a_mutated_capture_converges_instead_of_missing_forever(c):
     assert len(ours) == 1, f"expected exactly one warning, got {len(ours)}"
 
 
-def test_two_closures_from_one_factory_do_not_collide(c):
+def test_two_closures_from_one_factory_do_not_collide(disk_cash):
     """`fold_closure`'s original reason for existing, unaffected by the change.
 
     Two closures from the same factory share source AND qualname, so without
@@ -302,7 +295,7 @@ def test_two_closures_from_one_factory_do_not_collide(c):
     """
 
     def factory(n):
-        @c.cache
+        @disk_cash.cache
         def f():
             return sum([n, n])
 

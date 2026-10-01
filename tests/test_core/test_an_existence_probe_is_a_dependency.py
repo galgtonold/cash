@@ -17,14 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from cash import Cash
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 PROBES = {
     "Path.exists": lambda p: Path(p).exists(),
     "Path.is_file": lambda p: Path(p).is_file(),
@@ -55,8 +47,8 @@ def _counted(c, probe):
 
 
 @pytest.mark.parametrize("name", sorted(PROBES))
-def test_a_file_that_appears_recomputes(c, tmp_path, name):
-    check, runs = _counted(c, PROBES[name])
+def test_a_file_that_appears_recomputes(disk_cash, tmp_path, name):
+    check, runs = _counted(disk_cash, PROBES[name])
     flag = tmp_path / "flag"
     assert check(str(flag)) == "default"
     assert check(str(flag)) == "default"
@@ -66,8 +58,8 @@ def test_a_file_that_appears_recomputes(c, tmp_path, name):
 
 
 @pytest.mark.parametrize("name", sorted(PROBES))
-def test_a_file_that_goes_away_recomputes(c, tmp_path, name):
-    check, runs = _counted(c, PROBES[name])
+def test_a_file_that_goes_away_recomputes(disk_cash, tmp_path, name):
+    check, runs = _counted(disk_cash, PROBES[name])
     flag = tmp_path / "flag"
     flag.write_text("", encoding="utf-8")
     assert check(str(flag)) == "custom"
@@ -78,8 +70,8 @@ def test_a_file_that_goes_away_recomputes(c, tmp_path, name):
 
 
 @pytest.mark.parametrize("name", sorted(DIR_PROBES))
-def test_a_folder_that_appears_and_goes_away_recomputes(c, tmp_path, name):
-    check, runs = _counted(c, DIR_PROBES[name])
+def test_a_folder_that_appears_and_goes_away_recomputes(disk_cash, tmp_path, name):
+    check, runs = _counted(disk_cash, DIR_PROBES[name])
     out = tmp_path / "out"
     assert check(str(out)) == "default"
     out.mkdir()
@@ -90,8 +82,8 @@ def test_a_folder_that_appears_and_goes_away_recomputes(c, tmp_path, name):
     assert check(str(out)) == "default"
 
 
-def test_a_relative_probe_is_checked_where_the_call_runs(c, tmp_path, monkeypatch):
-    check, _ = _counted(c, lambda p: Path(p).exists())
+def test_a_relative_probe_is_checked_where_the_call_runs(disk_cash, tmp_path, monkeypatch):
+    check, _ = _counted(disk_cash, lambda p: Path(p).exists())
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
@@ -102,9 +94,9 @@ def test_a_relative_probe_is_checked_where_the_call_runs(c, tmp_path, monkeypatc
     assert check("cfg.yaml") == "default"
 
 
-def test_a_file_found_but_not_read_is_not_keyed_by_content(c, tmp_path):
+def test_a_file_found_but_not_read_is_not_keyed_by_content(disk_cash, tmp_path):
     """Being there is what the probe asked; an edit to the flag is not a change."""
-    check, runs = _counted(c, lambda p: os.path.exists(p))
+    check, runs = _counted(disk_cash, lambda p: os.path.exists(p))
     flag = tmp_path / "flag"
     flag.write_text("a", encoding="utf-8")
     assert check(str(flag)) == "custom"
@@ -113,12 +105,12 @@ def test_a_file_found_but_not_read_is_not_keyed_by_content(c, tmp_path):
     assert len(runs) == 1
 
 
-def test_writing_into_a_folder_the_call_made_still_hits(c, tmp_path):
+def test_writing_into_a_folder_the_call_made_still_hits(disk_cash, tmp_path):
     """``os.makedirs(exist_ok=True)`` probes the parents; the call's own
     output there must not make the next call miss."""
     runs: list[int] = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def export(root):
         runs.append(1)
         out = os.path.join(root, "out", "run")
@@ -130,13 +122,13 @@ def test_writing_into_a_folder_the_call_made_still_hits(c, tmp_path):
     assert len(runs) == 1
 
 
-def test_a_probe_answer_reaches_an_enclosing_cached_call(c, tmp_path):
+def test_a_probe_answer_reaches_an_enclosing_cached_call(disk_cash, tmp_path):
     """Recorded on the inner call, found again from its entry on a hit."""
     flag = tmp_path / "flag"
-    check, _ = _counted(c, lambda p: os.path.exists(p))
+    check, _ = _counted(disk_cash, lambda p: os.path.exists(p))
     runs: list[int] = []
 
-    @c.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def outer(p):
         runs.append(1)
         return check(p) + "!"

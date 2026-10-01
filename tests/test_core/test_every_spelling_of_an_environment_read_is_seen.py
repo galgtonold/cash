@@ -15,17 +15,11 @@ import warnings
 
 import pytest
 
-from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer
 from cash.analysis.purity_report import ISSUE_AMBIENT_READ
 from cash.notebook.lineage_formula import statement_environment_reads
 
 _VAR = "CASH_TEST_FLAG"
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _codes(fn, *args):
@@ -76,8 +70,8 @@ _POSIX_ONLY = pytest.mark.skipif(not hasattr(os, "environb"), reason="os.environ
     [by_membership, by_non_membership, pytest.param(by_bytes_subscript, marks=_POSIX_ONLY)],
     ids=lambda f: f.__name__,
 )
-def test_a_read_by_name_is_keyed(c, monkeypatch, fn):
-    cached = c.cache(fn)
+def test_a_read_by_name_is_keyed(disk_cash, monkeypatch, fn):
+    cached = disk_cash.cache(fn)
     monkeypatch.delenv(_VAR, raising=False)
     assert _codes(cached) == []
     first = cached()
@@ -86,10 +80,10 @@ def test_a_read_by_name_is_keyed(c, monkeypatch, fn):
 
 
 @pytest.mark.parametrize("fn", [by_copy, by_items, by_dict, by_membership_of_a_computed_name], ids=lambda f: f.__name__)
-def test_a_read_of_the_whole_environment_is_reported(c, monkeypatch, fn):
+def test_a_read_of_the_whole_environment_is_reported(disk_cash, monkeypatch, fn):
     monkeypatch.setenv(_VAR, "1")
     args = (_VAR,) if fn is by_membership_of_a_computed_name else ()
-    assert "KEY-AMBIENT-READ" in _codes(c.cache(fn), *args)
+    assert "KEY-AMBIENT-READ" in _codes(disk_cash.cache(fn), *args)
     assert ISSUE_AMBIENT_READ in [i.kind for i in PurityAnalyzer().analyze(fn).issues]
 
 

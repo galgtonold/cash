@@ -28,8 +28,6 @@ from unittest import mock
 
 import pytest
 
-import cash
-
 pytestmark = pytest.mark.core
 
 
@@ -51,11 +49,6 @@ def mods(tmp_path, monkeypatch):
     yield load
     for name in created:
         sys.modules.pop(name, None)
-
-
-@pytest.fixture
-def c(tmp_path):
-    return cash.Cash(cache_dir=str(tmp_path / "cache"))
 
 
 def _check(fn, *args):
@@ -88,16 +81,16 @@ def _primes(c, mods, body_import):
     return lib, app
 
 
-def test_imported_alias_patched_after_a_real_call(c, mods):
+def test_imported_alias_patched_after_a_real_call(disk_cash, mods):
     """`from sievelib import sieve as _sieve`, patch `app._sieve`."""
-    _, app = _primes(c, mods, "from PFX_sievelib import sieve as _sieve")
+    _, app = _primes(disk_cash, mods, "from PFX_sievelib import sieve as _sieve")
     assert _check(app.count, 1) == 20
     with mock.patch.object(app, "_sieve", lambda n: -1):
         assert _check(app.count, 1) == -10
     assert _check(app.count, 1) == 20
 
 
-def test_same_module_helper_mocked_first_then_restored(c, mods):
+def test_same_module_helper_mocked_first_then_restored(disk_cash, mods):
     """The first call's binding used to decide for the rest of the process."""
     (app,) = mods(
         {
@@ -110,20 +103,20 @@ def test_same_module_helper_mocked_first_then_restored(c, mods):
         },
         "app",
     )
-    app.count = c.cache(app.count)
+    app.count = disk_cash.cache(app.count)
     with mock.patch.object(app, "_sieve", lambda n: -1):
         assert _check(app.count, 1) == -10
     assert _check(app.count, 1) == 20
 
 
-def test_monkeypatch_setattr(c, mods, monkeypatch):
-    _, app = _primes(c, mods, "from PFX_sievelib import sieve as _sieve")
+def test_monkeypatch_setattr(disk_cash, mods, monkeypatch):
+    _, app = _primes(disk_cash, mods, "from PFX_sievelib import sieve as _sieve")
     assert _check(app.count, 2) == 30
     monkeypatch.setattr(app, "_sieve", lambda n: 0)
     assert _check(app.count, 2) == 0
 
 
-def test_a_patch_two_levels_down(c, mods):
+def test_a_patch_two_levels_down(disk_cash, mods):
     """The helper's helper, bound in the helper's module: `lvl1._h2`."""
     lvl1, app = mods(
         {
@@ -144,16 +137,16 @@ def test_a_patch_two_levels_down(c, mods):
         },
         "lvl1,app",
     )
-    app.f = c.cache(app.f)
+    app.f = disk_cash.cache(app.f)
     assert _check(app.f, 1) == 20
     with mock.patch.object(lvl1, "_h2", lambda x: -1):
         assert _check(app.f, 1) == -10
     assert _check(app.f, 1) == 20
 
 
-def test_a_mock_runs_the_call_uncached(c, mods):
+def test_a_mock_runs_the_call_uncached(disk_cash, mods):
     """A MagicMock has no code to key: that call bypasses the cache entirely."""
-    _, app = _primes(c, mods, "from PFX_sievelib import sieve as _sieve")
+    _, app = _primes(disk_cash, mods, "from PFX_sievelib import sieve as _sieve")
     assert _check(app.count, 1) == 20
     with mock.patch.object(app, "_sieve", return_value=5):
         assert _check(app.count, 1) == 50
@@ -162,9 +155,9 @@ def test_a_mock_runs_the_call_uncached(c, mods):
     assert _check(app.count, 1) == 20
 
 
-def test_a_mocked_call_says_why_it_missed(c, mods):
+def test_a_mocked_call_says_why_it_missed(disk_cash, mods):
     """The miss reason and explain() name the mock instead of guessing."""
-    _, app = _primes(c, mods, "from PFX_sievelib import sieve as _sieve")
+    _, app = _primes(disk_cash, mods, "from PFX_sievelib import sieve as _sieve")
     app.count(1)
     with mock.patch.object(app, "_sieve", return_value=5):
         explanation = app.count.explain(1)
@@ -175,7 +168,7 @@ def test_a_mocked_call_says_why_it_missed(c, mods):
     assert any("a helper is a mock" in str(r) for r in reasons), reasons
 
 
-def test_a_mock_two_levels_down_runs_uncached(c, mods):
+def test_a_mock_two_levels_down_runs_uncached(disk_cash, mods):
     lvl1, app = mods(
         {
             "lvl2": """
@@ -195,13 +188,13 @@ def test_a_mock_two_levels_down_runs_uncached(c, mods):
         },
         "lvl1,app",
     )
-    app.f = c.cache(app.f)
+    app.f = disk_cash.cache(app.f)
     assert _check(app.f, 1) == 20
     with mock.patch.object(lvl1, "_h2", return_value=-1):
         assert _check(app.f, 1) == -10
 
 
-def test_a_cached_callee_patched_in_the_callers_module(c, mods):
+def test_a_cached_callee_patched_in_the_callers_module(disk_cash, mods):
     """`outer` calls cached `inner` by name; patching `app.inner` must reach outer's key."""
     (app,) = mods(
         {
@@ -214,15 +207,15 @@ def test_a_cached_callee_patched_in_the_callers_module(c, mods):
         },
         "app",
     )
-    app.inner = c.cache(app.inner)
-    app.outer = c.cache(app.outer)
+    app.inner = disk_cash.cache(app.inner)
+    app.outer = disk_cash.cache(app.outer)
     assert _check(app.outer, 1) == 20
     with mock.patch.object(app, "inner", lambda x: -1):
         assert _check(app.outer, 1) == -10
     assert _check(app.outer, 1) == 20
 
 
-def test_restored_helper_brings_its_own_subtree_back(c, mods):
+def test_restored_helper_brings_its_own_subtree_back(disk_cash, mods):
     """Analysed while mocked, then restored: the REAL helper's global reads must
     reach the key, so the tree below a changed binding is re-analysed."""
     (app,) = mods(
@@ -237,7 +230,7 @@ def test_restored_helper_brings_its_own_subtree_back(c, mods):
         },
         "app",
     )
-    app.f = c.cache(app.f)
+    app.f = disk_cash.cache(app.f)
     with mock.patch.object(app, "_scale", lambda x: -1):
         assert _check(app.f, 1) == -1
     assert _check(app.f, 1) == 10
@@ -245,7 +238,7 @@ def test_restored_helper_brings_its_own_subtree_back(c, mods):
     assert _check(app.f, 1) == 100
 
 
-def test_unpatched_calls_hit_and_a_restore_hits_the_original_entry(c, mods):
+def test_unpatched_calls_hit_and_a_restore_hits_the_original_entry(disk_cash, mods):
     """Controls: nothing patched -> one execution; patch and restore -> the
     original entry is hit again rather than recomputed."""
     lib, app = mods(
@@ -261,7 +254,7 @@ def test_unpatched_calls_hit_and_a_restore_hits_the_original_entry(c, mods):
         },
         "sievelib,app",
     )
-    app.count = c.cache(app.count)
+    app.count = disk_cash.cache(app.count)
     app.count(1)
     app.count(1)
     assert app.CALLS == [1], "an unpatched second call did not hit"
@@ -272,7 +265,7 @@ def test_unpatched_calls_hit_and_a_restore_hits_the_original_entry(c, mods):
     assert app.CALLS == [1, 1], "restoring the real helper did not return to its entry"
 
 
-def test_identically_written_functions_in_two_modules_keep_their_own_helpers(c, mods):
+def test_identically_written_functions_in_two_modules_keep_their_own_helpers(disk_cash, mods):
     """Found while fixing the above: the analyzer cached its report by the
     function's source TEXT, so a second module's identically written `count`
     got the first module's helper tree. Redefining the second module's own
@@ -294,18 +287,18 @@ def test_identically_written_functions_in_two_modules_keep_their_own_helpers(c, 
         },
         "one,two",
     )
-    one.count = c.cache(one.count)
-    two.count = c.cache(two.count)
+    one.count = disk_cash.cache(one.count)
+    two.count = disk_cash.cache(two.count)
     assert _check(one.count, 1) == 20
     assert _check(two.count, 1) == 30
     exec("def _sieve(n):\n    return n + 5\n", two.__dict__)  # an in-process redefinition
     assert _check(two.count, 1) == 60
 
 
-def test_the_helper_home_rebound_is_not_what_runs(c, mods):
+def test_the_helper_home_rebound_is_not_what_runs(disk_cash, mods):
     """Patching the helper's HOME module after the caller imported it does not
     change what the caller runs -- and must not change its answer either."""
-    lib, app = _primes(c, mods, "from PFX_sievelib import sieve as _sieve")
+    lib, app = _primes(disk_cash, mods, "from PFX_sievelib import sieve as _sieve")
     assert _check(app.count, 1) == 20
     with mock.patch.object(lib, "sieve", lambda n: -1):
         assert _check(app.count, 1) == 20
@@ -330,12 +323,12 @@ def _json_app(c, mods):
 
 
 @pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
-def test_a_patched_library_function_is_not_cached_as_the_real_answer(c, mods, real_first):
+def test_a_patched_library_function_is_not_cached_as_the_real_answer(disk_cash, mods, real_first):
     """`mock.patch("requests.get")` stored the fake under the real key, and
     every later unpatched call got it. The standard library stands in for the
     installed module: `json.loads` is someone else's code, patched where it
     lives."""
-    app = _json_app(c, mods)
+    app = _json_app(disk_cash, mods)
     if real_first:
         assert _check(app.total, '{"v": 2}') == 20
     with mock.patch("json.loads", return_value={"v": 5}):
@@ -344,7 +337,7 @@ def test_a_patched_library_function_is_not_cached_as_the_real_answer(c, mods, re
 
 
 @pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
-def test_a_known_io_call_patched_is_not_cached_as_the_real_answer(c, mods, real_first):
+def test_a_known_io_call_patched_is_not_cached_as_the_real_answer(disk_cash, mods, real_first):
     """The exact reported shape: `requests.get` is on cash's known-I/O list, and
     those call sites were never even looked at. `os.system` is on the same list
     (`exit 0` is harmless everywhere)."""
@@ -358,7 +351,7 @@ def test_a_known_io_call_patched_is_not_cached_as_the_real_answer(c, mods, real_
         },
         "app",
     )
-    app.run = c.cache(app.run, assume_safe=True)
+    app.run = disk_cash.cache(app.run, assume_safe=True)
     if real_first:
         assert _check(app.run, "exit 0") == 1
     with mock.patch("os.system", return_value=5):
@@ -367,9 +360,9 @@ def test_a_known_io_call_patched_is_not_cached_as_the_real_answer(c, mods, real_
 
 
 @pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
-def test_a_module_global_replaced_by_a_mock_is_not_cached(c, mods, real_first):
+def test_a_module_global_replaced_by_a_mock_is_not_cached(disk_cash, mods, real_first):
     """`mock.patch("mylib.requests", MagicMock())` -- the whole module swapped."""
-    app = _json_app(c, mods)
+    app = _json_app(disk_cash, mods)
     if real_first:
         assert _check(app.total, '{"v": 2}') == 20
     fake = mock.MagicMock()
@@ -380,7 +373,7 @@ def test_a_module_global_replaced_by_a_mock_is_not_cached(c, mods, real_first):
 
 
 @pytest.mark.parametrize("real_first", [False, True], ids=["patched-first", "real-first"])
-def test_a_mock_below_the_library_function_is_not_cached(c, mods, real_first):
+def test_a_mock_below_the_library_function_is_not_cached(disk_cash, mods, real_first):
     """`mock.patch("requests.Session.request")` and
     `HTTPAdapter.send` sit one level below the `requests.get` the body calls,
     where no binding the key reads can show them. `json.loads` calls the
@@ -391,7 +384,7 @@ def test_a_mock_below_the_library_function_is_not_cached(c, mods, real_first):
     must never happen is the other direction -- the fake stored for later."""
     import json.decoder
 
-    app = _json_app(c, mods)
+    app = _json_app(disk_cash, mods)
     if real_first:
         assert _check(app.total, '{"v": 2}') == 20
     with mock.patch.object(json.decoder.JSONDecoder, "decode", return_value={"v": 9}):
@@ -399,7 +392,7 @@ def test_a_mock_below_the_library_function_is_not_cached(c, mods, real_first):
     assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
 
 
-def test_an_instance_global_mocked_after_a_real_call_is_not_cached(c, mods):
+def test_an_instance_global_mocked_after_a_real_call_is_not_cached(disk_cash, mods):
     """A module-level `SESSION = requests.Session()` swapped
     for a MagicMock after one ordinary call -- the state of every pytest
     session -- had its answer stored under the real key."""
@@ -414,7 +407,7 @@ def test_an_instance_global_mocked_after_a_real_call_is_not_cached(c, mods):
         },
         "app",
     )
-    app.total = c.cache(app.total)
+    app.total = disk_cash.cache(app.total)
     assert _check(app.total, '{"v": 1}') == 10
     fake = mock.MagicMock()
     fake.decode.return_value = {"v": 4}
@@ -423,15 +416,15 @@ def test_an_instance_global_mocked_after_a_real_call_is_not_cached(c, mods):
     assert _check(app.total, '{"v": 2}') == 20, "the mock's answer was stored"
 
 
-def test_a_call_that_ran_a_mock_says_so(c, mods):
+def test_a_call_that_ran_a_mock_says_so(disk_cash, mods):
     """The miss that ran a mock is not stored, and the next call's reason says
     why rather than claiming there was never an entry."""
     import json.decoder
 
-    app = _json_app(c, mods)
+    app = _json_app(disk_cash, mods)
     with mock.patch.object(json.decoder.JSONDecoder, "decode", return_value={"v": 9}):
         app.total('{"v": 2}')
-    outcome = next(iter(c._misses.outcomes.values()))
+    outcome = next(iter(disk_cash._misses.outcomes.values()))
     assert "mock" in (outcome.get("not_stored") or ""), outcome
 
 
@@ -454,7 +447,7 @@ _CAPTURED = {
 
 
 @pytest.mark.parametrize("kind", sorted(_CAPTURED))
-def test_a_frozen_clock_fixture_keys_what_it_froze(c, mods, kind):
+def test_a_frozen_clock_fixture_keys_what_it_froze(disk_cash, mods, kind):
     """`monkeypatch.setattr(clock, "now", lambda: when)` -- every `when` got ONE
     entry for anything but str/int/float/bytes, so a March test was served July's
     answer."""
@@ -472,7 +465,7 @@ def test_a_frozen_clock_fixture_keys_what_it_froze(c, mods, kind):
         },
         "clock,app",
     )
-    app.stamp = c.cache(app.stamp)
+    app.stamp = disk_cash.cache(app.stamp)
 
     def freeze(when):
         clock.now = lambda: when
@@ -488,7 +481,7 @@ def test_a_frozen_clock_fixture_keys_what_it_froze(c, mods, kind):
         clock.now = real
 
 
-def test_a_closure_that_mutates_what_it_captured_still_hits(c, mods):
+def test_a_closure_that_mutates_what_it_captured_still_hits(disk_cash, mods):
     """The control: a memo dict the helper writes into stays out of the key,
     or every call would miss."""
     (app,) = mods(
@@ -509,7 +502,7 @@ def test_a_closure_that_mutates_what_it_captured_still_hits(c, mods):
     )
     calls = []
     real = app.f
-    app.f = c.cache(lambda x: (calls.append(x), real(x))[1])
+    app.f = disk_cash.cache(lambda x: (calls.append(x), real(x))[1])
     app.f(3)
     app.f(3)
     assert calls == [3], "a helper's mutated memo made the key drift"

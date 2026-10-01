@@ -22,7 +22,7 @@ import gc
 
 import pytest
 
-from cash import Cash, content_hashers
+from cash import content_hashers
 from cash.decorator.arg_hashing import is_cow_pandas
 
 pd = pytest.importorskip("pandas")
@@ -33,25 +33,20 @@ pytestmark = pytest.mark.core
 needs_cow = pytest.mark.skipif(not is_cow_pandas(pd.DataFrame()), reason="pandas copy-on-write is not active")
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 @dataclasses.dataclass
 class Params:
     F: float = 0.02
     k: float = 0.06
 
 
-def test_a_mutated_params_object_from_a_cached_call(c):
+def test_a_mutated_params_object_from_a_cached_call(disk_cash):
     """A sweep idiom: one returned params object, mutated per iteration."""
 
-    @c.cache
+    @disk_cash.cache
     def make_params():
         return Params()
 
-    @c.cache
+    @disk_cash.cache
     def run(p):
         return round(p.F * 1000 + p.k * 10, 6)
 
@@ -63,14 +58,14 @@ def test_a_mutated_params_object_from_a_cached_call(c):
     assert got == [run.__wrapped__(Params(F=f)) for f in (0.02, 0.03, 0.04)]
 
 
-def test_a_mutated_frame_from_a_cached_call(c):
+def test_a_mutated_frame_from_a_cached_call(disk_cash):
     """The known-limitations example, now fixed for scripts."""
 
-    @c.cache
+    @disk_cash.cache
     def load():
         return pd.DataFrame({"a": [1, 2, 3]})
 
-    @c.cache
+    @disk_cash.cache
     def total(df):
         return int(df["a"].sum())
 
@@ -109,8 +104,8 @@ MUTATIONS = {
 
 @needs_cow
 @pytest.mark.parametrize("mutation", sorted(MUTATIONS))
-def test_every_in_place_mutation_is_seen_by_the_copy_on_write_check(c, mutation):
-    @c.cache
+def test_every_in_place_mutation_is_seen_by_the_copy_on_write_check(disk_cash, mutation):
+    @disk_cash.cache
     def summary(df):
         return (list(df.columns), [str(v) for v in df.to_numpy().ravel()], df.index.name)
 
@@ -121,7 +116,7 @@ def test_every_in_place_mutation_is_seen_by_the_copy_on_write_check(c, mutation)
 
 
 @needs_cow
-def test_an_unchanged_frame_is_not_re_hashed(c, monkeypatch):
+def test_an_unchanged_frame_is_not_re_hashed(disk_cash, monkeypatch):
     """The point of the memo: the same frame through a pipeline hashes once."""
     calls = []
     real = content_hashers.hash_pandas
@@ -132,7 +127,7 @@ def test_an_unchanged_frame_is_not_re_hashed(c, monkeypatch):
 
     monkeypatch.setattr(content_hashers, "hash_pandas", counting)
 
-    @c.cache
+    @disk_cash.cache
     def mean_a(df):
         return float(df["a"].mean())
 
@@ -150,7 +145,7 @@ def test_an_unchanged_frame_is_not_re_hashed(c, monkeypatch):
 
 
 @needs_cow
-def test_an_unchanged_series_is_not_re_hashed(c, monkeypatch):
+def test_an_unchanged_series_is_not_re_hashed(disk_cash, monkeypatch):
     """The memo's own shallow copy references the series' array; that is not
     an outside writer, so it must not send every call back to a full hash."""
     calls = []
@@ -162,7 +157,7 @@ def test_an_unchanged_series_is_not_re_hashed(c, monkeypatch):
 
     monkeypatch.setattr(content_hashers, "hash_pandas", counting)
 
-    @c.cache
+    @disk_cash.cache
     def total(s):
         return float(s.sum())
 
@@ -173,23 +168,23 @@ def test_an_unchanged_series_is_not_re_hashed(c, monkeypatch):
 
 
 @needs_cow
-def test_the_memo_lets_go_of_a_collected_frame(c):
+def test_the_memo_lets_go_of_a_collected_frame(disk_cash):
     """It holds a shallow copy of each frame; that copy must not outlive the frame."""
 
-    @c.cache
+    @disk_cash.cache
     def n(df):
         return len(df)
 
     df = pd.DataFrame({"a": [1.0, 2.0, 3.0], "s": ["x", "y", "z"]})  # no categorical: memoised
     n(df)
-    assert id(df) in c._args._frame_memo
+    assert id(df) in disk_cash._args._frame_memo
     key = id(df)
     del df
     gc.collect()
-    assert key not in c._args._frame_memo
+    assert key not in disk_cash._args._frame_memo
 
 
-def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
+def test_a_statement_maintained_tag_is_still_trusted(disk_cash, monkeypatch):
     """The notebook path: the statement layer re-tags on every change, so its
     tag stands in for the content and a big frame is not re-hashed per call."""
     calls = []
@@ -202,7 +197,7 @@ def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
     monkeypatch.setattr(content_hashers, "hash_pandas", counting)
     monkeypatch.setattr("cash.decorator.arg_hashing._COW_PANDAS", False)  # isolate from the CoW memo
 
-    @c.cache
+    @disk_cash.cache
     def n(df):
         return len(df)
 
@@ -214,11 +209,11 @@ def test_a_statement_maintained_tag_is_still_trusted(c, monkeypatch):
     assert len(calls) == 1, "a statement-maintained tag should have skipped the re-hash"
 
 
-def test_a_decorator_tag_alone_is_not_trusted(c, monkeypatch):
+def test_a_decorator_tag_alone_is_not_trusted(disk_cash, monkeypatch):
     """The control for the above: the same tag written by the decorator."""
     monkeypatch.setattr("cash.decorator.arg_hashing._COW_PANDAS", False)
 
-    @c.cache
+    @disk_cash.cache
     def n(df):
         return int(df["a"].sum())
 

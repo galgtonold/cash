@@ -22,7 +22,6 @@ import textwrap
 
 import pytest
 
-from cash import Cash
 from cash.source_norm import bytecode_identity, code_consts_without_docstring
 
 
@@ -103,23 +102,18 @@ CLASS = '''
 '''
 
 
-@pytest.fixture()
-def cash_instance(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 class TestClassSurface:
-    def test_rewording_class_and_method_docstrings_keeps_it(self, cash_instance):
+    def test_rewording_class_and_method_docstrings_keeps_it(self, disk_cash):
         a = _define(CLASS, "Box")
         b = _define(CLASS.replace("A box.", "A crate.").replace("How big it is.", "Its size."), "Box")
-        assert cash_instance._code.code_surface_hash(a) == cash_instance._code.code_surface_hash(b)
+        assert disk_cash._code.code_surface_hash(a) == disk_cash._code.code_surface_hash(b)
 
-    def test_a_method_edit_still_moves_it(self, cash_instance):
+    def test_a_method_edit_still_moves_it(self, disk_cash):
         a = _define(CLASS, "Box")
         b = _define(CLASS.replace("return 3", "return 4"), "Box")
-        assert cash_instance._code.code_surface_hash(a) != cash_instance._code.code_surface_hash(b)
+        assert disk_cash._code.code_surface_hash(a) != disk_cash._code.code_surface_hash(b)
 
-    def test_a_pydantic_model_s_docstring_still_counts(self, cash_instance):
+    def test_a_pydantic_model_s_docstring_still_counts(self, disk_cash):
         """It is the schema's description: the prompt, not commentary."""
         pytest.importorskip("pydantic")
         model = '''
@@ -132,4 +126,4 @@ class TestClassSurface:
         a = _define(model, "Invoice")
         b = _define(model.replace("invoice total", "invoice subtotal"), "Invoice")
         assert a.model_json_schema()["description"] != b.model_json_schema()["description"]
-        assert cash_instance._code.code_surface_hash(a) != cash_instance._code.code_surface_hash(b)
+        assert disk_cash._code.code_surface_hash(a) != disk_cash._code.code_surface_hash(b)

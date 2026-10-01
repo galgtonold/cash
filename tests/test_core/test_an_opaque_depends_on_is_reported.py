@@ -16,8 +16,6 @@ import warnings
 
 import pytest
 
-from cash import Cash
-
 pytestmark = pytest.mark.core
 
 
@@ -30,14 +28,9 @@ def _codes_for(c, dep, name):
     return [getattr(w.message, "code", None) for w in rec]
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 @pytest.mark.parametrize("dep", [len, math.sqrt], ids=["builtin", "c-extension"])
-def test_a_callable_without_source_or_bytecode_warns(c, dep):
-    assert "KEY-DEPENDS-ON-OPAQUE" in _codes_for(c, dep, "f")
+def test_a_callable_without_source_or_bytecode_warns(disk_cash, dep):
+    assert "KEY-DEPENDS-ON-OPAQUE" in _codes_for(disk_cash, dep, "f")
 
 
 def _helper(x):
@@ -45,15 +38,15 @@ def _helper(x):
 
 
 @pytest.mark.parametrize("dep", [json.loads, _helper], ids=["stdlib-python", "local"])
-def test_a_readable_callable_does_not(c, dep):
-    assert "KEY-DEPENDS-ON-OPAQUE" not in _codes_for(c, dep, "f")
+def test_a_readable_callable_does_not(disk_cash, dep):
+    assert "KEY-DEPENDS-ON-OPAQUE" not in _codes_for(disk_cash, dep, "f")
 
 
-def test_it_does_not_hide_another_warning_on_the_same_function(c):
+def test_it_does_not_hide_another_warning_on_the_same_function(disk_cash):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
 
-        @c.cache(depends_on=[len], cache_if=lambda r: True, chunk_max_items=2)
+        @disk_cash.cache(depends_on=[len], cache_if=lambda r: True, chunk_max_items=2)
         def gen(n):
             yield from range(n)
 

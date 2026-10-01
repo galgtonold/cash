@@ -17,15 +17,9 @@ import warnings
 
 import pytest
 
-from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer
 
 pytestmark = pytest.mark.core
-
-
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _quiet(fn):
@@ -79,8 +73,8 @@ HOMES = ("cash_home_a", "cash_home_b")
     ],
     ids=lambda v: getattr(v, "__name__", None),
 )
-def test_a_new_value_is_a_new_entry(c, monkeypatch, fn, var, values):
-    cached = c.cache(fn)
+def test_a_new_value_is_a_new_entry(disk_cash, monkeypatch, fn, var, values):
+    cached = disk_cash.cache(fn)
     monkeypatch.setenv(var, values[0])
     first, codes = _quiet(cached)
     assert codes == [] and values[0] in first
@@ -91,7 +85,7 @@ def test_a_new_value_is_a_new_entry(c, monkeypatch, fn, var, values):
     assert cached.cache_info()["hits"] >= 1
 
 
-def test_which_follows_path(c, monkeypatch, tmp_path):
+def test_which_follows_path(disk_cash, monkeypatch, tmp_path):
     # Windows finds a program only by an extension listed in PATHEXT.
     suffix = ".bat" if os.name == "nt" else ""
     for sub in ("one", "two"):
@@ -99,29 +93,29 @@ def test_which_follows_path(c, monkeypatch, tmp_path):
         tool.parent.mkdir()
         tool.write_text("#!/bin/sh\n", encoding="utf-8")
         tool.chmod(0o755)
-    cached = c.cache(which)
+    cached = disk_cash.cache(which)
     monkeypatch.setenv("PATH", str(tmp_path / "one"))
     assert "one" in cached()
     monkeypatch.setenv("PATH", str(tmp_path / "two"))
     assert "two" in cached()
 
 
-def test_the_temporary_directory_is_an_input(c, monkeypatch, tmp_path):
-    cached = c.cache(tempdir)
+def test_the_temporary_directory_is_an_input(disk_cash, monkeypatch, tmp_path):
+    cached = disk_cash.cache(tempdir)
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "a"))
     assert cached().endswith("a")
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "b"))
     assert cached().endswith("b")
 
 
-def test_setdefault_is_keyed_and_its_write_is_reported(c, monkeypatch):
+def test_setdefault_is_keyed_and_its_write_is_reported(disk_cash, monkeypatch):
     def setdefault():
         return os.environ.setdefault("CASH_TEST_MODE", "default")
 
     report = PurityAnalyzer().analyze(setdefault)
     assert ("env", "CASH_TEST_MODE") in report.environment_reads
     assert any("setdefault() - write method" in i.description for i in report.issues), report.issues
-    cached = c.cache(setdefault, assume_safe=True)
+    cached = disk_cash.cache(setdefault, assume_safe=True)
     monkeypatch.setenv("CASH_TEST_MODE", "a")
     assert cached() == "a"
     monkeypatch.setenv("CASH_TEST_MODE", "b")

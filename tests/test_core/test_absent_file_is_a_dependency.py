@@ -31,15 +31,7 @@ from __future__ import annotations
 import os
 import textwrap
 
-import pytest
-
-from cash import Cash
 from tests._scripts import run_python
-
-
-@pytest.fixture
-def cash_instance(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
 
 
 def _optional_config_reader(c, runs, name="cfg.txt"):
@@ -54,13 +46,13 @@ def _optional_config_reader(c, runs, name="cfg.txt"):
     return scaled
 
 
-def test_a_file_that_appears_invalidates_the_entry(cash_instance, tmp_path, monkeypatch):
+def test_a_file_that_appears_invalidates_the_entry(disk_cash, tmp_path, monkeypatch):
     """The B -> A direction, in process: computed without the file, then with."""
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
     runs: list[int] = []
-    scaled = _optional_config_reader(cash_instance, runs)
+    scaled = _optional_config_reader(disk_cash, runs)
 
     assert scaled(1000) == 1000  # no cfg.txt: the defaults branch
     (work / "cfg.txt").write_text("7", encoding="utf-8")
@@ -69,14 +61,14 @@ def test_a_file_that_appears_invalidates_the_entry(cash_instance, tmp_path, monk
     assert len(runs) == 2
 
 
-def test_a_file_that_disappears_invalidates_too(cash_instance, tmp_path, monkeypatch):
+def test_a_file_that_disappears_invalidates_too(disk_cash, tmp_path, monkeypatch):
     """The other direction, which already worked -- kept so it cannot regress."""
     work = tmp_path / "work"
     work.mkdir()
     (work / "cfg.txt").write_text("7", encoding="utf-8")
     monkeypatch.chdir(work)
     runs: list[int] = []
-    scaled = _optional_config_reader(cash_instance, runs)
+    scaled = _optional_config_reader(disk_cash, runs)
 
     assert scaled(1000) == 7000
     (work / "cfg.txt").unlink()
@@ -85,13 +77,13 @@ def test_a_file_that_disappears_invalidates_too(cash_instance, tmp_path, monkeyp
     assert len(runs) == 2
 
 
-def test_nothing_changing_still_hits(cash_instance, tmp_path, monkeypatch):
+def test_nothing_changing_still_hits(disk_cash, tmp_path, monkeypatch):
     """The control. Every assertion above passes if nothing caches at all."""
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
     runs: list[int] = []
-    scaled = _optional_config_reader(cash_instance, runs)
+    scaled = _optional_config_reader(disk_cash, runs)
 
     assert scaled(1000) == 1000
     assert scaled(1000) == 1000
@@ -99,13 +91,13 @@ def test_nothing_changing_still_hits(cash_instance, tmp_path, monkeypatch):
     assert len(runs) == 1, f"the second call recomputed: {runs}"
 
 
-def test_an_unrelated_file_appearing_does_not_churn(cash_instance, tmp_path, monkeypatch):
+def test_an_unrelated_file_appearing_does_not_churn(disk_cash, tmp_path, monkeypatch):
     """Only what the call looked for counts, not everything in the directory."""
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
     runs: list[int] = []
-    scaled = _optional_config_reader(cash_instance, runs)
+    scaled = _optional_config_reader(disk_cash, runs)
 
     assert scaled(1000) == 1000
     (work / "something_else.txt").write_text("hello", encoding="utf-8")
@@ -114,14 +106,14 @@ def test_an_unrelated_file_appearing_does_not_churn(cash_instance, tmp_path, mon
     assert len(runs) == 1, f"an unrelated file invalidated the entry: {runs}"
 
 
-def test_isfile_is_covered_too(cash_instance, tmp_path, monkeypatch):
+def test_isfile_is_covered_too(disk_cash, tmp_path, monkeypatch):
     """`os.path.isfile` is the same idiom and must record the same thing."""
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
     runs: list[int] = []
 
-    @cash_instance.cache(assume_safe=True)
+    @disk_cash.cache(assume_safe=True)
     def scaled(n):
         runs.append(n)
         return n * 3 if os.path.isfile("flag.txt") else n
@@ -132,7 +124,7 @@ def test_isfile_is_covered_too(cash_instance, tmp_path, monkeypatch):
     assert len(runs) == 2
 
 
-def test_a_present_file_is_recorded_as_read_not_as_absent(cash_instance, tmp_path, monkeypatch):
+def test_a_present_file_is_recorded_as_read_not_as_absent(disk_cash, tmp_path, monkeypatch):
     """A probe that succeeds is followed by the read, which is the real record.
 
     Without this, the absent-marker could shadow a genuine content dependency
@@ -143,7 +135,7 @@ def test_a_present_file_is_recorded_as_read_not_as_absent(cash_instance, tmp_pat
     (work / "cfg.txt").write_text("7", encoding="utf-8")
     monkeypatch.chdir(work)
     runs: list[int] = []
-    scaled = _optional_config_reader(cash_instance, runs)
+    scaled = _optional_config_reader(disk_cash, runs)
 
     assert scaled(1000) == 7000
     (work / "cfg.txt").write_text("9", encoding="utf-8")

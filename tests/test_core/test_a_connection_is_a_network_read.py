@@ -22,7 +22,6 @@ import warnings
 
 import pytest
 
-from cash import Cash
 from cash.exceptions import CashImpureFunctionError
 from cash.tracking.reader_patches import file_registry
 
@@ -47,11 +46,6 @@ def url():
     server.server_close()
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 def _codes(record):
     return [getattr(w.message, "code", None) for w in record]
 
@@ -67,10 +61,10 @@ def rate(url):
         return int(response.read())
 
 
-def test_an_unnamed_fetch_gets_the_ttl_advisory(c, url):
+def test_an_unnamed_fetch_gets_the_ttl_advisory(disk_cash, url):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        assert c.cache(rate)(url) == 7
+        assert disk_cash.cache(rate)(url) == 7
     assert _codes(rec) == ["KEY-NETWORK-READ"], _codes(rec)
     message = _message(rec, "KEY-NETWORK-READ")
     assert "socket connect to 127.0.0.1" in message
@@ -78,23 +72,23 @@ def test_an_unnamed_fetch_gets_the_ttl_advisory(c, url):
     assert "ttl=" in message
 
 
-def test_ttl_silences_it(c, url):
+def test_ttl_silences_it(disk_cash, url):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        assert c.cache(rate, ttl=3600)(url) == 7
+        assert disk_cash.cache(rate, ttl=3600)(url) == 7
     assert _codes(rec) == [], _codes(rec)
 
 
-def test_strict_raises_and_stores_nothing(c, url):
-    fn = c.cache(rate, strict=True)
+def test_strict_raises_and_stores_nothing(disk_cash, url):
+    fn = disk_cash.cache(rate, strict=True)
     with pytest.raises(CashImpureFunctionError, match="connected to a server"):
         fn(url)
     with pytest.raises(CashImpureFunctionError):
         fn(url)  # nothing was stored, so the second call is not a silent hit
 
 
-def test_strict_accepts_it_with_a_ttl(c, url):
-    assert c.cache(rate, strict=True, ttl=3600)(url) == 7
+def test_strict_accepts_it_with_a_ttl(disk_cash, url):
+    assert disk_cash.cache(rate, strict=True, ttl=3600)(url) == 7
 
 
 def _fetch_by_url(target):
@@ -102,7 +96,7 @@ def _fetch_by_url(target):
         return response.read()
 
 
-def test_a_tracked_remote_read_is_not_reported(c, url, monkeypatch):
+def test_a_tracked_remote_read_is_not_reported(disk_cash, url, monkeypatch):
     """A reader handed a URL records it as a remote dependency before the
     fetch; the connection it then opens is that read, not a hidden one."""
     registry = file_registry()
@@ -117,7 +111,7 @@ def test_a_tracked_remote_read_is_not_reported(c, url, monkeypatch):
 
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            assert c.cache(load)(url) == 7
+            assert disk_cash.cache(load)(url) == 7
         assert "KEY-NETWORK-READ" not in _codes(rec), _message(rec, "KEY-NETWORK-READ")
         assert "IMPURE-OBSERVED-EFFECTS" not in _codes(rec), _message(rec, "IMPURE-OBSERVED-EFFECTS")
     finally:

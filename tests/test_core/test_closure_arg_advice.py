@@ -21,8 +21,6 @@ import warnings
 
 import pytest
 
-from cash import Cash
-
 pytestmark = pytest.mark.core
 
 
@@ -42,11 +40,6 @@ def _messages(rec, code):
     return [str(w.message) for w in rec if f"[{code}]" in str(w.message)]
 
 
-@pytest.fixture
-def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-
-
 @pytest.mark.parametrize(
     "arg",
     [
@@ -56,10 +49,10 @@ def c(tmp_path):
     ],
     ids=["closure", "lambda", "partial-of-closure"],
 )
-def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(c, arg):
+def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(disk_cash, arg):
     """THE BUG: the fix line said `register_hasher(function, ...)`."""
 
-    @c.cache
+    @disk_cash.cache
     def apply_to(fn, x):
         return x
 
@@ -73,10 +66,10 @@ def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(c, arg):
     assert "plain arguments" in found[0]
 
 
-def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(c):
+def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(disk_cash):
     """The control: for a live object the type-wide hasher IS the right fix."""
 
-    @c.cache
+    @disk_cash.cache
     def query(session, n):
         return n
 
@@ -89,8 +82,8 @@ def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(c):
     assert "cash.register_hasher(Session, ...)" in found[0]
 
 
-def test_explain_gives_the_same_advice(c):
-    @c.cache
+def test_explain_gives_the_same_advice(disk_cash):
+    @disk_cash.cache
     def apply_to(fn, x):
         return x
 
@@ -99,17 +92,17 @@ def test_explain_gives_the_same_advice(c):
 
 
 @pytest.mark.parametrize("type_", [types.FunctionType, types.MethodType, functools.partial])
-def test_registering_a_hasher_for_every_callable_warns(c, type_):
+def test_registering_a_hasher_for_every_callable_warns(disk_cash, type_):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        c.register_hasher(type_, lambda f: getattr(f, "__qualname__", "?"))
+        disk_cash.register_hasher(type_, lambda f: getattr(f, "__qualname__", "?"))
     assert _messages(rec, "KEY-CALLABLE-HASHER")
 
 
-def test_registering_a_hasher_for_an_ordinary_type_is_silent(c):
+def test_registering_a_hasher_for_an_ordinary_type_is_silent(disk_cash):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        c.register_hasher(Session, lambda s: "one")
+        disk_cash.register_hasher(Session, lambda s: "one")
     assert not _messages(rec, "KEY-CALLABLE-HASHER")
 
 
@@ -122,10 +115,10 @@ def test_registering_a_hasher_for_an_ordinary_type_is_silent(c):
 # ---------------------------------------------------------------------------
 
 
-def test_a_frame_next_to_a_lambda_blames_the_lambda(c):
+def test_a_frame_next_to_a_lambda_blames_the_lambda(disk_cash):
     pd = pytest.importorskip("pandas")
 
-    @c.cache
+    @disk_cash.cache
     def score(df, fn):
         return float(fn(df).sum().sum())
 
@@ -138,10 +131,10 @@ def test_a_frame_next_to_a_lambda_blames_the_lambda(c):
     assert "DataFrame" not in found[0]
 
 
-def test_an_unpicklable_object_after_a_frame_is_named(c):
+def test_an_unpicklable_object_after_a_frame_is_named(disk_cash):
     pd = pytest.importorskip("pandas")
 
-    @c.cache
+    @disk_cash.cache
     def use(df, session):
         return len(df)
 
