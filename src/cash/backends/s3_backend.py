@@ -81,14 +81,10 @@ class S3Backend(CacheBackend):
     METADATA_PREFETCH_BYTES = 8192
 
     def _get_key(self, key: str) -> str:
-        """One object per entry.
-
-        It was two, a ``.meta`` and a ``.data``, which cost two requests for
-        every read, write and delete -- and made reading metadata download the
-        whole value. S3 has ranged GETs and the entry format has a
-        length-prefixed header; together they make a metadata read one small
-        request.
-        """
+        """One object per entry, metadata and value together: one request per
+        read, write and delete. The entry format's length-prefixed header and
+        S3's ranged GETs make a metadata read one small request
+        (`get_metadata`)."""
         return f"{self.prefix}{key}{ENTRY_SUFFIX}"
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
@@ -125,10 +121,8 @@ class S3Backend(CacheBackend):
     def get_metadata(self, key: str) -> MetadataDict | None:
         """One ranged GET of the front of the object.
 
-        The base implementation performs a full ``get()`` and discards the
-        value -- two requests and the whole cached object over the network,
-        measured at 4,194,457 bytes for a 4MB entry to return about 150 bytes
-        of answer. Both halves of that are billed.
+        Not the base ``get()``: that downloads the whole cached object, and
+        is billed for it, to answer with a few hundred bytes of metadata.
         """
         self._writes.wait(key)
         obj_key = self._get_key(key)
@@ -191,11 +185,8 @@ class S3Backend(CacheBackend):
     def _do_set_sync(self, obj_key: str, blob: bytes) -> None:
         """The actual S3 PUT -- runs in the PendingWrites worker thread.
 
-        One object, so one request, and no ordering to reason about. The
-        two-object version had to PUT the data first and the metadata second
-        so a reader could never find metadata pointing at a payload that was
-        not there yet, and had to delete the orphan when the second PUT
-        failed.
+        One object, so one request: a reader sees the whole entry or none of
+        it.
         """
         try:
             self.s3.put_object(Bucket=self.bucket, Key=obj_key, Body=blob)
@@ -269,11 +260,8 @@ class S3Backend(CacheBackend):
                         if not key.endswith(ENTRY_SUFFIX):
                             continue  # not a cache entry
                         try:
-                            # Ranged: listing a cache must not download it. The
-                            # two-object version fetched whole .meta objects,
-                            # which was already bounded -- this keeps that
-                            # property now that metadata shares an object with
-                            # the value.
+                            # Ranged: listing a cache must not download the
+                            # values that share each object with its metadata.
                             head = self._ranged_get(key, self.METADATA_PREFETCH_BYTES)
                             metadata, _ = unpack_entry(head, with_payload=False)
                             entries.append(metadata)

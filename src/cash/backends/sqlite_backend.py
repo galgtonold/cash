@@ -104,11 +104,9 @@ class SQLiteBackend(CacheBackend):
 
     #: Column order is load-bearing: SQLite lays a row out in declaration
     #: order and spills what does not fit onto a chain of overflow pages, so
-    #: reading a column means walking past everything declared before it. With
-    #: ``data`` first, ``SELECT metadata`` on a 16MB entry walked 16MB:
-    #: measured at 7.398ms against 0.003ms with the two swapped -- 2845x, for a
-    #: change that moves no bytes. Changing the table means bumping
-    #: `SCHEMA_VERSION`.
+    #: reading a column means walking past everything declared before it.
+    #: ``data`` goes last, so ``SELECT metadata`` never walks a large value.
+    #: Changing the table means bumping `SCHEMA_VERSION`.
     _SCHEMA = """
         CREATE TABLE IF NOT EXISTS cache_entries (
             key TEXT PRIMARY KEY,
@@ -184,13 +182,9 @@ class SQLiteBackend(CacheBackend):
     def get_metadata(self, key: str) -> MetadataDict | None:
         """Read an entry's metadata without touching its value.
 
-        The base implementation performs a full ``get()`` and discards the
-        value, which means answering "when was this last accessed?" unpickles
-        the whole cached object. Measured at 35.9ms for a 16MB entry against
-        0.226ms for the file backend, whose metadata read is bounded by the
-        metadata.
-
-        Selecting one column instead makes the cost independent of the value,
+        Not the base ``get()``, which unpickles the whole cached object to
+        answer "when was this last accessed?". Selecting one column makes the
+        cost independent of the value,
         which is what every caller of this method already assumes: it exists
         so badges and listings can inspect entries they have no intention of
         restoring.

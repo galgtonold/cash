@@ -136,7 +136,7 @@ from cash import Cash, InMemoryBackend
 app = Cash(backend=InMemoryBackend(max_size_bytes=512 * 1024**2))
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict @e183f287, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict @33eac6fb, cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e -->
 A dictionary in this process: everything is gone when the process ends. It
 evicts on three triggers: `max_entries` (least recently used first),
 `max_size_bytes`, and system memory above `max_memory_percent` (default 90%).
@@ -168,7 +168,7 @@ Each entry is two Redis keys, written together. A ttl becomes a Redis
 `EXPIRE`. Give each project its own `prefix`: it is the only thing that keeps
 two projects in one Redis apart.
 
-<!-- claim: cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/redis_backend.py:RedisBackend.lock @dcc9c1b1 -->
 - It also needs `pip install redis`. Without it the backend raises
   `DependencyNotFoundError`.
 - Inside a tier stack, a single value over 10 MiB skips Redis.

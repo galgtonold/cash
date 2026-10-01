@@ -42,7 +42,7 @@ rule.
 [Configuration](../getting-started/configuration.md) lists every setting and
 which one wins.
 
-<!-- claim: cash/backends/adaptive_caps.py:DISK_FRACTION == 0.25, cash/backends/adaptive_caps.py:DISK_FLOOR @a6159b9c, cash/backends/adaptive_caps.py:DISK_CEILING @774c769b, cash/backends/adaptive_caps.py:DISK_SAFETY == 0.8, cash/backends/adaptive_caps.py:RAM_FRACTION == 0.20, cash/backends/adaptive_caps.py:RAM_FLOOR @bb77c2b3, cash/backends/adaptive_caps.py:RAM_CEILING @a21285e0, cash/backends/adaptive_caps.py:adaptive_disk_cap_for @5e8f2ff8 -->
+<!-- claim: cash/backends/adaptive_caps.py:DISK_FRACTION == 0.25, cash/backends/adaptive_caps.py:DISK_FLOOR @a6159b9c, cash/backends/adaptive_caps.py:DISK_CEILING @774c769b, cash/backends/adaptive_caps.py:DISK_SAFETY == 0.8, cash/backends/adaptive_caps.py:RAM_FRACTION == 0.20, cash/backends/adaptive_caps.py:RAM_FLOOR @bb77c2b3, cash/backends/adaptive_caps.py:RAM_CEILING @a21285e0, cash/backends/adaptive_caps.py:adaptive_disk_cap_for @eb1486f7 -->
 Each tier has a size cap, sized to the machine unless you set one:
 
 | Tier | Default cap |

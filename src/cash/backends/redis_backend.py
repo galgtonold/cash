@@ -128,11 +128,8 @@ class RedisBackend(CacheBackend):
     def get_metadata(self, key: str) -> MetadataDict | None:
         """Fetch the metadata key only, not the value.
 
-        The base implementation performs a full ``get()`` and discards the
-        value. Both keys ride one pipeline, so the round trip count was
-        already right -- but the whole cached object came back over the wire
-        to answer a question about its metadata. Measured against a 4MB entry:
-        4,194,460 bytes transferred, for roughly 150 bytes of answer.
+        Not the base ``get()``: that brings the whole cached object over the
+        wire to answer with a few hundred bytes of metadata.
 
         A metadata key with no data key still reports, matching the file
         backend: an entry whose value was too large to persist keeps its
@@ -242,10 +239,7 @@ class RedisBackend(CacheBackend):
         while True:
             cursor, keys = self.client.scan(cursor=cursor, match=match_pattern, count=100)
             if keys:
-                # Get all metadata
-                # MGET might be too big if many keys, but let's try batching if needed.
-                # For now, just iterate or pipeline batches.
-                # Let's pipeline in batches of 100
+                # One round trip per SCAN page (up to 100 keys).
                 pipe = self.client.pipeline()
                 for k in keys:
                     pipe.get(k)
@@ -266,13 +260,7 @@ class RedisBackend(CacheBackend):
         self.client.close()
 
     def lock(self, key: str) -> contextlib.AbstractContextManager:
-        """
-        Acquire a distributed lock for the key.
-        Uses Redis standard locking (SET NX px).
-        """
-        # Lock name should be distinct from data key to avoid collision?
-        # Actually, redis.lock creates a key, usually `lock:name`.
-        # We'll use prefix + "lock:" + key
-        lock_name = f"{self.prefix}lock:{key}"
-        # Return the lock object which is a context manager
-        return self.client.lock(lock_name, timeout=60, blocking_timeout=10)
+        """A lock on *key* shared by every process using this server: Redis's
+        own lock (``SET NX PX``), as a context manager. Its name is in a
+        ``lock:`` namespace under the prefix, apart from the entries' keys."""
+        return self.client.lock(f"{self.prefix}lock:{key}", timeout=60, blocking_timeout=10)

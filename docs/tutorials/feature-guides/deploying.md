@@ -89,7 +89,7 @@ extra setup. Across hosts, point every host at a Redis or S3 backend; see
 [Sharing a cache](sharing-caches.md) for what makes keys match on two machines,
 and [Choosing a backend](choosing-a-backend.md) for the options.
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @dcc9c1b1 -->
 **Locking across processes needs Redis as the backend itself.**
 `use_locking=True` gives one computation per key within a process on every
 backend. Only a bare `RedisBackend` also locks across processes and hosts:

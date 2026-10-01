@@ -100,8 +100,7 @@ class InMemoryBackend(CacheBackend):
         self._gdsf_clock = 0.0
         self._gdsf_base: dict[str, float] = {}
         #: Access order, for ties. ``last_access`` is wall-clock and collides
-        #: within one timer tick, which is how the disk tier's LRU once
-        #: degenerated into directory order.
+        #: within one timer tick, so it cannot order entries written together.
         self._access_seq = 0
         self._seq_by_key: dict[str, int] = {}
 
@@ -115,10 +114,9 @@ class InMemoryBackend(CacheBackend):
     #: while the pressure lasts. A share is at most a fifth of the tier (the
     #: overshoot over the memory in use, with the target at 81%), so below
     #: this it would free at most ~3 MiB, which relieves no machine, while
-    #: every entry it drops is recomputed. Holding the tier at a smaller
-    #: footprint was worse than the share: a session that began on a full
-    #: machine kept the few entries it had at the first check, and a loop of
-    #: 100 calls of 5 ms re-ran all 100 on an identical re-run.
+    #: every entry it drops is recomputed. And a session that starts on a full
+    #: machine must still be able to hold a working set, not only the few
+    #: entries it had at the first check.
     _PRESSURE_KEEPS_BYTES = 16 * 1024**2
 
     @staticmethod
@@ -229,7 +227,7 @@ class InMemoryBackend(CacheBackend):
         if mutable:
             try:
                 copied = pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
-            except Exception:  # noqa: BLE001 - cells that cannot be copied are shared, as before
+            except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                 logger.debug("could not copy the cells of a %s", type(frame).__name__)
         if copied is None:
             copied = frame.copy(deep=not _pandas_copy_on_write())
@@ -473,8 +471,8 @@ class InMemoryBackend(CacheBackend):
         check would empty the tier -- costing its user everything and the
         machine nothing. It sheds its share: ``overshoot * own / in_use`` bytes, where
         ``own`` is this tier's footprint. A tier that IS most of the memory in
-        use sheds nearly the whole overshoot, as before; one that holds a
-        sliver of it sheds a sliver.
+        use sheds nearly the whole overshoot; one that holds a sliver of it
+        sheds a sliver.
 
         **Once per episode.** Under pressure that never relents, taking the
         share again on every check (one per ``check_interval`` writes) is the
@@ -506,8 +504,7 @@ class InMemoryBackend(CacheBackend):
         # WORSE since the last one. Holding flat is right while the pressure is
         # steady; if it keeps climbing, something -- possibly this tier, if the
         # memory it freed has not gone back to the OS yet -- is still growing,
-        # and refusing to shed again would let the machine swap. The old loop
-        # erred towards emptying the cache; this must not err the other way.
+        # and refusing to shed again would let the machine swap.
         self._pressure_percent = percent
         in_use = total * percent / 100.0
         overshoot = in_use - total * target_percent
@@ -611,11 +608,9 @@ def _memory_reading() -> Any | None:
     The pressure check is advice about memory, never part of a store: the
     value is already in the tier when it runs, on every ``check_interval``-th
     write. So a reading that fails -- whatever it raises -- skips the check
-    rather than failing that write. It raised only ``OSError`` and
-    ``AttributeError`` before, and a psutil left patched by a test, whose
-    stand-in read a name that was gone, made every tenth write raise
-    ``NameError``. Logged once per process: a check that cannot run stays
-    that way, and a line per ten writes would say nothing new.
+    rather than failing that write. A reading without a numeric percentage
+    and total counts as none. Logged once per process: a check that cannot
+    run stays that way, and a line per ten writes would say nothing new.
     """
     try:
         mem = psutil.virtual_memory()
@@ -688,7 +683,7 @@ def _holds_mutable_cells(frame: Any) -> bool:
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
         return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
-    except Exception:  # noqa: BLE001 - cannot tell: copy as before
+    except Exception:  # noqa: BLE001 - cannot tell: the shallow copy
         return False
 
 

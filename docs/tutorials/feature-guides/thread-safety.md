@@ -40,7 +40,7 @@ compute for themselves.
 
 ## Which lock spans what
 
-<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @cfdf2e01 -->
+<!-- claim: cash/backends/_base.py:CacheBackend.lock @2c1d7483, cash/backends/redis_backend.py:RedisBackend.lock @dcc9c1b1 -->
 | Backend | Callers that share one computation |
 |---|---|
 | Any backend, including the default | threads and tasks in **one process** |

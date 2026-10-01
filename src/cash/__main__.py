@@ -715,10 +715,9 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
         sys.exit(1)
     if not force:
         # Looking like a cache is not enough: cash writes its stamp into
-        # whatever directory it is pointed at, so a `cache_dir` beside the
-        # user's data made this a recursive delete of that data -- a project
-        # with `cache_dir = "../shared_data"` lost `shared_data/precious.csv`
-        # to `cash clear --all`, exit 0. Nothing cash did not write is removed.
+        # whatever directory it is pointed at, so a `cache_dir` set to a
+        # folder of the user's data looks like a cache too. Nothing cash did
+        # not write is removed.
         foreign = _not_cash_files(resolved)
         if foreign:
             shown = ", ".join(foreign[:3]) + (", ..." if len(foreign) > 3 else "")
@@ -825,9 +824,8 @@ def cmd_clear(args: argparse.Namespace) -> None:
     only_entry = args.entry
     only_function = args.function
     for flag, value in (("--entry", only_entry), ("--function", only_function)):
-        # `--entry "$ID"` with $ID unset arrives as "": falsy, so it fell
-        # through to clearing the whole path. A selector that selects nothing
-        # must never widen to everything.
+        # An empty value (`--entry "$ID"` with $ID unset) selects nothing,
+        # and a selector that selects nothing must never widen to everything.
         if value is not None and not value.strip():
             print(f"cash clear: {flag} needs a non-empty value; nothing was cleared.")
             sys.exit(2)

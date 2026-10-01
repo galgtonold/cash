@@ -468,8 +468,8 @@ class FileBackend(CacheBackend):
                 try:
                     payload = gzip.decompress(payload)
                 except (OSError, gzip.BadGzipFile, EOFError):
-                    # Flag says compressed but the bytes are not. Fall through
-                    # with the raw bytes, as the two-file path did.
+                    # Flag says compressed but the bytes are not: the raw
+                    # bytes are the payload.
                     logger.debug("Entry for %r flagged compressed but is not", key)
 
             if isinstance(payload, SplitPayload):
@@ -843,11 +843,11 @@ class FileBackend(CacheBackend):
     def promotion_size_cap(self) -> int | None:
         """Refuse (skip) only an object larger than this tier's WHOLE cap.
 
-        "Keep at most N bytes" reads as: store what fits and evict the rest. A
-        lower threshold (it was half the cap) refused values that fit
-        comfortably, and a job whose working set was half its cap cached
-        nothing. A write-and-evict treadmill is reported when it happens
-        (``CACHE-THRASH``) rather than pre-empted. Uncapped, the class-level
+        "Keep at most N bytes" reads as: store what fits and evict the rest.
+        Any lower threshold refuses values that fit, and a job whose working
+        set is a large part of its cap would cache nothing. A write-and-evict
+        treadmill is reported when it happens (``CACHE-THRASH``) rather than
+        pre-empted. Uncapped, the class-level
         hint applies.
         """
         if self.evictor.max_size_bytes:

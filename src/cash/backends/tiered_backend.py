@@ -205,9 +205,8 @@ class TieredBackend(CacheBackend):
     def _serialized_size(value: Any, serializer: Serializer | None) -> int | None:
         """Bytes this value takes once serialized, or None if it cannot be.
 
-        The number a disk cap is actually about, and the one ``cash inspect``
-        reports -- unlike the in-memory footprint the RAM tier measures, which
-        is what the size gate had been comparing.
+        The number a disk cap is about, and the one ``cash inspect`` reports,
+        unlike the in-memory footprint the RAM tier measures.
 
         Called only on the refusal path (see the caller), so the cost lands on
         values that were about to be thrown away. Returns None when the value

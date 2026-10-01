@@ -452,7 +452,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/file_backend.py:FileBackend.promotion_size_cap @ef38a34e -->
+<!-- claim: cash/backends/store_notices.py:StoreNotices.too_big @0b79929c, cash/backends/file_backend.py:FileBackend.promotion_size_cap @db165d55 -->
 **What happened.** One value, serialized, is bigger than every disk tier's
 whole cap, so it was not written to disk. The message names its size and the
 cap.

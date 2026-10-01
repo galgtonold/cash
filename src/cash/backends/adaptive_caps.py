@@ -290,7 +290,7 @@ def adaptive_disk_cap_for(cache_dir: str, own_bytes: int) -> int:
     Adding what the cache already holds back in removes the loop: as the cache
     grows by N bytes, free drops by N, and the sum is unchanged. The cap
     becomes a property of the volume rather than of how full the cache happens
-    to be. A cache with nothing in it gets exactly the same answer as before.
+    to be. A cache with nothing in it gets the same answer as `resolve_disk_cap`.
     """
     return adaptive_disk_cap(free_bytes_on_volume(cache_dir) + max(0, own_bytes))
 
