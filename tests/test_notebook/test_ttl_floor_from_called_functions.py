@@ -3,7 +3,7 @@
 Under %cash_on, ``x = f()`` is cached as an ordinary statement. When ``f`` is
 decorated ``@cash.cache(ttl=0)`` — "recompute every call" — the statement cache
 had no TTL and froze ``x`` at the first result, silently overriding the freshness
-the decorator promised. ``_ttl_floor_from_called_functions`` lowers the
+the decorator promised. ``ttl_floor_from_called_functions`` lowers the
 statement's effective TTL to the smallest TTL of any cash-wrapped function it
 calls, so ttl=0 rides the immediate-expiry path and the body runs every
 run.
@@ -14,19 +14,7 @@ The end-to-end behaviour is pinned by the real-driver reproducer in r11p2.
 
 from __future__ import annotations
 
-from cash.notebook.statement import StatementProcessor
-
-
-class _Shell:
-    def __init__(self, ns):
-        self.user_ns = ns
-
-
-class _Stub:
-    """Only ``self.shell.user_ns`` is read by the method under test."""
-
-    def __init__(self, ns):
-        self.shell = _Shell(ns)
+from cash.notebook.statement.directives import ttl_floor_from_called_functions
 
 
 def _wrapper(ttl):
@@ -39,7 +27,7 @@ def _wrapper(ttl):
 
 
 def _floor(ns, inputs, effective_ttl):
-    return StatementProcessor._ttl_floor_from_called_functions(_Stub(ns), set(inputs), effective_ttl)
+    return ttl_floor_from_called_functions(set(inputs), effective_ttl, ns)
 
 
 def test_ttl_zero_function_floors_the_statement():

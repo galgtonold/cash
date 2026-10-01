@@ -26,6 +26,7 @@ from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
 from cash.notebook.statement.control_body import is_control_body
+from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
 from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
@@ -465,8 +466,8 @@ class StatementProcessor:
         """Read *run*'s annotation, warn about its randomness, start its
         metrics and parse it."""
         code = run.code
-        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random, run.cache_fit = self._parse_annotation(
-            run.annotation, run.ttl
+        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random, run.cache_fit = statement_directives(
+            run.annotation, run.ttl, self.persist_all
         )
         self._calls.begin_statement(run.effective_ttl, run.force_persist)
         run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random, skip_cache=run.skip_cache)
@@ -564,7 +565,7 @@ class StatementProcessor:
     ) -> tuple[StatementCacheMetadata | None, Any | None]:
         """Look *run* up in the cache: ``(metadata, cached_data)``, both None
         on a miss or a skipped lookup."""
-        run.effective_ttl = self._ttl_floor_from_called_functions(run.inputs, run.effective_ttl)
+        run.effective_ttl = ttl_floor_from_called_functions(run.inputs, run.effective_ttl, self.shell.user_ns)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(
             run.skip_cache, run.cache_key, run.effective_ttl, run.inputs
         )
@@ -736,71 +737,6 @@ class StatementProcessor:
         cash_instance whose attributes are all truthy.
         """
         return getattr(getattr(self.cash_instance, "config", None), "persist_all", False) is True
-
-    def _parse_annotation(
-        self,
-        annotation: CacheAnnotation | None,
-        ttl: int | None,
-    ) -> tuple[int | None, bool, bool, bool, bool]:
-        """Return ``(effective_ttl, force_persist, skip_cache, allow_random, cache_fit)``.
-
-        ``persist_all`` (config / ``%cash_persist`` magic) forces persistence
-        for every statement, as if each carried ``# @cash:persist``.
-
-        ``allow_random`` (``# @cash:allow-random``) is *advisory only* — it
-        suppresses the unseeded-randomness warning and nothing else.  It must
-        never reach the cacheability decision: an unseeded random statement is
-        cacheable by design, with or without the directive.
-
-        ``cache_fit`` (``# @cash:cache-fit``) opts a bare ``estimator.fit(X, y)``
-        statement IN to the estimator-fit caching path.  It is off by
-        default: without it a bare fit is skip-cached and simply re-executes,
-        which is net-neutral.  It does NOT, as this comment used to
-        claim, keep aliases correct: ``backup = model`` is an ordinary assignment
-        whose own restore rebinds a pre-fit copy, independently of the fit
-        (— fixed by refusing to cache a bare alias bind).
-        """
-        effective_ttl = ttl
-        force_persist = self.persist_all
-        skip_cache = False
-        allow_random = False
-        cache_fit = False
-        if annotation:
-            if annotation.ttl is not None:
-                effective_ttl = annotation.ttl
-            force_persist = force_persist or annotation.persist
-            skip_cache = annotation.no_cache
-            allow_random = annotation.allow_random
-            cache_fit = annotation.cache_fit
-        return effective_ttl, force_persist, skip_cache, allow_random, cache_fit
-
-    def _ttl_floor_from_called_functions(self, inputs: set[str], effective_ttl: int | None) -> int | None:
-        """Lower *effective_ttl* to the TTL of any ``@cash.cache`` function called here.
-
-        A statement ``x = f()`` where ``f`` is decorated ``@cash.cache(ttl=0)`` was
-        cached with no TTL under %cash_on, so the statement restore froze ``x`` at
-        the first result — silently overriding the freshness the decorator
-        promised. The call target appears in ``inputs`` (the analyzer
-        lists ``f`` for ``x = f()``); if it is a cash wrapper with a smaller
-        declared TTL, the statement must expire at least as often. ``ttl=0`` then
-        rides the existing immediate-expiry path, so every run is a miss
-        and the decorated body runs every time, as ``ttl=0`` asks.
-
-        Only LOWERS the TTL and only for a wrapper carrying an explicit TTL, so a
-        plain ``@cash.cache`` (ttl=None) call is completely unaffected — the
-        statement caches exactly as before.
-        """
-        user_ns = self.shell.user_ns
-        floor = effective_ttl
-        for name in inputs:
-            fn = user_ns.get(name)
-            if fn is None or not getattr(fn, "_cash_cached", False):
-                continue
-            declared = getattr(fn, "_cash_declared_ttl", None)
-            if declared is None:
-                continue
-            floor = declared if floor is None else min(floor, declared)
-        return floor
 
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
