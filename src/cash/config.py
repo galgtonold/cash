@@ -61,18 +61,6 @@ TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
 _NAMED_CHOICES = {"backend": TIER_TYPES | {"tiered"}, "type": TIER_TYPES}
 
 
-#: The `TierConfig` fields each tier type is built from
-#: (``backends.factory._settings``). Any other field set on a tier does
-#: nothing, and is reported (CONFIG-INVALID) rather than silently ignored.
-_TIER_FIELDS: dict[str, frozenset[str]] = {
-    "memory": frozenset({"max_size_bytes", "max_entries"}),
-    "file": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "compress", "flush_interval"}),
-    "sqlite": frozenset({"max_size_bytes", "default_ttl", "cache_dir", "db_path", "wal_mode"}),
-    "redis": frozenset({"host", "port", "db", "password", "prefix"}),
-    "s3": frozenset({"bucket", "region", "prefix"}),
-}
-
-
 #: The smallest value each numeric setting can take (tier keys included), and
 #: the largest where there is one. A size or count of 0 or less would cap
 #: everything out -- nothing reached disk, and the messages then said "up to
@@ -202,10 +190,14 @@ class TierConfig:
     def __post_init__(self) -> None:
         if self.type not in TIER_TYPES:
             raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(TIER_TYPES)}")
+        # The factory is what reads a tier's keys, so it says which ones a
+        # type uses. Imported here: the factory imports this module.
+        from .backends.factory import TIER_FIELDS
+
         unused = sorted(
             f.name
             for f in fields(self)
-            if f.name != "type" and getattr(self, f.name) is not None and f.name not in _TIER_FIELDS[self.type]
+            if f.name != "type" and getattr(self, f.name) is not None and f.name not in TIER_FIELDS[self.type]
         )
         if unused:
             _config_notice(
@@ -213,7 +205,7 @@ class TierConfig:
                 f"a {self.type} tier sets {', '.join(unused)}, which a {self.type} tier does not use, "
                 f"so {'it does' if len(unused) == 1 else 'they do'} nothing.",
                 f"remove {'it' if len(unused) == 1 else 'them'}; a {self.type} tier is built from "
-                f"{', '.join(sorted(_TIER_FIELDS[self.type]))}.",
+                f"{', '.join(sorted(TIER_FIELDS[self.type]))}.",
             )
 
 

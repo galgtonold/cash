@@ -192,7 +192,7 @@ A tier's `type` decides which other keys it uses (details under
 not use does nothing, and cash warns
 [`CONFIG-INVALID`](../warnings.md#config-invalid).
 
-<!-- claim: cash/config.py:_TIER_FIELDS @3f70dfeb, cash/config.py:TierConfig.__post_init__ @02c67b7c -->
+<!-- claim: cash/backends/factory.py:TIER_FIELDS @e9cbbb70, cash/config.py:TierConfig.__post_init__ @8f5450d5 -->
 | `type` | Keys |
 |---|---|
 | `memory` | `max_entries`, `max_size_bytes` |
