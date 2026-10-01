@@ -956,7 +956,7 @@ def splitlines_like_the_parser(raw_cell: str) -> list[str]:
 
     Both ``str.translate`` and ``str.splitlines`` are single C-level passes
     over the whole string, so this stays cheap enough for the fast path
-    of ``cell_executor._statement_source`` to keep its measured win over
+    of ``statement_source.statement_source`` to keep its measured win over
     always calling ``ast.get_source_segment`` (see that docstring for the
     numbers).
     """

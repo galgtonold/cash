@@ -230,7 +230,7 @@
   position: relative;          /* tooltip anchor */
 }
 /* A multi-line .c3-code cell (a captured StatementRow.display_code, or a
-   `match` statement's full body -- see _statement_source) makes the row
+   `match` statement's full body -- see statement_source) makes the row
    taller than its dots/bar/chip siblings; start-align those instead of
    letting them float to the row's vertical midpoint. Scoped to
    [data-multiline="true"] -- stamped by _statement_row_html only when the

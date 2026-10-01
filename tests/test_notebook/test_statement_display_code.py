@@ -84,7 +84,7 @@ def test_a_control_body_statement_has_no_display_code(mock_shell, cash_magics):
     ``self.statement_processor.process_statement(modified_code, ttl, silent,
     annotation=annotation)`` with no ``display_code`` kwarg at all -- for
     every loop-body statement, every iteration. Only the top-level dispatch
-    loop in ``cell_executor.py`` computes ``_statement_source`` and threads
+    loop in ``cell_executor.py`` computes ``statement_source`` and threads
     it through. A test that calls ``process_statement("y = 2")`` directly
     (as this one used to) never touches that wiring at all: it would keep
     passing even if someone threaded ``display_code`` all the way into

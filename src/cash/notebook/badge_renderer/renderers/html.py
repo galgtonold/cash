@@ -491,7 +491,7 @@ def _row_code_html(row: StatementRow) -> str:
     That covers the common single-line statement (where the two strings are
     identical anyway) and every row the view-builder withholds one for by
     design: control bodies, loop-split iterations, statements cash rewrote,
-    and top-level ``def``/``class`` (see ``_statement_source``) -- for those,
+    and top-level ``def``/``class`` (see ``statement_source``) -- for those,
     ``_code_html``'s first-line + "... +N lines" summary IS the intended
     treatment, not a compromise to route around.
     """

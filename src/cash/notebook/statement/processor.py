@@ -430,8 +430,8 @@ class StatementProcessor:
                 modules), so the key still tracks the loop source + input
                 lineages.
             exec_source: The statement's ORIGINAL text (comments intact), when
-                the caller could recover one -- see ``_statement_source`` in
-                ``cell_executor.py``. Compiled in place of ``code`` so a
+                the caller could recover one -- see ``statement_source`` in
+                ``ipython/statement_source.py``. Compiled in place of ``code`` so a
                 function defined here keeps its comments for
                 ``inspect.getsource`` (and therefore for a per-line
                 ``# @cash:assume-safe`` waiver). Never affects the cache key:

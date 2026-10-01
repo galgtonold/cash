@@ -667,7 +667,7 @@ def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
     top-level statement.
 
     Drives ``display_code`` through the SAME function the real cell-executor
-    split loop calls (``_statement_source``) instead of hand-picking it, so
+    split loop calls (``statement_source``) instead of hand-picking it, so
     this fails if that capture decision ever stops excluding def/class --
     not only if this test's fixture happens to omit the key. ``ast.unparse``
     of a top-level ``FunctionDef`` is already multi-line, so ``row.code``
@@ -678,15 +678,15 @@ def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
     """
     import ast
 
-    from cash.notebook.ipython.cell_executor import _statement_source
+    from cash.notebook.ipython.statement_source import statement_source
 
     cell = "def foo(x):\n    y = x + 1\n    return y\n"
     node = ast.parse(cell).body[0]
     code = ast.unparse(node)
-    display_code = _statement_source(cell, node)
+    display_code = statement_source(cell, node)
     assert display_code is None, (
         "premise: capture must withhold display_code for a top-level def -- "
-        "if this fires, the regression is in _statement_source, not here"
+        "if this fires, the regression is in statement_source, not here"
     )
 
     metrics = [
@@ -714,18 +714,18 @@ def test_a_top_level_match_statement_renders_across_lines() -> None:
     covers For/While/If/With/Try) it has no per-branch rows of its own; the
     runtime caches and runs it as ONE unit, so showing its full source is
     showing "the code that ran", same as any other captured statement. Also
-    drives ``display_code`` through the real ``_statement_source`` (not a
+    drives ``display_code`` through the real ``statement_source`` (not a
     hand-picked value), so this fails if a future "fix" adds ``ast.Match``
     to the def/class exclusion tuple.
     """
     import ast
 
-    from cash.notebook.ipython.cell_executor import _statement_source
+    from cash.notebook.ipython.statement_source import statement_source
 
     cell = 'match command:\n    case "go":\n        result = 1\n    case _:\n        result = 0\n'
     node = ast.parse(cell).body[0]
     code = ast.unparse(node)
-    display_code = _statement_source(cell, node)
+    display_code = statement_source(cell, node)
     assert display_code is not None, (
         "premise: capture must NOT withhold display_code for a top-level "
         "match -- if this fires, someone added ast.Match to the exclusion"

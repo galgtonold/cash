@@ -78,7 +78,7 @@ def test_an_unannotated_line_still_warns_in_a_notebook_cell(cell_runner):
 def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell(magics, mock_shell):
     """A decorator whose expression begins on the
     line AFTER the ``@`` -- legal since PEP 614 (Python 3.9) -- made
-    ``_exec_source_for_node`` prepend from ``decorator_list[0].lineno``,
+    ``exec_source_for_node`` prepend from ``decorator_list[0].lineno``,
     which is the EXPRESSION's line, not the ``@`` line. The recovered text
     started mid-expression (``'    c.cache\\n)\\ndef f(n):...'``): the ``@(``
     line dropped, a stray ``)`` left behind. That does not compile, and
@@ -89,7 +89,7 @@ def test_a_pep614_parenthesised_decorator_does_not_kill_the_cell(magics, mock_sh
     The general fix -- ``compile()`` the recovered text before returning it,
     ``None`` if that raises -- falls back to the unparsed form here exactly
     as it does for any other unrecoverable statement (per
-    ``_exec_source_for_node``'s own docstring promise: "this must never be
+    ``exec_source_for_node``'s own docstring promise: "this must never be
     able to break a cell"). The annotation is then simply not visible to
     ``inspect.getsource`` for this one rare shape -- the same behaviour
     every function had before Task 1 -- but the cell runs.

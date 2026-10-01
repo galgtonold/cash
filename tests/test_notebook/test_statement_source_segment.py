@@ -10,12 +10,12 @@ guard in ``processor.py``'s ``process_statement``).
 
 A top-level ``def``/``class`` is a different story: this function withholds
 its body (returns ``None``), and its original text -- when there is one to
-recover -- is recovered separately, in ``cell_executor.py``'s
-``_exec_source_for_node``, ONLY when the body carries a ``@cash:``
+recover -- is recovered separately, in ``statement_source.py``'s
+``exec_source_for_node``, ONLY when the body carries a ``@cash:``
 directive; a `# @cash:assume-safe` inside a function defined in a cell keeps
 its comment ONLY in that case. An undirected def/class keeps compiling from
 the unparsed form, same as before. See that function's docstring (in
-``cell_executor.py``, not this test module) for the def/class case, which
+``statement_source.py``, not this test module) for the def/class case, which
 this file does not cover.
 """
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import ast
 
-from cash.notebook.ipython.cell_executor import _statement_source
+from cash.notebook.ipython.statement_source import statement_source
 
 
 def test_a_top_level_statement_comes_back_verbatim():
@@ -35,7 +35,7 @@ def test_a_top_level_statement_comes_back_verbatim():
         ")\n"
     )
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) == cell.rstrip("\n")
+    assert statement_source(cell, node) == cell.rstrip("\n")
 
 
 def test_a_nested_statement_is_dedented_relative_to_itself():
@@ -51,13 +51,13 @@ def test_a_nested_statement_is_dedented_relative_to_itself():
     raw = ast.get_source_segment(cell, inner)
     assert raw.splitlines()[1].startswith("        "), "premise: raw is ragged"
 
-    assert _statement_source(cell, inner) == ("total = (\n    df[df.k == k]\n    .amount.sum()\n)")
+    assert statement_source(cell, inner) == ("total = (\n    df[df.k == k]\n    .amount.sum()\n)")
 
 
 def test_a_single_line_statement_is_unchanged():
     cell = "x = 1\n"
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) == "x = 1"
+    assert statement_source(cell, node) == "x = 1"
 
 
 def test_an_unrecoverable_segment_returns_none():
@@ -79,7 +79,7 @@ def test_an_unrecoverable_segment_returns_none():
     """
     cell = "x = 1\ny = 2\nz = 3\n"
     node = ast.parse(cell).body[2]
-    assert _statement_source("x = 1\n", node) is None
+    assert statement_source("x = 1\n", node) is None
 
 
 def test_a_top_level_function_definition_returns_none():
@@ -91,7 +91,7 @@ def test_a_top_level_function_definition_returns_none():
     """
     cell = "def foo(x):\n    y = x + 1\n    return y\n"
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) is None
+    assert statement_source(cell, node) is None
 
 
 def test_a_top_level_async_function_definition_returns_none():
@@ -99,13 +99,13 @@ def test_a_top_level_async_function_definition_returns_none():
     checked separately so an ``async def`` doesn't slip through the guard."""
     cell = "async def foo(x):\n    y = x + 1\n    return y\n"
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) is None
+    assert statement_source(cell, node) is None
 
 
 def test_a_top_level_class_definition_returns_none():
     cell = "class Foo:\n    x = 1\n"
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) is None
+    assert statement_source(cell, node) is None
 
 
 def test_a_top_level_match_statement_is_captured_verbatim():
@@ -119,7 +119,7 @@ def test_a_top_level_match_statement_is_captured_verbatim():
     """
     cell = 'match command:\n    case "go":\n        result = 1\n    case _:\n        result = 0\n'
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) == cell.rstrip("\n")
+    assert statement_source(cell, node) == cell.rstrip("\n")
 
 
 def test_a_vertical_tab_inside_a_string_literal_is_not_truncated():
@@ -138,7 +138,7 @@ def test_a_vertical_tab_inside_a_string_literal_is_not_truncated():
     vertical_tab = chr(0x0B)
     cell = f"x = 'A{vertical_tab}B'\n"
     node = ast.parse(cell).body[0]
-    assert _statement_source(cell, node) == ast.get_source_segment(cell, node)
+    assert statement_source(cell, node) == ast.get_source_segment(cell, node)
 
 
 def test_a_form_feed_does_not_corrupt_the_following_statement():
@@ -153,7 +153,7 @@ def test_a_form_feed_does_not_corrupt_the_following_statement():
     cell = f"x = 1{form_feed}\ny = 2\n"
     tree = ast.parse(cell)
     assert len(tree.body) == 2, "premise: two top-level statements"
-    assert [_statement_source(cell, node) for node in tree.body] == [
+    assert [statement_source(cell, node) for node in tree.body] == [
         ast.get_source_segment(cell, node) for node in tree.body
     ]
 
@@ -178,4 +178,4 @@ def test_the_fast_path_agrees_with_get_source_segment_for_every_parser_incompati
     tree = ast.parse(cell)
     assert len(tree.body) == len(offenders), "premise: one statement per offender"
     for node in tree.body:
-        assert _statement_source(cell, node) == ast.get_source_segment(cell, node)
+        assert statement_source(cell, node) == ast.get_source_segment(cell, node)

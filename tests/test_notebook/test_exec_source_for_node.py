@@ -1,5 +1,5 @@
-"""``_exec_source_for_node`` -- what a statement is EXECUTED from, which
-diverges from ``_statement_source`` (what the badge DISPLAYS) only for a
+"""``exec_source_for_node`` -- what a statement is EXECUTED from, which
+diverges from ``statement_source`` (what the badge DISPLAYS) only for a
 top-level ``def``/``class`` whose body the purity analyzer recognises as
 carrying an ``# @cash:assume-safe`` waiver.
 
@@ -46,14 +46,14 @@ are pinned here so none regresses silently:
   than by a second, independently-fallible guess. See
   ``test_a_docstring_mentioning_cash_syntax_is_not_a_directive`` and its
   neighbours below for the false-positive shapes this closes, and
-  ``_exec_source_for_node``'s own docstring for the full reasoning.
+  ``exec_source_for_node``'s own docstring for the full reasoning.
 """
 
 from __future__ import annotations
 
 import ast
 
-from cash.notebook.ipython.cell_executor import _exec_source_for_node
+from cash.notebook.ipython.statement_source import exec_source_for_node
 
 
 def _node(cell: str, index: int = 0) -> ast.stmt:
@@ -65,7 +65,7 @@ def test_reuses_stmt_display_when_present():
     recovered display text is reused verbatim, not re-derived."""
     cell = "x = 1\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, "x = 1") == "x = 1"
+    assert exec_source_for_node(cell, node, "x = 1") == "x = 1"
 
 
 def test_none_stmt_display_on_a_non_def_class_node_stays_none():
@@ -74,7 +74,7 @@ def test_none_stmt_display_on_a_non_def_class_node_stays_none():
     other than a def/class."""
     cell = "x = 1\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_function_with_no_directive_is_left_alone():
@@ -85,13 +85,13 @@ def test_a_function_with_no_directive_is_left_alone():
     itself IS recoverable."""
     cell = "def compute(v):\n    return v * 2\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_function_with_the_directive_is_recovered_with_comments():
     cell = "def audited(n):\n    time.sleep(0.01)  # @cash:assume-safe - audited\n    return n * 2\n"
     node = _node(cell)
-    result = _exec_source_for_node(cell, node, None)
+    result = exec_source_for_node(cell, node, None)
     assert result == cell.rstrip("\n")
     assert "@cash:assume-safe" in result
 
@@ -103,7 +103,7 @@ def test_the_decorator_is_not_dropped():
     function it executes."""
     cell = "@c.cache\ndef audited(n):\n    x = 1  # @cash:assume-safe\n    return x\n"
     node = _node(cell)
-    result = _exec_source_for_node(cell, node, None)
+    result = exec_source_for_node(cell, node, None)
     assert result == cell.rstrip("\n")
     assert result.startswith("@c.cache\n")
 
@@ -111,7 +111,7 @@ def test_the_decorator_is_not_dropped():
 def test_multiple_decorators_and_blank_lines_between_them_survive():
     cell = "@a\n\n@b(\n    1,\n)\ndef audited(n):\n    x = 1  # @cash:assume-safe\n    return x\n"
     node = _node(cell)
-    result = _exec_source_for_node(cell, node, None)
+    result = exec_source_for_node(cell, node, None)
     assert result == cell.rstrip("\n")
     # The recovered text must itself compile -- proof the decorator block
     # was captured intact, not merely present as a substring.
@@ -121,19 +121,19 @@ def test_multiple_decorators_and_blank_lines_between_them_survive():
 def test_an_async_function_with_the_directive_is_recovered():
     cell = "async def audited(n):\n    x = 1  # @cash:assume-safe\n    return x\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")
+    assert exec_source_for_node(cell, node, None) == cell.rstrip("\n")
 
 
 def test_a_class_with_the_directive_is_recovered():
     cell = "class Audited:\n    x = compute()  # @cash:assume-safe\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")
+    assert exec_source_for_node(cell, node, None) == cell.rstrip("\n")
 
 
 def test_a_class_with_no_directive_is_left_alone():
     cell = "class Plain:\n    x = 1\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_cash_directive_on_a_sibling_statement_does_not_leak_in():
@@ -142,14 +142,14 @@ def test_a_cash_directive_on_a_sibling_statement_does_not_leak_in():
     unrelated, undirected function's recovery fire."""
     cell = "def plain(n):\n    return n\nx = 1  # @cash:assume-safe\n"
     node = _node(cell, index=0)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
     """The regression this file exists to guard against. Since PEP 614 (Python 3.9), a decorator's
     EXPRESSION need not start on the same line as the ``@`` --
     ``decorator_list[0].lineno`` is the expression's own line. The manual
-    prefix in ``_exec_source_for_node`` (lines from
+    prefix in ``exec_source_for_node`` (lines from
     ``decorators[0].lineno - 1`` through ``node.lineno - 1``) then drops the
     ``@(`` line and leaves a stray ``)`` -- text that does not compile.
 
@@ -161,7 +161,7 @@ def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
     the unparsed form rather than text that cannot compile."""
     cell = "@(\n    c.cache\n)\ndef f(n):\n    return n  # @cash:assume-safe\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 # --- The substring gate's own false-positive surface. `"@cash:" in body`
@@ -179,7 +179,7 @@ def test_a_docstring_mentioning_cash_syntax_is_not_a_directive():
     UNDIRECTED function on the recovery path."""
     cell = 'def f(n):\n    """See the @cash: docs."""\n    return n\n'
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_string_literal_containing_the_substring_is_not_a_directive():
@@ -187,7 +187,7 @@ def test_a_string_literal_containing_the_substring_is_not_a_directive():
     purity analyzer both see it, but it waives nothing."""
     cell = 'def f(n):\n    msg = "@cash: not a directive"\n    return n\n'
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_prose_comment_mentioning_cash_syntax_is_not_a_directive():
@@ -196,7 +196,7 @@ def test_a_prose_comment_mentioning_cash_syntax_is_not_a_directive():
     codebase would be most likely to write by accident."""
     cell = "def f(n):\n    # the @cash: system does this\n    return n\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_non_waiver_directive_between_the_decorator_and_def_is_not_recovered():
@@ -209,7 +209,7 @@ def test_a_non_waiver_directive_between_the_decorator_and_def_is_not_recovered()
     position regardless) must not fire the gate either."""
     cell = "@c.cache\n# @cash:no-cache - not real here, just documenting the syntax\ndef f(n):\n    return n\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) is None
+    assert exec_source_for_node(cell, node, None) is None
 
 
 def test_a_real_directive_alongside_the_false_positives_is_still_recovered():
@@ -219,4 +219,4 @@ def test_a_real_directive_alongside_the_false_positives_is_still_recovered():
     genuinely directed function."""
     cell = "def f(n):\n    time.sleep(0.01)  # @cash:assume-safe\n    return n\n"
     node = _node(cell)
-    assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")
+    assert exec_source_for_node(cell, node, None) == cell.rstrip("\n")
