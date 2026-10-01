@@ -558,6 +558,34 @@ def _from_import_constant_hash(
     return None
 
 
+def _joined(hashes: list[str]) -> str:
+    """``":"`` and the sorted *hashes* joined by ``":"``; empty for none."""
+    return ":" + ":".join(sorted(hashes)) if hashes else ""
+
+
+def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
+    """The key component for the globals the called functions reach for.
+
+    Those are read at CALL time, including any bound BELOW this statement,
+    which the input-lineage path structurally cannot see, because it is
+    built when the ``def`` runs and only looks upward. Empty when there are
+    none, so a statement that calls no user-defined function keeps a
+    byte-identical key.
+    """
+    virtual = (
+        virtual_namespace(
+            ctx.virtual_callables,
+            ctx.virtual_lineage or {},
+            ctx.variable_lineage,
+            ctx.virtual_modules or set(),
+        )
+        if ctx.virtual_callables
+        else None
+    )
+    callee_deps = called_function_dependencies(sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual)
+    return f":callees:{':'.join(callee_deps)}" if callee_deps else ""
+
+
 def compute_cache_key(
     code: str,
     inputs: set[str],
@@ -607,11 +635,6 @@ def compute_cache_key(
         - func_source_hashes: List of ``"var:hash"`` strings for function sources.
         - module_source_hashes: List of ``"var:hash"`` strings for tracked modules.
     """
-    variable_lineage = ctx.variable_lineage
-    user_ns = ctx.user_ns
-    virtual_lineage = ctx.virtual_lineage or {}
-    virtual_modules = ctx.virtual_modules or set()
-
     source_hash = statement_source_hash(code)
 
     parts = _KeyParts()
@@ -624,45 +647,23 @@ def compute_cache_key(
     func_source_hashes = parts.func_source_hashes
     module_source_hashes = parts.module_source_hashes
 
-    # Build the final combined hash string
-    func_component = ""
-    if func_source_hashes:
-        func_component = ":" + ":".join(sorted(func_source_hashes))
-
-    module_component = ""
-    if module_source_hashes:
-        module_component = ":" + ":".join(sorted(module_source_hashes))
-
     # For import statements, also include source hashes for OUTPUT modules.
     # When `import trackmod` is re-executed after module reload, the cache key
     # must differ from the pre-reload key. Otherwise the backend cache returns
     # the old module object even though importlib already reloaded it.
     if outputs:
-        output_module_hashes = _collect_output_module_hashes(outputs, code, variable_lineage, user_ns)
-        module_source_hashes.extend(output_module_hashes)
-        if module_source_hashes:
-            module_component = ":" + ":".join(sorted(module_source_hashes))
+        module_source_hashes.extend(_collect_output_module_hashes(outputs, code, ctx.variable_lineage, ctx.user_ns))
+    func_component = _joined(func_source_hashes)
+    module_component = _joined(module_source_hashes)
 
     # Include occurrence index so duplicate statements within a cell get
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
-
-    # Globals the called functions reach for at CALL time, including any bound
-    # BELOW this statement — which the input-lineage path structurally cannot
-    # see, because it is built when the ``def`` runs and only looks upward.
-    # Omitted entirely when absent, so a statement that calls no user-defined
-    # function keeps a byte-identical key.
-    virtual = (
-        virtual_namespace(ctx.virtual_callables, virtual_lineage, variable_lineage, virtual_modules)
-        if ctx.virtual_callables
-        else None
-    )
-    callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage, virtual)
-    callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
+    callee_component = _callee_component(sorted_inputs, ctx)
 
     # What the environment reads in the statement return now: a new value is a
     # new entry. Empty when it reads none, so every other key is unchanged.
-    environment = statement_environment_component(code, user_ns)
+    environment = statement_environment_component(code, ctx.user_ns)
 
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
