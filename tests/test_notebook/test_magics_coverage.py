@@ -150,9 +150,9 @@ class TestCashStatus:
         parsed = json.loads(result)
         assert "lineage" in parsed
 
-    def test_status_reflects_execution(self, cash_magics):
+    def test_status_reflects_execution(self, cash_magics, statement_processor):
         """After executing a statement, status should reflect it."""
-        processor = cash_magics._statement_processor
+        processor = statement_processor
         processor.process_statement("x = 42")
         result = cash_magics.cash_status("dict")
         assert "x" in result["executed_codes"]
@@ -304,7 +304,7 @@ class TestCashDebugConsoleHandler:
         assert "[UPSTREAM_DEBUG] routed" in new_stream.getvalue()
         assert handler.stream is old_stdout
 
-    def test_the_bare_toggle_installs_the_handler(self, cash_magics, capsys):
+    def test_the_bare_toggle_installs_the_handler(self, cash_magics, cash_instance, capsys):
         """A bare `%cash_debug` set the level and nothing else, so the debug
         markers the console handler exists to show never appeared."""
         cash_magics._debug = False
@@ -315,7 +315,7 @@ class TestCashDebugConsoleHandler:
 
         cash_magics.cash_debug("")
         assert _cash_handlers() == []
-        assert cash_magics._cash_instance.debug is False
+        assert cash_instance.debug is False
 
     def test_switching_modes_does_not_print_twice(self, cash_magics, capsys):
         """`on` then `json` left both handlers attached: every record twice."""

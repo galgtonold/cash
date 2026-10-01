@@ -60,32 +60,32 @@ def test_cash_persist_magic_toggles_at_runtime(cash_magics, statement_processor)
     assert p.process_statement("w = 6 + 7")["status"] == CacheStatus.COMPUTED
 
 
-def test_configure_reaches_a_running_pipeline(cash_magics, statement_processor):
+def test_configure_reaches_a_running_pipeline(cash_magics, cash_instance, statement_processor):
     """``cash.configure(persist_all=True)`` is documented as a hot field. The
     processor copied the flag once, at construction, so flipping it on a
     running session changed config and nothing else."""
     p = statement_processor
     # Far above any scheduling stall, so "too cheap to cache" is certain.
-    cash_magics._cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
+    cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
     assert p.persist_all is False
-    cash_magics._cash_instance.reconfigure(persist_all=True)
+    cash_instance.reconfigure(persist_all=True)
     assert p.persist_all is True
     p.process_statement("v = 3 + 4")
     assert p.process_statement("v = 3 + 4")["status"] in (CacheStatus.RESTORED, CacheStatus.SKIPPED)
 
-    cash_magics._cash_instance.reconfigure(persist_all=False)
+    cash_instance.reconfigure(persist_all=False)
     assert p.persist_all is False
     p.process_statement("u = 5 + 6")
     assert p.process_statement("u = 5 + 6")["status"] == CacheStatus.COMPUTED
 
 
-def test_cash_persist_writes_config(cash_magics):
+def test_cash_persist_writes_config(cash_magics, cash_instance):
     """``%cash_persist`` kept its own copy; config (what ``cash.configure``
     and everything else reads) never heard of it."""
     cash_magics.cash_persist("on")
-    assert cash_magics._cash_instance.config.persist_all is True
+    assert cash_instance.config.persist_all is True
     cash_magics.cash_persist("")  # toggle
-    assert cash_magics._cash_instance.config.persist_all is False
+    assert cash_instance.config.persist_all is False
 
 
 def test_explicit_no_cache_still_wins_over_persist_all(persist_all_processor):

@@ -54,10 +54,12 @@ def temp_module(tmp_path):
 class TestModuleReloadInvalidation:
     """Test that module reload properly invalidates cache for dependent statements."""
 
-    def test_invalidate_module_lineages_updates_module_lineage(self, cash_magics, mock_shell, temp_module):
+    def test_invalidate_module_lineages_updates_module_lineage(
+        self, cash_magics, statement_processor, mock_shell, temp_module
+    ):
         """After module reload, module's variable_lineage should change."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # Import the module
         mod = importlib.import_module(module_name)
@@ -71,7 +73,7 @@ class TestModuleReloadInvalidation:
         changed_modules = {module_name: module_file}
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         # Lineage should have changed
@@ -82,10 +84,10 @@ class TestModuleReloadInvalidation:
 
         assert new_lineage == read_module_source_hash(module_file)
 
-    def test_invalidate_module_lineages_clears_dependent_vars(self, cash_magics, temp_module):
+    def test_invalidate_module_lineages_clears_dependent_vars(self, cash_magics, statement_processor, temp_module):
         """Variables computed from a changed module should have their lineage cleared."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # Set up lineage: module has old lineage, result depends on it
         old_module_lineage = hashlib.sha256(b"old_source").hexdigest()
@@ -99,7 +101,7 @@ class TestModuleReloadInvalidation:
         changed_modules = {module_name: module_file}
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         # Dependent variable 'result' should have been cleared
@@ -108,10 +110,10 @@ class TestModuleReloadInvalidation:
         assert "result" not in sp.tracking_state.executed_input_lineages
         assert "result" not in sp.tracking_state.current_session_hashes
 
-    def test_invalidate_module_lineages_preserves_unrelated_vars(self, cash_magics, temp_module):
+    def test_invalidate_module_lineages_preserves_unrelated_vars(self, cash_magics, statement_processor, temp_module):
         """Variables NOT depending on the changed module should be preserved."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         old_module_lineage = hashlib.sha256(b"old_source").hexdigest()
         sp.tracking_state.lineage.record(module_name, old_module_lineage)
@@ -123,31 +125,31 @@ class TestModuleReloadInvalidation:
         changed_modules = {module_name: module_file}
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         # Unrelated variable should be preserved
         assert sp.tracking_state.variable_lineage["unrelated"] == "unrelated_hash"
         assert sp.tracking_state.executed_cell_codes["unrelated"] == "unrelated = 42"
 
-    def test_recently_reloaded_modules_set(self, cash_magics, temp_module):
+    def test_recently_reloaded_modules_set(self, cash_magics, statement_processor, temp_module):
         """After invalidation, recently_reloaded_modules should contain the module name."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         changed_modules = {module_name: module_file}
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         assert module_name in sp.recently_reloaded_modules
 
-    def test_recently_reloaded_modules_cleared_after_cell(self, cash_magics, temp_module):
+    def test_recently_reloaded_modules_cleared_after_cell(self, cash_magics, statement_processor, temp_module):
         """recently_reloaded_modules should persist across non-import cells
         and be cleared when the import statement is re-executed."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # Set recently reloaded
         sp.recently_reloaded_modules.add(module_name)
@@ -171,10 +173,10 @@ class TestModuleReloadInvalidation:
             # the persistence behavior above was correct
             pass
 
-    def test_module_lineage_included_in_cache_key(self, cash_magics, mock_shell, temp_module):
+    def test_module_lineage_included_in_cache_key(self, cash_magics, statement_processor, mock_shell, temp_module):
         """When a module has lineage, it should be included in the cache key."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # Import the module
         mod = importlib.import_module(module_name)
@@ -191,10 +193,10 @@ class TestModuleReloadInvalidation:
         # Keys should differ because module lineage is now included
         assert key1 != key2
 
-    def test_module_lineage_change_changes_cache_key(self, cash_magics, mock_shell, temp_module):
+    def test_module_lineage_change_changes_cache_key(self, cash_magics, statement_processor, mock_shell, temp_module):
         """Changing module lineage should change the cache key for dependent code."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         mod = importlib.import_module(module_name)
         mock_shell.user_ns[module_name] = mod
@@ -211,10 +213,10 @@ class TestModuleReloadInvalidation:
 
         assert key_v1 != key_v2
 
-    def test_redundant_import_not_skipped_after_reload(self, cash_magics, mock_shell, temp_module):
+    def test_redundant_import_not_skipped_after_reload(self, cash_magics, statement_processor, mock_shell, temp_module):
         """Import statement should NOT be skipped if the module was recently reloaded."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # Import the module initially
         mod = importlib.import_module(module_name)
@@ -229,7 +231,7 @@ class TestModuleReloadInvalidation:
         # AND clears executed_cell_codes/variable_lineage for the module)
         cash_magics._module_invalidator.invalidate(
             {module_name: module_file},
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         # Now import should NOT be skipped (module was reloaded)
@@ -237,12 +239,12 @@ class TestModuleReloadInvalidation:
         # It should be computed or at least not SKIPPED
         assert metrics2["status"] != CacheStatus.SKIPPED
 
-    def test_full_flow_module_change_invalidates_cache(self, cash_magics, mock_shell, tmp_path):
+    def test_full_flow_module_change_invalidates_cache(self, cash_magics, statement_processor, mock_shell, tmp_path):
         """End-to-end: changing module source should cause cache miss for dependent statements.
         _PERSIST forces caching regardless of the 10 ms min-execution-time floor so that
         the cache-mechanics (SKIPPED/RESTORED on re-run, COMPUTED after invalidation)
         are actually exercised."""
-        sp = cash_magics._statement_processor
+        sp = statement_processor
         ft = sp.function_tracker
 
         # _PERSIST annotation: bypass min-execution-time floor for trivial module calls.
@@ -287,7 +289,7 @@ class TestModuleReloadInvalidation:
             # Invalidate lineages
             cash_magics._module_invalidator.invalidate(
                 changed,
-                cash_magics._statement_processor,
+                statement_processor,
                 per_mod_syms,
             )
 
@@ -304,10 +306,10 @@ class TestModuleReloadInvalidation:
             if module_name in sys.modules:
                 del sys.modules[module_name]
 
-    def test_invalidate_with_no_prior_lineage(self, cash_magics, temp_module):
+    def test_invalidate_with_no_prior_lineage(self, cash_magics, statement_processor, temp_module):
         """Module invalidation should work even if module had no prior lineage."""
         module_name, module_file = temp_module
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # No prior lineage
         assert module_name not in sp.tracking_state.variable_lineage
@@ -315,21 +317,21 @@ class TestModuleReloadInvalidation:
         changed_modules = {module_name: module_file}
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         # Should set new lineage regardless
         assert module_name in sp.tracking_state.variable_lineage
 
-    def test_invalidate_with_missing_file(self, cash_magics):
+    def test_invalidate_with_missing_file(self, cash_magics, statement_processor):
         """Module invalidation should handle missing file gracefully."""
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         changed_modules = {"nonexistent_module": "/path/that/does/not/exist.py"}
         # Should not raise
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         # Should get a random hash as fallback
@@ -393,9 +395,9 @@ class TestExceptionSurfacing:
         run_cash_cell(cash_magics, "def foo(")
         # Should not raise
 
-    def test_error_metrics_contain_error_info(self, cash_magics):
+    def test_error_metrics_contain_error_info(self, cash_magics, statement_processor):
         """When a statement fails, metrics should contain error info."""
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         metrics = sp.process_statement("raise RuntimeError('test')", silent=True)
         assert metrics["status"] == CacheStatus.ERROR
@@ -557,10 +559,10 @@ class TestTransitiveDependencyTracking:
 
         assert metrics.compute(5) == (5 + 100) * 2
 
-    def test_invalidate_lineages_with_transitive_dep(self, cash_magics, two_level_modules):
+    def test_invalidate_lineages_with_transitive_dep(self, cash_magics, statement_processor, two_level_modules):
         """_invalidate_module_lineages should produce a lineage hash that includes sub-dep content."""
         info = two_level_modules
-        sp = cash_magics._statement_processor
+        sp = statement_processor
 
         # Track metrics → discovers helpers as transitive dep
         sp.function_tracker.track_module("metrics")
@@ -573,7 +575,7 @@ class TestTransitiveDependencyTracking:
         changed_modules = {"metrics": info["metrics_file"]}
         cash_magics._module_invalidator.invalidate(
             changed_modules,
-            cash_magics._statement_processor,
+            statement_processor,
         )
 
         new_lineage = sp.tracking_state.variable_lineage["metrics"]

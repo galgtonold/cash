@@ -6,7 +6,7 @@ from unittest.mock import patch
 class TestHotReloadNotification:
     """Tests for function change detection and badge notification."""
 
-    def test_changed_function_detected_in_metrics(self, cash_magics, mock_shell):
+    def test_changed_function_detected_in_metrics(self, cash_magics, statement_processor, mock_shell):
         """When a function's source changes, a FUNCTION_CHANGED metric is added."""
 
         # Define and track a function
@@ -14,7 +14,7 @@ class TestHotReloadNotification:
             return x * 2
 
         mock_shell.user_ns["helper"] = helper
-        ft = cash_magics._statement_processor.function_tracker
+        ft = statement_processor.function_tracker
         ft.detect_changed_functions({"helper": helper}, {"helper"})
 
         # Now replace it with a different implementation
@@ -66,21 +66,21 @@ class TestHotReloadNotification:
                 # Should have called display
                 assert True  # May not display in test env
 
-    def test_no_notification_when_no_changes(self, cash_magics, mock_shell):
+    def test_no_notification_when_no_changes(self, cash_magics, statement_processor, mock_shell):
         """No FUNCTION_CHANGED metric when functions haven't changed."""
 
         def helper(x):
             return x * 2
 
         mock_shell.user_ns["helper"] = helper
-        ft = cash_magics._statement_processor.function_tracker
+        ft = statement_processor.function_tracker
         ft.detect_changed_functions({"helper": helper}, {"helper"})
 
         # Same function, no change
         changed = ft.detect_changed_functions(mock_shell.user_ns)
         assert "helper" not in changed
 
-    def test_multiple_functions_changed(self, cash_magics, mock_shell):
+    def test_multiple_functions_changed(self, cash_magics, statement_processor, mock_shell):
         """Multiple function changes generate single notification."""
 
         def func_a():
@@ -91,7 +91,7 @@ class TestHotReloadNotification:
 
         mock_shell.user_ns["func_a"] = func_a
         mock_shell.user_ns["func_b"] = func_b
-        ft = cash_magics._statement_processor.function_tracker
+        ft = statement_processor.function_tracker
         ft.detect_changed_functions({"func_a": func_a}, {"func_a"})
         ft.detect_changed_functions({"func_b": func_b}, {"func_b"})
 
@@ -123,14 +123,14 @@ class TestHotReloadNotification:
         assert len(notification["changed_functions"]) == 2
         assert "Functions" in notification["code"]  # plural
 
-    def test_function_deleted_detected(self, cash_magics, mock_shell):
+    def test_function_deleted_detected(self, cash_magics, statement_processor, mock_shell):
         """Deleted function is detected as changed."""
 
         def old_func():
             return 42
 
         mock_shell.user_ns["old_func"] = old_func
-        ft = cash_magics._statement_processor.function_tracker
+        ft = statement_processor.function_tracker
         ft.detect_changed_functions({"old_func": old_func}, {"old_func"})
 
         # Delete the function
@@ -139,14 +139,14 @@ class TestHotReloadNotification:
         changed = ft.detect_changed_functions(mock_shell.user_ns)
         assert "old_func" in changed
 
-    def test_function_replaced_with_non_callable(self, cash_magics, mock_shell):
+    def test_function_replaced_with_non_callable(self, cash_magics, statement_processor, mock_shell):
         """Function replaced with non-callable is detected as changed."""
 
         def my_func():
             return 42
 
         mock_shell.user_ns["my_func"] = my_func
-        ft = cash_magics._statement_processor.function_tracker
+        ft = statement_processor.function_tracker
         ft.detect_changed_functions({"my_func": my_func}, {"my_func"})
 
         # Replace with a string

@@ -186,11 +186,12 @@ def test_reset_zeroes_every_stat_a_session_can_hold(cash_magics, capsys):
 )
 def test_the_split_follows_cashs_own_floor_not_a_second_opinion(
     cash_magics,
+    cash_instance,
     floor,
     expect_cacheable,
 ):
     """ "Worth caching" must mean exactly what the cache meant by it."""
-    cash_magics._cash_instance.config.min_execution_time_to_cache_seconds = floor
+    cash_instance.config.min_execution_time_to_cache_seconds = floor
 
     cash_magics.session.record_cell(
         [{"status": CacheStatus.COMPUTED, "execution_time": 0.02, "code": "x = f()"}],

@@ -108,13 +108,13 @@ class TestNetNegativeOrZero:
 class TestOverheadAccountingIsCheap:
     """The overhead accumulator is a float add, never a per-cell fsync."""
 
-    def test_overhead_accumulation_adds_no_per_cell_io(self, cash_magics, tmp_path):
+    def test_overhead_accumulation_adds_no_per_cell_io(self, cash_magics, statement_processor, tmp_path):
         # Counting committed analytics rows across N cells is the deterministic
         # guard against a per-cell fsync: it stays 0 until a real flush, so a per-cell
         # commit sneaking back in (from the overhead accounting or anywhere in
         # the finaliser) would fail this immediately.
         am = AnalyticsManager(db_path=str(tmp_path / "analytics.db"))
-        cash_magics._statement_processor.analytics_manager = am
+        statement_processor.analytics_manager = am
 
         for i in range(10):
             run_cash_cell(cash_magics, f"guard_{i} = {i} + 1")

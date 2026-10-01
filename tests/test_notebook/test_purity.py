@@ -318,9 +318,9 @@ class TestPurityStatementProcessorIntegration:
         run_cash_cell(cash_magics, "result = pure_func(x) + unmarked_func(x)")
         assert mock_shell.user_ns["result"] == 16  # 10 + 6
 
-    def test_stateful_with_debug(self, cash_magics, mock_shell):
+    def test_stateful_with_debug(self, cash_magics, statement_processor, mock_shell):
         """Verify stateful debug output is generated."""
-        cash_magics._statement_processor.debug = True
+        statement_processor.debug = True
 
         @stateful
         def update_db():

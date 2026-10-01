@@ -59,8 +59,8 @@ def test_an_empty_tier_list_counts_zero():
 
 
 @pytest.mark.parametrize("n", [0, 4])
-def test_cash_on_counts_without_listing(cash_magics, capsys, monkeypatch, n):
-    backend = cash_magics._cash_instance.backend
+def test_cash_on_counts_without_listing(cash_magics, cash_instance, capsys, monkeypatch, n):
+    backend = cash_instance.backend
     _fill(backend, n)
 
     def refuse(*_a, **_k):

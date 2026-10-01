@@ -188,7 +188,7 @@ def test_a_no_cache_statement_never_reaches_the_gate(cash_magics, monkeypatch):
     )
 
 
-def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(cash_magics):
+def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(cash_magics, statement_processor):
     """The identity contract holds on the no-eligible-call and opt-out branches.
 
     ``process_statement``/``process_statement_async`` forward the cell's
@@ -214,7 +214,7 @@ def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(ca
     import types
 
     run_cash_cell(cash_magics, "out = []")
-    processor = cash_magics._statement_processor
+    processor = statement_processor
 
     # Branch 1: no eligible call anywhere in the statement.
     code = "out.append(1)"

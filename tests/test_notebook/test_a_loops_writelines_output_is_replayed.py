@@ -21,8 +21,8 @@ for i in range(3000):
 """
 
 
-def test_the_restored_loop_shows_its_lines(cash_magics, capsys):
-    cash_magics._cash_instance.reconfigure(persist_all=True)  # cache it however cheap it is
+def test_the_restored_loop_shows_its_lines(cash_magics, cash_instance, capsys):
+    cash_instance.reconfigure(persist_all=True)  # cache it however cheap it is
     cash_magics.cash_on("")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # no notebook around the cell

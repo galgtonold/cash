@@ -15,7 +15,7 @@ class LocalClass:
         return f"LocalClass({self.x})"
 
 
-def test_cache_unpicklable_object_in_memory(cash_magics, mock_shell, clean_backend):
+def test_cache_unpicklable_object_in_memory(cash_magics, statement_processor, mock_shell, clean_backend):
     """Test that unpicklable objects can be cached in memory.
     _PERSIST forces the cache write regardless of the 10 ms min-execution-time floor."""
 
@@ -40,7 +40,7 @@ def test_cache_unpicklable_object_in_memory(cash_magics, mock_shell, clean_backe
         mock_context.outputs = []
 
         # Process statement — use _PERSIST so the trivially-fast statement is cached
-        cash_magics._statement_processor.process_statement(code, annotation=_PERSIST)
+        statement_processor.process_statement(code, annotation=_PERSIST)
 
         # Verify it is cached
         entries = clean_backend.list_entries()

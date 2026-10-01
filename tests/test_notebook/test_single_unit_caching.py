@@ -344,10 +344,10 @@ class TestUpstreamFunctionTrackerSharing:
     causing forward propagation to fail and virtual lineage to diverge.
     """
 
-    def test_function_tracker_shared(self, cash_magics):
+    def test_function_tracker_shared(self, cash_magics, statement_processor):
         """UpstreamChecker should have same function_tracker as StatementProcessor."""
 
-        sp_ft = cash_magics._statement_processor.function_tracker
+        sp_ft = statement_processor.function_tracker
         uc_ft = cash_magics._upstream_checker.function_tracker
 
         assert sp_ft is uc_ft, "function_tracker must be the same object instance on both components"

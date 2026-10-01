@@ -22,12 +22,12 @@ def _routes_calls(magics, code: str) -> bool:
     return routed is not code
 
 
-def test_a_zero_floor_keeps_routing_a_fast_statement(cash_magics, cash_instance):
+def test_a_zero_floor_keeps_routing_a_fast_statement(cash_magics, statement_processor, cash_instance):
     cash_instance.config.call_cost_floor_seconds = 0.0
     run_cash_cell(cash_magics, "def bump(v):\n    return v + 1\nx = 1")
     # The statement's run time is wall time under cash, which a loaded
     # machine stretches past any small floor; learn from a 1 ms run directly.
-    cash_magics._statement_processor._calls.learn_call_wrapping("y = bump(x)", 0.001, [])
+    statement_processor._calls.learn_call_wrapping("y = bump(x)", 0.001, [])
 
     assert _routes_calls(cash_magics, "y = bump(x)")
 

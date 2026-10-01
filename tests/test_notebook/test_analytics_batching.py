@@ -36,11 +36,11 @@ def _committed_row_count(db_path: str) -> int:
 class TestPerCellDoesNotFsync:
     """The core guard: no commit-per-cell."""
 
-    def test_running_cells_does_not_commit_per_cell(self, cash_magics, tmp_path):
+    def test_running_cells_does_not_commit_per_cell(self, cash_magics, statement_processor, tmp_path):
 
         # Point the processor at an isolated DB so we can count committed rows.
         am = AnalyticsManager(db_path=str(tmp_path / "analytics.db"))
-        cash_magics._statement_processor.analytics_manager = am
+        statement_processor.analytics_manager = am
 
         n_cells = 10  # well under the flush threshold
         for i in range(n_cells):
