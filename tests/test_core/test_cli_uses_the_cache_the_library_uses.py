@@ -52,12 +52,7 @@ def a_cache_somewhere_else(tmp_path):
     workdir.mkdir()
     script = tmp_path / "build.py"
     script.write_text(
-        "import cash, time\n"
-        "@cash.cache(assume_safe=True)\n"
-        "def slow(n):\n"
-        "    time.sleep(0.3)\n"
-        "    return n * 2\n"
-        "print(slow(21))\n",
+        "import cash, time\n@cash.cache(assume_safe=True)\ndef slow(n):\n    return n * 2\nprint(slow(21))\n",
         encoding="utf-8",
     )
     env = {"CASH_CACHE_DIR": str(elsewhere)}

@@ -342,7 +342,6 @@ def test_after_a_code_edit_every_call_of_a_loop_says_the_code_changed(tmp_path):
 
         @cash.cache(assume_safe=True)
         def f(x):
-            time.sleep(0.12)
             return x + OFFSET
 
         print([f(x) for x in range(3)])

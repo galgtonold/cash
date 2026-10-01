@@ -41,7 +41,6 @@ def test_explain_leaves_the_entry_and_its_use_count_alone(tmp_path, make):
 
     @c.cache
     def f(x):
-        time.sleep(0.15)
         return x * 2
 
     f(3)

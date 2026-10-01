@@ -15,8 +15,6 @@ in the process -- inside cached code or not.
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 pa = pytest.importorskip("pyarrow")
@@ -68,7 +66,6 @@ def test_a_new_file_through_a_pyarrow_reader_recomputes(disk_cash, tmp_path, rea
     @disk_cash.cache(assume_safe=True)
     def total(p):
         runs.append(1)
-        time.sleep(0.2)
         return int(read(p).column("v").to_pandas().sum())
 
     assert total(str(path)) == 6
@@ -92,7 +89,6 @@ def test_a_reader_called_by_keyword_works_everywhere(disk_cash, tmp_path):
 
     @disk_cash.cache(assume_safe=True)
     def warm(p):
-        time.sleep(0.2)
         return int(pd.read_csv(p)["v"].sum())
 
     warm(str(csv))  # installs the wrappers
@@ -112,7 +108,6 @@ def test_a_keyword_path_is_still_tracked(disk_cash, tmp_path):
     @disk_cash.cache(assume_safe=True)
     def total(p):
         runs.append(1)
-        time.sleep(0.2)
         return int(pq.read_table(source=p).column("v").to_pandas().sum())
 
     assert total(str(parquet)) == 3

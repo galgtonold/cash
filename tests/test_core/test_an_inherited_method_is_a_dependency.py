@@ -40,19 +40,16 @@ MODULE = textwrap.dedent("""
 
     @cash.cache
     def via_empty(x):
-        time.sleep(0.4)
         return Empty().run(x)
 
 
     @cash.cache
     def via_with_body(x):
-        time.sleep(0.4)
         return WithBody().run(x)
 
 
     @cash.cache
     def via_local(x):
-        time.sleep(0.4)
         worker = Empty()
         return worker.run(x)
 """)

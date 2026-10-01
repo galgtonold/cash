@@ -55,7 +55,6 @@ MAIN = textwrap.dedent("""
     @cash.cache
     def integrate(force, n):
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
         return round(sum(force(i / n) for i in range(n)), 6)
 
     print(json.dumps([

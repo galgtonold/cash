@@ -41,7 +41,6 @@ MAIN = textwrap.dedent('''
 
     def body():
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
 
     @cash.cache
     def own(x):

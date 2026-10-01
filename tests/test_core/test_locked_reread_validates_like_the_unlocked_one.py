@@ -51,7 +51,6 @@ def load_config():
 @engine.cache(assume_safe=True)
 def answer(prompt):
     print("RAN", file=sys.stderr, flush=True)
-    time.sleep(0.3)
     return f"{load_config()['model']}:{prompt}"
 
 
@@ -110,7 +109,6 @@ def test_the_locked_path_still_serves_a_valid_entry(tmp_path):
     @c.cache(assume_safe=True)
     def work(n):
         runs.append(n)
-        time.sleep(0.2)
         return n * 2
 
     assert work(21) == 42

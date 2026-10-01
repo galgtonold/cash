@@ -45,7 +45,6 @@ import cash
 @cash.cache(assume_safe=True)
 def work(n):
     print("RAN", file=sys.stderr, flush=True)
-    time.sleep(0.3)
     return n * 2
 
 print("RESULT", work(21), flush=True)

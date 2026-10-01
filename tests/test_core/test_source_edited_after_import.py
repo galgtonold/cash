@@ -47,7 +47,6 @@ MAIN = textwrap.dedent("""
     @cash.cache
     def compute(x):
         print("COMPUTE", file=sys.stderr, flush=True)  # @cash:assume-safe
-        time.sleep(0.25)
         return bump(x)
 
     if __name__ == "__main__":

@@ -26,13 +26,11 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def total():
-        time.sleep(0.3)
         with sqlite3.connect(DB) as conn:
             return conn.execute("select coalesce(sum(x), 0) from t").fetchone()[0]
 
     @cash.cache
     def total_pandas():
-        time.sleep(0.3)
         with sqlite3.connect(DB) as conn:
             return int(pd.read_sql_query("select coalesce(sum(x), 0) as s from t", conn)["s"][0])
 

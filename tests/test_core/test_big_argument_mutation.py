@@ -14,8 +14,6 @@ level by level, whatever their size.
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 pytestmark = [pytest.mark.core]
@@ -29,12 +27,10 @@ def _tail(rows):
 def test_sorting_the_argument_in_place_is_not_stored(disk_cash, n, frozen):
     @disk_cash.cache(frozen=frozen)
     def load(n):
-        time.sleep(0.12)
         return [((i * 7919) % n, i) for i in range(n)]  # "file order" is i order
 
     @disk_cash.cache
     def top(rows):
-        time.sleep(0.12)
         rows.sort(reverse=True)  # the accident
         return rows[:3]
 
@@ -51,12 +47,10 @@ def test_sorting_the_argument_in_place_is_not_stored(disk_cash, n, frozen):
 def test_rewriting_a_field_of_a_frozen_result_invalidates_its_later_consumers(disk_cash):
     @disk_cash.cache(frozen=True)
     def load(n):
-        time.sleep(0.12)
         return [[i, "/api/items" if i % 2 else "/login"] for i in range(n)]
 
     @disk_cash.cache
     def per_path(rows):
-        time.sleep(0.12)
         out: dict = {}
         for r in rows:
             out[r[1]] = out.get(r[1], 0) + 1
@@ -64,7 +58,6 @@ def test_rewriting_a_field_of_a_frozen_result_invalidates_its_later_consumers(di
 
     @disk_cash.cache
     def normalise(rows):
-        time.sleep(0.12)
         for r in rows:
             r[1] = r[1].removeprefix("/api")  # a field of every row
         return len(rows)
@@ -116,7 +109,6 @@ def test_a_big_list_that_is_only_read_still_stores(disk_cash):
     @disk_cash.cache
     def total(rows):
         runs.append(1)
-        time.sleep(0.12)
         return sum(r[0] for r in rows)
 
     rows = [(i, str(i)) for i in range(300_000)]
@@ -144,7 +136,6 @@ def test_a_big_array_changed_inside_a_library_is_not_stored(disk_cash, monkeypat
 
     @disk_cash.cache
     def normalise(values):
-        time.sleep(0.12)
         _scale_in_place(values, 2.0)
         return float(values.sum())
 
@@ -167,7 +158,6 @@ def test_a_big_array_only_read_still_stores(disk_cash, monkeypatch):
     @disk_cash.cache
     def total(values):
         runs.append(1)
-        time.sleep(0.12)
         return float(values.sum())
 
     total(np.arange(10, dtype=float))

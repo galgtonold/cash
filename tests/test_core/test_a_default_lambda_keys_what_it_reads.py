@@ -33,7 +33,6 @@ MAIN = textwrap.dedent("""
     @cash.cache
     def f(x):
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
         return helper.g(x)
 
     print(json.dumps(f(1)))

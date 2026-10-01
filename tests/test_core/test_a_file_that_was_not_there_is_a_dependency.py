@@ -30,7 +30,6 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def with_try(n):
-        time.sleep(0.3)
         try:
             with open(F) as fh:
                 return fh.read().strip()
@@ -39,7 +38,6 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def with_pandas(n):
-        time.sleep(0.3)
         try:
             return pd.read_csv(F).iloc[0, 0]
         except FileNotFoundError:
@@ -47,7 +45,6 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def with_pathlib(n):
-        time.sleep(0.3)
         from pathlib import Path
         try:
             return Path(F).read_text().strip()

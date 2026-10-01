@@ -32,13 +32,11 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def via_dataset():
-        time.sleep(0.3)
         import pyarrow.dataset as ds
         return int(ds.dataset(os.path.join(D, "parts"), format="parquet").to_table().num_rows)
 
     @cash.cache
     def via_linecache():
-        time.sleep(0.3)
         path = os.path.join(D, "raw.txt")
         linecache.checkcache(path)
         return linecache.getline(path, 1).strip()

@@ -39,7 +39,6 @@ CORE = textwrap.dedent("""
     LOCAL_FACTOR = {local}
 
     def _work():
-        time.sleep(0.25)
         return 10
 
     @cash.cache

@@ -75,13 +75,11 @@ def test_a_frozen_list_keys_the_same_in_the_next_process(tmp_path):
 
         @cash.cache(frozen=True)
         def parse(n):
-            time.sleep(0.15)
             return [(i, str(i)) for i in range(n)]
 
         @cash.cache
         def total(rows):
             print("[RUN] total", file=sys.stderr)
-            time.sleep(0.15)
             return sum(r[0] for r in rows)
 
         print(total(parse(1000)))

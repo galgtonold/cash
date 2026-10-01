@@ -40,7 +40,6 @@ class TestAutoFileTracking:
 
         @c.cache
         def f():
-            time.sleep(0.12)
             calls[0] += 1
             with open(path, encoding="utf-8") as fh:
                 return fh.read()
@@ -64,7 +63,6 @@ class TestAutoFileTracking:
 
         @c.cache
         def load():
-            time.sleep(0.12)
             calls[0] += 1
             return pd.read_csv(path)
 
@@ -91,7 +89,6 @@ class TestAutoFileTracking:
 
         @c.cache
         def f():
-            time.sleep(0.12)
             calls[0] += 1
             with open(path, encoding="utf-8") as fh:
                 return fh.read()
@@ -112,7 +109,6 @@ class TestAutoFileTracking:
 
         @c.cache(file_depends_on=str(path))
         def f():
-            time.sleep(0.12)
             calls[0] += 1
             return path.read_text(encoding="utf-8")
 

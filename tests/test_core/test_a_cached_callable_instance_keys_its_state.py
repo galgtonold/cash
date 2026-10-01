@@ -57,7 +57,6 @@ MAIN = textwrap.dedent("""
 
         def __call__(self, x):
             print("RAN", file=sys.stderr)  # @cash:assume-safe
-            time.sleep(0.2)
             return self.k * x
 
     print(cash.cache(Scaler(int(sys.argv[1])))(3))

@@ -29,22 +29,18 @@ MOD = textwrap.dedent("""
 
     @cash.cache
     def by_globals(x):
-        time.sleep(0.4)
         return x * globals()["K"]
 
     @cash.cache
     def by_vars(x):
-        time.sleep(0.4)
         return x * vars(conf)["K"]
 
     @cash.cache
     def by_class_table(x):
-        time.sleep(0.4)
         return TABLE["fast"]().run(x)
 
     @cash.cache
     def by_function_table(x):
-        time.sleep(0.4)
         return MAKERS["fast"](x)
 """)
 IMPL = "class Fast:\n    def run(self, x):\n        return x * MULT\n\n\ndef build(x):\n    return x * MULT\n"

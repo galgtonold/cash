@@ -24,7 +24,6 @@ PROGRAM = textwrap.dedent("""
     cash.configure(cache_dir=CACHE)
 
     def slow(a, b):
-        time.sleep(0.3)
         return a + b
 
     cached = cash.cache(functools.partial(slow, 1))

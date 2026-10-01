@@ -38,7 +38,6 @@ MAIN = textwrap.dedent("""
     @cash.cache
     def score(v):
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.25)
         return [shrink(v), scaled(v)]
 
     print(json.dumps(score(100.0)))

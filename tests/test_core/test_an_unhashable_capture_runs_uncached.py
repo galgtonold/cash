@@ -9,7 +9,6 @@ changing the setting it carried served the old result.
 from __future__ import annotations
 
 import threading
-import time
 import warnings
 
 import pytest
@@ -33,7 +32,6 @@ def _make_scorer(c, settings, runs):
     @c.cache
     def score(v):
         runs.append(1)
-        time.sleep(0.12)
         return v * settings.weight
 
     return score
@@ -71,7 +69,6 @@ def test_a_helper_closure_over_an_unhashable_value_is_not_served_stale(tmp_path)
 
     @c.cache
     def use(v):
-        time.sleep(0.12)
         return WEIGH(v)
 
     with warnings.catch_warnings(record=True) as record:

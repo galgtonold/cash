@@ -26,12 +26,10 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def draw_np(n):
-        time.sleep(0.3)
         return float(np.random.rand())
 
     @cash.cache
     def draw_std(n):
-        time.sleep(0.3)
         return random.random()
 
     np.random.seed(0)

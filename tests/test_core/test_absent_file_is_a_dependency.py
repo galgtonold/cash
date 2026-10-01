@@ -159,7 +159,6 @@ import cash
 @cash.cache(assume_safe=True)
 def scaled(n):
     print("RAN", file=sys.stderr, flush=True)
-    time.sleep(0.3)
     if os.path.exists("cfg.txt"):
         with open("cfg.txt") as fh:
             return n * int(fh.read().strip())

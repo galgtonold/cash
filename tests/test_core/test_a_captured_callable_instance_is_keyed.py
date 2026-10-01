@@ -60,13 +60,11 @@ MAIN = textwrap.dedent("""
     @cash.cache
     def closure(x):
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
         return lib.SCORE(x)
 
     @cash.cache
     def decorated(x):
         print("RAN", file=sys.stderr)  # @cash:assume-safe
-        time.sleep(0.2)
         return lib.DECO(x)
 
     print(json.dumps([closure(2), decorated(2)]))

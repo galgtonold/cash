@@ -23,7 +23,6 @@ PROGRAM = textwrap.dedent("""
 
     @cash.cache
     def slow(n):
-        time.sleep(0.3)
         return n * 2
 
     print("RESULT", slow(3))
