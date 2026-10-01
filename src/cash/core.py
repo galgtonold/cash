@@ -15,7 +15,6 @@ import inspect
 import logging
 import os
 import sys
-import time
 import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
@@ -25,7 +24,6 @@ from ._active import ACTIVE_CONFIG
 from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
-from .backends._base import entry_expired
 from .backends.factory import build_tiered
 from .config import CashConfig, get_config
 from .data_source import DataSource
@@ -35,7 +33,6 @@ from .decorator.arg_hashing import (
     mark_opaque,
 )
 from .decorator.backend_slot import BackendSlot
-from .decorator.cache_metadata import CacheMetadata
 from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl, new_stats
 from .decorator.call_state import (
     CACHE_MISS,
@@ -60,6 +57,7 @@ from .decorator.function_identity import OwnSourcePins, func_key, hash_callable_
 from .decorator.global_reads import GlobalReads
 from .decorator.global_values import GlobalValues
 from .decorator.globals_fold import GlobalsFold
+from .decorator.maintenance import Maintenance
 from .decorator.method_deps import MethodClassDeps
 from .decorator.module_attrs import ModuleAttrFold
 from .decorator.purity_checks import LearnedMutations, PurityChecks
@@ -81,7 +79,6 @@ from .diagnostics import (
 from .effectiveness import EffectivenessLedger
 from .exceptions import (
     CashCacheIneffectiveWarning,
-    CashCacheStoreFailedWarning,
 )
 from .graph import DependencyGraph
 from .object_hashing import builtin_hash_family
@@ -448,6 +445,7 @@ class Cash:
             self._misses,
             self._notices,
         )
+        self._maintenance = Maintenance(self._registry, self._backend_slot)
         self._summary = RunSummary(lambda: self.config, self._registry, self._backend_slot)
         self._explainer = Explainer(
             self.config,
@@ -734,58 +732,6 @@ class Cash:
 
         return wrapper
 
-    def _delete_backend_entries(self, func_name: str) -> None:
-        """Delete all backend cache entries whose key starts with *func_name*,
-        tell running processes, and say which entries could not be removed.
-
-        Other processes (and other `Cash` instances on the folder) may hold
-        the deleted results in their RAM tiers. Moving the disk tier's
-        generation is what tells them to drop those, as ``cash clear
-        --function`` does; without it they went on serving what was cleared.
-        """
-        backend = self.backend
-        prefix = f"{func_name}:"
-        deleted = 0
-        survivors: list[str] = []
-        try:
-            keys = [
-                k
-                for k in (CacheMetadata.from_dict(e).key or "" for e in backend.list_entries())
-                if k.startswith(prefix)
-            ]
-        except (OSError, RuntimeError, KeyError):
-            logger.debug("Failed to list cache entries for %s", func_name, exc_info=True)
-            keys = []
-        for key in keys:
-            try:
-                backend.delete(key)
-                deleted += 1
-                # A file another process holds open cannot be removed on
-                # Windows; the delete says nothing, and the next call would
-                # be served the entry that was meant to be gone.
-                if backend.get_metadata(key) is not None:
-                    survivors.append(key)
-            except Exception:  # one entry must not stop the clear
-                logger.debug("Failed to clear cache entry %s", key, exc_info=True)
-                survivors.append(key)
-        if deleted:
-            try:
-                backend.bump_generation()
-            except Exception:  # the local clear is done either way
-                logger.debug("Could not tell other processes about the clear", exc_info=True)
-        if survivors:
-            warn_diagnostic(
-                CashCacheStoreFailedWarning,
-                "CACHE-CLEAR-INCOMPLETE",
-                f"{func_name}.cache_clear() could not remove {len(survivors)} of its "
-                f"{len(keys)} cache entr{'y' if len(keys) == 1 else 'ies'}; "
-                f"{'it is' if len(survivors) == 1 else 'they are'} still stored and "
-                f"will be served.",
-                "another process has the entry files open (on Windows: a reader, a "
-                "virus scanner, an indexer). Close it and clear again, or run "
-                "`cash clear --function` once it has let go.",
-            )
-
     def _wrap_with_stats(self, cf: CachedFunction, wrapper: Callable) -> Callable:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
 
@@ -900,7 +846,7 @@ class Cash:
             """Delete this function's cache entries and reset its statistics
             and warning log, so its warnings are shown again."""
             _stats.update(new_stats())
-            self._delete_backend_entries(func_name)
+            self._maintenance.delete_function_entries(func_name)
             self._notices.forget(cf)
 
         def explain(*args: Any, **kwargs: Any) -> CacheExplanation:
@@ -1039,31 +985,7 @@ class Cash:
         Returns:
             The number of entries removed.
         """
-        now = time.time()
-        tier_default = self.backend.default_ttl
-
-        def current_ttl(func_name):
-            """The ``ttl=`` a call of *func_name* would judge its entries by
-            now, when that function is decorated in this process."""
-            cf = self._registry.cached.get(func_name) if func_name else None
-            return self._registry.effective_ttl(func_name, cf.ttl) if cf is not None else None
-
-        def is_expired(raw_metadata):
-            try:
-                metadata = CacheMetadata.from_dict(raw_metadata)
-                timestamp = metadata.timestamp or 0
-                age = now - timestamp
-
-                if max_age is not None and age > max_age:
-                    return True
-
-                # The rule a read applies, so cleanup removes exactly what
-                # would no longer be served.
-                return entry_expired(raw_metadata, tier_default, now, current=current_ttl(metadata.func_name))
-            except (AttributeError, TypeError, ValueError):
-                return True
-
-        return self.backend.cleanup_expired(is_expired)
+        return self._maintenance.cleanup(max_age)
 
     def explorer(self) -> CacheExplorer:
         """Return a `CacheExplorer` for browsing this instance's entries."""
