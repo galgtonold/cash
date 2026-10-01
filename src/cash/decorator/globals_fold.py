@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
-import inspect
 import pickle
 import sys
 import types
@@ -15,23 +14,18 @@ from ..analysis.purity_analyzer import (
     PurityReport,
     get_analyzer,
     resolve_binding,
-    resolve_local_import,
 )
 from ..dependency_state import ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
-from ..install_paths import is_user_module
-from ..value_types import CODELESS_PRIMS
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
-from .closure_fold import iter_code_scopes
 from .global_values import UNHASHABLE_GLOBAL_FIX
 from .key_values import (
     carried_payload,
     iter_contained,
     plain_data_kind,
-    stabilize_for_global_hash,
 )
-from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
+from .user_code import is_user_class, own_package
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -40,6 +34,7 @@ if TYPE_CHECKING:
     from .code_surface import CodeSurface
     from .global_reads import GlobalReads
     from .global_values import GlobalValues
+    from .module_attrs import ModuleAttrFold
     from .purity_checks import LearnedMutations
     from .registry import FunctionRegistry
     from .reporting import Notices
@@ -55,18 +50,6 @@ if TYPE_CHECKING:
 READS_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_reads_folded", default=None)
 
 
-def _resolve_dotted(g: dict, path: str) -> Any:
-    """The object ``pkg.conf`` names in globals *g*: the global, then each
-    attribute through modules only. None when a link is missing."""
-    head, _, rest = path.partition(".")
-    value = g.get(head)
-    for attr in rest.split(".") if rest else ():
-        if not isinstance(value, types.ModuleType):
-            return None
-        value = vars(value).get(attr)
-    return value
-
-
 class GlobalsFold:
     """The module data a function and its helpers read, folded into the state
     segment: globals, ``module.ATTR`` reads, data reached through local
@@ -78,6 +61,7 @@ class GlobalsFold:
         reads: GlobalReads,
         values: GlobalValues,
         classes: ClassDataFold,
+        attrs: ModuleAttrFold,
         code: CodeSurface,
         registry: FunctionRegistry,
         mutations: LearnedMutations,
@@ -87,6 +71,7 @@ class GlobalsFold:
         self._reads = reads
         self._values = values
         self._classes = classes
+        self._attrs = attrs
         classes.bind_reads_fold(self.fold_read_globals)
         self._code = code
         self._registry = registry
@@ -321,7 +306,7 @@ class GlobalsFold:
                     digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
                     parts.append((f"{name}#code", digest))
         parts.extend(
-            self.module_attr_parts(
+            self._attrs.module_attr_parts(
                 func,
                 func_name,
                 g,
@@ -334,9 +319,9 @@ class GlobalsFold:
         pending = CAPTURE_WATCH.get()
         if pending is not None:
             pending.update(watch)
-        parts.extend(self._local_binding_parts(func))
+        parts.extend(self._attrs.local_binding_parts(func))
         if code is not None and self._reads.reads_docstrings(code):
-            parts.extend(self._docstring_parts(code, g, own_pkg))
+            parts.extend(self._attrs.docstring_parts(code, g, own_pkg))
         # A function default is evaluated where the `def` stands, so what a
         # default LAMBDA reads (`def g(x, fn=lambda v: v + K)`) is in no scope
         # of *func*'s, so it is folded here or editing K would keep the key.
@@ -363,50 +348,6 @@ class GlobalsFold:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode("utf-8")).hexdigest()
-
-    def _docstring_parts(self, code: Any, g: dict, own_pkg: str | None) -> list[tuple[str, str]]:
-        """Key parts for the docstrings code that reads docstrings can reach.
-
-        A docstring is not part of the key: it documents the code. Unless the
-        code reads it -- a tool description, a prompt, help text built from
-        ``__doc__`` -- and then it is an input like any string constant.
-        Every user function, class and
-        module the code names (and ``module.attr`` of those it reads), and the
-        module's own docstring when it reads ``__doc__``.
-        """
-        parts: list[tuple[str, str]] = []
-        names: dict[str, None] = {}
-        for scope in iter_code_scopes(code):
-            names.update(dict.fromkeys(scope.co_names or ()))
-        attr_reads: dict[str, set[str]] = {}
-        for mod_name, attr in self._reads.known_module_attr_pairs(code):
-            attr_reads.setdefault(mod_name, set()).add(attr)
-
-        def fold(label: str, value: Any) -> None:
-            if isinstance(value, types.ModuleType):
-                if not is_user_module(value, own_pkg):
-                    return
-            elif is_cash_wrapper(value):
-                pass
-            elif not isinstance(value, (types.FunctionType, type)) or not is_user_code_object(value):
-                return
-            doc = getattr(value, "__doc__", None)
-            if isinstance(doc, str):
-                parts.append((f"{label}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest()))
-
-        for name in names:
-            if name not in g:
-                continue
-            value = g[name]
-            if name == "__doc__":
-                if isinstance(value, str):
-                    parts.append(("__doc__", hashlib.sha256(value.encode("utf-8")).hexdigest()))
-                continue
-            fold(name, value)
-            if isinstance(value, types.ModuleType) and is_user_module(value, own_pkg):
-                for attr in sorted(attr_reads.get(name, ())):
-                    fold(f"{name}.{attr}", getattr(value, attr, None))
-        return parts
 
     def fold_helper_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold globals the transitive HELPERS read, not just *func*'s own.
@@ -646,199 +587,3 @@ class GlobalsFold:
                     seen=seen,
                 )
         return state_hash
-
-    def _local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:
-        """Key parts for data reached through names the module's globals never see.
-
-        Two shapes:
-
-        * an import written INSIDE the body -- ``from .settings import
-          ROUNDING``, or ``from . import settings`` then ``settings.ROUNDING``
-          -- binds a local, which the globals channels never see (the helper
-          walk follows only the FUNCTIONS such an import binds);
-        * a module held in a closure: ``from . import settings`` inside a
-          decorator factory, read by the wrapper as ``settings.ROUNDING``.
-
-        Data values are folded, and a module's ``ATTR`` reads, the same way the
-        ``module.ATTR`` channel folds a global module's. A user module the
-        body has not imported yet is imported here -- the import the body is
-        about to make; a library module only if it is already loaded.
-        """
-        plan = self._reads.local_binding_plan(func)
-        if not plan:
-            return []
-
-        imports, attr_reads, bare_reads = plan
-        own_pkg = own_package(func)
-        root_module = getattr(func, "__module__", None)
-        code = func.__code__
-        cells = dict(zip(code.co_freevars or (), getattr(func, "__closure__", None) or ()))
-        parts: list[tuple[str, str]] = []
-
-        def resolve(name: str) -> Any:
-            if name in imports:
-                module_name, prefix = imports[name]
-                return resolve_local_import(module_name, prefix, root_module)
-            cell = cells.get(name)
-            if cell is None:
-                return None
-            try:
-                return cell.cell_contents
-            except ValueError:
-                return None
-
-        def fold(label: str, value: Any) -> None:
-            if isinstance(value, (types.ModuleType, type)):
-                return
-            if callable(value) and not isinstance(value, (dict, list, tuple, set)):
-                return  # code: the helper walk follows it
-            try:
-                stabilized = stabilize_for_global_hash(value, self._values.data_callable_identity)
-                parts.append((label, self._args.hash_payload((stabilized,), {})))
-            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                pass
-
-        for name, attrs in attr_reads.items():
-            obj = resolve(name)
-            if not isinstance(obj, types.ModuleType) or not is_user_module(obj, own_pkg):
-                continue
-            for attr in sorted(attrs):
-                try:
-                    value = getattr(obj, attr)
-                except AttributeError:
-                    continue
-                fold(f"local:{name}.{attr}", value)
-        for name in sorted(bare_reads):
-            obj = resolve(name)
-            if obj is not None and not isinstance(obj, types.ModuleType):
-                fold(f"local:{name}", obj)
-        return parts
-
-    def module_attr_parts(
-        self,
-        func: Callable,
-        func_name: str,
-        g: dict,
-        *,
-        learned: frozenset | set = frozenset(),
-        watch: dict | None = None,
-        owner_code: Any = None,
-        seen: set | None = None,
-    ) -> list[tuple[str, str]]:
-        """Key parts for ``module.ATTR`` data reads, one level of recursion deep.
-
-        Two shapes are covered:
-
-        * ``conf.RATE`` - fold the attribute's content.
-        * ``conf.get_rate()`` - the callable itself is already tracked by the
-          helper-source channel, but that only sees its *source*. A helper whose
-          source never changes while the constant it returns does was stale, so
-          fold the data globals the callee reads from its own module too.
-
-        Callables, classes and nested modules are skipped as data (the first is
-        handled by the helper channel, the others carry no editable value) --
-        except what a library-made callable was built with (``conf.SMOOTH =
-        partial(gaussian_filter, sigma=...)``), which is folded when *watch*
-        is given, so the drift guard can see it too (`GlobalValues.carried_global_hash`).
-        *learned* is the drift guard's verdict: labels not to fold. A user
-        class read as ``module.Class`` (and an instance's class) is folded by
-        `ClassDataFold.class_parts`, *owner_code* and *seen* as there.
-        """
-        parts: list[tuple[str, str]] = []
-        own_pkg = own_package(func)
-        for mod_name, attr in self._reads.module_attr_pairs(func):
-            obj = _resolve_dotted(g, mod_name)
-            is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
-            # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
-            # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT), with a
-            # class in place of the module. Fold user-class attributes too.
-            is_cls = isinstance(obj, type) and is_user_class(obj, own_pkg)
-            if not (is_mod or is_cls):
-                # `scale.k` with `scale.k = 1` set on a function of the
-                # user's: an attribute stored on the function object, which
-                # its source does not show.
-                if isinstance(obj, types.FunctionType):
-                    parts.extend(self._function_attr_parts(obj, attr, mod_name, func_name))
-                continue
-            try:
-                value = inspect.getattr_static(obj, attr) if is_cls else getattr(obj, attr)
-            except (AttributeError, Exception):  # noqa: BLE001 - never break a call
-                continue
-            label = f"{mod_name}.{attr}"
-            if isinstance(value, type):
-                # `cfg.Cfg.RATE`, `cfg.Color.RED.value`: the pair is (cfg, Cfg)
-                # and the constant is one attribute further in.
-                if is_mod and is_user_class(value, own_pkg):
-                    parts.extend(
-                        self._classes.class_parts(value, func_name, owner_code=owner_code, seen=seen, reader=func)
-                    )
-                continue
-            if isinstance(value, types.ModuleType):
-                continue
-            if is_mod:
-                # An instance read as `lib.SVC`: its pickle is its own
-                # attributes, not what its class holds (`helper = CC(10)`).
-                item_types = {type(item) for item in iter_contained(value) if type(item) not in CODELESS_PRIMS}
-                for item_type in sorted(item_types, key=lambda t: f"{t.__module__}.{t.__qualname__}"):
-                    if item_type is not type and is_user_class(item_type, own_pkg):
-                        parts.extend(
-                            self._classes.class_parts(
-                                item_type, func_name, owner_code=owner_code, seen=seen, reader=func
-                            )
-                        )
-            if is_cls and wraps_code(value):
-                # Read statically, a classmethod, property or cached_property is
-                # its descriptor, which is neither callable nor data: hashing it
-                # warned KEY-UNHASHABLE-GLOBAL for `A.make(v)`, whose code is
-                # followed like any method's.
-                continue
-            if callable(value) and not isinstance(value, (dict, list, tuple, set)):
-                # A class method/staticmethod/classmethod is handled by the
-                # helper-source / self-dep channels; only recurse into a
-                # module-level helper's own constants here.
-                if not is_mod:
-                    continue
-                if watch is not None and label not in learned:
-                    carried = self._values.carried_global_hash(value, getattr(func, "__module__", None))
-                    if carried is not None:
-                        parts.append((f"{label}#carried", carried))
-                        watch[label] = (carried, "carrier", (vars(obj), attr), None)
-                        continue
-                # One level only: fold the constants the helper itself reads.
-                # Deeper recursion would drag in whole transitive namespaces for
-                # a diminishing chance of catching a real edit.
-                # A cached helper's globals are those of the function it
-                # wraps, not of cash's wrapper.
-                value = cash_wrapped(value)
-                helper_globals = getattr(value, "__globals__", None)
-                if not isinstance(helper_globals, dict):
-                    continue
-                for inner in self._reads.read_global_data_names(value):
-                    if inner not in helper_globals:
-                        continue
-                    iv = helper_globals[inner]
-                    if isinstance(iv, types.ModuleType) or isinstance(iv, type):
-                        continue
-                    if callable(iv) and not isinstance(iv, (dict, list, tuple, set)):
-                        continue
-                    h = self._values.safe_global_hash(iv, func_name, f"{label}.{inner}")
-                    if h is not None:
-                        parts.append((f"{label}.{inner}", h))
-                continue
-            h = self._values.safe_global_hash(value, func_name, label)
-            if h is not None:
-                parts.append((label, h))
-        return parts
-
-    def _function_attr_parts(self, fn: Any, attr: str, name: str, func_name: str) -> list[tuple[str, str]]:
-        """The key part for data stored as an attribute of the user's function *fn*."""
-        stored = getattr(fn, "__dict__", None)
-        if not isinstance(stored, dict) or attr not in stored or not is_user_code_object(fn):
-            return []
-        value = stored[attr]
-        if isinstance(value, (types.ModuleType, type)) or (
-            callable(value) and not isinstance(value, (dict, list, tuple, set))
-        ):
-            return []
-        h = self._values.safe_global_hash(value, func_name, f"{name}.{attr}")
-        return [(f"{name}.{attr}", h)] if h is not None else []

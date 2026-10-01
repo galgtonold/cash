@@ -383,7 +383,7 @@ class GlobalReads:
         * A global followed by a chain of attribute loads
           (``LOAD_GLOBAL pkg; LOAD_ATTR conf; LOAD_ATTR RATE``) gives one
           pair per link: ``("pkg", "conf")`` and ``("pkg.conf", "RATE")``.
-          `GlobalsFold.module_attr_parts` resolves the dotted path and folds
+          `ModuleAttrFold.module_attr_parts` resolves the dotted path and folds
           the pairs whose path is a user module.
         * A module the code takes whole (bound to a local, passed on, or read
           with ``vars(conf)["K"]`` / ``getattr(conf, "K")``) is paired with
@@ -434,7 +434,7 @@ class GlobalReads:
         return result
 
     def local_binding_plan(self, func: Callable) -> tuple | None:
-        """What `_local_binding_parts` needs from *func*'s source, per code object.
+        """What `ModuleAttrFold.local_binding_parts` needs from *func*'s source, per code object.
 
         ``(imports, attr_reads, bare_reads)``: the names an import written in
         the body binds (``name -> (module, prefix)``), the ``name.ATTR`` reads

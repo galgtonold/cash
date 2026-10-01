@@ -63,6 +63,7 @@ from .decorator.global_reads import GlobalReads
 from .decorator.global_values import GlobalValues
 from .decorator.globals_fold import GlobalsFold
 from .decorator.method_deps import MethodClassDeps
+from .decorator.module_attrs import ModuleAttrFold
 from .decorator.purity_checks import LearnedMutations, PurityChecks
 from .decorator.registry import FunctionRegistry, checked_depends_on, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
@@ -389,6 +390,7 @@ class Cash:
             self._reads,
             self._values,
             self._classes,
+            ModuleAttrFold(self._args, self._reads, self._values, self._classes),
             self._code,
             self._registry,
             self._mutations,

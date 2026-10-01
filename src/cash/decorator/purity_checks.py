@@ -787,7 +787,7 @@ class PurityChecks:
         value = module_ns[name]
         if isinstance(value, types.ModuleType):
             # `conf.RATE` reads of a module of the user's are folded by value
-            # (`GlobalsFold.module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
+            # (`ModuleAttrFold.module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
             return is_user_module(value, own_package(reader))
         if isinstance(value, type):
             return False
