@@ -17,7 +17,7 @@ from __future__ import annotations
 import importlib
 import sys
 import textwrap
-import time
+import uuid
 import warnings
 
 import pytest
@@ -28,7 +28,7 @@ pytestmark = [pytest.mark.core]
 
 
 def _module(tmp_path, monkeypatch, files: dict[str, str]):
-    tag = f"_{time.monotonic_ns()}"
+    tag = f"_{uuid.uuid4().hex}"
     for name, text in files.items():
         (tmp_path / f"{name}{tag}.py").write_text(textwrap.dedent(text).replace("{tag}", tag), encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))

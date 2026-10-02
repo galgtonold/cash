@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib
 import sys
 import textwrap
-import time
+import uuid
 import warnings
 
 import pytest
@@ -57,7 +57,7 @@ BUILDS = {
 
 @pytest.fixture()
 def scoring(tmp_path, monkeypatch):
-    tag = f"_{time.monotonic_ns()}"
+    tag = f"_{uuid.uuid4().hex}"
     (tmp_path / f"scoring{tag}.py").write_text(textwrap.dedent(SCORING), encoding="utf-8")
     (tmp_path / f"reader{tag}.py").write_text(
         f"import scoring{tag} as scoring\n\ndef f(x):\n    return scoring.score(x)\n", encoding="utf-8"

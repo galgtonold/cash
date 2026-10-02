@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib
 import sys
 import textwrap
-import time
+import uuid
 import warnings
 
 import pytest
@@ -65,7 +65,7 @@ CASES = {
 
 
 def _modules(tmp_path, monkeypatch, body: str):
-    tag = f"_{time.monotonic_ns()}"
+    tag = f"_{uuid.uuid4().hex}"
     (tmp_path / f"model{tag}.py").write_text(textwrap.dedent(MODEL), encoding="utf-8")
     (tmp_path / f"reader{tag}.py").write_text(
         f"from model{tag} import *\n\ndef f(x):\n    {body}\n",
@@ -96,7 +96,7 @@ def test_rebinding_what_the_callable_carries_recomputes(case, tmp_path, monkeypa
 
 def test_a_callable_that_memoises_into_itself_settles(tmp_path, monkeypatch):
     """Folding its state must not key each call on the last call's memo."""
-    tag = f"_{time.monotonic_ns()}"
+    tag = f"_{uuid.uuid4().hex}"
     (tmp_path / f"memo{tag}.py").write_text(
         textwrap.dedent("""
         class Memo:

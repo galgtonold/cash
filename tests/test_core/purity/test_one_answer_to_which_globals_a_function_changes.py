@@ -16,7 +16,7 @@ import ast
 import importlib
 import sys
 import textwrap
-import time
+import uuid
 
 import pytest
 
@@ -73,7 +73,7 @@ def test_mutual_recursion_ends():
 
 
 def _module(tmp_path, monkeypatch, text: str):
-    name = f"globals_mod_{time.monotonic_ns()}"
+    name = f"globals_mod_{uuid.uuid4().hex}"
     (tmp_path / f"{name}.py").write_text(textwrap.dedent(text), encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     module = importlib.import_module(name)

@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 import warnings
 
 import pytest
@@ -128,7 +129,7 @@ def make(c, calls, on_run=None):
 def project(tmp_path, monkeypatch):
     """A helper module and a module holding the cached function, which reads
     the helper as a module global -- the ordinary shape."""
-    tag = f"{os.getpid()}_{time.monotonic_ns()}"
+    tag = f"{os.getpid()}_{uuid.uuid4().hex}"
     helper, job = f"codemove_helper_{tag}", f"codemove_job_{tag}"
     path = tmp_path / f"{helper}.py"
     path.write_text(HELPER.format(K=2), encoding="utf-8")
