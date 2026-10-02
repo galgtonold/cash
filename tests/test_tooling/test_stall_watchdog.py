@@ -148,3 +148,41 @@ def test_a_patched_time_sleep_does_not_make_it_spin(monkeypatch):
     count = polls[0]
     assert count <= 2, f"the watchdog polled {count} times in 0.5s"
     assert not fired
+
+
+def test_a_worker_waiting_for_its_next_test_is_not_killed(monkeypatch):
+    """Between tests an xdist worker waits on the master; that is not a stall.
+
+    At the tail of a run the wait can outlast the limit, and killing the worker
+    then reports the item it was holding as a crash of a test that never ran.
+    """
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    w, fired = _watchdog(0.3)
+    w.park("teardown:passed tests/test_x.py::test_a")
+    w.start()
+    time.sleep(1.0)
+
+    assert not fired, f"watchdog killed a worker parked between tests: {fired}"
+
+
+def test_the_next_test_starting_re_arms_a_parked_worker(monkeypatch):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    w, fired = _watchdog(0.3)
+    w.park("teardown:passed tests/test_x.py::test_a")
+    w.start()
+    w.poke("started tests/test_x.py::test_hangs")
+    time.sleep(1.5)
+
+    assert fired
+    assert fired[0][1] == "started tests/test_x.py::test_hangs"
+
+
+def test_the_master_is_never_parked(monkeypatch):
+    """The master's watchdog is what still catches a run that stops altogether."""
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    w, fired = _watchdog(0.3)
+    w.park("collected 10 items")
+    w.start()
+    time.sleep(1.5)
+
+    assert fired

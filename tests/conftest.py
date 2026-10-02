@@ -31,7 +31,9 @@ if os.environ.get("CASH_TEST_FAULTHANDLER", "1") == "1":
     import faulthandler as _faulthandler
     import tempfile as _tempfile
 
-    _FH_DIR = os.path.join(_tempfile.gettempdir(), "cash_faulthandler")
+    # The system temp dir, not the basetemp one _temp_files_under_basetemp
+    # points TEMP at: workers inherit that TEMP, and pytest rotates it away.
+    _FH_DIR = os.path.join(os.environ.get("CASH_TEST_SYSTEM_TMPDIR") or _tempfile.gettempdir(), "cash_faulthandler")
     try:
         os.makedirs(_FH_DIR, exist_ok=True)
         _FH_FILE = open(  # kept open for the worker's lifetime
@@ -96,6 +98,14 @@ class _StallWatchdog:
         self._current = "<none yet>"
         self._started = False
         self._allowance: float | None = None
+        # An xdist worker between tests is blocked in execnet waiting for the
+        # master, not stalled: it holds the LAST item it was sent until more
+        # work or shutdown arrives, and at the tail of a run that wait can
+        # outlast the limit while other workers finish. Killing it then reports
+        # that pending item as "node down: Not properly terminated" for a test
+        # that never started. A parked worker is not timed; the master's own
+        # watchdog still catches a run that stops altogether.
+        self._parked = False
         # Waited on, never set: the poll's timer. Not `time.sleep`, which a
         # test may patch -- tests/docs patched it to a no-op for every docs
         # test, and this thread then spun holding the GIL, slowing whatever
@@ -106,8 +116,16 @@ class _StallWatchdog:
     def poke(self, what: str | None = None) -> None:
         with self._lock:
             self._last = time.monotonic()
+            self._parked = False
             if what is not None:
                 self._current = what
+
+    def park(self, what: str) -> None:
+        """Stop timing until the next poke(); only in an xdist worker."""
+        self.poke(what)
+        if os.environ.get("PYTEST_XDIST_WORKER"):
+            with self._lock:
+                self._parked = True
 
     def set_allowance(self, seconds: float | None) -> None:
         """Let the running test raise the silence limit for its own duration.
@@ -149,7 +167,8 @@ class _StallWatchdog:
                 idle = time.monotonic() - self._last
                 current = self._current
                 limit = self._allowance or self.timeout
-            if idle >= limit:
+                parked = self._parked
+            if not parked and idle >= limit:
                 self._fire(idle, current)
                 return
 
@@ -183,8 +202,10 @@ class _StallWatchdog:
             import faulthandler
             import tempfile
 
+            # Not tempfile.gettempdir(): by now that is <basetemp>/tmp, which
+            # the next runs rotate away, taking the only stack of the stall.
             path = os.path.join(
-                tempfile.gettempdir(),
+                os.environ.get("CASH_TEST_SYSTEM_TMPDIR") or tempfile.gettempdir(),
                 "cash_faulthandler",
                 f"stall_{worker}_{os.getpid()}.log",
             )
@@ -668,7 +689,7 @@ def pytest_collectreport(report):
 
 
 def pytest_collection_finish(session):
-    _STALL_WATCHDOG.poke(f"collected {len(session.items)} items")
+    _STALL_WATCHDOG.park(f"collected {len(session.items)} items")
 
 
 def pytest_runtest_logstart(nodeid, location):
@@ -709,7 +730,10 @@ _RERUN_FAILURES: list[tuple[str, str]] = []
 
 
 def pytest_runtest_logreport(report):
-    _STALL_WATCHDOG.poke(f"{report.when}:{report.outcome} {report.nodeid}")
+    if report.when == "teardown":
+        _STALL_WATCHDOG.park(f"{report.when}:{report.outcome} {report.nodeid}")
+    else:
+        _STALL_WATCHDOG.poke(f"{report.when}:{report.outcome} {report.nodeid}")
     if report.outcome == "rerun" and report.longrepr is not None:
         _RERUN_FAILURES.append((report.nodeid, str(report.longrepr)))
     if report.when == "teardown":
