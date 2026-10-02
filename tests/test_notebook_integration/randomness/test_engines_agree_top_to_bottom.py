@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.upstream]
+# The whole project notebook (pandas, matplotlib, a scikit-learn fit) runs in a
+# fresh kernel: ~16 s on an idle Windows box, so the global 30 s timeout killed
+# its worker under a full parallel run.
+pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout(120)]
 
 pytest.importorskip("matplotlib")
 pytest.importorskip("sklearn")
