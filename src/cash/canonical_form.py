@@ -23,12 +23,12 @@ import logging
 import sys
 import types
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import Any, NamedTuple
 
 from . import _plain_data
 from .sizing import SPARSE_PARTS, pandas_nbytes
-from .value_types import CODELESS_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
+from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
 
 
 class CyclicValueError(TypeError):
@@ -82,7 +82,7 @@ def object_state(value: Any) -> dict:
 _BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
 
 
-def _typed(value: Any, canon: Any, walk: _Walk) -> tuple:
+def _typed(value: Any, canon: Any, walk: _Walk) -> Generator[Any, Any, tuple]:
     """*canon*, a container's canonical items, tagged with the container's type.
 
     Every container carries its type, so containers holding equal items key
@@ -96,8 +96,9 @@ def _typed(value: Any, canon: Any, walk: _Walk) -> tuple:
     caller's answer for every source. The state is read from ``__dict__``
     and ``__slots__`` both (`object_state`): a subclass declaring slots kept
     its values out of the key. The state is walked as part of the same
-    *walk*, so a list it shares with the items is marked as
-    shared and a loop back to the container is caught. Nothing is caught
+    *walk* (each value yielded to `_walk`, see `_object_steps`), so a list it
+    shares with the items is marked as shared and a loop back to the
+    container is caught. Nothing is caught
     here: a part that cannot be read is not left out of the key, it makes
     the call unkeyable (run uncached, with a warning).
     """
@@ -111,7 +112,10 @@ def _typed(value: Any, canon: Any, walk: _Walk) -> tuple:
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
-        state += tuple(sorted((k, _walk(v, walk)) for k, v in own.items()))
+        walked = []
+        for k, v in own.items():
+            walked.append((k, (yield v)))
+        state += tuple(sorted(walked))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
@@ -156,11 +160,13 @@ def stable_key_repr(
     A container graph that loops back on itself raises `CyclicValueError` (a
     TypeError, so the value is reported as unhashable and the call runs
     uncached): a form that stood in for the loop could make two different
-    graphs key alike, which would be a wrong answer. A value nested deeper
-    than the walk can follow raises `TooDeepValueError`, a TypeError too.
-    There is no depth limit below that: a part cut off at a fixed depth and
-    left to pickle keeps its sets in the order PYTHONHASHSEED picks, and the
-    key changes from process to process.
+    graphs key alike, which would be a wrong answer. There is no depth
+    limit: a part cut off at a fixed depth and left to pickle keeps its sets
+    in the order PYTHONHASHSEED picks, and the key changes from process to
+    process. The walk keeps its path on the heap, not the C stack (`_walk`),
+    so however deep a value nests it cannot overflow the stack. Only pickling
+    the finished form recurses; a form deeper than pickle follows raises
+    `TooDeepValueError`, a TypeError too, and the whole value is refused.
 
     *seen*, when given, is filled with the writable containers the walk met.
     *left*, when given, gets an entry for each object left to pickle whole
@@ -174,14 +180,15 @@ def stable_key_repr(
 
 
 class TooDeepValueError(TypeError):
-    """A value nested deeper than Python's recursion limit lets cash walk it,
-    such as a long linked list. A TypeError, so the value is reported as
-    unhashable and the call runs uncached: a key over part of it could serve
-    one value's result for another."""
+    """A value nested deeper than pickle follows (Python's recursion limit,
+    or the C recursion limit on 3.12 and later), such as a long linked list.
+    A TypeError, so the value is reported as unhashable and the call runs
+    uncached: a key over part of it could serve one value's result for
+    another."""
 
 
 def _too_deep(value: Any) -> str:
-    return f"a {type(value).__qualname__} nested too deeply to key (deeper than the recursion limit)"
+    return f"a {type(value).__qualname__} nested too deeply to key"
 
 
 class _Walk:
@@ -189,7 +196,7 @@ class _Walk:
     containers met so far (*seen*), and the caller's *content*, *hook* and
     *left* (see `stable_key_repr`)."""
 
-    __slots__ = ("content", "hook", "left", "seen", "stack")
+    __slots__ = ("content", "holds_set", "hook", "left", "seen", "stack")
 
     def __init__(
         self, content: ContentHashing, seen: dict, hook: Callable[[Any], Any] | None, left: list | None
@@ -199,10 +206,75 @@ class _Walk:
         self.hook = hook
         self.left = left
         self.stack: set[int] = set()
+        #: Objects known to hold a set (`contains_set`'s *found*).
+        self.holds_set: dict[int, Any] = {}
 
 
 def _walk(value: Any, walk: _Walk) -> Any:
-    """`stable_key_repr` of one value, as part of *walk*."""
+    """`stable_key_repr` of one value, as part of *walk*.
+
+    Iterative: each container or object being walked is a generator
+    (`_object_steps`) that yields the parts it needs walked and is sent back
+    their forms, and this loop keeps those generators on a list, so the C
+    stack the walk takes does not grow with the value's depth. A recursive
+    walk takes C stack for every level -- on Python 3.10 every Python call
+    does -- and a value nested a few hundred deep overflows Windows' 2 MB
+    main thread stack, killing the process, before Python's recursion limit
+    is reached. An exception a part raises is thrown into the generator that
+    asked for it, as a recursive call would raise it there, so
+    ``_object_steps`` can still catch one.
+    """
+    entered = _enter(value, walk)
+    if type(entered) is not _Descend:
+        return entered
+    steps = [entered.steps]
+    sent: Any = None
+    error: BaseException | None = None
+    while True:
+        current = steps[-1]
+        try:
+            if error is None:
+                part = current.send(sent)
+            else:
+                part = current.throw(error)
+        except StopIteration as done:
+            steps.pop()
+            if not steps:
+                return done.value
+            sent, error = done.value, None
+            continue
+        except BaseException as exc:
+            steps.pop()
+            if not steps:
+                raise
+            sent, error = None, exc
+            continue
+        error = None
+        try:
+            entered = _enter(part, walk)
+        except BaseException as exc:  # noqa: BLE001 - raised in the step that asked for the part, as a call would
+            sent, error = None, exc
+            continue
+        if type(entered) is _Descend:
+            steps.append(entered.steps)
+            sent = None
+        else:
+            sent = entered
+
+
+class _Descend:
+    """`_enter`'s answer for a value whose form needs its parts walked first."""
+
+    __slots__ = ("steps",)
+
+    def __init__(self, steps: Generator[Any, Any, Any]) -> None:
+        self.steps = steps
+
+
+def _enter(value: Any, walk: _Walk) -> Any:
+    """*value*'s form when it needs no walk below it (a primitive, a hooked
+    or content-hashed value, a container met before), else a `_Descend`
+    holding the generator that walks it."""
     seen = walk.seen
     if type(value) in CODELESS_PRIMS:
         if type(value) is bytearray:
@@ -240,11 +312,7 @@ def _walk(value: Any, walk: _Walk) -> Any:
         # The value is held, so its id cannot be reused by another
         # container while the walk lasts.
         seen[id(value)] = (len(seen), value)
-    walk.stack.add(id(value))
-    try:
-        return _walk_object(value, walk)
-    finally:
-        walk.stack.discard(id(value))
+    return _Descend(_object_steps(value, walk))
 
 
 #: Containers whose identity code can observe by writing through one
@@ -404,39 +472,56 @@ def _worth_opening(value: Any, content: ContentHashing) -> bool:
     return isinstance(size, int) and size >= OPEN_UP_BYTES
 
 
-def _walk_object(value: Any, walk: _Walk) -> Any:
-    """`_walk` of a container or object, once it is on ``walk.stack``."""
+def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
+    """The form of a container or object: a generator `_walk` drives, which
+    yields each part to walk and is sent its form. *value* is on
+    ``walk.stack`` while its parts are walked, so a part that is *value*
+    again is a loop. A primitive part is its own form and is not yielded."""
+    walk.stack.add(id(value))
+    try:
+        prims = _IMMUTABLE_PRIMS
+        items: list = []
+        if isinstance(value, (set, frozenset)):
+            for v in value:
+                items.append(v if type(v) in prims else (yield v))
+            items.sort(key=_plain_data.content_dumps)
+            return (yield from _typed(value, tuple(items), walk))
+        if isinstance(value, dict):
+            for k, v in value.items():
+                k_form = k if type(k) in prims else (yield k)
+                items.append((k_form, v if type(v) in prims else (yield v)))
+            return (yield from _typed(value, tuple(items), walk))
+        if isinstance(value, (list, tuple)):
+            for v in value:
+                items.append(v if type(v) in prims else (yield v))
+            return (yield from _typed(value, tuple(items), walk))
+        t = type(value)
+        if contains_set(value, walk.holds_set):
+            return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
+        if holds_content_data(value, walk.content):
+            # Pickled whole, every frame inside was serialised and hashed on each
+            # call. Opened up, each goes through the caller's content hasher
+            # (``walk.content``, the decorator's memo), so an unchanged frame is
+            # checked rather than read again. An object that reaches itself is
+            # left to pickle, which keeps the loop.
+            try:
+                return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
+            except CyclicValueError:
+                pass
+        left = walk.left
+        if left is not None and not (
+            type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
+        ):
+            left.append(value)
+        return value
+    finally:
+        walk.stack.discard(id(value))
 
-    def sub(v: Any) -> Any:
-        return _walk(v, walk)
 
-    if isinstance(value, (set, frozenset)):
-        items = [sub(v) for v in value]
-        items.sort(key=_plain_data.content_dumps)
-        return _typed(value, tuple(items), walk)
-    if isinstance(value, dict):
-        return _typed(value, tuple((sub(k), sub(v)) for k, v in value.items()), walk)
-    if isinstance(value, (list, tuple)):
-        return _typed(value, tuple(sub(v) for v in value), walk)
-    t = type(value)
-    if contains_set(value):
-        return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
-    if holds_content_data(value, walk.content):
-        # Pickled whole, every frame inside was serialised and hashed on each
-        # call. Opened up, each goes through the caller's content hasher
-        # (``walk.content``, the decorator's memo), so an unchanged frame is
-        # checked rather than read again. An object that reaches itself is
-        # left to pickle, which keeps the loop.
-        try:
-            return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", sub(_pickled_state(value)))
-        except CyclicValueError:
-            pass
-    left = walk.left
-    if left is not None and not (
-        type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
-    ):
-        left.append(value)
-    return value
+#: Exact types that are their own form: `_enter` returns them as they are,
+#: so `_object_steps` takes them without a step. ``bytearray`` is left to
+#: `_enter`, which marks one met twice.
+_IMMUTABLE_PRIMS = frozenset(IMMUTABLE_PRIMS)
 
 
 #: The reconstructors ``object.__reduce_ex__`` names: their state is the
@@ -476,58 +561,108 @@ def _pickled_state(value: Any) -> Any:
     return tuple(parts)
 
 
-def contains_set(value: Any, _seen: set[int] | None = None) -> bool:
+def contains_set(value: Any, found: dict[int, Any] | None = None) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
     inside objects). `stable_key_repr` opens an object up only when it holds
     one; any other object is left to pickle.
 
-    Each container or object is looked at once per walk, which is what ends
-    the walk on a cyclic graph: a module-level ``logger`` reaches the logging
+    Each container or object is looked at once, which is what ends the
+    search on a cyclic graph: a module-level ``logger`` reaches the logging
     manager, whose dict of every logger reaches the manager again. A node
-    seen before is either still being walked (its other branches answer for
-    it) or was walked and held no set, or the walk would have stopped there.
-    There is no depth limit: a set below one would be left to pickle, in the
-    order PYTHONHASHSEED picks. A value deeper than the recursion limit
-    raises RecursionError, which `stable_key_repr` reports as
-    `TooDeepValueError`.
+    seen before is either still being searched (its other branches answer
+    for it) or was searched and held no set, or the search would have
+    stopped there. There is no depth limit: a set below one would be left to
+    pickle, in the order PYTHONHASHSEED picks. The nodes still to look at are
+    kept on a list, not the C stack, in the order a recursive search takes
+    them, so a value nested however deep cannot overflow the stack.
+
+    *found*, when given, is one walk's record of the nodes known to hold a
+    set: every node on the path to a set found is added, and a node in it
+    answers at once. The walk asks again of each object it opens below one
+    that holds a set, and without the record a linked list with a set at
+    its end was searched to the end once per node.
     """
-    if _seen is None:
-        _seen = set()
-    # An exact builtin primitive cannot contain anything, so it cannot contain
-    # a set. Without this the fall-through below called ``object_state`` on
-    # EVERY element -- which walks ``type(value).__mro__`` looking for
-    # ``__slots__`` -- so hashing a 10k-element list of ints made 10k such
-    # walks per cache hit. Exact-type test, matching ``CODELESS_PRIMS``'s own
-    # contract: a str/int SUBCLASS can carry a ``__dict__`` holding a set and
-    # must still be walked.
-    if type(value) in CODELESS_PRIMS:
-        return False
-    if isinstance(value, (set, frozenset)):
-        return True
-    if id(value) in _seen:
-        return False
-    if isinstance(value, logging.Logger):
-        # Pickled by NAME (`Logger.__reduce__`), so nothing inside it reaches
-        # the key -- and walking it means walking every logger in the process,
-        # 270 us on each call of any function that reads a module `logger`.
-        return False
-    if type(value) in _plain_data.numpy_scalar_set():
-        return False  # a number; without this, an MRO walk per scalar
-    _seen.add(id(value))
-    if isinstance(value, dict):
-        return any(contains_set(k, _seen) or contains_set(v, _seen) for k, v in value.items())
-    if isinstance(value, (list, tuple)):
-        return any(contains_set(v, _seen) for v in value)
-    obj_state = object_state(value)
-    if obj_state and any(contains_set(v, _seen) for v in obj_state.values()):
-        return True
-    if _holds_native_state(type(value)):
-        try:
-            parts = _pickled_state(value)
-        except Exception:  # noqa: BLE001 - what cannot be reduced fails in the pickle, with its own error
-            return False
-        return contains_set(parts, _seen)
+    seen: set[int] = set()
+    # Every node looked at is held until the search ends, so the id of one
+    # made on the way (the parts `_pickled_state` builds) is not reused by
+    # another and taken for it.
+    held: list = []
+    path: list = []
+    todo = [value]
+    while todo:
+        node = todo.pop()
+        kind = type(node)
+        if kind is _Leave:
+            path.pop()
+            continue
+        if kind is _NativeParts:
+            try:
+                todo.append(_pickled_state(node.value))
+            except Exception:  # noqa: BLE001 - what cannot be reduced fails in the pickle, with its own error
+                pass
+            continue
+        # An exact builtin primitive cannot contain anything, so it cannot
+        # contain a set. Without this the fall-through below called
+        # ``object_state`` on EVERY element -- which walks
+        # ``type(value).__mro__`` looking for ``__slots__`` -- so hashing a
+        # 10k-element list of ints made 10k such walks per cache hit.
+        # Exact-type test, matching ``CODELESS_PRIMS``'s own contract: a
+        # str/int SUBCLASS can carry a ``__dict__`` holding a set and must
+        # still be walked.
+        if kind in CODELESS_PRIMS:
+            continue
+        if isinstance(node, (set, frozenset)) or (found is not None and id(node) in found):
+            if found is not None:
+                for on_path in path:
+                    found[id(on_path)] = on_path
+            return True
+        if id(node) in seen:
+            continue
+        if isinstance(node, logging.Logger):
+            # Pickled by NAME (`Logger.__reduce__`), so nothing inside it
+            # reaches the key -- and walking it means walking every logger in
+            # the process, 270 us on each call of any function that reads a
+            # module `logger`.
+            continue
+        if kind in _plain_data.numpy_scalar_set():
+            continue  # a number; without this, an MRO walk per scalar
+        seen.add(id(node))
+        held.append(node)
+        if isinstance(node, dict):
+            parts: list = []
+            for k, v in node.items():
+                parts.append(k)
+                parts.append(v)
+        elif isinstance(node, (list, tuple)):
+            parts = list(node)
+        else:
+            parts = list(object_state(node).values())
+            if _holds_native_state(kind):
+                parts.append(_NativeParts(node))
+        path.append(node)
+        todo.append(_LEAVE)
+        parts.reverse()
+        todo.extend(parts)
     return False
+
+
+class _Leave:
+    """`contains_set`'s step for leaving a node: its parts are all looked at."""
+
+    __slots__ = ()
+
+
+_LEAVE = _Leave()
+
+
+class _NativeParts:
+    """`contains_set`'s step for the parts pickle stores for *value* beside
+    its ``__dict__`` and slots (`_holds_native_state`), taken after them."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
 
 
 #: ``Py_TPFLAGS_IMMUTABLETYPE``: set on a class written in C, never on one

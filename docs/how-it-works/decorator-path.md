@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @f61c38f8, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @1c729512, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -119,11 +119,12 @@ registration.
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @5765b31b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @75c9fb19 -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
-- an argument that cannot be hashed, such as a generator or a lock
+- an argument that cannot be hashed, such as a generator or a lock, or one
+  nested too deeply to key, such as a very long linked list
   ([`KEY-UNHASHABLE-ARG`](../warnings.md#key-unhashable-arg));
 - a parameter default that cannot be hashed
   ([`KEY-UNHASHABLE-DEFAULT`](../warnings.md#key-unhashable-default));

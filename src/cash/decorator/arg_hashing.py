@@ -20,6 +20,7 @@ from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..canonical_form import (
     NOT_HOOKED,
     ContentHashing,
+    TooDeepValueError,
     canonical_bytes,
     canonical_call_bytes,
     canonical_marker_bytes,
@@ -813,8 +814,29 @@ class ArgHasher:
         except Exception:  # noqa: BLE001 - a lookup must never break a call
             return False
 
-    def warn_unhashable_args(self, func_name: str, args: tuple, kwargs: dict) -> None:
-        """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out."""
+    def warn_unhashable_args(
+        self, func_name: str, args: tuple, kwargs: dict, cause: BaseException | None = None
+    ) -> None:
+        """KEY-UNHASHABLE-ARG, naming the argument when one can be singled out.
+
+        *cause* is what hashing the arguments raised, when known: a value
+        nested deeper than pickle follows is said to be that, not unhashable
+        for want of a hasher.
+        """
+        if isinstance(cause, TooDeepValueError):
+            self._notices.warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                "<too deep>",
+                f"@cash.cache on {func_name}: an argument is nested too deeply to key (deeper than pickle "
+                "follows, such as a long linked list), so this call and every call like it does not cache.",
+                code="KEY-UNHASHABLE-ARG",
+                fix=(
+                    "pass a flatter value, or give its class a __cash_key__(self) method returning what "
+                    "identifies it (a version, an id, a digest of its content)."
+                ),
+            )
+            return
         arg_type_name = self.first_unhashable_arg_type(args, kwargs)
         if arg_type_name == "<unknown>":
             which = (
@@ -1268,7 +1290,12 @@ class ArgHasher:
         return None
 
     def serialize_args(
-        self, func_name: str, args: tuple, kwargs: dict, normalized: tuple[tuple, dict] | None = None
+        self,
+        func_name: str,
+        args: tuple,
+        kwargs: dict,
+        normalized: tuple[tuple, dict] | None = None,
+        failure: list | None = None,
     ) -> str | None:
         """Hash the arguments, canonicalised.
 
@@ -1279,6 +1306,7 @@ class ArgHasher:
         same logical call -- disagree in one channel and split into two cache
         entries. One canonicalisation, shared, is the only way that invariant
         holds by construction rather than by two call sites staying in step.
+        *failure*, when given, gets what hashing raised when this returns None.
         """
         if normalized is None:
             normalized = self.normalize_call_args(func_name, args, kwargs)
@@ -1299,6 +1327,8 @@ class ArgHasher:
             # debug level so it's available when explicitly enabled but doesn't
             # double-warn.
             logger.debug("Could not serialize arguments for %s: %s", func_name, e)
+            if failure is not None:
+                failure.append(e)
             return None
 
     def note_arg_cost(self, func_name: str) -> None:

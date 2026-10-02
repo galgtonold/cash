@@ -150,8 +150,8 @@ class KeyBuilder:
             # cannot tell whether it changed, so caching at all risks a stale
             # result.
             return Unkeyable(_UNHASHABLE), watch
-        except UnhashableArgs:
-            self._args.warn_unhashable_args(func_name, args, kwargs)
+        except UnhashableArgs as e:
+            self._args.warn_unhashable_args(func_name, args, kwargs, e.args[0] if e.args else None)
             return Unkeyable(_UNHASHABLE), watch
         except KeyBuildFailed as e:
             self._notices.warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
@@ -300,14 +300,15 @@ class KeyBuilder:
             )
             chain.append(state_hash)
             dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
-            args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args)
+            failure: list = []
+            args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args, failure=failure)
             self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
-            raise UnhashableArgs
+            raise UnhashableArgs(*failure[:1])
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
 

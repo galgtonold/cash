@@ -815,7 +815,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @5765b31b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @75c9fb19 -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1137,11 +1137,12 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @5765b31b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @75c9fb19 -->
 **What happened.** An argument could not be hashed, so no key could be built.
-The message names the type, or says the value is nested in a container. A
-value a cached `functools.partial` binds counts as an argument too. The
-call ran uncached.
+The message names the type, says the value is nested in a container, or says
+it is nested too deeply to key: deeper than pickle follows, such as a long
+linked list. A value a cached `functools.partial` binds counts as an argument
+too. The call ran uncached.
 
 **Why it matters.** Every call with that argument recomputes. Nothing stale
 is served.
