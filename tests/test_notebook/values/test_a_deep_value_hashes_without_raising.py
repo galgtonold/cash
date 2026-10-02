@@ -3,9 +3,14 @@
 The notebook hashes every value it keys or checks for change. Its value hashes
 are documented never to fail: a value with no content hash falls back to its
 identity, and `mutation_fingerprint` answers None for a value it cannot observe.
-A linked list of a few hundred objects, or a deeply nested list, made pickle
-raise RecursionError, which escaped the hash and ended the cell with an
+A linked list or nested list deeper than pickle follows makes pickle raise
+RecursionError, which must not escape the hash and end the cell with an
 internal error.
+
+How deep pickle follows depends on the Python: to the recursion limit on
+3.10 and 3.11, a few thousand levels of its own C limit on 3.12 and 3.13,
+as far as the C stack allows on 3.14. A value pickle does follow is hashed
+by its content, whole. The values here are deeper than any of them.
 """
 
 from __future__ import annotations
@@ -35,7 +40,8 @@ def _nested(n: int) -> list:
     return value
 
 
-DEEP = [pytest.param(_chain(3000), id="linked list"), pytest.param(_nested(5000), id="nested list")]
+DEPTH = 100_000
+DEEP = [pytest.param(_chain(DEPTH), id="linked list"), pytest.param(_nested(DEPTH), id="nested list")]
 
 
 @pytest.mark.parametrize("value", DEEP)
