@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -39,6 +40,22 @@ if os.environ.get("CASH_TEST_FAULTHANDLER", "1") == "1":
         _faulthandler.enable(file=_FH_FILE, all_threads=True)
     except OSError:
         _faulthandler.enable(all_threads=True)
+    else:
+
+        def _drop_empty_fault_log():
+            # A worker that exits normally wrote nothing; only a crash's
+            # dump is worth keeping, or every run adds one file per worker.
+            _faulthandler.disable()
+            _FH_FILE.close()
+            try:
+                if os.path.getsize(_FH_FILE.name) == 0:
+                    os.remove(_FH_FILE.name)
+            except OSError:
+                pass
+
+        import atexit as _atexit
+
+        _atexit.register(_drop_empty_fault_log)
 
 # ---------------------------------------------------------------------------
 # Stall watchdog (ALL processes: xdist master AND every worker).
@@ -566,9 +583,11 @@ def sample_dataframe():
 # ============================================================================
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_configure(config):
     """Configure pytest with custom markers."""
     _STALL_WATCHDOG.start()
+    _temp_files_under_basetemp(config)
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "requires_ipython: marks tests that require IPython")
@@ -580,6 +599,34 @@ def pytest_configure(config):
         "filterwarnings",
         "ignore::cash.CashImpurityWarning",
     )
+
+
+def _temp_files_under_basetemp(config) -> None:
+    """Send ``tempfile`` and every child process's temp dir to
+    ``<basetemp>/tmp``.
+
+    A test (or a kernel, or a script a test runs) that makes a temp dir with
+    ``tempfile.mkdtemp()`` and never removes it otherwise leaves it in the
+    system temp dir, which then grows by that much on every run. Under the
+    basetemp it goes when pytest rotates old runs away. The real system temp
+    dir stays in ``CASH_TEST_SYSTEM_TMPDIR`` for what must be shared across
+    runs (the kernel boot throttle).
+    """
+    factory = getattr(config, "_tmp_path_factory", None)
+    if factory is None:
+        return
+    tmp = factory.getbasetemp() / "tmp"
+    # A Unix socket's path holds at most 104 bytes (macOS; 108 on Linux), and
+    # multiprocessing puts its forkserver's socket at <temp>/pymp-*/listener-*,
+    # 32 more. A basetemp too deep for that (macOS's own temp dir is) stays
+    # in the system temp dir.
+    if os.name != "nt" and len(str(tmp)) > 70:
+        return
+    tmp.mkdir(exist_ok=True)
+    os.environ.setdefault("CASH_TEST_SYSTEM_TMPDIR", tempfile.gettempdir())
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        os.environ[name] = str(tmp)
+    tempfile.tempdir = str(tmp)
 
 
 def pytest_collection_modifyitems(config, items):

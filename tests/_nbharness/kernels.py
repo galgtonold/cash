@@ -106,7 +106,11 @@ _BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
 # stalled every worker at once.
 _WARM_MAX_RSS_BYTES = int(os.environ.get("CASH_TEST_WARM_MAX_RSS_MB", "1200")) * 2**20
 _WARM_MAX_TESTS = int(os.environ.get("CASH_TEST_WARM_MAX_TESTS", "250"))
-_BOOT_DIR = os.path.join(tempfile.gettempdir(), "cash_kernel_boot_throttle")
+# The system temp dir, not the run's (the root conftest moves tempfile under
+# the basetemp): the throttle counts boots across every run on the machine.
+_BOOT_DIR = os.path.join(
+    os.environ.get("CASH_TEST_SYSTEM_TMPDIR") or tempfile.gettempdir(), "cash_kernel_boot_throttle"
+)
 _BOOT_STATE = os.path.join(_BOOT_DIR, "active.json")
 _BOOT_LOCK = os.path.join(_BOOT_DIR, "lock.d")
 _BOOT_ENTRY_TTL = 90.0  # a boot never takes this long; older entry = dead worker
