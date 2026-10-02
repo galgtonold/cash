@@ -352,6 +352,24 @@ def _force_kill_kernel(km) -> None:
             res.close()
     except Exception:
         pass
+    # Closing that coroutine unrun also skipped the part of it that matters:
+    # closing the manager's control socket and destroying the zmq context it
+    # created. Left open, they end up in a reference cycle that a later
+    # gc.collect() finalizes in arbitrary order -- the context first, with the
+    # socket's weakref already cleared, so Context.destroy() closes nothing and
+    # term() blocks forever on the socket it cannot see. pytest's own
+    # gc.collect() in pytest_unconfigure hit exactly that after every
+    # restarting test on Windows, and the stall watchdog killed the run.
+    # Both calls are synchronous on either manager class.
+    try:
+        km._close_control_socket()
+    except Exception:
+        pass
+    try:
+        if getattr(km, "_created_context", False) and not km.context.closed:
+            km.context.destroy(linger=0)
+    except Exception:
+        pass
 
 
 # =============================================================================
