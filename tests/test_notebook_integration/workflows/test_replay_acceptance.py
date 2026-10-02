@@ -19,7 +19,11 @@ pytest.importorskip("sklearn")
 from tests._nbharness.replay_corpus import SCENARIOS, expected_recompute
 from tests._nbharness.replay_harness import fresh_trace_file, run_with_cash
 
-pytestmark = [pytest.mark.integration, pytest.mark.upstream]
+# Each scenario boots a fresh kernel, runs the notebook, restarts, and runs the
+# plain-Python oracle in a subprocess -- pandas, sklearn and matplotlib imported
+# three times. At 16 workers the restart cases take 26-31s, so the global 30s
+# timeout killed workers mid-test ("node down: Not properly terminated").
+pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout(120)]
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=[s.id for s in SCENARIOS])
