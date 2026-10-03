@@ -234,8 +234,9 @@ changed. The second list is what cash does not see, and what to do about it.
     - The function's **own code**. Comments, docstrings and formatting are
       ignored, unless the code reads a docstring (`f.__doc__`,
       `inspect.getdoc(tool)`): then the docstrings it reaches count.
-    - The code of every **helper it calls**, transitively, in your project or
-      your own installed package.
+    - The code of every **helper it calls**, transitively, in your project
+      (an editable `pip install -e` counts) or in the package the cached
+      function itself is in.
     - **Module globals** read by the function or its helpers, parameter
       defaults, and captured variables.
     - The **classes it uses**: their code, their class attributes, and the
@@ -263,7 +264,10 @@ changed. The second list is what cash does not see, and what to do about it.
 
     ---
 
-    - **Library code** (`site-packages`, the standard library): pin versions.
+    - **Library code** (`site-packages`, the standard library), your team's
+      own package too when it is installed without `-e`. The version is not
+      in the key: see
+      [Code in installed packages](decorator-limitations.md#code-in-installed-packages).
     - What a **server or database** returns: set `ttl=`
       ([`KEY-NETWORK-READ`](warnings.md#key-network-read)).
     - The **clock**, a random UUID, or the whole environment
@@ -353,7 +357,7 @@ treated as a missing local file, so for `s3://` or `https://` data pass
 ([Remote objects](tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)).
 
 `depends_on=` names things cash cannot follow on its own: a function picked at
-run time, a library function whose version you want in the key, or a
+run time, a library function whose code you want in the key, or a
 `DataSource` for a database table or API version. A plain function in the list
 is keyed by its source:
 
