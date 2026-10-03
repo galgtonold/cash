@@ -730,9 +730,28 @@ class MismatchClassifier:
         normalized_inp_code = strip_markers(inp_producing_code).strip()
         return normalized_inp_code not in result.trace_codes and self._ran_the_notebook_version(inp, result.trace_codes)
 
-    def _all_tainted_inputs_valid(self, stmt_code: str, sim: SimulationResult, result: ClassificationResult) -> bool:
-        """Return True if all inputs for a tainted statement are available and fresh."""
+    def _all_tainted_inputs_valid(
+        self,
+        stmt_code: str,
+        sim: SimulationResult,
+        result: ClassificationResult,
+        read_lineages: dict[str, str] | None = None,
+    ) -> bool:
+        """Return True if all inputs for a tainted statement are available and fresh.
+
+        *read_lineages* are the lineages the statement reads at its place in
+        the notebook (its trace entry's ``input_hashes``). A live input must
+        hold that version, not merely be present: the lineage at the end of
+        the notebook cannot vouch for a name the notebook deletes or rebinds
+        below the statement. ``m = clean.merge(...)``, ``m['hour'] = ...``,
+        ``del m`` in one cell: a repair from below re-ran the first two and
+        not the ``del``, so an ``m`` built from the old ``clean`` stayed live.
+        After the next edit, the repair re-ran ``m['hour'] = ...`` on that
+        ``m`` without the merge above it, and every result below was built
+        from the cleaning the user had replaced.
+        """
         virtual_lineage = sim.virtual_lineage
+        read_lineages = read_lineages or {}
         stmt_inputs_check, _ = CodeAnalyzer.analyze_code_block(stmt_code)
         for inp in stmt_inputs_check:
             if inp in sim.virtual_modules:
@@ -765,6 +784,15 @@ class MismatchClassifier:
                     virtual_lineage[inp][:8],
                 )
                 return False
+            read = read_lineages.get(inp)
+            if read is not None and self.tracking_state.variable_lineage.get(inp) != read:
+                logger.debug(
+                    "[UPSTREAM] Tainted stmt input '%s' is not the version it reads (actual=%s, read=%s). Cascading.",
+                    inp,
+                    str(self.tracking_state.variable_lineage.get(inp))[:8],
+                    read[:8],
+                )
+                return False
         return True
 
     def _resolve_tainted_stmt(
@@ -781,7 +809,7 @@ class MismatchClassifier:
 
         True when it was scheduled; False when its inputs need cascading.
         """
-        if self._all_tainted_inputs_valid(stmt_code, sim, result):
+        if self._all_tainted_inputs_valid(stmt_code, sim, result, sim.trace[i].input_hashes):
             scan.run.append(i)
             scan.needed.difference_update(outputs)
             scan.resolved.update(outputs - needed_outputs_pre)
