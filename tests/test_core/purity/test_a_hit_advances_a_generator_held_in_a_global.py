@@ -66,3 +66,46 @@ def test_more_calls_after_fewer_match_a_plain_run(tmp_path):
 def test_a_stream_moved_before_the_calls_is_not_served_old_values(tmp_path):
     _run(tmp_path, 4)
     assert _run(tmp_path, 4, skew=True) == _run(tmp_path, 4, skew=True, cached=False)
+
+
+ARG_PROGRAM = textwrap.dedent("""
+    import json, sys, warnings
+    import numpy as np
+    import cash
+    cash.configure(cache_dir=CACHE_DIR)
+    N, CACHED = int(sys.argv[1]), sys.argv[2]
+
+    def boot(x, rng):
+        return float(rng.normal()) + x
+
+    if CACHED == "cached":
+        boot = cash.cache(boot)
+    elif CACHED == "waived":
+        boot = cash.cache(assume_safe=True)(boot)
+    rng = np.random.default_rng(42)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        res = [boot(g, rng) for g in range(N)]
+    codes = sorted({str(w.message).split("]")[0].lstrip("[") for w in caught})
+    print(json.dumps({"res": res, "next": float(rng.normal()), "codes": codes}))
+""")
+
+
+def _run_arg(tmp_path, n, mode):
+    script = tmp_path / "arg.py"
+    script.write_text(ARG_PROGRAM.replace("CACHE_DIR", repr(str(tmp_path / ".cash"))), encoding="utf-8")
+    done = run_python(script, str(n), mode, cwd=tmp_path, timeout=180)
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("mode", ["cached", "waived"])
+def test_a_generator_passed_in_is_advanced_by_a_hit(tmp_path, mode):
+    plain = {n: _run_arg(tmp_path, n, "plain") for n in (4, 12)}
+    first = _run_arg(tmp_path, 4, mode)
+    assert {k: first[k] for k in ("res", "next")} == {k: plain[4][k] for k in ("res", "next")}
+    # The first four hit; the rest must draw where a plain run would.
+    more = _run_arg(tmp_path, 12, mode)
+    assert {k: more[k] for k in ("res", "next")} == {k: plain[12][k] for k in ("res", "next")}
+    # A draw a hit replays is not an effect the caller loses.
+    assert "IMPURE-OBSERVED-EFFECTS" not in first["codes"]

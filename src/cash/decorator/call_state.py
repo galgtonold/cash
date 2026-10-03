@@ -100,6 +100,8 @@ class BodyRun:
         "rng_pre",
         "carriers_pre",
         "carriers_moved",
+        "arg_carriers_pre",
+        "arg_carriers_moved",
         "res",
         "body_seconds",
         "saves_seconds",

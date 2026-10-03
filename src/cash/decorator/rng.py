@@ -446,7 +446,9 @@ class RngWatch:
         if own:
             self._self_seeded[func_name] = set(own)
 
-    def replay_parts(self, drew: bool, pre_state: dict | None, carriers: list | None = None) -> dict:
+    def replay_parts(
+        self, drew: bool, pre_state: dict | None, carriers: list | None = None, arg_carriers: list | None = None
+    ) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
 
         A hit never runs the body, so the stream it advanced stays where it was
@@ -461,6 +463,8 @@ class RngWatch:
         alone rather than rewound.
         """
         parts: dict = {"carriers": carriers} if carriers else {}
+        if arg_carriers:
+            parts["arg_carriers"] = arg_carriers
         if not drew or pre_state is None:
             return parts
         try:

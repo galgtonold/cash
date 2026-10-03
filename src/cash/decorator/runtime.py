@@ -22,7 +22,14 @@ from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
-from ..tracking.randomness import capture_reachable_carrier_states, moved_carriers, replayable
+from ..tracking.randomness import (
+    capture_argument_carrier_states,
+    capture_reachable_carrier_states,
+    carriers_put_back,
+    moved_carriers,
+    replay_argument_carriers,
+    replayable,
+)
 from .arg_hashing import PLAIN_CENSUS
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -675,6 +682,7 @@ class CallRunner:
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if hit is not CACHE_MISS:
+            self._replay_argument_rng(func_name, args, kwargs, call.metadata)
             self._calls.note_effectiveness(
                 func_name,
                 call.cash_overhead,
@@ -705,7 +713,24 @@ class CallRunner:
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
+        self._replay_argument_rng(spec.name, call.args, call.kwargs, metadata)
         return self._wrap_iterator_hit(call, metadata, hit)
+
+    def _named_args(self, func_name: str, args: tuple, kwargs: dict) -> list[tuple[str, Any]]:
+        """``(parameter, value)`` for each argument of the call, bound to the
+        signature as the key binds it, so two spellings of one call agree."""
+        try:
+            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
+        except Exception:  # noqa: BLE001 - unbindable: positions are all there is
+            canon_args, canon_kwargs = args, kwargs
+        return [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
+
+    def _replay_argument_rng(self, func_name: str, args: tuple, kwargs: dict, metadata: Any) -> None:
+        """Move a generator handed in as an argument to where the computed
+        call left it (`RngWatch.replay_parts`)."""
+        moved = (getattr(metadata, "rng_replay", None) or {}).get("arg_carriers")
+        if moved:
+            replay_argument_carriers(moved, dict(self._named_args(func_name, args, kwargs)))
 
     @contextlib.contextmanager
     def body_scope(self, spec: CachedFunction, call: Call) -> Iterator[BodyRun]:
@@ -738,6 +763,10 @@ class CallRunner:
         # inside): the module channel above cannot see those move.
         run.carriers_pre = capture_reachable_carrier_states(func)
         run.carriers_moved = []
+        # Or handed in as an argument (`boot(x, rng)`): a hit must move the
+        # caller's generator on just the same.
+        run.arg_carriers_pre = capture_argument_carrier_states(self._named_args(func_name, args, kwargs))
+        run.arg_carriers_moved = []
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
             body_t0 = _perf_counter()
@@ -758,6 +787,7 @@ class CallRunner:
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.rng_new = self._rng.note_draw(func_name, run.rng_pre)
             run.carriers_moved = moved_carriers(run.carriers_pre)
+            run.arg_carriers_moved = moved_carriers(run.arg_carriers_pre)
 
     def finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
@@ -786,7 +816,11 @@ class CallRunner:
             )
             return StreamingCachedIterator(self._store.stream_and_store(res, spec, call, run))
 
-        self._purity.check_argument_mutation(func_name, args, kwargs, call.call_args_hash, run.observer)
+        # A generator argument the body drew from is moved on again by a hit
+        # (`replay_argument_carriers`), so that draw is not a mutation the
+        # caller would lose: the check sees it where the call found it.
+        with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []):
+            self._purity.check_argument_mutation(func_name, args, kwargs, call.call_args_hash, run.observer)
         self._purity.report_observed_effects(func_name, run.observer)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
@@ -796,7 +830,7 @@ class CallRunner:
         refusal = self._store.refusal(
             func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
         )
-        if refusal is None and not replayable(run.carriers_moved):
+        if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
             # A hit must leave the generator where the body did, or the
             # caller's next draw repeats what this call drew. One only a
             # closure holds cannot be found again by a later process.
@@ -818,7 +852,10 @@ class CallRunner:
                     body_seconds=run.body_seconds,
                     saves_seconds=run.saves_seconds,
                     rng_replay=self._rng.replay_parts(
-                        bool(self._registry.cached[func_name].rng_modules), run.rng_pre, run.carriers_moved
+                        bool(self._registry.cached[func_name].rng_modules),
+                        run.rng_pre,
+                        run.carriers_moved,
+                        run.arg_carriers_moved,
                     ),
                 ),
                 res,

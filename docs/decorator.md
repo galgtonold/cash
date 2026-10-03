@@ -525,11 +525,13 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @d750f8d8 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @6d9b4781 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
 call left it, so a loop of calls draws what it would without the cache. A
+generator passed in as an argument (`boot(x, rng)`) is keyed and moved on the
+same way, and drawing from it is not reported as changing the argument. A
 generator only a closure holds cannot be found again by a later run, so a call
 that draws from one is not stored.
 

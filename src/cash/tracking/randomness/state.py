@@ -7,10 +7,12 @@ per-object carriers a statement reads (``rng = np.random.default_rng()``).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import random
 import sys
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 from .detect import KIND_NP_GENERATOR, KIND_NP_RANDOMSTATE, KIND_PY_RANDOM
@@ -369,6 +371,74 @@ def carrier_states_changed(before: list[tuple[object, object, tuple[str, str] | 
     return bool(moved_carriers(before))
 
 
+def _set_carrier_state(obj: object, kind: str, state: object) -> None:
+    if kind == KIND_NP_GENERATOR:
+        obj.bit_generator.state = state
+    elif kind == KIND_NP_RANDOMSTATE:
+        obj.set_state(state)
+    else:
+        obj.setstate(state)
+
+
+def capture_argument_carrier_states(named: list[tuple[str, object]]) -> list[tuple[object, object, tuple[str, str]]]:
+    """The RNG carriers among a call's arguments, each with its current state.
+
+    *named* is ``(parameter, value)`` for each argument. An entry's *where* is
+    ``("arg", parameter)``: a later call finds the generator again among its
+    own arguments. Compare with :func:`moved_carriers`.
+    """
+    found: dict[int, tuple[object, object, tuple[str, str]]] = {}
+    for name, value in named:
+        kind = rng_carrier_kind(value)
+        if kind is None or id(value) in found:
+            continue
+        try:
+            state = _carrier_state(value, kind)
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
+            state = _UNREADABLE
+        found[id(value)] = (value, state, ("arg", name))
+    return list(found.values())
+
+
+@contextlib.contextmanager
+def carriers_put_back(before: list[tuple[object, object, object]]) -> Iterator[None]:
+    """Inside the block, each carrier of *before* stands where it was then;
+    afterwards, where it is now. For a check that must not see a draw the
+    caller will see replayed (the argument-mutation check)."""
+    now = []
+    for obj, state, _where in before:
+        kind = rng_carrier_kind(obj)
+        if kind is None or state is _UNREADABLE:
+            continue
+        try:
+            now.append((obj, kind, _carrier_state(obj, kind)))
+            _set_carrier_state(obj, kind, state)
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
+            continue
+    try:
+        yield
+    finally:
+        for obj, kind, state in now:
+            _set_carrier_state(obj, kind, state)
+
+
+def replay_argument_carriers(moved: list, named: dict[str, object]) -> None:
+    """:func:`replay_carriers` for generators handed in as arguments: *named*
+    maps each parameter of the hit's call to its value."""
+    for where, pre, post in moved:
+        try:
+            _scope, name = where
+            obj = named.get(name)
+            kind = rng_carrier_kind(obj)
+            if kind is None:
+                continue
+            if not _rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
+                continue
+            _set_carrier_state(obj, kind, post)
+        except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
+            logger.debug("[RANDOMNESS] Failed to replay RNG state for %r: %s", where, e)
+
+
 def replay_carriers(moved: list) -> None:
     """Move each recorded carrier to where the computed call left it -- only
     while it is where that call found it, as the module channel does.
@@ -384,12 +454,7 @@ def replay_carriers(moved: list) -> None:
                 continue
             if not _rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
                 continue
-            if kind == KIND_NP_GENERATOR:
-                obj.bit_generator.state = post
-            elif kind == KIND_NP_RANDOMSTATE:
-                obj.set_state(post)
-            else:
-                obj.setstate(post)
+            _set_carrier_state(obj, kind, post)
         except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
             logger.debug("[RANDOMNESS] Failed to replay RNG state for %r: %s", where, e)
 
