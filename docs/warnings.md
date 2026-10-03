@@ -1552,7 +1552,7 @@ call.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @32bc3d1f, cash/decorator/registry.py:FunctionRegistry.code_functions @031ca888 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @32bc3d1f, cash/decorator/registry.py:FunctionRegistry.code_functions @f4899cd2 -->
 **What happened.** A file holding the function, a helper, or a cached function
 it depends on changed on disk during the call, in code this call runs. The
 result was returned but not stored.

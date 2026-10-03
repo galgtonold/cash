@@ -37,7 +37,7 @@ from .call_state import (
 )
 from .class_data import CLASSES_FOLDED
 from .explain import MissKind, MissReason, describe_stale_files
-from .file_deps import propagate_file_deps_to_active_tracker, snapshot_tracked_deps
+from .file_deps import note_unentered_body, propagate_file_deps_to_active_tracker, snapshot_tracked_deps
 from .function_identity import func_key
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
@@ -359,6 +359,7 @@ class CallRunner:
 
     def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
+        note_unentered_body(spec.name)
         result = spec.func(*call.args, **call.kwargs)
         self._calls.log(
             spec.name,
@@ -404,7 +405,7 @@ class CallRunner:
             # Without this, a dependency that was already cached before the
             # consumer's first run hides its file deps behind a cache hit
             # and the consumer never invalidates when that file changes.
-            propagate_file_deps_to_active_tracker(metadata)
+            propagate_file_deps_to_active_tracker(metadata, func_name)
             # Re-attach the lineage hash to the restored value. It's a plain
             # attribute that doesn't survive pickling, so a value restored
             # from disk would otherwise lose it - and a downstream cached
@@ -556,10 +557,16 @@ class CallRunner:
         # Inherit the shortest TTL of any TTL'd dependency (computed after
         # analysis populates the graph).
         call.ttl = self._registry.effective_ttl(func_name, spec.ttl)
-        if async_body:
-            call.recompute = lambda: run_to_completion(lambda: func(*args, **kwargs))
-        else:
-            call.recompute = lambda: func(*args, **kwargs)
+
+        def recompute() -> Any:
+            # The body runs here with no entry of its own (a stream whose
+            # chunk went), under whatever tracker is active.
+            note_unentered_body(func_name)
+            if async_body:
+                return run_to_completion(lambda: func(*args, **kwargs))
+            return func(*args, **kwargs)
+
+        call.recompute = recompute
 
         # Everything from here to the hit/miss verdict is cash's own cost,
         # not the user's work. Two perf_counter pairs cost under 1% of the

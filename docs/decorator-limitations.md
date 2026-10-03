@@ -104,7 +104,8 @@ uncached, and a large one (a frame, a model) is read on every call. A
 A class or function of yours passed as an argument is keyed by its code and by
 what that code reads, so editing it recomputes. Three cases are not covered:
 
-- **Library classes and functions** are keyed by name, not code. Pin versions.
+- **Library classes and functions** are keyed by name, not code. See
+  [Code in installed packages](#code-in-installed-packages).
 - **A closure or `lambda`** can't be pickled, so the call runs uncached. Pass a
   module-level function and give it the captured value as an argument.
 - **An implementation picked at run time** (`HANDLERS[name]()` on a dict built
@@ -113,6 +114,64 @@ what that code reads, so editing it recomputes. Three cases are not covered:
 
 A marker class you pass but whose code never affects the result can be excluded
 with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decorators.md#cashopaque-leave-a-class-out-of-the-key).
+
+## Code in installed packages
+
+<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @d210933e, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+cash follows the code a cached function calls, and puts it in the key, when
+that code is yours. Yours means:
+
+- a file outside the Python installation: your project, or a package installed
+  with `pip install -e` (an editable install runs from your source folder);
+- the package the cached function itself is in, wherever it is installed. A
+  cached function in `mytool.jobs` is keyed by the code it calls anywhere in
+  `mytool`, even when `mytool` is installed with a plain `pip install`.
+
+Any other code in `site-packages` is a library, and that includes your team's
+internal package when it is installed with a plain `pip install`. cash keys a
+call into it by name and does not look inside, so after an upgrade the old
+results are still served.
+
+Pinning versions does not change this: the version is not part of the key. A
+pin keeps everyone on the same code; it does not make an upgrade recompute.
+After an upgrade that changes results, clear the affected entries
+(`f.cache_clear()` or [`cash clear --function`](cli.md#cash-clear-path-all)),
+or tell cash what to watch:
+
+- **While you work on the package**, install it with `pip install -e`. Its
+  code is then tracked like your project's.
+- **`depends_on=[teamlib.score]`** puts the source of that function, as
+  installed, in the key, so an upgrade that changes `score` recomputes. Only
+  that function's own code counts, not the functions it calls: an upgrade that
+  changes only a helper inside `teamlib` keeps the old results. Name each
+  function whose change matters.
+- **To recompute on every release**, depend on the installed version with a
+  `DataSource`. A new version number recomputes; changed code reinstalled
+  under the same version number does not.
+
+<!-- test:skip reason="needs an installed package named teamlib" -->
+```python
+import importlib.metadata
+
+import cash
+import teamlib
+
+
+class InstalledVersion(cash.DataSource):
+    def __init__(self, dist):
+        self.dist = dist
+
+    def get_id(self):
+        return f"installed:{self.dist}"
+
+    def state_token(self):
+        return importlib.metadata.version(self.dist)
+
+
+@cash.cache(depends_on=[InstalledVersion("teamlib")])
+def forecast(region):
+    return teamlib.score(region)
+```
 
 ## Reads cash cannot see
 
