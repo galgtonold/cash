@@ -56,10 +56,11 @@ def test_an_unrelated_cell_does_not_rerun_it(nb_runner, tmp_path, clear, unrelat
 
 
 @pytest.mark.fresh_kernel
-def test_an_unrelated_cell_does_not_rerun_it_after_a_restart(nb_runner, tmp_path):
+@pytest.mark.parametrize("clear", sorted(CLEARS))
+def test_an_unrelated_cell_does_not_rerun_it_after_a_restart(nb_runner, tmp_path, clear):
     out = tmp_path / "charts"
     nb_runner.create_notebook(
-        ["import cash\n%cash_on", _chart_cell(out, "path_glob"), "x = 41 + 1\nprint('RUN unrelated', x)"]
+        ["import cash\n%cash_on", _chart_cell(out, clear), "x = 41 + 1\nprint('RUN unrelated', x)"]
     )
     nb_runner.start_kernel()
     nb_runner.run_all()
