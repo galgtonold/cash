@@ -237,6 +237,17 @@ class FileWriterScheduler:
         # read only the copy.
         # A writer whose path does not resolve keeps the broad rule.
         written_forms = self._written_path_forms(simulation_trace, writer_indices)
+        # A folder a writer makes, removes or deletes files in: a file read
+        # inside it was written too.
+        written_places = (
+            [
+                os.path.normcase(os.path.abspath(resolve_file_dep_path(p) or p)) + os.sep
+                for w in writer_indices
+                for p in self._writer_paths(simulation_trace[w].stmt_code, simulation_trace) or ()
+            ]
+            if written_forms is not None
+            else []
+        )
 
         def _reads_written(outputs) -> bool:
             deps = set()
@@ -248,7 +259,7 @@ class FileWriterScheduler:
                 return False
             if written_forms is None:
                 return True
-            return any(self._normalize_path_forms(d) & written_forms for d in deps)
+            return any(self._normalize_path_forms(d) & written_forms or self._inside(d, written_places) for d in deps)
 
         promoted: set[int] = set()
         promoted_outputs: set[str] = set()
@@ -697,6 +708,17 @@ class FileWriterScheduler:
             except (OSError, ValueError, TypeError):
                 continue
         return forms
+
+    @staticmethod
+    def _inside(path: str, folders: list[str]) -> bool:
+        """True when *path* lies inside one of *folders* (each ending in a separator)."""
+        if not folders:
+            return False
+        try:
+            where = os.path.normcase(os.path.abspath(resolve_file_dep_path(path) or path))
+        except (OSError, ValueError, TypeError):
+            return True  # cannot tell: count it as written, so its reader re-runs
+        return any(where.startswith(f) for f in folders)
 
     def _read_path_index(self, relevant_read_paths) -> tuple[set[str], list[str], list[str]]:
         """``(comparable forms, folders listed, places)`` of the paths read, once

@@ -42,6 +42,7 @@ __all__ = [
     "resolve_literal_path",
     "statement_written_paths",
     "statement_read_paths",
+    "LISTING_TEXT_MARKERS",
     "resolve_path_list",
     "statement_saves_current_pyplot_figure",
     "capturable_globals",
@@ -461,7 +462,10 @@ def statement_written_paths(
     ``np.save(PATH, ...)``, ``open(PATH, 'w'|'wb'|'a'|...)``,
     ``Path(PATH).write_text/write_bytes(...)``, and the nested-handle forms
     ``json.dump(obj, open(PATH, ...))`` / ``pickle.dump(obj, open(PATH, ...))``
-    (the path comes from the ``open()``).
+    (the path comes from the ``open()``), the folder forms (``OUT.mkdir()``,
+    ``shutil.rmtree(OUT)``) and file deletions (``PATH.unlink()``,
+    ``os.remove(PATH)``; a loop variable over a folder's listing stands for
+    that folder).
 
     Returns the set of resolved paths only when EVERY path-bearing write call in
     the statement resolves to a string literal (or a simple ``Name`` bound to a
@@ -480,10 +484,13 @@ def statement_written_paths(
             return None
     paths: set[str] = set()
     saw_path_bearing = False
+    listed = _listed_entry_folders(tree, namespace)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        resolved, is_path_bearing = _write_call_path(node, namespace)
+        resolved, is_path_bearing = _removal_call_path(node, namespace, listed)
+        if not is_path_bearing:
+            resolved, is_path_bearing = _write_call_path(node, namespace)
         if not is_path_bearing:
             continue
         saw_path_bearing = True
@@ -493,6 +500,141 @@ def statement_written_paths(
     if not saw_path_bearing or not paths:
         return None
     return paths
+
+
+#: ``os.<f>(PATH)`` calls that delete one file.
+_FILE_REMOVAL_FUNCTIONS: frozenset[str] = frozenset({"remove", "unlink"})
+
+#: Characters that make a ``glob`` pattern component a wildcard.
+_GLOB_MAGIC = ("*", "?", "[")
+
+
+def _removal_call_path(
+    call: ast.Call,
+    namespace: dict[str, Any] | None,
+    listed: dict[str, str],
+) -> tuple[str | None, bool]:
+    """``(path, is_path_bearing)`` for a call that deletes a file:
+    ``PATH.unlink()``, ``os.remove(PATH)`` / ``os.unlink(PATH)``.
+
+    A *PATH* that is the variable of a loop over a folder's listing
+    (*listed*, see :func:`_listed_entry_folders`) resolves to that folder:
+    whatever it deletes is inside it. ``for old in OUT.glob('*.png'):
+    old.unlink()`` is how a chart cell clears its folder before drawing,
+    and unresolved it could never be ruled out as unread.
+    """
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return None, False
+    if func.attr in _FILE_REMOVAL_FUNCTIONS and get_base_name(func.value) == "os":
+        if not call.args or isinstance(call.args[0], ast.Starred):
+            return None, True
+        target = call.args[0]
+    elif func.attr == "unlink" and not call.args:
+        target = func.value
+    else:
+        return None, False
+    if isinstance(target, ast.Name) and target.id in listed:
+        return listed[target.id], True
+    return resolve_literal_path(target, namespace), True
+
+
+def _listing_folder(node: ast.AST, namespace: dict[str, Any] | None) -> str | None:
+    """The folder whose entries iterable *node* lists, or ``None``.
+
+    ``FOLDER.glob(pattern)`` / ``.rglob(pattern)`` / ``.iterdir()`` with a
+    resolvable *FOLDER*, and ``glob.glob(pattern)`` / ``glob.iglob(pattern)``
+    with a resolvable pattern (its folder is the part before the first
+    wildcard), each optionally inside ``sorted``/``list``/``tuple``. Every
+    entry they yield lies inside that folder.
+    """
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("sorted", "list", "tuple")
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _listing_folder(node.args[0], namespace)
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return None
+    method = node.func.attr
+    if get_base_name(node.func.value) == "glob":
+        if method not in ("glob", "iglob") or not node.args or isinstance(node.args[0], ast.Starred):
+            return None
+        pattern = resolve_literal_path(node.args[0], namespace)
+        if pattern is None:
+            return None
+        if node.keywords and any(kw.arg in ("root_dir", "dir_fd") for kw in node.keywords):
+            return None  # the pattern is relative to another folder
+        parts = pattern.replace(os.sep, "/").split("/")
+        fixed = []
+        for part in parts:
+            if any(c in part for c in _GLOB_MAGIC):
+                break
+            fixed.append(part)
+        else:
+            fixed = fixed[:-1]  # no wildcard: the pattern names one entry
+        folder = "/".join(fixed)
+        if not folder:
+            return "/" if pattern.startswith("/") else os.curdir
+        return folder
+    if method in ("glob", "rglob", "iterdir"):
+        return resolve_literal_path(node.func.value, namespace)
+    return None
+
+
+#: Methods that list a folder: ``os.listdir`` / ``os.scandir``,
+#: ``glob.glob`` / ``glob.iglob``, ``Path.glob`` / ``rglob`` / ``iterdir``.
+_LISTING_METHODS: frozenset[str] = frozenset({"listdir", "scandir", "glob", "iglob", "rglob", "iterdir"})
+
+#: Text a statement that lists a folder contains (see ``_LISTING_METHODS``).
+LISTING_TEXT_MARKERS: tuple[str, ...] = ("listdir", "scandir", "glob", "iterdir")
+
+
+def _listing_read_folder(call: ast.Call, namespace: dict[str, Any] | None) -> str | None:
+    """The folder a listing call (``_LISTING_METHODS``) reads, or ``None``
+    when it does not resolve."""
+    func = call.func
+    if isinstance(func, ast.Attribute) and get_base_name(func.value) == "os":
+        if not call.args and not call.keywords:
+            return os.curdir
+        return _call_path_argument(call, 0, namespace, frozenset({"path"}))
+    return _listing_folder(call, namespace)
+
+
+def _listed_entry_folders(tree: ast.AST, namespace: dict[str, Any] | None) -> dict[str, str]:
+    """``{loop variable: folder}`` for ``for p in FOLDER.glob(...)`` loops and
+    comprehensions over a folder's listing (:func:`_listing_folder`).
+
+    A name bound anywhere else in the statement -- assigned, a second loop,
+    ``with ... as``, a parameter -- is left out: it need not be an entry.
+    """
+    found: dict[str, str] = {}
+    loop_targets: set[int] = set()
+    unknown: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)) or not isinstance(node.target, ast.Name):
+            continue
+        folder = _listing_folder(node.iter, namespace)
+        name = node.target.id
+        if folder is None or found.get(name, folder) != folder:
+            unknown.add(name)
+            continue
+        found[name] = folder
+        loop_targets.add(id(node.target))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and id(node) not in loop_targets:
+            unknown.add(node.id)
+        elif isinstance(node, ast.arg):
+            unknown.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            unknown.add(node.name)
+        elif isinstance(node, ast.alias):
+            unknown.add((node.asname or node.name).split(".")[0])
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            unknown.add(node.name)
+    return {name: folder for name, folder in found.items() if name not in unknown}
 
 
 def _read_call_path(
@@ -505,7 +647,8 @@ def _read_call_path(
     ``open(PATH)`` in a non-write mode, ``*.read_csv(PATH)`` / any ``.read_<x>``
     reader, ``np.load(PATH)`` / ``joblib.load(PATH)``, the nested-handle
     ``pickle.load(open(PATH))`` / ``json.load(open(PATH))``, and
-    ``Path(PATH).read_text/read_bytes()``. ``is_path_bearing`` marks a recognised
+    ``Path(PATH).read_text/read_bytes()``, and a folder's listing
+    (``os.listdir(DIR)``, ``DIR.glob(...)``: the folder). ``is_path_bearing`` marks a recognised
     reader whose args name an input file; a ``None`` path there means the target
     was present but not statically resolvable (caller stays conservative).
     """
@@ -517,6 +660,10 @@ def _read_call_path(
         return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
     if isinstance(func, ast.Attribute):
         method = func.attr
+        # A folder's listing reads the folder: what is written into it
+        # changes what the next listing finds.
+        if method in _LISTING_METHODS:
+            return _listing_read_folder(call, namespace), True
         # Path(PATH).read_text(...) / Path(PATH).read_bytes(...)
         if method in ("read_text", "read_bytes"):
             recv = func.value
@@ -554,7 +701,7 @@ def statement_read_paths(
     statically resolvable (f-string / computed) -- so the caller treats the read
     set as unknown and never suppresses a writer it cannot prove is unread.
     """
-    if not any(m in code for m in READ_TEXT_MARKERS):
+    if not any(m in code for m in READ_TEXT_MARKERS + LISTING_TEXT_MARKERS):
         return set()
     if tree is None:
         try:

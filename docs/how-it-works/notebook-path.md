@@ -155,6 +155,14 @@ changed what it would write, the badge adds a `STALE FILE: … not rewritten`
 line naming the statement to re-run. Before exporting, run the exporting cells
 themselves, or the last cell of the notebook.
 
+<!-- claim: cash/analysis/namespace_effects.py:_removal_call_path @edf26c04, cash/analysis/namespace_effects.py:_listing_read_folder @1812a4da -->
+Listing a folder (`os.listdir`, `os.scandir`, `glob.glob`, `Path.glob`,
+`rglob` or `iterdir`) reads the folder, and deleting the files a `glob` or
+`iterdir` loop finds (`for old in OUT.glob("*.png"): old.unlink()`, or
+`os.remove(f)` for each `f` in `glob.glob(...)`) writes it. So a chart cell that clears its folder and draws into it again is left
+alone by the cells that do not read that folder, and a cell that lists the
+folder re-runs it when its code or what it draws from has changed.
+
 ## Related
 
 - [Cache keys and lineage](cache-keys-and-lineage.md): what a statement's key

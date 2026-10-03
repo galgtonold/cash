@@ -73,3 +73,60 @@ def test_a_loop_variable_also_bound_elsewhere_stays_unknown():
         statement_read_paths("for f in TF:\n    f = f.with_suffix('.tsv')\n    x = pd.read_csv(f)", namespace=ns)
         is None
     )
+
+
+def test_deleting_the_entries_of_a_listed_folder_writes_that_folder():
+    """``for old in CHARTS.glob('*.png'): old.unlink()`` clears a chart
+    folder before drawing. Unresolved, the scope gate could never rule it out,
+    and every unrelated cell re-ran the chart cell first."""
+    out = {os.path.normpath("out")}
+    for code in (
+        "for old in OUT.glob('*.png'):\n    old.unlink()",
+        "for old in sorted(OUT.rglob('*.png')):\n    old.unlink(missing_ok=True)",
+        "for old in OUT.iterdir():\n    os.remove(old)",
+        "[p.unlink() for p in OUT.glob('*.png')]",
+        "for f in glob.glob('out/*.png'):\n    os.unlink(f)",
+        "for f in glob.glob(f'{OUT}/*.png'):\n    os.remove(f)",
+    ):
+        paths = statement_written_paths(code, namespace=NS)
+        assert paths is not None and {os.path.normpath(p) for p in paths} == out, code
+    assert statement_written_paths("Path('out/a.png').unlink()", namespace=NS) == {"out/a.png"}
+
+
+def test_a_deletion_the_listing_does_not_pin_down_stays_unknown():
+    """Control: a deleted path that is not simply an entry of a resolved listing."""
+    for code in (
+        "for old in FILES:\n    old.unlink()",
+        "for old in OUT.glob('*.png'):\n    old.with_suffix('.svg').unlink()",
+        "for old in OUT.glob('*.png'):\n    old = Path('/elsewhere')\n    old.unlink()",
+        "for old in OUT.glob('*.png'):\n    old.unlink()\nfor old in SRC.glob('*.png'):\n    old.unlink()",
+        "for old in unknown.glob('*.png'):\n    old.unlink()",
+        "for f in os.listdir(OUT):\n    os.remove(os.path.join(OUT, f))",
+        "for f in glob.glob('*.png', root_dir=OUT):\n    os.remove(f)",
+    ):
+        assert statement_written_paths(code, namespace=NS) is None, code
+
+
+def test_a_folder_listing_reads_the_folder():
+    """``sorted(os.listdir(OUT))`` read nothing, as the planner saw it, so a
+    writer into OUT whose input was edited was left alone for the cell
+    listing it."""
+    out = {os.path.normpath("out")}
+    for code in (
+        "names = sorted(os.listdir(OUT))",
+        "names = [e.name for e in os.scandir(OUT)]",
+        "names = sorted(p.name for p in OUT.glob('*.txt'))",
+        "names = list(OUT.rglob('*.txt'))",
+        "names = list(OUT.iterdir())",
+        "names = glob.glob('out/*.txt')",
+    ):
+        paths = statement_read_paths(code, namespace=NS)
+        assert paths is not None and {os.path.normpath(p) for p in paths} == out, code
+    assert statement_read_paths("names = os.listdir()", namespace=NS) == {os.curdir}
+
+
+def test_a_listing_of_an_unknown_folder_is_an_unknown_read():
+    """Control: the folder must resolve, or the read set is unknown and no
+    writer is ruled out."""
+    assert statement_read_paths("names = os.listdir(somewhere())", namespace=NS) is None
+    assert statement_read_paths("names = list(unknown.glob('*'))", namespace=NS) is None
