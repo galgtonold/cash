@@ -55,6 +55,11 @@ class StatementCacheMetadata:
     #: restored value had an empty record and the check silently passed. That
     #: is how a model table built before an upstream fix got exported.
     input_lineages: dict[str, str] | None = None
+    #: The input variables holding a random generator that this statement
+    #: drew from, each of which it gave a new lineage
+    #: (``advanced_carrier_lineage``); empty when it read one and did not
+    #: draw, absent when it read none. Read by the simulation after a restart.
+    carriers_advanced: list[str] | None = None
     storage: list[str] | None = None
     source: str | None = None
     skipped_reason: str | None = None

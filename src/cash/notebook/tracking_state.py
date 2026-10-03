@@ -192,6 +192,15 @@ class TrackingState:
     # persisted verdict after a restart). R: both of them.
     mutation_verdicts: dict[str, set[str]] = field(default_factory=dict)
 
+    # Statement source hash -> the variables holding a random generator that
+    # the statement was seen drawing from when it last ran or was restored
+    # (empty: it read one and left it where it was). Each such variable takes
+    # a new lineage (``advanced_carrier_lineage``); the simulation reads this
+    # to give it the same one. Absent: the statement read no generator, or has
+    # not run this session.
+    # W: StatementProcessor. R: StatementLineage (simulation).
+    carrier_advances: dict[str, frozenset[str]] = field(default_factory=dict)
+
     # Variable -> the ``consumables.consumable_state`` token a consumable,
     # unrestorable input (generator, queue, file handle) held when the reading
     # cell last started. A consumable drains in place, so this is the only way

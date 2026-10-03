@@ -40,10 +40,11 @@ from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...source_norm import exact_source_digest
-from ...tracking.randomness import capture_rng_state, rng_carrier_kind, rng_modules_changed
+from ...tracking.randomness import capture_rng_state, carrier_positions, rng_carrier_kind, rng_modules_changed
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
 from ..lineage_formula import statement_environment_reads
+from ..statement.carrier_advances import carrier_candidates
 from ..statement.file_deps import compute_file_hash_component
 from ..write_observer import observe_writes
 from . import helpers as _helpers
@@ -180,6 +181,9 @@ class ControlStructureProcessor:
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = capture_rng_state() if isinstance(node, ast.For) else None
+        # Where each generator it can draw from stands, so a draw in the body
+        # moves the variable on (`carrier_advances`).
+        positions = carrier_positions(carrier_candidates(reads, self.shell.user_ns), self.shell.user_ns)
 
         sp.begin_structure_cost()
         result = None
@@ -187,6 +191,13 @@ class ControlStructureProcessor:
             with observe_writes() as written:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
         finally:
+            if positions:
+                try:
+                    sp.advance_carriers_of_a_structure(
+                        code, {n: p for n, p in positions.items() if n not in writes}, before
+                    )
+                except Exception:  # never let bookkeeping break the user's loop
+                    logger.debug("[CONTROL] generator advance failed", exc_info=True)
             succeeded = result is not None and result.success
             changed = {v for v, h in lineage.items() if before.get(v) != h} | set(writes) if succeeded else set()
             sp.end_structure_cost(reads, changed, succeeded)

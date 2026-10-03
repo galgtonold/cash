@@ -22,6 +22,7 @@ from .detect import (
     warn_unseeded_estimator_fit,
 )
 from .lineage import (
+    advanced_carrier_lineage,
     entropy_write_lineage,
     hidden_lineage_reads,
     hidden_lineage_writes,
@@ -41,8 +42,10 @@ from .state import (
     capture_object_rng_states,
     capture_reachable_carrier_states,
     capture_rng_state,
+    carrier_positions,
     carrier_states_changed,
     carriers_put_back,
+    moved_carrier_names,
     moved_carriers,
     replay_argument_carriers,
     replay_carriers,
@@ -55,13 +58,16 @@ from .state import (
 
 __all__ = [
     "CashRandomnessWarning",
+    "advanced_carrier_lineage",
     "RandomnessDetector",
     "capture_object_rng_states",
     "capture_argument_carrier_states",
     "capture_reachable_carrier_states",
     "carriers_put_back",
     "capture_rng_state",
+    "carrier_positions",
     "carrier_states_changed",
+    "moved_carrier_names",
     "moved_carriers",
     "replay_argument_carriers",
     "replay_carriers",

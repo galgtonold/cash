@@ -400,6 +400,52 @@ def capture_argument_carrier_states(named: list[tuple[str, object]]) -> list[tup
     return list(found.values())
 
 
+def carrier_positions(names: "Iterable[str]", user_ns: dict[str, object]) -> dict[str, tuple[object, object]]:
+    """``{name: (generator, its state)}`` for each of *names* bound to an RNG
+    carrier in *user_ns*. Compare with :func:`moved_carrier_names`.
+
+    Keyed by name, not by object: two names for one generator are both
+    reported when it moves. A state that cannot be read is recorded as
+    unreadable, which :func:`moved_carrier_names` reports as moved.
+    """
+    positions: dict[str, tuple[object, object]] = {}
+    for name in names:
+        try:
+            obj = user_ns.get(name)
+        except (TypeError, AttributeError):
+            continue
+        kind = rng_carrier_kind(obj)
+        if kind is None:
+            continue
+        try:
+            state = _carrier_state(obj, kind)
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
+            state = _UNREADABLE
+        positions[name] = (obj, state)
+    return positions
+
+
+def moved_carrier_names(positions: dict[str, tuple[object, object]], user_ns: dict[str, object]) -> set[str]:
+    """The names from :func:`carrier_positions` whose generator moved since,
+    and that still hold that same generator (a rebound name is an output of
+    the statement, with a lineage of its own)."""
+    moved: set[str] = set()
+    for name, (obj, before) in positions.items():
+        if user_ns.get(name) is not obj:
+            continue
+        if before is _UNREADABLE:
+            moved.add(name)
+            continue
+        try:
+            after = _carrier_state(obj, rng_carrier_kind(obj))
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
+            moved.add(name)
+            continue
+        if not _rng_states_equal(_flatten_state(before), _flatten_state(after)):
+            moved.add(name)
+    return moved
+
+
 @contextlib.contextmanager
 def carriers_put_back(before: list[tuple[object, object, object]]) -> Iterator[None]:
     """Inside the block, each carrier of *before* stands where it was then;

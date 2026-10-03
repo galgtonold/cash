@@ -49,7 +49,7 @@ for all of them. Only a storage tier's size cap still applies.
 
 ### A statement around a cached call { #a-statement-around-a-cached-call }
 
-<!-- claim: cash/notebook/statement/store.py:StatementStore._store @cc8fe383, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @6680f15e -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore._store @9b9ac4fb, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @6680f15e -->
 cash also caches the slow calls inside a statement on their own (see
 [`no-cache-calls`](annotations.md#call-level-caching-default-and-cashno-cache-calls)).
 The call's result is kept in the call's entry, so a statement around it is

@@ -26,8 +26,9 @@ One probe per static-review lead:
     post-loop lineage = keys-only dict hash -> downstream serves stale sum.
 12. test_pathlib_write_text_skipped_on_hit
     Path.write_text not in _WRITE_METHODS -> write cell restored, file missing.
-13. test_np_generator_state_diverges_after_edit
-    np.random.Generator state untracked -> edited cell draws from wrong state.
+13. test_np_generator_edited_draw_matches_a_clean_run
+    np.random.Generator position across cells -> edited cell draws from the
+    position a top-to-bottom run gives it.
 14. test_receiver_reset_suppressed_by_name_collision
     Receiver-reset suppression keyed by NAME, flow-insensitive -> rebound receiver
     accumulates on isolated re-runs.
@@ -435,7 +436,7 @@ def test_pathlib_write_text_skipped_on_hit(nb_runner, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_np_generator_state_diverges_after_edit(nb_runner):
+def test_np_generator_edited_draw_matches_a_clean_run(nb_runner):
     c1 = "import numpy as np\nrng = np.random.default_rng(0)"
     c2 = "a = rng.normal(size=3)\nprint('a=' + ','.join(format(v, '.5f') for v in a))"
     c3 = "b = rng.normal(size=3)\nprint('b=' + ','.join(format(v, '.5f') for v in b))"
@@ -460,27 +461,11 @@ def test_np_generator_state_diverges_after_edit(nb_runner):
     nb_runner.run_cell(3)
     out_lines = [l for l in nb_runner.get_output(3).splitlines() if l.startswith("b=")]
     assert out_lines, nb_runner.get_output(3)
-    # ADJUDICATED: the documented per-object-generator limitation, kept as-is by
-    # explicit decision (docs/known-limitations.md, "Per-object generators
-    # (np.random.default_rng) are only partially tracked" — facet 1, stream
-    # position across cells).
-    #
-    # A per-object generator's POSITION is not tracked: `rng` is one live object
-    # carrying hidden state, and an isolated re-run draws from wherever the
-    # previous run left it rather than the position it would hold top-to-bottom.
-    # Fixing it needs per-object stream tracking, which numpy's C types block —
-    # a Generator is not attr-settable or weakref-able and its methods cannot be
-    # wrapped, so there is nowhere to hang the bookkeeping. The module-global
-    # channel IS position-aware (test_rng_position_aware.py), which is exactly
-    # why the docs point there as the remedy.
-    #
-    # Pinned as the real behaviour so the limitation stays visible; if per-object
-    # tracking ever lands, this test fails and says so.
-    assert out_lines[0] != gt_b, (
-        "per-object generator position now matches a from-scratch run — the "
-        "documented limitation appears to be FIXED; update known-limitations.md "
-        "and turn this into an equality assertion"
-    )
+    # A draw from `rng` moves the variable's lineage on, so the edited cell's
+    # upstream check sees `rng` past where cell 3 reads it and rebuilds it
+    # (cell 1, then cell 2) first: the draw lands where a top-to-bottom run
+    # has it.
+    assert out_lines[0] == gt_b, (out_lines[0], gt_b)
 
 
 # ---------------------------------------------------------------------------

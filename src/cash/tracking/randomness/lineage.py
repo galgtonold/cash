@@ -256,6 +256,21 @@ def hidden_write_lineage(producing_key: str) -> str:
     return hashlib.sha256(producing_key.encode("utf-8")).hexdigest()
 
 
+def advanced_carrier_lineage(statement_key: str, name: str) -> str:
+    """Lineage of generator variable *name* after the statement keyed
+    *statement_key* drew from it.
+
+    A draw from ``rng`` in ``d = {k: draw(k, rng) for k in ks}`` moves the
+    generator without rebinding it, so ``rng`` keeps its lineage unless the
+    draw gives it a new one, and a later statement reading the moved ``rng``
+    gets the key of one reading the fresh ``rng``. Chained, not reset: the
+    statement's key folds in ``rng``'s lineage before the draw, so the lineage
+    after it stands for the seed plus every draw since. Both engines call this
+    with the same key, so the simulation reaches the runtime's lineage.
+    """
+    return hashlib.sha256(f"rng-advance:{statement_key}:{name}".encode()).hexdigest()
+
+
 def seed_cells_not_yet_run(
     drawing_modules: set[str],
     notebook_cells: "list[str]",

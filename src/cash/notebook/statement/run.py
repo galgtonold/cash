@@ -80,6 +80,9 @@ class StatementRun:
     #: the rewritten code is what compiles.
     exec_code: str = ""
     exec_tree: ast.Module | None = None
+    #: The input variables holding a random generator that the statement drew
+    #: from (``carrier_advances``); None when it read no generator.
+    carriers_advanced: set[str] | None = None
 
 
 @dataclass

@@ -199,7 +199,8 @@ seed; seeding `np.random` says nothing about it.
 A draw too cheap to cache is held too when it comes from the `random`,
 `numpy.random` or `torch` module stream: before a re-run, cash rewinds those
 streams to where the cell started, so the draw repeats. cash does not rewind a
-generator held in a variable, so a cheap draw from `rng` changes on every run.
+generator held in a variable, so a cheap draw from an unseeded `rng` changes on
+every run.
 
 <!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->
 `# @cash:allow-random` silences the warning and changes nothing else.

@@ -26,7 +26,12 @@ from ...analysis.mutation_effects import (
     statement_effects,
 )
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
-from ...tracking.randomness import hidden_lineage_writes, hidden_write_lineage
+from ...tracking.randomness import (
+    advanced_carrier_lineage,
+    hidden_lineage_writes,
+    hidden_write_lineage,
+    rng_carrier_kind,
+)
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
@@ -42,6 +47,7 @@ from ..lineage_formula import (
 )
 from ..run_memo import stats_this_run
 from ..statement import is_control_body
+from ..statement.carrier_advances import carrier_candidates
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
@@ -89,6 +95,9 @@ class _CacheLookup(NamedTuple):
     files_to_check: set[str]
     #: On a hit, the aliases the write bumped.
     bumped: set[str]
+    #: The generators the entry says the statement drew from
+    #: (``StatementCacheMetadata.carriers_advanced``); None when it does not say.
+    carriers: list[str] | None = None
 
 
 class StatementLineage:
@@ -489,6 +498,7 @@ class StatementLineage:
         """
         lookup_time = 0.0
         files_stale = False
+        carriers = None
         stmt_file_deps: dict[str, float] = {}
         files_to_check: set[str] = set()
 
@@ -503,6 +513,7 @@ class StatementLineage:
             lookup_time = _perf_counter() - t_lookup
 
             if metadata:
+                carriers = metadata.get("carriers_advanced")
                 hist_files = metadata.get("file_dependencies", {})
                 output_lineages = metadata.get("output_lineages", {})
                 files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
@@ -512,7 +523,7 @@ class StatementLineage:
                         stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages
                     )
                     hit_file_deps = CacheProbe.stat_file_deps(hist_files)
-                    return _CacheLookup(True, lookup_time, False, hit_file_deps, set(), bumped)
+                    return _CacheLookup(True, lookup_time, False, hit_file_deps, set(), bumped, carriers)
 
                 if not files_valid:
                     files_stale = True
@@ -535,7 +546,7 @@ class StatementLineage:
         except (KeyError, TypeError, OSError, ValueError) as e:
             logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
-        return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, set())
+        return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, set(), carriers)
 
     # -- One statement ---------------------------------------------------------
 
@@ -584,7 +595,12 @@ class StatementLineage:
             outputs = outputs | effects.callee_globals
 
             if not outputs:
-                return StatementOutcome(set(), 0.0, False, {})
+                # A bare call can still draw from a generator it is handed
+                # (`print(draw(0, rng))`), which moves the generator's lineage.
+                advanced = self._advance_carriers_without_outputs(
+                    stmt_code, inputs, hidden_reads, virtual_lineage, virtual_modules, occurrence_index
+                )
+                return StatementOutcome(advanced, 0.0, False, {})
 
             return self._apply_writes(
                 stmt_code,
@@ -651,10 +667,16 @@ class StatementLineage:
         file_deps_to_check = self._session_file_deps(outputs)
         lookup = self._lookup_cached_lineages(stmt_code, cache_key, outputs, inputs, virtual_lineage, is_import)
 
+        # The generators it draws from move on, as the runtime moves them on
+        # after the run or the hit (`carrier_advances`).
+        advanced = self._advanced_carriers(stmt_code, lookup.carriers, inputs, outputs)
+        for name in advanced:
+            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+
         if lookup.hit:
             # Union derivation-bumped vars so this cached mutation statement
             # is still recorded as a producer of the aliased base.
-            outputs = outputs | lookup.bumped
+            outputs = outputs | lookup.bumped | advanced
             self._register_callables(stmt_code, tree, virtual_lineage, is_import)
             return StatementOutcome(outputs, lookup.lookup_time, False, lookup.file_deps)
 
@@ -684,6 +706,7 @@ class StatementLineage:
         _log_lineage_calc(stmt_code, source_hash, input_lineages_all, file_hash_component, lineage_by_out)
 
         virtual_lineage.update(lineage_by_out)
+        outputs = outputs | advanced
         self._register_callables(stmt_code, tree, virtual_lineage, is_import)
 
         # Mirror the runtime derivation-alias bump: when
@@ -713,6 +736,64 @@ class StatementLineage:
             self._propagate_import_lineage(outputs, lineage_by_out)
 
         return StatementOutcome(outputs, lookup.lookup_time, lookup.files_stale, stmt_file_deps)
+
+    def _advanced_carriers(
+        self, stmt_code: str, in_entry: list[str] | None, inputs: set[str], outputs: set[str]
+    ) -> set[str]:
+        """The variables holding a generator that *stmt_code* draws from.
+
+        As its cache entry recorded them (*in_entry*: the runtime moves those
+        on after a hit), else as its last run this session saw them. A
+        statement never seen run is assumed to draw from every live generator
+        it can reach: when it does not, the simulation only re-runs something
+        it could have kept.
+        """
+        if is_control_body(stmt_code):
+            return set()
+        recorded = in_entry
+        if recorded is None:
+            recorded = self.tracking_state.carrier_advances.get(statement_source_hash(stmt_code))
+        if recorded is None:
+            user_ns = self.shell.user_ns
+            recorded = {
+                name for name in carrier_candidates(inputs, user_ns) if rng_carrier_kind(user_ns.get(name)) is not None
+            }
+        return set(recorded) - outputs
+
+    def _advance_carriers_without_outputs(
+        self,
+        stmt_code: str,
+        inputs: set[str],
+        hidden_reads: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+        occurrence_index: int,
+    ) -> set[str]:
+        """:meth:`_advanced_carriers` for a statement that binds nothing, with
+        their new lineages written into *virtual_lineage*. Keyed only when it
+        reads a generator, or its last run drew from one."""
+        if is_control_body(stmt_code) or not inputs:
+            return set()
+        recorded = self.tracking_state.carrier_advances.get(statement_source_hash(stmt_code))
+        if recorded is not None and not recorded:
+            return set()
+        user_ns = self.shell.user_ns
+        if recorded is None and not any(
+            rng_carrier_kind(user_ns.get(name)) is not None for name in carrier_candidates(inputs, user_ns)
+        ):
+            return set()
+        cache_key = self._key(
+            stmt_code, inputs | hidden_reads, set(), virtual_lineage, virtual_modules, occurrence_index
+        )
+        try:
+            metadata = self.probe.metadata(cache_key) if self.probe.cash_instance else None
+        except (KeyError, TypeError, ValueError, OSError, AttributeError):
+            metadata = None
+        in_entry = metadata.get("carriers_advanced") if metadata else None
+        advanced = self._advanced_carriers(stmt_code, in_entry, inputs, set())
+        for name in advanced:
+            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+        return advanced
 
     def _register_callables(
         self, stmt_code: str, tree: ast.Module | None, virtual_lineage: dict[str, str], is_import: bool

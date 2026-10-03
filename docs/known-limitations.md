@@ -29,15 +29,17 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @d4cb0139, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @d4cb0139, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0 -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
 result. A cheap draw that is never cached is frozen too if it comes from the
 `random`, `numpy.random` or `torch` stream: before a cell re-runs, cash rewinds
 those streams to where the cell started, so a re-run lands where a top-to-bottom
-run would. A generator held in a variable (`rng = np.random.default_rng()`) is
-not rewound, so a cheap draw from it changes on every run. cash warns
+run would. A generator held in a variable is not rewound but rebuilt: before a
+draw from it re-runs, cash runs or restores the cells that created it and drew
+from it (see below), so a cheap draw from an unseeded one
+(`rng = np.random.default_rng()`) changes on every run. cash warns
 `RANDOM-UNSEEDED` when an unseeded draw first runs (not in a `no-cache`
 statement), and `RANDOM-REPLAYED` when an unseeded value comes back from the
 cache. An estimator fitted with `random_state=None` counts as an unseeded draw.
@@ -63,13 +65,20 @@ are **not** flagged and are cached silently:
 - a draw inside a helper function (`arr = make_data()`);
 - an anonymous generator: `z = np.random.default_rng().normal(size=3)`.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
-Three gaps on an isolated re-run:
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca -->
+A statement that draws from a generator held in a variable, or calls a function
+that does, counts as changing that variable. With `rng =
+np.random.default_rng(0)` in one cell and draws from `rng` in the next two,
+re-running the third cell alone first runs or restores the two above it, so it
+draws where a top-to-bottom run does. A stored draw from such a generator is
+kept apart from one made with it in another position, so a reseed or a restart
+does not bring back a value drawn elsewhere in its stream. Three gaps on an
+isolated re-run:
 
-- **A generator's position across cells.** With `rng = np.random.default_rng(0)`
-  in one cell and draws from `rng` in the next two, re-running the third cell
-  alone draws from wherever `rng` is now. Draw from a generator in the cell that
-  creates it.
+- **A generator held by an object.** One reached only through an attribute
+  (`self.rng.normal()`, `model.rng`) is not followed: re-running a later draw
+  alone draws from wherever it is now. Draw from such a generator in the cell
+  that creates it.
 - **An edited seed cell you did not re-run.** Edit `np.random.seed(0)` to
   `seed(1)` and run only a later draw: the draw does not see the new seed,
   because a bare `seed()` binds no variable. Re-run the seed cell after editing

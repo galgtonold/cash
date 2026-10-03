@@ -25,6 +25,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
+from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.sizing import estimate_object_size
 from cash.tracking import file_dep_snapshot
@@ -61,6 +62,12 @@ def _snapshot_with_inherited(
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
     return snapshot
+
+
+def _carriers_advanced(run: StatementRun) -> list[str] | None:
+    """The generators *run* drew from, for its metadata: the simulation reads
+    them after a restart (`carrier_advances`). None when it read none."""
+    return None if run.carriers_advanced is None else sorted(run.carriers_advanced)
 
 
 def _version_slot(source_hash: str, outputs: set[str]) -> str:
@@ -412,6 +419,7 @@ class StatementStore:
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
+            carriers_advanced=_carriers_advanced(run),
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             **cost_fields,
@@ -596,6 +604,7 @@ class StatementStore:
             metadata_only=True,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
+            carriers_advanced=_carriers_advanced(run),
             **cost_fields,
         )
         try:
@@ -646,6 +655,10 @@ class StatementStore:
                 payload["rng_object_states"] = object_rng_states
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Object RNG capture skipped: %s", e)
+        # Which of them it drew from, so a hit gives them the lineage the run
+        # gave them (`carrier_advances`).
+        if run.carriers_advanced is not None:
+            payload[CARRIERS_FIELD] = sorted(run.carriers_advanced)
         return payload, referenced
 
     def _wire(self, run: StatementRun, metadata: StatementCacheMetadata, referenced: dict[str, int]) -> dict[str, Any]:

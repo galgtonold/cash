@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import secrets
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
@@ -19,12 +20,18 @@ from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
     CacheKeyContext,
     compute_cache_key,
+    statement_source_hash,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
 from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
+from cash.notebook.statement.carrier_advances import (
+    advance_carriers,
+    carrier_candidates,
+    carriers_an_entry_advanced,
+)
 from cash.notebook.statement.control_body import is_control_body
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
 from cash.notebook.statement.evictions import EvictedRecomputes
@@ -71,6 +78,7 @@ from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
+from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..lineage_formula import key_hidden_reads
 from ..run_memo import forget_file_state_this_run
 from ..write_observer import observe_writes
@@ -297,6 +305,50 @@ class StatementProcessor:
     def user_written_paths(self, paths) -> frozenset[str]:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
+
+    def advance_carriers_of_a_structure(self, code: str, positions: dict, before: dict[str, str]) -> None:
+        """Move on the generators a top-level loop or branch *code* drew from.
+
+        Its body runs statement by statement, and a body statement moves
+        nothing (see :meth:`_executing`), so the structure does it as a whole,
+        as the simulation sees it: one statement keyed on its lineages at
+        entry. *positions* are the generators' positions before it ran
+        (``carrier_positions``); *before* the lineages then. A generator the
+        structure rebound, or that a statement run whole moved already, has
+        its lineage.
+        """
+        user_ns = self.shell.user_ns
+        lineage = self.tracking_state.variable_lineage
+        moved = {name for name in moved_carrier_names(positions, user_ns) if lineage.get(name) == before.get(name)}
+        try:
+            key = self.key_as_one_statement(code, before)
+        except Exception:  # noqa: BLE001 - unkeyable: a lineage no statement shares
+            key = "unkeyable:" + secrets.token_hex(16)
+        advance_carriers(self.tracking_state, statement_source_hash(code), moved, key, code, user_ns)
+
+    def key_as_one_statement(self, code: str, lineages: dict[str, str]) -> str:
+        """The key the upstream simulation gives *code* as one statement, with
+        the variables at *lineages* (``StatementLineage._key``)."""
+        tree = ast.parse(code)
+        effects = statement_effects(
+            code,
+            tree,
+            namespace=self.shell.user_ns,
+            resolve_source=self.resolve_live_function_source,
+            control_body=False,
+        )
+        key, _, _, _, _ = compute_cache_key(
+            code,
+            set(effects.inputs) | key_hidden_reads(code, self.tracking_state),
+            ctx=CacheKeyContext(
+                variable_lineage=lineages,
+                user_ns=self.shell.user_ns,
+                function_tracker=self.function_tracker,
+                compute_hash_fn=self.compute_hash,
+            ),
+            outputs=set(effects.outputs),
+        )
+        return key
 
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
@@ -586,9 +638,14 @@ class StatementProcessor:
     ) -> ProcessResult | None:
         """Restore *run* from its entry; the finished result, or None when the
         restore failed and the statement must run after all."""
+        # Read before the restore moves the generators.
+        advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        # The restore put the generators where the run left them; their
+        # lineages follow, as the run's did.
+        advance_carriers(self.tracking_state, run.source_hash, advanced, run.cache_key, run.code, self.shell.user_ns)
         self.analytics_manager.record_event(
             status="HIT",
             execution_time=hit_result["total_time"],
@@ -650,6 +707,15 @@ class StatementProcessor:
         # diff catches a draw that static analysis and object-introspection
         # both miss -- one hidden inside a called function.
         pre_rng = self._randomness.begin_statement()
+        # Where each generator among the inputs stands, to see which ones the
+        # statement draws from (`carrier_advances`). Not for a loop or branch
+        # body: the structure is one statement to the simulation, as for
+        # in-place mutations (`MutationRouting._classify`).
+        positions = (
+            {}
+            if is_control_body(run.code)
+            else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
+        )
         try:
             with make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured:
                 execution.captured = captured
@@ -669,6 +735,8 @@ class StatementProcessor:
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
+        if positions:
+            run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
@@ -704,6 +772,16 @@ class StatementProcessor:
 
         result = execution.result
         if not result.success:
+            # A draw before the error still moved the generator.
+            if run.carriers_advanced:
+                advance_carriers(
+                    self.tracking_state,
+                    run.source_hash,
+                    run.carriers_advanced,
+                    run.cache_key,
+                    run.code,
+                    self.shell.user_ns,
+                )
             metrics["status"] = CacheStatus.ERROR
             metrics["error"] = result.error
             metrics["total_time"] = _perf_counter() - run.process_start
@@ -812,6 +890,10 @@ class StatementProcessor:
         revealed (an observed mutation, an uncacheable value).
         """
         self._mutation_routing.observe(run)
+        if run.carriers_advanced is not None:
+            # A generator the statement rebinds or was seen changing in place
+            # is an output, with an output's lineage.
+            run.carriers_advanced -= run.outputs
 
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
@@ -854,6 +936,11 @@ class StatementProcessor:
             )
         else:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+        # After the save: the entry records each input's lineage as the
+        # statement read it, before its draw moved it on.
+        advance_carriers(
+            self.tracking_state, run.source_hash, run.carriers_advanced, run.cache_key, run.code, self.shell.user_ns
+        )
         self._report_saved(run, saved_metadata)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._rebuild_cost.note(
