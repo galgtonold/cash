@@ -1,6 +1,6 @@
 """A hit moves a generator the function draws from to where the body left it.
 
-Round 32 found this with a notebook helper and the same holds for
+Found with a notebook helper, and the same holds for
 ``@cash.cache``::
 
     rng = np.random.default_rng(42)

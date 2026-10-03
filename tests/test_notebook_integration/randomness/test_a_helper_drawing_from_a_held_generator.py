@@ -1,6 +1,6 @@
 """A cached helper call that draws from a generator held in a variable.
 
-Round 32 found this in a notebook::
+Seen in a notebook::
 
     rng = np.random.default_rng(42)
     def boot(x): ...rng.integers(...)...
