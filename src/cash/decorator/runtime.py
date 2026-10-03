@@ -8,6 +8,7 @@ import contextlib
 import contextvars
 import hashlib
 import logging
+import os
 import pickle
 import threading
 import time
@@ -353,7 +354,7 @@ class KeyBuilder:
             keyed = keyed_arguments(arg_key, spec.signature, spec.name, args, kwargs, normalized)
         read = sorted(tracker.get_accessed_files() | tracker.get_accessed_remote_urls())
         if read and spec.purity != "silent":
-            self._notices.key_function_impure(spec.name, [f"reads {path}" for path in read[:3]])
+            self._notices.key_function_impure(spec.name, [f"reads {os.path.normpath(path)}" for path in read[:3]])
         return keyed
 
     def _fold_key_function(self, spec: CachedFunction, state_hash: str) -> str:

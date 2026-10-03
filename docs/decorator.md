@@ -450,7 +450,7 @@ load("a.csv")               # first call: runs the body
 load("a.csv", debug=True)   # cache hit: nothing is logged
 ```
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @f33cf009, cash/decorator/runtime.py:KeyBuilder._fold_key_function @bf3a14e9 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @316e84b5, cash/decorator/runtime.py:KeyBuilder._fold_key_function @bf3a14e9 -->
 **`key=`** takes a function that gets each call's arguments, bound to the
 signature with the defaults filled in, so `f(2, "3")`, `f(2, unit="3")` and
 `f(x=2, unit="3")` reach it alike. What it returns (a tuple, a string, a

@@ -956,7 +956,7 @@ object that takes attributes. Or remove `frozen=True`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/arg_key.py:key_function_impurities @784f8639, cash/decorator/runtime.py:KeyBuilder.key_arguments @f33cf009 -->
+<!-- claim: cash/decorator/arg_key.py:key_function_impurities @784f8639, cash/decorator/runtime.py:KeyBuilder.key_arguments @316e84b5 -->
 **What happened.** The function passed as `key=` reads something besides its
 arguments: a file, the clock, a random number, the network, a database, a
 subprocess or the environment. Reading its code finds most of these when the
