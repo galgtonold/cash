@@ -33,11 +33,11 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 | `function` | The module-qualified name, such as `pipeline.train`. A function in the script you ran is named after the script's file, so `python model.py` and `import model` share entries. A REPL or `python -c` keeps `__main__`. |
 | `state` | The function's code and everything it reads that is not an argument ([below](#what-goes-into-the-state)). |
 | `dynamic` | What the `dynamic_depends_on=` resolvers returned for this call; empty without them. |
-| `args` | The arguments, hashed by content ([below](#how-arguments-are-hashed)). |
+| `args` | The arguments, hashed by content ([below](#how-arguments-are-hashed)). With `ignore=` or `cash.Ignore`, all but the ignored ones; with `key=`, what the key function returns ([below](#when-you-choose-the-arguments)). |
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @1c729512, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -50,6 +50,7 @@ that can change the result without changing an argument:
 | Closures, defaults, a bound method's instance | The values a closure captured (a captured module: its name and the code of the functions and classes read from it), parameter defaults by value (a function default also by the globals it reads: `fn=lambda v: v + K`), data stored on a function (`scale.k`), and the `self` of `cash.cache(obj.method)`. |
 | What a callable was built with | The arguments of a `functools.partial`, a factory closure's values, an `operator.itemgetter` key, the attributes of your class's callable instance and a bound method's instance, also when the callable sits in a dict or list global, is captured by a closure or decorator, or is itself passed to `cash.cache`. |
 | Code passed as an argument | A class or function passed in is keyed by its code, not its name, so editing a schema class you pass recomputes. A decorated function is keyed by the function and every layer its decorators wrap, and a class or function by the code of the classes and functions its code names, transitively. So is one held in an argument or a data global, however deep: an instance's attribute, a list of steps, a transformer inside a library pipeline (a library object is only searched for your code; its own state is not keyed this way, and loggers, streams, threads and locks are not searched). A value a [registered hasher](../tutorials/feature-guides/custom-hashers.md) keys is not searched. What that code reads is keyed as the function's own reads are: the globals it and its helpers read, and what the callables it calls were built with. |
+| The `key=` function | Its code, the code it calls and the globals that code reads, as for code passed as an argument ([below](#when-you-choose-the-arguments)). |
 | Files named in `file_depends_on=` | The names only; their content is checked on lookup ([Files](#files)). |
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made after the function was decorated, by the caller too (module level, or an outer function before it calls this one). Re-seeding recomputes, and two draws in a row under one seed are two entries. |
@@ -117,9 +118,28 @@ so a config parsed from JSON hits the equal one written as literals.
 [Custom hashers](../tutorials/feature-guides/custom-hashers.md) covers
 registration.
 
+## When you choose the arguments
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+`ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
+The call is first bound to the signature with its defaults filled in. Ignored
+parameters are then dropped; a key function is called with the bound
+arguments, and its return value is hashed by the rules above as the one
+argument. The code those arguments carry (a class or function passed in) is
+keyed from what is left, too. A call that does not bind to the signature
+keeps every argument.
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._fold_key_function @bf3a14e9 -->
+The key function itself goes into `state`, as a function passed as an
+argument does: its code, the code it calls and the globals that code reads.
+The argument-mutation check after a miss still hashes every argument, and
+the entry records that hash, so `explain()` can say when a hit was matched by
+`key=` or ignored parameters. The contract is in the
+[decorator guide](../decorator.md#leaving-arguments-out-of-the-key).
+
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @75c9fb19 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -128,6 +148,8 @@ It never caches under a partial key. The usual causes:
   ([`KEY-UNHASHABLE-ARG`](../warnings.md#key-unhashable-arg));
 - a parameter default that cannot be hashed
   ([`KEY-UNHASHABLE-DEFAULT`](../warnings.md#key-unhashable-default));
+- a `key=` function that raised
+  ([`KEY-FUNCTION-RAISED`](../warnings.md#key-function-raised));
 - any other failure while building the key
   ([`KEY-BUILD-FAILED`](../warnings.md#key-build-failed)).
 
@@ -172,7 +194,7 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @860f12a7 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @eeff78d0 -->
 A result is written to the RAM tier and to disk, however cheap it was, unless
 a tier's size cap refuses it; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the

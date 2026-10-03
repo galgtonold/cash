@@ -9,7 +9,7 @@ terminal.
 
 ## Asking a decorated function
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @38481769 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7 -->
 `func.explain(*args, **kwargs)` answers "would a call with these arguments hit,
 and why?" without calling the function, changing its counters or writing
 anything:
@@ -48,6 +48,11 @@ The reason is `hit` or one of `no_entry`, `ttl_expired`, `file_changed`,
 `key_uncomputable` and `disabled`, each with details such as which file
 changed or which argument type could not be hashed. The result is a
 [`CacheExplanation`](../api/cash.md).
+
+<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138 -->
+For a function with `key=` or ignored parameters, a hit whose arguments
+differ from those of the call that stored the entry also has `matched_by`,
+saying which of the two matched them.
 
 <!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @206fd76a -->
 `func.cache_info()` counts the hits and misses of this wrapper since it was

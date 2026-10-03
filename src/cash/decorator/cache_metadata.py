@@ -56,6 +56,9 @@ class CacheMetadata:
     # Decorator-stamped identity / lineage fields.
     func_name: str | None = None
     args_hash: str | None = None
+    #: The hash of every argument of the call that wrote the entry, when
+    #: ``key=`` or ignored parameters decided ``args_hash``.
+    call_args_hash: str | None = None
     state_hash: str | None = None
     timestamp: float | None = None
     auto_file_deps: dict[str, dict[str, float]] | None = None

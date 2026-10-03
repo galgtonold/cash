@@ -60,12 +60,9 @@ def transform(data, verbose=False):
 ```python { title="After: cash" }
 import cash
 
-@cash.cache
-def _transform(data):
-    return data.apply(clean)
-
+@cash.cache(ignore=["verbose"])
 def transform(data, verbose=False):
-    return _transform(data)
+    return data.apply(clean)
 ```
 
 </div>
@@ -76,7 +73,7 @@ helpers it calls (`clean` here) and the files it reads.
 | `joblib.Memory` | cash |
 |---|---|
 | `Memory("joblib-cache")` | `.cash` at your project root by default. Choose another with `CASH_CACHE_DIR` or `Cash(cache_dir=...)`; see [Cache folder](decorator.md#cache-folder) |
-| `ignore=["verbose"]` | No `ignore=`: every argument is in the key. Use a wrapper, as above; see [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
+| `ignore=["verbose"]` | `ignore=["verbose"]`, checked against the signature when the function is decorated. See [Leaving arguments out of the key](decorator.md#leaving-arguments-out-of-the-key) |
 | `verbose=` | `CASH_VERBOSE=1` logs one line per call |
 | `compress=True` | The `compress` setting ([Configuration](getting-started/configuration.md#all-settings)) |
 | `memory.reduce_size(bytes_limit=...)` | `max_cache_size`, enforced on every write |
@@ -119,7 +116,7 @@ calls or a file it reads changes.
 | `Cache("diskcache")` | `.cash` at your project root, or `CASH_CACHE_DIR`; see [Cache folder](decorator.md#cache-folder) |
 | `expire=3600` | `ttl=3600` (seconds, or a `datetime.timedelta`) |
 | `typed=True` | Always on |
-| `ignore=` | No `ignore=`; see [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
+| `ignore=` | `ignore=`, or `key=` for a key computed from the arguments; see [Leaving arguments out of the key](decorator.md#leaving-arguments-out-of-the-key) |
 | `size_limit=` | `max_cache_size` |
 | `cache.clear()` | `cash clear --all`, or `transform.cache_clear()` for one function |
 

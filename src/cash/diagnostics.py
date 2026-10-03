@@ -219,6 +219,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-DEPENDS-ON-OPAQUE",  # a declared depends_on= target has no readable
         # source, so editing it invalidates nothing
         "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised
+        "KEY-FUNCTION-IMPURE",  # the key= function reads something besides its
+        # arguments (a file, the clock, a random draw)
+        "KEY-FUNCTION-RAISED",  # the key= function raised; the call ran uncached
         "KEY-FROZEN-MUTATED",  # a result declared frozen=True was modified
         "KEY-FROZEN-NO-EFFECT",  # frozen=True on a function whose result it cannot mark
         # after it was returned; keyed by content now

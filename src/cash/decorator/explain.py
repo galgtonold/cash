@@ -64,7 +64,9 @@ class CacheExplanation:
         details: Reason-specific extras. Common keys:
 
             * ``hit``: ``cached_at`` (unix ts), ``execution_time_saved`` (s),
-              ``cache_age_seconds``.
+              ``cache_age_seconds``, and ``matched_by`` when ``key=`` or
+              ignored parameters gave these arguments the key of a call
+              with other arguments.
             * ``key_uncomputable``: ``arg_type`` (qualname or ``"<unknown>"``),
               ``error`` (exception type+message), ``hint``.
             * ``no_entry``: ``hint``, and ``why`` -- what this process
@@ -741,7 +743,34 @@ class Explainer:
             raw_metadata = None  # nothing to restore: a real call misses
         if raw_metadata is None:
             return self._absent_entry(cf, cache_key, args, kwargs, frozen_args)
-        return self._stored_entry(cf, cache_key, CacheMetadata.from_dict(raw_metadata), frozen_args)
+        answer = self._stored_entry(cf, cache_key, CacheMetadata.from_dict(raw_metadata), frozen_args)
+        if answer.would_hit and cf.arg_key is not None:
+            self._note_matched_by(cf, args, kwargs, built, raw_metadata, answer.details)
+        return answer
+
+    def _note_matched_by(
+        self, cf: CachedFunction, args: tuple, kwargs: dict, built: BuiltKey, raw_metadata: dict, details: dict
+    ) -> None:
+        """Say so when a hit was matched by ``key=`` or ignored parameters:
+        the entry was written by a call whose arguments differ from these."""
+        stored = raw_metadata.get("call_args_hash")
+        token = _EXPLAINING.set(True)
+        try:
+            current = self._keys.call_args_hash(cf, args, kwargs, built)
+        finally:
+            _EXPLAINING.reset(token)
+        if stored is None or current is None:
+            if stored != current:
+                details["matched_by"] = (
+                    f"{cf.arg_key.how}: cash cannot tell whether these arguments are the ones the entry was "
+                    f"written with, since not all of them can be hashed"
+                )
+            return
+        if stored != current:
+            details["matched_by"] = (
+                f"{cf.arg_key.how}: the entry was written by a call with other arguments, "
+                f"which get the same key as these"
+            )
 
     def _refused_before_key(self, cf: CachedFunction) -> CacheExplanation | None:
         """The answer when no key is built at all: caching is disabled, or a
@@ -793,7 +822,9 @@ class Explainer:
                     ),
                 },
             )
-        except UnhashableArgs:
+        except UnhashableArgs as e:
+            if e.keyed is not None:
+                args, kwargs = e.keyed
             arg_type_name = self._args.first_unhashable_arg_type(args, kwargs)
             return _uncomputable(
                 func_name,

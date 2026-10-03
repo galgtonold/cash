@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/store.py:ResultStore.store @860f12a7, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/store.py:ResultStore.store @eeff78d0, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -231,6 +231,8 @@ changed. The second list is what cash does not see, and what to do about it.
     ---
 
     - The **arguments**, by content and type. Equal values share an entry.
+      With `ignore=` or `key=`, only what
+      [you leave in](#leaving-arguments-out-of-the-key).
     - The function's **own code**. Comments, docstrings and formatting are
       ignored, unless the code reads a docstring (`f.__doc__`,
       `inspect.getdoc(tool)`): then the docstrings it reaches count.
@@ -290,7 +292,7 @@ see [The decorator path](how-it-works/decorator-path.md).
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @5c304b0c -->
+<!-- claim: cash/core.py:Cash.cache @470582df -->
 All parameters are keyword-only and optional:
 
 | Parameter | Default | What it does |
@@ -305,7 +307,8 @@ All parameters are keyword-only and optional:
 | `assume_safe=` | `False` | Silence purity findings and cache anyway. For some lines only, see [Side effects](#side-effects) |
 | `allow_random=` | `False` | Silence the unseeded-randomness warning |
 | `chunk_max_items=`, `chunk_max_bytes=` | 1,000,000 items, 1 GB | Chunk size for iterator results |
-| Leave an argument out of the key | | Not a parameter: every argument is in the key. See [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result) |
+| `ignore=` | `None`: every argument is in the key | Names of parameters to leave out of the key. Annotating a parameter `cash.Ignore[...]` does the same. See [Leaving arguments out of the key](#leaving-arguments-out-of-the-key) |
+| `key=` | `None`: every argument is in the key | A function that gets the call's arguments and returns what stands for them in the key. See [Leaving arguments out of the key](#leaving-arguments-out-of-the-key) |
 
 Checks and rules that hold for all of them:
 
@@ -313,6 +316,9 @@ Checks and rules that hold for all of them:
   negative, NaN or infinite `ttl=`. A `ttl=` that is not a number (a `"300"`
   read from an environment variable) raises `TypeError`. Both happen when
   the function is decorated.
+- An `ignore=` name that is not a parameter of the function raises
+  `ValueError`, and `key=` together with an ignored parameter raises
+  `TypeError`, also when the function is decorated.
 - Changing a parameter keeps the entries already stored; adding, removing or
   changing a declared dependency recomputes.
 - Locking is not a decorator parameter: it is `Cash(use_locking=True)`, see
@@ -394,6 +400,112 @@ raises, the result is returned and not stored, with a warning. For an iterator
 result larger than one chunk the predicate cannot run
 ([`CACHE-IF-BYPASSED`](warnings.md#cache-if-bypassed)).
 
+### Leaving arguments out of the key
+
+Every argument is part of the key, so a `verbose=` flag, a logger or an
+`n_jobs=` setting splits the cache: `fit(data, verbose=True)` misses after
+`fit(data)` ran. Three ways to say which arguments decide the result:
+
+<!-- claim: cash/decorator/arg_key.py:arg_key_spec @e4696751, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+**`ignore=`** names the parameters to leave out. It works on any function,
+including one you do not own, and the names are checked against the
+signature when the function is decorated:
+
+```python
+import cash
+
+@cash.cache(ignore=["verbose"])
+def fit(data, verbose=False):
+    return sum(data) / len(data)
+
+fit([1, 2, 3])                 # first call: runs the body
+fit([1, 2, 3], verbose=True)   # cache hit: verbose is not in the key
+```
+
+For a library function: `fill = cash.cache(ignore=["width"])(textwrap.fill)`.
+A misspelt name raises at once:
+`ignore= names no parameter 'verbsoe' in fit(data, verbose)`.
+
+<!-- claim: cash/decorator/arg_key.py:annotated_ignores @3c698cef -->
+**`cash.Ignore`** says the same on the parameter itself. A type checker sees
+the type inside, `bool` here; `Annotated[bool, cash.Ignore]` is the same
+marker. String annotations (`from __future__ import annotations`) are read
+too. The list and the annotation add up to one set, and `*args` or
+`**kwargs` can be left out as a whole:
+
+```python
+import logging
+
+import cash
+
+log = logging.getLogger(__name__)
+
+@cash.cache
+def load(path, debug: cash.Ignore[bool] = False):
+    if debug:
+        log.warning("loading %s", path)
+    return path.upper()
+
+load("a.csv")               # first call: runs the body
+load("a.csv", debug=True)   # cache hit: nothing is logged
+```
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @f33cf009, cash/decorator/runtime.py:KeyBuilder._fold_key_function @bf3a14e9 -->
+**`key=`** takes a function that gets each call's arguments, bound to the
+signature with the defaults filled in, so `f(2, "3")`, `f(2, unit="3")` and
+`f(x=2, unit="3")` reach it alike. What it returns (a tuple, a string, a
+frame, an object with `__cash_key__`) is hashed like an argument and stands
+for all of the arguments in the key. Use it to make two spellings of one
+input key alike:
+
+```python
+import cash
+
+def by_unit(x, unit=1):
+    return (x, int(unit))
+
+@cash.cache(key=by_unit)
+def scale(x, unit=1):
+    return x * int(unit)
+
+scale(2, "3")   # first call: runs the body
+scale(2, 3)     # cache hit: by_unit gives both calls the key (2, 3)
+```
+
+`self` reaches the key function like any other argument, and it works the
+same for `async def` functions and generators. `key=` and ignored parameters
+cannot be combined: leave those arguments out of what the key function
+returns.
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5 -->
+Only the arguments' part of the key changes. The function's code, its
+helpers, the globals and files it reads, `depends_on=`, the random seed and
+the rest stay in the key as before. The key function's own code is in the key
+too, with the helpers it calls, so editing it re-keys every call.
+
+!!! warning "The key is a promise"
+    `key=` and `ignore=` promise that calls with equal keys return equal
+    results and have the same side effects. Cash cannot check it. Leave out an
+    argument that changes the result and cash serves one call's result to
+    another without noticing: the same trade as `assume_safe=True`. A hit also
+    does not run the body, so with an ignored `debug` flag the debug prints of
+    a hit do not happen.
+
+<!-- claim: cash/decorator/arg_key.py:key_function_impurities @784f8639, cash/core.py:Cash._check_key_function @c5ba8c38 -->
+The key function must compute the key from its arguments alone. One that
+reads a file, the clock, a random number, the network or the environment
+gets [`KEY-FUNCTION-IMPURE`](warnings.md#key-function-impure)
+(`strict=True` raises instead, `assume_safe=True` silences it). One that
+raises runs the call uncached with
+[`KEY-FUNCTION-RAISED`](warnings.md#key-function-raised).
+
+<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138, cash/decorator/runtime.py:KeyBuilder.call_args_hash @4b0cf9f0 -->
+A hit whose arguments differ from those of the call that stored the entry
+is not reported, since that is the point. To see it,
+`f.explain(*args).details["matched_by"]` says when a hit was matched by
+`key=` or the ignored parameters. The check that the body did not change an
+argument in place still looks at every argument, ignored ones included.
+
 ### `allow_random=`
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d89d19fb -->
@@ -413,7 +525,7 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @3c24aa0b -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @d750f8d8 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -563,7 +675,7 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @38481769 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 

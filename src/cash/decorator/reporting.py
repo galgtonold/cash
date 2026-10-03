@@ -16,7 +16,7 @@ from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..backends import adaptive_caps, budget_notices
 from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_message
-from ..exceptions import CashCacheIneffectiveWarning
+from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
 from .explain import MissKind, MissReason, entry_id_of
@@ -232,6 +232,20 @@ class Notices:
             code="CACHE-IF-RAISED",
             fix="make the predicate total -- it must handle every shape the "
             "result can take -- or drop cache_if= to restore caching.",
+        )
+
+    def key_function_impure(self, func_name: str, reads: list[str]) -> None:
+        """KEY-FUNCTION-IMPURE: the ``key=`` function reads something besides
+        its arguments, found by reading its code or by watching its first call."""
+        self.warn_once(
+            CashImpurityWarning,
+            func_name,
+            "key= " + reads[0],
+            f"@cash.cache on {func_name}: the key= function reads something besides its arguments "
+            f"({', '.join(reads)}), so equal arguments can get different keys from one call to the next, "
+            f"or different results one key.",
+            code="KEY-FUNCTION-IMPURE",
+            fix="compute the key from the arguments alone, and pass in as an argument anything else it needs.",
         )
 
     def metadata_invalid(

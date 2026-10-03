@@ -434,6 +434,14 @@ class ResultStore:
                 ttl=ttl,
                 ttl_declared=ttl_declared,
                 args_hash=call.args_hash,
+                # Every argument's hash, when ``key=`` or ignored parameters
+                # decided ``args_hash``: a later hit whose arguments differ
+                # was matched by them, which explain() says.
+                call_args_hash=(
+                    call.call_args_hash
+                    if getattr(self._registry.cached.get(func_name), "arg_key", None) is not None
+                    else None
+                ),
                 state_hash=call.state_hash,
                 # Each entry: path -> {'mtime': float, 'size': int}.
                 # Validated on subsequent get() via FileDeps.auto_file_deps_fresh.
@@ -649,7 +657,7 @@ class ResultStore:
         last chunk and the manifest that names the stream's chunks."""
         func_name = spec.name
         tracker, observer = run.tracker, run.observer
-        self._purity.check_argument_mutation(func_name, call.args, call.kwargs, call.args_hash, observer)
+        self._purity.check_argument_mutation(func_name, call.args, call.kwargs, call.call_args_hash, observer)
         self._purity.report_observed_effects(func_name, observer)
         self._files.credit_remembered_reads(func_name, tracker, call.args, call.kwargs)
         auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)

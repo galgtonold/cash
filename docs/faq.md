@@ -98,11 +98,11 @@ link to the page that has the details.
     runs uncached. See [the warning](warnings.md#key-unhashable-arg).
 
 ??? question "How do I keep an argument such as a logger or a `verbose` flag out of the key?"
-    There is no `ignore=` parameter: every argument is in the key. Call a
-    cached core function from a thin wrapper that takes the extra arguments,
-    or, for a type such as `logging.Logger`, register a hasher that returns a
-    constant. See
-    [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result).
+    Name it in `@cash.cache(ignore=["verbose"])`, or annotate the parameter
+    `verbose: cash.Ignore[bool] = False`. For a rule such as "`unit="1"` and
+    `unit=1` are the same input", pass `key=` a function that returns what
+    decides the result. See
+    [Leaving arguments out of the key](decorator.md#leaving-arguments-out-of-the-key).
 
 ## Notebook
 

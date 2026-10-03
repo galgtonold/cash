@@ -31,6 +31,7 @@ from .decorator.arg_hashing import (
     ArgHasher,
     mark_opaque,
 )
+from .decorator.arg_key import arg_key_spec, key_function_impurities
 from .decorator.backend_slot import BackendSlot
 from .decorator.cached_function import CHUNK_MAX_BYTES, CHUNK_MAX_ITEMS, CachedFunction, checked_ttl
 from .decorator.cash_key import KeyCheck
@@ -73,6 +74,7 @@ from .diagnostics import (
 from .effectiveness import EffectivenessLedger
 from .exceptions import (
     CashCacheIneffectiveWarning,
+    CashImpureFunctionError,
 )
 from .graph import DependencyGraph
 from .reconfigure import apply_overrides
@@ -558,6 +560,8 @@ class Cash:
         assume_safe: bool = ...,
         allow_random: bool = ...,
         frozen: bool = ...,
+        key: Callable[..., Any] | None = ...,
+        ignore: str | list[str] | tuple[str, ...] | None = ...,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
     def cache(
@@ -575,6 +579,8 @@ class Cash:
         assume_safe: bool = False,
         allow_random: bool = False,
         frozen: bool = False,
+        key: Callable[..., Any] | None = None,
+        ignore: str | list[str] | tuple[str, ...] | None = None,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
         """Cache a function's results, keyed on its arguments, code and inputs.
 
@@ -605,15 +611,28 @@ class Cash:
                 draw is still what is stored.
             frozen: Promise the result is never modified, so cached functions
                 that receive it key it by this call instead of hashing it.
+            key: ``key(*args, **kwargs) -> value``, called with the call's
+                arguments bound to the signature, defaults applied. Its
+                return value, hashed like an argument, replaces the
+                arguments in the key; the rest of the key (code, globals,
+                files, ...) is unchanged, and so is the key function's own
+                code. A promise that calls with equal keys return equal
+                results. If it raises, the call runs uncached.
+            ignore: Names of parameters left out of the key, checked against
+                the signature. Annotating a parameter ``cash.Ignore[...]``
+                does the same. Cannot be combined with ``key``.
 
         Returns:
             The wrapped function, or a decorator when called with options.
 
         Raises:
-            ValueError: ``strict`` and ``assume_safe`` are both set, or
-                ``ttl`` is negative, NaN or infinite.
-            TypeError: ``ttl`` is not a number, timedelta or ``None``, or a
-                ``depends_on`` entry is neither a callable nor a `DataSource`.
+            ValueError: ``strict`` and ``assume_safe`` are both set,
+                ``ttl`` is negative, NaN or infinite, or ``ignore`` names a
+                parameter the function does not have.
+            TypeError: ``ttl`` is not a number, timedelta or ``None``, a
+                ``depends_on`` entry is neither a callable nor a `DataSource`,
+                ``key`` is combined with ignored parameters, or ``key`` is not
+                a plain function.
         """
         ttl = checked_ttl(ttl)
         depends_on = checked_depends_on(depends_on)
@@ -638,6 +657,8 @@ class Cash:
                 assume_safe=assume_safe,
                 allow_random=allow_random,
                 frozen=frozen,
+                key=key,
+                ignore=ignore,
             )
 
         cf = CachedFunction(
@@ -653,6 +674,8 @@ class Cash:
             allow_random=allow_random,
             declared_files=_declared_files(file_depends_on),
         )
+        # Checked before anything is registered: a mistake raises here.
+        cf.arg_key = arg_key_spec(func, cf.signature, key, ignore)
         func_name = cf.name
         for dep in self._registry.register(cf, depends_on):
             warn_inert_dependency(self._notices, func_name, dep)
@@ -679,6 +702,8 @@ class Cash:
         # the async-generator early return because that path is not cached at
         # all, and the hazard being warned about is a frozen cached value.
         self._rng.warn_unseeded_randomness(func, func_name, allow_random)
+        if cf.arg_key is not None and cf.arg_key.key_fn is not None:
+            self._check_key_function(cf)
 
         # Watch reads from now, not from the first miss: a memo the cached
         # function will use is usually filled before it is first called
@@ -692,6 +717,24 @@ class Cash:
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
         return self._wrappers.wrap(cf)
+
+    def _check_key_function(self, cf: CachedFunction) -> None:
+        """KEY-FUNCTION-IMPURE when reading the ``key=`` function finds it reads
+        something besides its arguments; under ``strict=True``, raise."""
+        try:
+            reads = key_function_impurities(cf.arg_key.key_fn)
+        except Exception:  # reading the key function must never break decoration
+            logger.debug("[CORE] could not analyse the key function of %s", cf.name, exc_info=True)
+            return
+        if not reads or cf.purity == "silent":
+            return
+        if cf.purity == "strict":
+            raise CashImpureFunctionError(
+                f"@cash.cache on {cf.name}: the key= function reads something besides its arguments "
+                f"({', '.join(reads)}), so equal arguments can get different keys. Compute the key from "
+                f"the arguments alone."
+            )
+        self._notices.key_function_impure(cf.name, reads)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.

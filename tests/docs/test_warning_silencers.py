@@ -116,6 +116,19 @@ CASES: dict[str, tuple[str, str]] = {
         """,
         "r = f(1)\nfor i in range(10):\n    r.append(i)\n    g(r)",
     ),
+    "KEY-FUNCTION-IMPURE": (
+        """
+        import time
+
+        def stamp(x):
+            return (x, time.time()){W}
+
+        @c.cache(key=stamp{FDEC})
+        def f(x):
+            return x
+        """,
+        "f(1)",
+    ),
     "KEY-NETWORK-READ": (
         """
         import urllib.request

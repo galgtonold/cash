@@ -12,7 +12,7 @@ parameters and return values.
 
 | Page | Covers |
 |---|---|
-| [Cash class](cash.md) | `Cash` and its methods, the methods every cached function gets (`explain`, `cache_info`, `cache_clear`), `CacheExplanation`, and the module-level `configure`, `disabled`, `reset_session` and `cleanup`. |
+| [Cash class](cash.md) | `Cash` and its methods, the methods every cached function gets (`explain`, `cache_info`, `cache_clear`), `CacheExplanation`, the `Ignore` annotation, and the module-level `configure`, `disabled`, `reset_session` and `cleanup`. |
 | [Backends](backends.md) | `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, `TieredBackend`, and the remote `RedisBackend` and `S3Backend` from `cash.backends`. |
 | [Purity markers](purity.md) | `pure`, `stateful`, `opaque`, `is_pure`, `is_stateful`. |
 | [Configuration API](config.md) | `CashConfig`, the tier entry `TierConfig`, `get_config`, `create_default_config`. |

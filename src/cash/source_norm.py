@@ -426,6 +426,8 @@ _CACHE_DECORATOR_PARAMS = frozenset(
         "assume_safe",
         "allow_random",
         "frozen",
+        "key",
+        "ignore",
     }
 )
 _CACHE_DECORATOR_NAME = "cache"

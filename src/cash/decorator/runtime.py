@@ -6,12 +6,15 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import contextvars
+import hashlib
 import logging
+import pickle
 import threading
 import time
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.purity_report import PurityReport
 from ..backends._base import ttl_expired, written_at
@@ -20,6 +23,7 @@ from ..exceptions import CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
 from ..tracking.randomness import capture_reachable_carrier_states, moved_carriers, replayable
 from .arg_hashing import PLAIN_CENSUS
+from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import (
@@ -38,7 +42,7 @@ from .call_state import (
 from .class_data import CLASSES_FOLDED
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import note_unentered_body, propagate_file_deps_to_active_tracker, snapshot_tracked_deps
-from .function_identity import func_key
+from .function_identity import func_key, hash_callable_source
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
@@ -152,7 +156,8 @@ class KeyBuilder:
             # result.
             return Unkeyable(_UNHASHABLE), watch
         except UnhashableArgs as e:
-            self._args.warn_unhashable_args(func_name, args, kwargs, e.args[0] if e.args else None)
+            hashed_args, hashed_kwargs = e.keyed if e.keyed is not None else (args, kwargs)
+            self._args.warn_unhashable_args(func_name, hashed_args, hashed_kwargs, e.args[0] if e.args else None)
             return Unkeyable(_UNHASHABLE), watch
         except KeyBuildFailed as e:
             self._notices.warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
@@ -202,6 +207,11 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._environment.fold_environment(func, func_name, state_hash)
         chain.append(state_hash)
+        spec = self._registry.cached.get(func_name)
+        if spec is not None and spec.arg_key is not None:
+            # What decides the argument part is code too: a caller that
+            # reaches this function keys it as well (`callee_state`).
+            state_hash = self._fold_key_function(spec, state_hash)
         return state_hash
 
     def callee_state(self, func: Callable, func_name: str) -> str:
@@ -294,24 +304,99 @@ class KeyBuilder:
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
             # logical call -- produced two cache keys and two executions.
             normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
-            if self._registry.cached[func_name].seed_params:
+            spec = self._registry.cached[func_name]
+            if spec.seed_params:
                 self._rng.warn_if_seed_is_none(func, func_name, args, kwargs)
+            # What the argument part of the key is made of: every argument,
+            # or what ``key=`` / the ignored parameters leave of them. Both
+            # channels read it, the code one and the value one.
+            keyed = normalized_args
+            if spec.arg_key is not None:
+                keyed = self.key_arguments(spec, args, kwargs, normalized_args)
             state_hash = self._code_args.fold_code_args(
-                *normalized_args, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
+                *keyed, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
             )
             chain.append(state_hash)
             dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             failure: list = []
-            args_hash = self._args.serialize_args(func_name, args, kwargs, normalized=normalized_args, failure=failure)
+            if keyed is normalized_args:
+                args_hash = self._args.serialize_args(
+                    func_name, args, kwargs, normalized=normalized_args, failure=failure
+                )
+            else:
+                args_hash = self._keyed_args_hash(keyed, failure)
             self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
-            raise UnhashableArgs(*failure[:1])
+            raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
-        return BuiltKey(cache_key, state_hash, args_hash, normalized_args)
+        call_args_hash = args_hash if spec.arg_key is None else None
+        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash)
+
+    def key_arguments(self, spec: CachedFunction, args: tuple, kwargs: dict, normalized: tuple[tuple, dict]) -> tuple:
+        """`keyed_arguments` for *spec*'s ``key=`` or ignored parameters.
+
+        The first time a key function runs, it runs under a file tracker of
+        its own: a file it reads is an input the key cannot see, and the
+        static check (`key_function_impurities`) only finds the readers it
+        can name. Raises `KeyBuildFailed` when the key function raises.
+        """
+        arg_key = spec.arg_key
+        if arg_key.key_fn is None or spec.key_reads_checked or _EXPLAINING.get():
+            return keyed_arguments(arg_key, spec.signature, spec.name, args, kwargs, normalized)
+        spec.key_reads_checked = True
+        tracker = FileAccessTracker()
+        with tracker:
+            keyed = keyed_arguments(arg_key, spec.signature, spec.name, args, kwargs, normalized)
+        read = sorted(tracker.get_accessed_files() | tracker.get_accessed_remote_urls())
+        if read and spec.purity != "silent":
+            self._notices.key_function_impure(spec.name, [f"reads {path}" for path in read[:3]])
+        return keyed
+
+    def _fold_key_function(self, spec: CachedFunction, state_hash: str) -> str:
+        """Fold the ``key=`` function's code into the state, as a function
+        passed as an argument is folded: its code, the user code it reaches
+        and the globals that code reads. An edit to it re-keys every call."""
+        key_fn = spec.arg_key.key_fn
+        if key_fn is None:
+            part = f"ignore:{sorted(spec.arg_key.ignored)}"
+            ledger_note(("ignored parameters", ", ".join(sorted(spec.arg_key.ignored))), part)
+        else:
+            parts = [f"{func_key(key_fn)}:{hash_callable_source(key_fn)}"]
+            parts.extend(
+                self._code_args.carrier_parts(key_fn, spec.name, "key", owner_code=getattr(spec.func, "__code__", None))
+            )
+            part = "keyfn:" + hashlib.sha256(":".join(parts).encode("utf-8")).hexdigest()
+            ledger_note(("key= function", getattr(key_fn, "__qualname__", type(key_fn).__name__)), part)
+        return hashlib.sha256(f"{state_hash}:{part}".encode("utf-8")).hexdigest()
+
+    def _keyed_args_hash(self, keyed: tuple[tuple, dict], failure: list) -> str | None:
+        """`ArgHasher.hash_payload` of what ``key=`` / the ignored parameters
+        left, or None (with what raised in *failure*). No retry with the raw
+        arguments, as `ArgHasher.serialize_args` does for a default: that
+        would key the parameters the user left out."""
+        try:
+            return self._args.hash_payload(*keyed)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+            failure.append(e)
+            return None
+
+    def call_args_hash(self, spec: CachedFunction, args: tuple, kwargs: dict, built: BuiltKey) -> str | None:
+        """The hash of every argument of the call, whatever ``key=`` or the
+        ignored parameters left out: what the argument-mutation check compares
+        after the body and what an entry records, so explain() can say a hit
+        was matched by ``key=`` / ``ignore``. None when they cannot all be
+        hashed."""
+        if built.call_args_hash is not None or spec.arg_key is None:
+            return built.call_args_hash
+        try:
+            return self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
+        except Exception:  # a hash for the record only, never the key
+            logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
+            return None
 
 
 class CallRunner:
@@ -596,6 +681,9 @@ class CallRunner:
                 was_hit=True,
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
+        else:
+            # Before the body runs: the mutation check compares against it.
+            call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
         return call
 
     def _reread(self, spec: CachedFunction, call: Call) -> Any:
@@ -697,7 +785,7 @@ class CallRunner:
             )
             return StreamingCachedIterator(self._store.stream_and_store(res, spec, call, run))
 
-        self._purity.check_argument_mutation(func_name, args, kwargs, call.args_hash, run.observer)
+        self._purity.check_argument_mutation(func_name, args, kwargs, call.call_args_hash, run.observer)
         self._purity.report_observed_effects(func_name, run.observer)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)

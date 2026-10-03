@@ -139,6 +139,8 @@ class CachedFunction:
     allow_random: bool = False
     #: ``file_depends_on=`` as ``(as written, absolute)`` pairs.
     declared_files: tuple[tuple[str, str], ...] = ()
+    #: ``key=`` or the ignored parameters (`arg_key.ArgKey`); None keys every argument.
+    arg_key: Any = None
 
     #: The wrapper `Cash.cache` returned.
     wrapper: Callable | None = field(default=None, repr=False)
@@ -156,6 +158,8 @@ class CachedFunction:
     #: Naming a changed argument cost more than its budget and is off (the
     #: check that some argument changed still runs).
     argument_naming_retired: bool = False
+    #: The ``key=`` function has been watched for file reads (`KeyBuilder.key_arguments`).
+    key_reads_checked: bool = False
     _signature: Any = field(default=_UNREAD, repr=False)
 
     @property

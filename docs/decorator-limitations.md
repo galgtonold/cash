@@ -37,13 +37,16 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## An argument that does not change the result
 
-<!-- claim: cash/core.py:Cash.cache @5c304b0c -->
-Every argument is part of the key, and `@cash.cache` has no `ignore=`
-parameter. So a logger, a progress callback or a `verbose=` flag splits the
-cache: `fit(data, verbose=True)` misses after `fit(data)` ran.
+<!-- claim: cash/core.py:Cash.cache @470582df -->
+Every argument is part of the key, so a logger, a progress callback or a
+`verbose=` flag splits the cache: `fit(data, verbose=True)` misses after
+`fit(data)` ran. Leave such a parameter out with `ignore=["verbose"]` or a
+`cash.Ignore[bool]` annotation, or say what decides the result with `key=`;
+see [Leaving arguments out of the key](decorator.md#leaving-arguments-out-of-the-key).
 
-Keep such arguments out of the cached function. A thin wrapper takes them and
-calls a cached core with only the arguments that change the result:
+When the extra argument's work should happen on every call, hits included,
+keep it out of the cached function instead. A thin wrapper takes it and calls
+a cached core with only the arguments that change the result:
 
 ```python
 import logging
@@ -88,8 +91,8 @@ fit_logged([1, 2, 3], logging.getLogger("b"))   # cache hit
 ```
 
 The hasher applies to every cached function in the process, so use it only
-for a type that is never input data. Don't do this for `bool` or `int`: a
-`verbose=` flag needs the wrapper.
+for a type that is never input data. Don't do this for `bool` or `int`: leave
+a `verbose=` flag out with `ignore=`.
 
 ## Methods and `self`
 

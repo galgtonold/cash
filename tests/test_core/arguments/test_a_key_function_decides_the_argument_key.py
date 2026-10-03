@@ -1,0 +1,355 @@
+"""``@cash.cache(key=fn)``: what *fn* returns for a call replaces the call's
+arguments in the key, and nothing else in the key moves.
+
+*fn* gets the call bound to the cached function's signature with its
+defaults applied, so every spelling of one call reaches it the same way. Its
+own code is part of the key. If it raises, the call runs uncached with
+KEY-FUNCTION-RAISED; if it reads something besides its arguments, cash says
+so with KEY-FUNCTION-IMPURE. The checks that look at the arguments (did the
+body change one in place?) still look at all of them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import textwrap
+import time
+import warnings
+
+import pytest
+
+from cash import CashImpureFunctionError
+from tests._scripts import run_python
+
+
+def _codes(caught) -> list[str]:
+    return [getattr(w.message, "code", None) for w in caught]
+
+
+def _unit(x, unit=1):
+    return (x, int(unit))
+
+
+def test_calls_the_key_function_maps_together_share_one_entry(disk_cash):
+    @disk_cash.cache(key=_unit)
+    def scale(x, unit=1):
+        return x * int(unit)
+
+    assert scale(2, "3") == 6
+    assert scale(2, 3) == 6
+    assert scale(2, unit="3") == 6
+    assert scale(x=2, unit=3) == 6
+    info = scale.cache_info()
+    assert (info["misses"], info["hits"]) == (1, 3)
+    assert scale(2, 4) == 8  # a different key still misses
+    assert scale.cache_info()["misses"] == 2
+
+
+def test_the_key_function_gets_the_call_bound_with_its_defaults(cash_instance):
+    seen = []
+
+    def key(x, unit=1, *, scale=10):
+        seen.append((x, unit, scale))
+        return (x, unit, scale)
+
+    @cash_instance.cache(key=key)
+    def f(x, unit=1, *, scale=10):
+        return x * unit * scale
+
+    f(1)
+    f(x=1)
+    f(1, 1, scale=10)
+    assert seen == [(1, 1, 10)] * 3
+    assert f.cache_info()["hits"] == 2
+
+
+def test_the_rest_of_the_key_is_unchanged(cash_instance):
+    """A global the body reads is still keyed, though the key function ignores it."""
+    import types
+
+    mod = types.ModuleType("keyed_globals_mod")
+    exec(
+        textwrap.dedent(
+            """
+            FACTOR = 2
+
+            def f(x, unit):
+                return x * FACTOR
+            """
+        ),
+        mod.__dict__,
+    )
+    cached = cash_instance.cache(key=lambda x, unit: x)(mod.f)
+    assert cached(3, "a") == 6
+    assert cached(3, "b") == 6
+    assert cached.cache_info()["hits"] == 1
+    mod.FACTOR = 5
+    assert cached(3, "a") == 15
+
+
+def test_a_method_passes_self_to_the_key_function(cash_instance):
+    class Model:
+        def __init__(self, name):
+            self.name = name
+
+        @cash_instance.cache(key=lambda self, x, verbose=False: (self.name, x))
+        def predict(self, x, verbose=False):
+            return f"{self.name}:{x}"
+
+    a = Model("a")
+    assert a.predict(1) == "a:1"
+    assert a.predict(1, verbose=True) == "a:1"
+    assert Model("b").predict(1) == "b:1"
+    info = Model.predict.cache_info()
+    assert (info["hits"], info["misses"]) == (1, 2)
+
+
+def test_an_async_function_is_keyed_by_its_key_function(cash_instance):
+    @cash_instance.cache(key=lambda x, unit=1: (x, int(unit)))
+    async def fetch(x, unit=1):
+        await asyncio.sleep(0)
+        return x * int(unit)
+
+    async def main():
+        return [await fetch(2, "3"), await fetch(2, 3)]
+
+    assert asyncio.run(main()) == [6, 6]
+    assert fetch.cache_info()["hits"] == 1
+
+
+def test_a_generator_function_is_keyed_by_its_key_function(cash_instance):
+    @cash_instance.cache(key=lambda n, label="": n)
+    def count(n, label=""):
+        yield from range(n)
+
+    assert list(count(3, "first")) == [0, 1, 2]
+    assert list(count(3, "second")) == [0, 1, 2]
+    assert count.cache_info()["hits"] == 1
+
+
+def test_a_key_function_that_raises_runs_the_call_uncached(cash_instance):
+    runs = []
+
+    def key(x):
+        return {"a": 1}[x]
+
+    @cash_instance.cache(key=key)
+    def f(x):
+        runs.append(x)  # @cash:assume-safe
+        return x
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert f("b") == "b"
+        assert f("b") == "b"
+    assert runs == ["b", "b"]
+    assert _codes(caught).count("KEY-FUNCTION-RAISED") == 1
+    assert "KeyError" in str(next(w.message for w in caught if "KEY-FUNCTION-RAISED" in str(w.message)))
+    assert f("a") == "a" and f("a") == "a"
+    assert runs == ["b", "b", "a"]
+
+
+def test_a_key_function_that_reads_the_clock_or_a_random_number_is_reported(cash_instance):
+    import random
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        @cash_instance.cache(key=lambda x: (x, time.time()))
+        def stamped(x):
+            return x
+
+    assert "KEY-FUNCTION-IMPURE" in _codes(caught)
+    assert "time.time()" in str(caught[-1].message)
+
+    def drawn(x):
+        return (x, random.random())
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        @cash_instance.cache(key=drawn)
+        def sampled(x):
+            return x
+
+    assert "KEY-FUNCTION-IMPURE" in _codes(caught)
+    assert "random.random()" in str(caught[-1].message)
+
+
+def test_a_key_function_that_reads_a_file_is_reported(cash_instance, tmp_path):
+    path = tmp_path / "units.txt"
+    path.write_text("1", encoding="utf-8")
+
+    def by_open(x):
+        with open(path, encoding="utf-8") as fh:
+            return (x, fh.read())
+
+    def by_reader(x):
+        return (x, path.read_text(encoding="utf-8"))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        @cash_instance.cache(key=by_open)
+        def f(x):
+            return x
+
+    assert "KEY-FUNCTION-IMPURE" in _codes(caught)
+
+    # A reader the code check does not name is caught on the first call.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        @cash_instance.cache(key=by_reader)
+        def g(x):
+            return x
+
+        assert "KEY-FUNCTION-IMPURE" not in _codes(caught)
+        g(1)
+    assert "KEY-FUNCTION-IMPURE" in _codes(caught)
+    assert str(path) in str(next(w.message for w in caught if "KEY-FUNCTION-IMPURE" in str(w.message)))
+
+
+def test_a_pure_key_function_gives_no_purity_warning(cash_instance):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        @cash_instance.cache(key=_unit)
+        def f(x, unit=1):
+            return x
+
+        f(1, "2")
+    assert "KEY-FUNCTION-IMPURE" not in _codes(caught)
+
+
+def test_strict_raises_on_an_impure_key_function_and_assume_safe_silences_it(cash_instance):
+    with pytest.raises(CashImpureFunctionError, match="key= function"):
+
+        @cash_instance.cache(key=lambda x: (x, time.time()), strict=True)
+        def f(x):
+            return x
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+
+        @cash_instance.cache(key=lambda x: (x, time.time()), assume_safe=True)
+        def g(x):
+            return x
+
+    assert "KEY-FUNCTION-IMPURE" not in _codes(caught)
+
+
+def test_the_argument_mutation_check_still_sees_every_argument(cash_instance):
+    """The key function leaves ``rows`` out; the body changing it in place is
+    still seen, and a body that leaves it alone is stored."""
+
+    @cash_instance.cache(key=lambda rows, n: n)
+    def grow(rows, n):
+        rows.append(n)
+        return len(rows)
+
+    @cash_instance.cache(key=lambda rows, n: n)
+    def size(rows, n):
+        return len(rows) + n
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        grow([1], 2)
+        grow([1], 2)
+    assert grow.cache_info()["hits"] == 0  # never stored: the call changed an argument
+
+    size([1], 2)
+    size([1, 2], 2)
+    assert size.cache_info()["hits"] == 1
+
+
+def test_key_must_be_a_plain_function(cash_instance):
+    with pytest.raises(TypeError, match="key= takes a function"):
+        cash_instance.cache(key="x")(lambda x: x)
+
+    async def akey(x):
+        return x
+
+    with pytest.raises(TypeError, match="not an async or generator"):
+        cash_instance.cache(key=akey)(lambda x: x)
+
+
+def test_explain_says_when_a_hit_was_matched_by_the_key_function(cash_instance):
+    @cash_instance.cache(key=_unit)
+    def scale(x, unit=1):
+        return x * int(unit)
+
+    scale(2, "3")
+    same = scale.explain(2, "3")
+    assert same.would_hit and "matched_by" not in same.details
+    other = scale.explain(2, 3)
+    assert other.would_hit
+    assert "key=" in other.details["matched_by"]
+    assert "other arguments" in other.details["matched_by"]
+
+
+_SCRIPT = """
+import sys
+import cash
+
+{key_src}
+
+@cash.cache(key=key)
+def scale(x, unit=1):
+    return x * int(unit)
+
+scale(2, sys.argv[1])
+info = scale.cache_info()
+print("HITS", info["hits"], "MISSES", info["misses"])
+"""
+
+
+def _write(tmp_path, key_src: str) -> None:
+    (tmp_path / "job.py").write_text(_SCRIPT.format(key_src=textwrap.dedent(key_src)), encoding="utf-8")
+
+
+def test_the_key_is_stable_across_processes_and_an_edit_to_the_key_function_rekeys(tmp_path):
+    _write(
+        tmp_path,
+        """
+        def key(x, unit=1):
+            return (x, int(unit))
+        """,
+    )
+    first = run_python("job.py", "3", cwd=tmp_path)
+    assert "HITS 0 MISSES 1" in first.stdout
+    again = run_python("job.py", "3", cwd=tmp_path)
+    assert "HITS 1 MISSES 0" in again.stdout, again.stdout + again.stderr
+    as_text = run_python("job.py", " 3", cwd=tmp_path)  # int(" 3") == 3: the same key
+    assert "HITS 1 MISSES 0" in as_text.stdout, as_text.stdout + as_text.stderr
+
+    _write(
+        tmp_path,
+        """
+        def key(x, unit=1):
+            return (x, int(unit), "v2")
+        """,
+    )
+    edited = run_python("job.py", "3", cwd=tmp_path, env={"CASH_VERBOSE": "1"})
+    assert "HITS 0 MISSES 1" in edited.stdout, edited.stdout + edited.stderr
+    assert "key= function key changed" in edited.stderr, edited.stderr
+
+
+def test_an_edit_to_a_helper_of_the_key_function_rekeys(tmp_path):
+    def write(helper_body: str) -> None:
+        _write(
+            tmp_path,
+            f"""
+            def _norm(unit):
+                return {helper_body}
+
+            def key(x, unit=1):
+                return (x, _norm(unit))
+            """,
+        )
+
+    write("int(unit)")
+    run_python("job.py", "3", cwd=tmp_path)
+    assert "HITS 1" in run_python("job.py", "3", cwd=tmp_path).stdout
+    write("int(unit) + 0")
+    assert "HITS 0 MISSES 1" in run_python("job.py", "3", cwd=tmp_path).stdout

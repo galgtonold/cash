@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ad43cda5 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @375aaed8 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -55,7 +55,7 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 15 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 17 | Something the result depends on may not be in the cache key. |
+| [Cache keys](#key-codes) | `KEY-` | 19 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 4 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
@@ -136,7 +136,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.cache @5c304b0c -->
+<!-- claim: cash/core.py:Cash.cache @470582df -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.
@@ -729,6 +729,8 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-DYNAMIC-DEPENDENCY](#key-dynamic-dependency) | decorator | code in an argument picks what it calls at run time |
 | [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | a `frozen=True` result was modified |
 | [KEY-FROZEN-NO-EFFECT](#key-frozen-no-effect) | decorator | `frozen=True` cannot mark this result |
+| [KEY-FUNCTION-IMPURE](#key-function-impure) | decorator | the `key=` function reads something besides its arguments |
+| [KEY-FUNCTION-RAISED](#key-function-raised) | decorator | the `key=` function raised; the call ran uncached |
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
@@ -816,7 +818,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @75c9fb19 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -949,6 +951,49 @@ functions receiving it still hash it in full.
 object that takes attributes. Or remove `frozen=True`.
 
 **When it is safe to ignore.** When the result is small.
+
+### KEY-FUNCTION-IMPURE {#key-function-impure}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+
+<!-- claim: cash/decorator/arg_key.py:key_function_impurities @784f8639, cash/decorator/runtime.py:KeyBuilder.key_arguments @f33cf009 -->
+**What happened.** The function passed as `key=` reads something besides its
+arguments: a file, the clock, a random number, the network, a database, a
+subprocess or the environment. Reading its code finds most of these when the
+function is decorated; a file read through a reader cash does not name is
+caught on the first call.
+
+**Why it matters.** The key decides which stored result a call gets. A key
+that depends on something else can give equal arguments different keys (no
+hits), or give two calls whose results differ the same key (a wrong result
+served).
+
+**What to do.** Compute the key from the arguments alone. Pass anything else
+it needs as an argument of the cached function, or let the cached function
+read it, where cash tracks it.
+
+**When it is safe to ignore.** Never, unless what it reads cannot change while
+the cache is in use.
+
+**Silencing it.** Whole function: `@cash.cache(assume_safe=True)`.
+`strict=True` raises `CashImpureFunctionError` instead. See [Silencing one
+code](#silencing-one-code).
+
+### KEY-FUNCTION-RAISED {#key-function-raised}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+**What happened.** The function passed as `key=` raised when called with the
+call's arguments. The call ran and returned its real result, uncached.
+
+**Why it matters.** Every call that makes the key function raise runs the
+body. The warning appears once per function, not once per call.
+
+**What to do.** Read the exception and make the key function handle every
+call the cached function accepts, defaults included.
+
+**When it is safe to ignore.** When those calls are cheap to recompute.
 
 ### KEY-HELPERS-UNWALKABLE {#key-helpers-unwalkable}
 
@@ -1138,7 +1183,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @75c9fb19 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -1569,7 +1614,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @860f12a7 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @eeff78d0 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

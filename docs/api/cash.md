@@ -13,6 +13,7 @@ every cached function gets, and the module-level functions. The
 from cash import (
     CacheExplanation,
     Cash,
+    Ignore,
     cleanup,
     configure,
     disabled,
@@ -27,7 +28,7 @@ for some functions.
 
 ## Signatures at a glance
 
-<!-- claim: cash/core.py:Cash.__init__ @9f4080df, cash/core.py:Cash.cache @5c304b0c -->
+<!-- claim: cash/core.py:Cash.__init__ @9f4080df, cash/core.py:Cash.cache @470582df -->
 ```text
 Cash(
     backend=None, cache_dir=None, backends=None, compress=None,
@@ -39,7 +40,7 @@ Cash.cache(
     file_depends_on=None, ttl=None, cache_if=None,
     chunk_max_items=1_000_000, chunk_max_bytes=1_000_000_000,
     strict=False, assume_safe=False, allow_random=False,
-    frozen=False)
+    frozen=False, key=None, ignore=None)
 ```
 
 `**config_overrides` takes any [setting](../getting-started/configuration.md)
@@ -95,6 +96,16 @@ print(double.explain(1).reason)     # "hit"
         - entry_id
         - cache_dir
         - details
+
+## Leaving a parameter out of the key
+
+<!-- claim: cash/decorator/arg_key.py:Ignore @ea1a47d6, cash/decorator/arg_key.py:annotated_ignores @3c698cef -->
+`cash.Ignore` marks a parameter that does not change the result, so it is
+left out of the key: `debug: cash.Ignore[bool] = False`. It is
+`typing.Annotated` with a marker, so a type checker sees `bool`;
+`Annotated[bool, cash.Ignore]` works as well. It adds to `ignore=`, and
+cannot be combined with `key=`. See
+[Leaving arguments out of the key](../decorator.md#leaving-arguments-out-of-the-key).
 
 ## Module-level functions
 

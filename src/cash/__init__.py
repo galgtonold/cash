@@ -31,6 +31,7 @@ from .config.schema import CashConfig
 from .config.template import create_default_config
 from .core import CacheExplanation, Cash
 from .data_source import DataSource
+from .decorator.arg_key import Ignore
 from .effect_observer import assume_safe
 from .exceptions import (
     AmbiguousCellError,
@@ -292,6 +293,7 @@ __all__ = [
     # Core API (stable)
     "Cash",
     "CacheExplanation",
+    "Ignore",
     "opaque",
     "reset_session",
     "configure",

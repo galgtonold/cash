@@ -37,17 +37,29 @@ class UnhashableDefault(Exception):
 
 
 class UnhashableArgs(Exception):
-    """The call's arguments could not be hashed."""
+    """The call's arguments could not be hashed. *keyed*, when set, is the
+    ``(args, kwargs)`` the key was built from (``key=``, ``ignore=``), for
+    the warning to name an argument that was actually hashed."""
+
+    def __init__(self, *args: Any, keyed: tuple[tuple, dict] | None = None) -> None:
+        super().__init__(*args)
+        self.keyed = keyed
 
 
 class BuiltKey(NamedTuple):
     """What `KeyBuilder.build` built: the key, two of its segments, and the
-    canonicalised arguments explain() reads frozen producers off."""
+    canonicalised arguments explain() reads frozen producers off.
+
+    *call_args_hash* is the hash of every argument the call was made with.
+    It is *args_hash* unless ``key=`` or ignored parameters decide the
+    argument part of the key; then it is None when they cannot all be hashed.
+    """
 
     cache_key: str
     state_hash: str
     args_hash: str
     normalized_args: tuple[tuple, dict]
+    call_args_hash: str | None = None
 
 
 class Call:
@@ -64,6 +76,7 @@ class Call:
         "cache_key",
         "state_hash",
         "args_hash",
+        "call_args_hash",
         "metadata",
         "cash_overhead",
         "outcome",
@@ -73,6 +86,7 @@ class Call:
         self.args = args
         self.kwargs = kwargs
         self.metadata: CacheMetadata | None = None
+        self.call_args_hash: str | None = None
         self.cash_overhead = 0.0
         self.outcome: Any = CACHE_MISS
 
