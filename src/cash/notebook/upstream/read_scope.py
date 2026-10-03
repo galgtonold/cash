@@ -12,7 +12,12 @@ import collections
 import logging
 
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
-from ...analysis.namespace_effects import resolve_literal_path, resolve_path_list, statement_read_paths
+from ...analysis.namespace_effects import (
+    LISTING_TEXT_MARKERS,
+    resolve_literal_path,
+    resolve_path_list,
+    statement_read_paths,
+)
 from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import read_provenance_key
@@ -226,7 +231,9 @@ class ReadScope:
             if i not in relevant:
                 continue
             code = entry.stmt_code
-            if i not in covered_defs and ("read" in code or "open(" in code or "load" in code):
+            if i not in covered_defs and (
+                "read" in code or "open(" in code or "load" in code or any(m in code for m in LISTING_TEXT_MARKERS)
+            ):
                 _collect(code, entry.outputs)
             # What the tracker recorded behind this statement's outputs counts
             # too, whatever the code looks like: a reader static analysis does

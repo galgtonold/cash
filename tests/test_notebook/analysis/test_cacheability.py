@@ -775,9 +775,11 @@ class TestStatementWrittenPaths:
         # First arg is a table name, not a filesystem path.
         assert self._paths("df.to_sql('mytable', conn)") is None
 
-    def test_os_remove_not_path_bearing(self):
-        # A delete is a write side effect but not a recognised output-producer.
-        assert self._paths("os.remove('gone.txt')") is None
+    def test_a_delete_writes_the_deleted_path(self):
+        # Deleting a file changes it for whatever reads it, and only for that:
+        # unresolved, a delete could never be ruled out as unread.
+        assert self._paths("os.remove('gone.txt')") == {"gone.txt"}
+        assert self._paths("os.remove(compute())") is None
 
     def test_non_writer_returns_none(self):
         assert self._paths("x = 1 + 2") is None

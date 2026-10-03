@@ -48,6 +48,12 @@ SHAPES = {
         "for i in range(3):\n    buf.write(str(i))\n    os.getcwd()\n    rows.copy()\n",
         {"buf"},
     ),
+    # ``remove`` is a list method too; ``os`` is not a list.
+    "a module function named like a list method": (
+        "import os\ngone = []",
+        "for name in []:\n    os.remove(name)\n    gone.append(name)\n",
+        {"gone"},
+    ),
 }
 
 

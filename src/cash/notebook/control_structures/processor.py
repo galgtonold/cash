@@ -229,11 +229,19 @@ class ControlStructureProcessor:
         as a whole has none unless recorded here, and after a restart the
         planner would re-fire it, with everything it reads, to redraw charts
         already on disk.
+
+        A structure whose text writes files but that was seen writing none
+        ran all the same: ``for old in OUT.glob('*.png'): old.unlink()``
+        deletes (no file opened), or finds nothing to delete. Its code is
+        still this session's, so the planner must not take it for an edited
+        writer and re-fire its cell before every later cell.
         """
         sp = self.statement_processor
         try:
             written = sp.user_written_paths(written)
             if not written:
+                if statement_writes_files(code):
+                    sp.tracking_state.executed_write_stmt_codes.add(code)
                 return
             sp.tracking_state.executed_write_stmt_codes.add(code)
             sp.persist_write_provenance(code, set(reads), None, written)
