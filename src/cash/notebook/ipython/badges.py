@@ -23,7 +23,7 @@ from ... import __version__
 from .. import badge_renderer as _badge
 from ..server_discovery import get_notebook_cells
 from ..statement import ProcessResult
-from .error_display import show_clean_error
+from .error_display import show_clean_error, show_module_load_error
 
 __all__ = ["BadgePresenter"]
 
@@ -341,6 +341,13 @@ class BadgePresenter:
             _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
         except Exception as e:  # the badge is never worth breaking a cell
             logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
+
+    def show_module_load_error(self, module_name: str, exc: BaseException) -> None:
+        """Display why the edited module *module_name* did not reload.
+
+        Delegates to :func:`error_display.show_module_load_error`.
+        """
+        show_module_load_error(module_name, exc, self.shell)
 
     def show_error(
         self,

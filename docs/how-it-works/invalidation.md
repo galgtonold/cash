@@ -50,6 +50,14 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **An in-place change** to a variable it reads
       ([below](#mutation-bumps-the-receivers-lineage)).
 
+    <!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @9a04e5bd, cash/notebook/ipython/cell_executor.py:CellExecutor._raise_failed_reload @c7525897 -->
+    If an edited module no longer loads (a syntax error, or an error in its
+    top-level code), the kernel still holds its old code, so cash runs
+    nothing on it: every cell you run fails with the error a fresh import of
+    the file gives, file and line included, until the module loads again.
+    Only a cell of cash magics (such as `%cash_off`) and `!` shell commands
+    still runs.
+
 ### Files
 
 <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @51a8bdb1, cash/tracking/read_events.py:_is_read_mode @238e2cb8 -->

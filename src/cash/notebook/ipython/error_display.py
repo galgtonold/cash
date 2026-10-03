@@ -119,3 +119,38 @@ def show_clean_error(
 
         # Fallback: format and print directly.
         tb_mod.print_exception(exc_type, exc, cell_tb)
+
+
+def show_module_load_error(module_name: str, exc: BaseException, shell: ShellProtocol) -> None:
+    """Display why the edited module *module_name* did not reload.
+
+    Shows what ``import module_name`` in a fresh kernel would show: a
+    ``SyntaxError`` as its file, line and caret, any other error as a
+    traceback that starts in the module's own file (the import machinery
+    and cash's frames above it are dropped). One line first says the cell
+    did not run.
+    """
+    module = sys.modules.get(module_name)
+    path = getattr(module, "__file__", None) or module_name
+    print(
+        f"cash: {path} changed and no longer loads, so the kernel still holds its old code. "
+        f"This cell did not run; fix the file and run it again.",
+        file=sys.stderr,
+    )
+    tb = exc.__traceback__
+    own = tb
+    while own is not None and own.tb_frame.f_code.co_filename != path:
+        own = own.tb_next
+    tb = own if own is not None else tb
+    try:
+        # IPython shows a SyntaxError from the exception being handled, not
+        # from ``exc_tuple``; raising it makes it that exception.
+        raise exc.with_traceback(tb)
+    except BaseException:  # noqa: BLE001 - only to make *exc* the handled exception
+        if hasattr(shell, "showtraceback"):
+            try:
+                shell.showtraceback(exc_tuple=(type(exc), exc, tb), tb_offset=0)
+                return
+            except (TypeError, AttributeError, ValueError):
+                logger.debug("showtraceback call failed, falling back to print_exception")
+        tb_mod.print_exception(type(exc), exc, tb)

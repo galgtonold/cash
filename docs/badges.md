@@ -156,7 +156,9 @@ A local `.py` module you import was edited, and cash reloaded it in your kernel
 (plain Jupyter needs `%autoreload` for that). Only statements that use code that
 changed run again. If one runs although nothing it uses changed, its function
 probably reaches into the module dynamically; the
-[invalidation page](how-it-works/invalidation.md) lists those cases.
+[invalidation page](how-it-works/invalidation.md) lists those cases. An edit
+that leaves the module unable to load fails the cell instead
+([what counts as a change](how-it-works/invalidation.md#what-counts-as-a-change)).
 
 ## Why wasn't this cached?
 

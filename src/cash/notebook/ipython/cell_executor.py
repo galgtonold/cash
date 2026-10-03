@@ -63,6 +63,7 @@ from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .notifications import (
     function_change_rows,
+    module_load_failed_row,
     module_reloaded_row,
     opaque_call_rows,
     stale_notebook_rows,
@@ -167,6 +168,19 @@ def _builtin_trap(shell: Any):
     if trap is None or not hasattr(trap, "__enter__"):
         return contextlib.nullcontext()
     return trap
+
+
+def _runs_no_python(raw_cell: str) -> bool:
+    """Whether *raw_cell* is only cash line magics (``%cash_off``) and ``!`` shell
+    commands (blank and comment lines aside), so it runs none of the user's
+    modules."""
+    lines = [line.strip() for line in raw_cell.splitlines()]
+    code = [line for line in lines if line and not line.startswith("#")]
+    return bool(code) and all(line.startswith("!") or _is_cash_line_magic(line) for line in code)
+
+
+def _is_cash_line_magic(line: str) -> bool:
+    return line.startswith("%") and line[1:].startswith("cash")
 
 
 def _set_written_later(executor: Any, names: frozenset[str]) -> None:
@@ -305,6 +319,7 @@ class CellExecutor:
 
         # 3. Module change detection (must precede upstream check)
         pre_upstream_metrics = self._detect_module_changes(raw_cell)
+        self._raise_failed_reload(raw_cell, badge_display_id, pre_upstream_metrics, hook_start, timing_breakdown)
 
         # 4. Upstream resolution
         upstream_result = self._upstream.resolve(
@@ -471,6 +486,36 @@ class CellExecutor:
             logger.debug("Failed to check/reload changed modules: %s", exc)
 
         return notifications
+
+    def _raise_failed_reload(
+        self,
+        raw_cell: str,
+        badge_display_id: str,
+        module_rows: list[ProcessResult],
+        hook_start: float,
+        timing_breakdown: "TimingBreakdown",
+    ) -> None:
+        """Raise what reloading an edited module raised, before the cell runs.
+
+        A module whose file no longer loads (a ``SyntaxError``, a top level
+        that raises) keeps its old code in the kernel. Running the cell
+        would run that old code as if the edit had been picked up, so the
+        cell fails instead, with the error a fresh import of the file gives,
+        and keeps failing until the module loads. A cell of only cash
+        magics and ``!`` shell commands still runs, so cash can be turned off.
+        """
+        errors = self._statement_processor.function_tracker.reload_errors()
+        if not errors or _runs_no_python(raw_cell):
+            return
+        self._badges.finish(
+            [*module_rows, module_load_failed_row(errors)],
+            badge_display_id,
+            _perf_counter() - hook_start,
+            timing_breakdown,
+        )
+        for mod_name, exc in errors.items():
+            self._badges.show_module_load_error(mod_name, exc)
+        raise next(iter(errors.values()))
 
     # ------------------------------------------------------------------
     # Phase 6: pre-execution notifications
