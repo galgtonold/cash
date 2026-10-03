@@ -19,7 +19,12 @@ from typing import TYPE_CHECKING
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
-from ...analysis.file_effects import REPEATABILITY_ACCUMULATING, REPEATABILITY_REPLACING, statement_write_repeatability
+from ...analysis.file_effects import (
+    REPEATABILITY_ACCUMULATING,
+    REPEATABILITY_REPLACING,
+    statement_only_deletes_files,
+    statement_write_repeatability,
+)
 from ...analysis.namespace_effects import (
     resolve_literal_path,
     statement_calls_user_writer,
@@ -304,7 +309,9 @@ class FileWriterScheduler:
         counter line on every replay. The exception is a cell
         whose replay already re-fires such a write -- a ``shutil.rmtree`` --
         where everything but a provable append follows it, or ``PACK.mkdir()``
-        stays behind and the next write finds no folder.
+        stays behind and the next write finds no folder. A deletion
+        (``for old in OUT.glob('*.png'): old.unlink()``) always follows its
+        cell's writes: without it a replay keeps the files a run removes.
         """
 
         cells = {simulation_trace[w].cell for w in writer_indices} - {-1}
@@ -324,6 +331,15 @@ class FileWriterScheduler:
                 continue
             code = entry.stmt_code
             if not self._is_file_writer(code, simulation_trace):
+                continue
+            if statement_only_deletes_files(code):
+                # Clearing the folder the cell then draws into: the drawing
+                # alone left files a run of the cell removes (``c2.txt``
+                # after ``N`` went from 3 to 2, a file dropped in from outside).
+                extra.append(j)
+                logger.debug(
+                    "[UPSTREAM] Scheduling same-cell deletion [%s] with its cell's stale writers: %s", j, code[:60]
+                )
                 continue
             verdict = statement_write_repeatability(code)
             if verdict == REPEATABILITY_ACCUMULATING:

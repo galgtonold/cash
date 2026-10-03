@@ -25,6 +25,8 @@ def test_the_common_spellings_resolve():
     assert _one("df.to_csv(os.path.join(OUT, name))") == os.path.normpath("out/x.csv")
     assert _one("df.to_csv(Path(OUT, 'a', name))") == os.path.normpath("out/a/x.csv")
     assert _one("df.to_csv(f'{OUT}/t_{k}.csv')") == os.path.normpath("out/t_3.csv")
+    assert _one("df.to_csv(str(OUT / 'a.csv'))") == os.path.normpath("out/a.csv")
+    assert _one("df.to_csv(os.fspath(OUT / 'a.csv'))") == os.path.normpath("out/a.csv")
     assert statement_read_paths("pd.read_csv(DATA / 'products.csv')", namespace=NS) == {
         os.path.join("data", "products.csv")
     }
@@ -36,6 +38,7 @@ def test_computed_paths_still_do_not_resolve():
     assert statement_written_paths("df.to_csv(f'{OUT}/t_{k:03d}.csv')", namespace=NS) is None
     assert statement_written_paths("df.to_csv(f'{OUT}/{unknown}.csv')", namespace=NS) is None
     assert statement_written_paths("df.to_csv(OUT / name.upper())", namespace=NS) is None
+    assert statement_written_paths("df.to_csv(str(compute()))", namespace=NS) is None
 
 
 def test_a_read_over_a_list_of_paths_resolves_to_its_elements():
@@ -87,6 +90,10 @@ def test_deleting_the_entries_of_a_listed_folder_writes_that_folder():
         "[p.unlink() for p in OUT.glob('*.png')]",
         "for f in glob.glob('out/*.png'):\n    os.unlink(f)",
         "for f in glob.glob(f'{OUT}/*.png'):\n    os.remove(f)",
+        "for f in glob.glob(str(OUT / '*.png')):\n    os.remove(f)",
+        "for f in os.listdir(OUT):\n    os.remove(os.path.join(OUT, f))",
+        "for f in sorted(os.listdir(OUT)):\n    (OUT / f).unlink()",
+        "for e in os.scandir(OUT):\n    os.remove(e.path)",
     ):
         paths = statement_written_paths(code, namespace=NS)
         assert paths is not None and {os.path.normpath(p) for p in paths} == out, code
@@ -101,7 +108,9 @@ def test_a_deletion_the_listing_does_not_pin_down_stays_unknown():
         "for old in OUT.glob('*.png'):\n    old = Path('/elsewhere')\n    old.unlink()",
         "for old in OUT.glob('*.png'):\n    old.unlink()\nfor old in SRC.glob('*.png'):\n    old.unlink()",
         "for old in unknown.glob('*.png'):\n    old.unlink()",
-        "for f in os.listdir(OUT):\n    os.remove(os.path.join(OUT, f))",
+        "for f in os.listdir(OUT):\n    os.remove(f)",
+        "for f in os.listdir(OUT):\n    os.remove(os.path.join(DATA, f))",
+        "for f in os.listdir(OUT):\n    os.remove(os.path.join(OUT, 'sub', f))",
         "for f in glob.glob('*.png', root_dir=OUT):\n    os.remove(f)",
     ):
         assert statement_written_paths(code, namespace=NS) is None, code

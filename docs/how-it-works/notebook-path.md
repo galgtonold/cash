@@ -155,13 +155,17 @@ changed what it would write, the badge adds a `STALE FILE: … not rewritten`
 line naming the statement to re-run. Before exporting, run the exporting cells
 themselves, or the last cell of the notebook.
 
-<!-- claim: cash/analysis/namespace_effects.py:_removal_call_path @edf26c04, cash/analysis/namespace_effects.py:_listing_read_folder @1812a4da -->
+<!-- claim: cash/analysis/namespace_effects.py:_removal_call_path @d9c4b0aa, cash/analysis/namespace_effects.py:_listing_read_folder @1812a4da, cash/notebook/upstream/file_writers.py:FileWriterScheduler._whole_cell_writers @f2562e8e -->
 Listing a folder (`os.listdir`, `os.scandir`, `glob.glob`, `Path.glob`,
-`rglob` or `iterdir`) reads the folder, and deleting the files a `glob` or
-`iterdir` loop finds (`for old in OUT.glob("*.png"): old.unlink()`, or
-`os.remove(f)` for each `f` in `glob.glob(...)`) writes it. So a chart cell that clears its folder and draws into it again is left
+`rglob` or `iterdir`) reads the folder, and deleting the files a loop over
+such a listing finds writes it (`for old in OUT.glob("*.png"): old.unlink()`,
+`os.remove(f)` for each `f` in `glob.glob(...)`, or
+`os.remove(os.path.join(OUT, name))` for each `name` in `os.listdir(OUT)`).
+So a chart cell that clears its folder and draws into it again is left
 alone by the cells that do not read that folder, and a cell that lists the
-folder re-runs it when its code or what it draws from has changed.
+folder re-runs it when its code or what it draws from has changed. Such a
+re-run clears the folder before drawing, as running the cell does: charts
+the cell no longer draws, and files put there from outside, are removed.
 
 ## Related
 

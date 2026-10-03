@@ -24,6 +24,7 @@ __all__ = [
     "locally_opened_handles",
     "call_repeatability",
     "statement_write_repeatability",
+    "statement_only_deletes_files",
     "READ_TEXT_MARKERS",
     "get_call_name",
     "get_call_module",
@@ -321,6 +322,46 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
     if REPEATABILITY_UNKNOWN in verdicts:
         return REPEATABILITY_UNKNOWN
     return REPEATABILITY_REPLACING
+
+
+#: Methods and module functions that delete a file or a folder.
+_DELETING_METHODS: frozenset[str] = frozenset({"unlink", "rmdir"})
+_DELETING_FUNCTIONS: frozenset[str] = frozenset(
+    {"os.remove", "os.unlink", "os.rmdir", "os.removedirs", "shutil.rmtree"}
+)
+
+
+def statement_only_deletes_files(code: str, tree: "ast.Module | None" = None) -> bool:
+    """True when every file write in *code* is a deletion, and there is one.
+
+    ``for old in OUT.glob('*.png'): old.unlink()`` clears a folder before a
+    cell draws into it. Replaying the drawing without it leaves the files a
+    run of the cell would have removed, so it replays with the cell's other
+    writes. Repeating a deletion removes what is there now, as running the
+    cell does.
+    """
+    if tree is None:
+        try:
+            tree = ast.parse(code)
+        except (SyntaxError, ValueError, TypeError):
+            return False
+    deletes = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "open":
+            if call_repeatability(node) is not None:
+                return False  # opened for writing (or a mode that may be)
+            continue
+        effect = classify_call(node)
+        if effect is None or effect.kind is not EffectKind.FILE_WRITE:
+            continue
+        if effect.name in (_DELETING_METHODS if effect.method else _DELETING_FUNCTIONS):
+            deletes = True
+            continue
+        return False
+    return deletes
 
 
 # Cheap textual pre-filter for statement_read_paths.

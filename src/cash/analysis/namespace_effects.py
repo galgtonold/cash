@@ -328,6 +328,22 @@ def resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> str
     # scope gate never suppressed it: a chart nothing reads was re-drawn for
     # every downstream cell. Each part must itself resolve, so anything
     # genuinely computed still returns None.
+    # ``str(OUT / '*.png')``, ``os.fspath(p)``: the same path as text.
+    if (
+        isinstance(node, ast.Call)
+        and len(node.args) == 1
+        and not node.keywords
+        and not isinstance(node.args[0], ast.Starred)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "str")
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "fspath"
+                and get_base_name(node.func.value) == "os"
+            )
+        )
+    ):
+        return resolve_literal_path(node.args[0], namespace)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         left = resolve_literal_path(node.left, namespace)
         right = resolve_literal_path(node.right, namespace)
@@ -512,16 +528,16 @@ _GLOB_MAGIC = ("*", "?", "[")
 def _removal_call_path(
     call: ast.Call,
     namespace: dict[str, Any] | None,
-    listed: dict[str, str],
+    listed: "tuple[dict[str, str], dict[str, str]]",
 ) -> tuple[str | None, bool]:
     """``(path, is_path_bearing)`` for a call that deletes a file:
     ``PATH.unlink()``, ``os.remove(PATH)`` / ``os.unlink(PATH)``.
 
-    A *PATH* that is the variable of a loop over a folder's listing
-    (*listed*, see :func:`_listed_entry_folders`) resolves to that folder:
-    whatever it deletes is inside it. ``for old in OUT.glob('*.png'):
-    old.unlink()`` is how a chart cell clears its folder before drawing,
-    and unresolved it could never be ruled out as unread.
+    A *PATH* that is an entry of a loop over a folder's listing (*listed*,
+    see :func:`_listed_entry_folders`) resolves to that folder: whatever it
+    deletes is inside it. ``for old in OUT.glob('*.png'): old.unlink()`` is
+    how a chart cell clears its folder before drawing, and unresolved it
+    could never be ruled out as unread.
     """
     func = call.func
     if not isinstance(func, ast.Attribute):
@@ -534,9 +550,43 @@ def _removal_call_path(
         target = func.value
     else:
         return None, False
-    if isinstance(target, ast.Name) and target.id in listed:
-        return listed[target.id], True
+    folder = _listed_entry(target, namespace, *listed)
+    if folder is not None:
+        return folder, True
     return resolve_literal_path(target, namespace), True
+
+
+def _listed_entry(
+    node: ast.AST, namespace: dict[str, Any] | None, entries: dict[str, str], names: dict[str, str]
+) -> str | None:
+    """The folder *node* is an entry of, or ``None``.
+
+    An entry is a loop variable over a listing that yields paths (``p`` in
+    ``for p in OUT.glob(...)``; ``e`` or ``e.path`` over ``os.scandir``), or
+    a bare name from ``os.listdir(OUT)`` joined back onto that same folder
+    (``os.path.join(OUT, name)``, ``Path(OUT, name)``, ``OUT / name``).
+    """
+    if isinstance(node, ast.Name):
+        return entries.get(node.id)
+    if isinstance(node, ast.Attribute) and node.attr == "path" and isinstance(node.value, ast.Name):
+        return entries.get(node.value.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        parts = [node.left, node.right]
+    elif (
+        isinstance(node, ast.Call)
+        and not node.keywords
+        and (_is_path_constructor(node.func) or _is_os_path_join(node.func))
+    ):
+        parts = list(node.args)
+    else:
+        return None
+    if len(parts) != 2 or not isinstance(parts[1], ast.Name) or parts[1].id not in names:
+        return None
+    folder = names[parts[1].id]
+    base = resolve_literal_path(parts[0], namespace)
+    if base is None or os.path.normpath(base) != os.path.normpath(folder):
+        return None
+    return folder
 
 
 def _listing_folder(node: ast.AST, namespace: dict[str, Any] | None) -> str | None:
@@ -603,25 +653,53 @@ def _listing_read_folder(call: ast.Call, namespace: dict[str, Any] | None) -> st
     return _listing_folder(call, namespace)
 
 
-def _listed_entry_folders(tree: ast.AST, namespace: dict[str, Any] | None) -> dict[str, str]:
-    """``{loop variable: folder}`` for ``for p in FOLDER.glob(...)`` loops and
-    comprehensions over a folder's listing (:func:`_listing_folder`).
+def _listing_of(node: ast.AST, namespace: dict[str, Any] | None) -> tuple[str, bool] | None:
+    """``(folder, yields bare names)`` for a loop's iterable that lists a
+    folder, or ``None``: :func:`_listing_folder`, ``os.scandir(FOLDER)``
+    (entries) and ``os.listdir(FOLDER)`` (names, relative to FOLDER)."""
+    while (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("sorted", "list", "tuple")
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        node = node.args[0]
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("listdir", "scandir")
+        and get_base_name(node.func.value) == "os"
+    ):
+        if not node.args and not node.keywords:
+            return os.curdir, False  # names relative to the current folder are paths in it
+        folder = _call_path_argument(node, 0, namespace, frozenset({"path"}))
+        return None if folder is None else (folder, node.func.attr == "listdir")
+    folder = _listing_folder(node, namespace)
+    return None if folder is None else (folder, False)
+
+
+def _listed_entry_folders(tree: ast.AST, namespace: dict[str, Any] | None) -> tuple[dict[str, str], dict[str, str]]:
+    """``({loop variable: folder}, {loop variable: folder})`` for loops and
+    comprehensions over a folder's listing (:func:`_listing_of`): the first
+    for listings that yield paths inside the folder, the second for
+    ``os.listdir``, which yields names relative to it.
 
     A name bound anywhere else in the statement -- assigned, a second loop,
     ``with ... as``, a parameter -- is left out: it need not be an entry.
     """
-    found: dict[str, str] = {}
+    found: dict[str, tuple[str, bool]] = {}
     loop_targets: set[int] = set()
     unknown: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)) or not isinstance(node.target, ast.Name):
             continue
-        folder = _listing_folder(node.iter, namespace)
+        listing = _listing_of(node.iter, namespace)
         name = node.target.id
-        if folder is None or found.get(name, folder) != folder:
+        if listing is None or found.get(name, listing) != listing:
             unknown.add(name)
             continue
-        found[name] = folder
+        found[name] = listing
         loop_targets.add(id(node.target))
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and id(node) not in loop_targets:
@@ -634,7 +712,11 @@ def _listed_entry_folders(tree: ast.AST, namespace: dict[str, Any] | None) -> di
             unknown.add((node.asname or node.name).split(".")[0])
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             unknown.add(node.name)
-    return {name: folder for name, folder in found.items() if name not in unknown}
+    known = {name: listing for name, listing in found.items() if name not in unknown}
+    return (
+        {name: folder for name, (folder, bare) in known.items() if not bare},
+        {name: folder for name, (folder, bare) in known.items() if bare},
+    )
 
 
 def _read_call_path(
