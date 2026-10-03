@@ -131,6 +131,23 @@ def module_reloaded_row(changed_modules: dict[str, str]) -> ProcessResult:
     }
 
 
+def module_load_failed_row(errors: dict[str, BaseException]) -> ProcessResult:
+    """The badge row for edited modules that did not reload, so the cell did not run."""
+    names = ", ".join(f"{name} ({type(exc).__name__})" for name, exc in sorted(errors.items()))
+    return {
+        "status": CacheStatus.ERROR,
+        "code": f"Module{'s' if len(errors) > 1 else ''} did not reload: {names}",
+        "is_upstream": True,
+        "total_time": 0.0,
+        "execution_time": 0.0,
+        "saved_time": 0.0,
+        "error": None,
+        "restored_vars": [],
+        "uncacheable_reasons": [],
+        "outputs": [],
+    }
+
+
 def function_change_rows(function_tracker: Any, user_ns: dict) -> list[ProcessResult]:
     """Return notification metrics for any user-defined functions that changed source."""
     try:

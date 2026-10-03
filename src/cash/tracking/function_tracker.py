@@ -152,6 +152,12 @@ class FunctionTracker:
         # Per-symbol hash tracking for granular invalidation:
         # Maps module_name -> {symbol_name: hash_of_symbol_source}
         self._module_symbol_hashes: dict[str, dict[str, str]] = {}
+        # Modules whose reload is still owed: their file changed, but the
+        # reload raised (or a module they import did), so the kernel runs
+        # code that is not in the file. Retried on every check until it loads.
+        self._owed_reloads: set[str] = set()
+        # What the last check's reloads raised, by module name.
+        self._reload_errors: dict[str, Exception] = {}
 
     def _tracked_module_file_changed(self, func_module: str | None) -> bool:
         """Return True if *func_module* is tracked and its file mtime has changed."""
@@ -303,6 +309,8 @@ class FunctionTracker:
         self.dep_file_to_parents.clear()
         self._dep_file_mtimes.clear()
         self._module_symbol_hashes.clear()
+        self._owed_reloads.clear()
+        self._reload_errors.clear()
 
     # ================================================================
     # Module file tracking for imported functions
@@ -413,9 +421,12 @@ class FunctionTracker:
         for name in FunctionTracker._kahn_sort_bottom_up(to_reload, imports_map):
             logger.info("Module '%s' was loaded from bytecode older than its file; reloading it", name)
             try:
-                ok = self.reload_module(name)
+                ok = self._reload_or_raise(name)
             except Exception as exc:  # noqa: BLE001 - the file's own top level raised; the import already ran
+                # The kernel keeps the old bytecode's code: owe the reload, so
+                # the next check retries it and reports what it raises.
                 logger.warning("Could not reload '%s' from its source: %s", name, exc)
+                self._owed_reloads.add(name)
                 ok = False
             if ok:
                 reloaded.add(name)
@@ -753,36 +764,57 @@ class FunctionTracker:
             module_name: The module to reload
 
         Returns:
-            True if reload succeeded, False otherwise
+            True if reload succeeded, False otherwise (what the reload
+            raised is logged)
         """
+        try:
+            return self._reload_or_raise(module_name)
+        except Exception as e:  # noqa: BLE001 - the module's own top level can raise anything
+            logger.warning("Failed to reload module '%s': %s", module_name, e)
+            return False
 
+    def _reload_or_raise(self, module_name: str) -> bool:
+        """`reload_module`, letting what the reload raised propagate.
+
+        A module whose file no longer compiles raises ``SyntaxError`` here,
+        and one whose top level fails raises that error; either way the
+        module object keeps (some of) its old code. False only when the
+        module is not loaded at all.
+        """
         module = sys.modules.get(module_name)
         if module is None:
             return False
 
-        try:
-            # Invalidate import caches to ensure fresh source is read
-            importlib.invalidate_caches()
+        # Invalidate import caches to ensure fresh source is read
+        importlib.invalidate_caches()
 
-            # Remove compiled .pyc file if it exists, so a later fresh
-            # import is not served it either. Best-effort: see below.
-            file_path = getattr(module, "__file__", None)
-            if file_path:
+        # Remove compiled .pyc file if it exists, so a later fresh
+        # import is not served it either. Best-effort: see below.
+        file_path = getattr(module, "__file__", None)
+        if file_path:
+            with contextlib.suppress(OSError, ValueError):
                 cache_file = importlib.util.cache_from_source(file_path)
                 if os.path.isfile(cache_file):
-                    with contextlib.suppress(OSError):
-                        os.remove(cache_file)
+                    os.remove(cache_file)
 
-            _reload_from_source(module)
-            if file_path and os.path.isfile(file_path):
+        _reload_from_source(module)
+        if file_path and os.path.isfile(file_path):
+            with contextlib.suppress(OSError):
                 self.module_mtimes[module_name] = os.path.getmtime(file_path)
-            # Clear source cache for functions from this module
-            self._invalidate_module_functions(module_name)
-            logger.info("Reloaded module '%s'", module_name)
-            return True
-        except (ImportError, ModuleNotFoundError, OSError, AttributeError) as e:
-            logger.warning("Failed to reload module '%s': %s", module_name, e)
-            return False
+        # Clear source cache for functions from this module
+        self._invalidate_module_functions(module_name)
+        logger.info("Reloaded module '%s'", module_name)
+        return True
+
+    def reload_errors(self) -> dict[str, Exception]:
+        """What the last `check_and_reload_changed_modules` failed to reload.
+
+        Module name to the exception its reload raised (a ``SyntaxError``
+        for a file that does not compile). Empty when every changed module
+        loaded. Such a module keeps running its old code, so the caller must
+        not run anything as if it had been reloaded.
+        """
+        return dict(self._reload_errors)
 
     def _invalidate_module_functions(self, module_name: str):
         """Clear cached source hashes for functions from a specific module."""
@@ -904,7 +936,11 @@ class FunctionTracker:
         # check_tracked_modules() updates module_mtimes in-place.
         pre_check_mtimes: dict[str, float] = dict(self.module_mtimes)
 
+        self._reload_errors = {}
         changed_modules = self.check_tracked_modules()
+        # A reload that failed before is owed whatever the mtimes say now:
+        # the check above already took the edited file's mtime as seen.
+        changed_modules |= self._owed_reloads & self.tracked_modules
         if not changed_modules:
             return {}, {}
 
@@ -922,11 +958,24 @@ class FunctionTracker:
         reload_order = self._topological_reload_order(modules_to_reload)
 
         result = {}
+        owed: set[str] = set()
+        imports_map = self._build_imports_map_for_set(modules_to_reload)
         for mod_name in reload_order:
             module = sys.modules.get(mod_name)
             file_path = getattr(module, "__file__", "unknown") if module else "unknown"
 
-            if self.reload_module(mod_name):
+            if mod_name in owed:
+                # It imports a module whose reload failed: reloading it now
+                # would bind the failed module's old code again.
+                continue
+            try:
+                reloaded = self._reload_or_raise(mod_name)
+            except Exception as exc:  # noqa: BLE001 - the module's own top level can raise anything
+                logger.debug("Failed to reload module '%s': %s", mod_name, exc)
+                self._reload_errors[mod_name] = exc
+                owed |= _importers_closure({mod_name}, imports_map)
+                continue
+            if reloaded:
                 result[mod_name] = file_path
                 reloaded_module = sys.modules.get(mod_name)
                 if reloaded_module:
@@ -937,6 +986,8 @@ class FunctionTracker:
                 # directly changed, record them with None (full invalidation)
                 if mod_name not in per_module_changed_symbols:
                     per_module_changed_symbols[mod_name] = None
+
+        self._owed_reloads = owed
 
         # After reloading, refresh the transitive dependency graph
         # (the reloaded module may now import different sub-modules)
