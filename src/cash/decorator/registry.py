@@ -10,7 +10,7 @@ import os
 import sys
 import threading
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
 from ..analysis.code_analyzer import CodeAnalyzer
@@ -427,10 +427,14 @@ class FunctionRegistry:
         except (OSError, TypeError, ValueError):
             return None
 
-    def code_functions(self, func: Callable, func_name: str) -> list[Any]:
+    def code_functions(self, func: Callable, func_name: str, served: Collection[str] = ()) -> list[Any]:
         """The functions whose code a call of *func_name* runs, as far as cash
         follows it: its own, its helpers', and those of the cached functions it
-        depends on, transitively."""
+        depends on, transitively.
+
+        A cached dependency named in *served* is not followed: the call reached
+        it only as entries served from the cache, so its code did not run. A
+        helper it shares with another path is still found through that path."""
         found: list[Any] = []
         seen_names: set[str] = set()
         stack: list[tuple[str, Any]] = [(func_name, func)]
@@ -439,6 +443,8 @@ class FunctionRegistry:
             if name in seen_names:
                 continue
             seen_names.add(name)
+            if name != func_name and name in served:
+                continue
             if fn is not None:
                 found.append(fn)
             report = self.report_for(fn, name) if fn is not None else self.purity_reports.get(name)

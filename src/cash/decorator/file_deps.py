@@ -71,19 +71,27 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
     return attach_code_relative(deps, code_module) or None
 
 
-def propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
+def propagate_file_deps_to_active_tracker(metadata: CacheMetadata, func_name: str) -> None:
     """Register this entry's recorded deps with the enclosing
     ``FileAccessTracker`` (if any), so a cached function that calls this
     one on a *hit* still inherits its dependencies. Best-effort: any
-    failure (no tracker active, import issue) is silently ignored."""
-    snap = getattr(metadata, "auto_file_deps", None)
-    if not snap:
-        return
+    failure (no tracker active, import issue) is silently ignored.
+
+    The enclosing tracker also learns that *func_name* was served from an
+    entry: those files are all this call brings it, so what *func_name*'s code
+    read for OTHER entries is not credited to it as a memo's reads
+    (`FileDeps.credit_remembered_reads`)."""
     try:
         tracker = active_tracker.get()
     except Exception:  # noqa: BLE001 - tracking is best-effort
         return
     if tracker is None:
+        return
+    note_served = getattr(tracker, "note_served", None)
+    if note_served is not None:
+        note_served(func_name)
+    snap = getattr(metadata, "auto_file_deps", None)
+    if not snap:
         return
     for path, recorded in snap.items():
         # A remote entry must go back onto the remote channel: routed to
@@ -106,6 +114,19 @@ def propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
             # that hash is the file as it is: no second read to take it.
             digest = recorded.get("hash") if isinstance(recorded, dict) else None
             tracker.add_tracked(dep_path_for_this_process(path, recorded), digest)
+
+
+def note_unentered_body(func_name: str) -> None:
+    """Tell the enclosing tracker (if any) that the body of the cached
+    *func_name* is running with no entry of its own, so its code's remembered
+    reads are credited to the enclosing call as any helper's are."""
+    try:
+        tracker = active_tracker.get()
+    except Exception:  # noqa: BLE001 - tracking is best-effort
+        return
+    note = getattr(tracker, "note_unentered", None)
+    if note is not None:
+        note(func_name)
 
 
 def warn_if_validation_is_expensive(validation: Any, metadata: CacheMetadata) -> None:
@@ -331,7 +352,12 @@ class FileDeps:
         after the file changed it kept serving the old total.
 
         For each function this call's code reaches that did NOT read a file in
-        this call, its remembered files are added (`credited_reads`). A memo
+        this call, its remembered files are added (`credited_reads`). A cached
+        function reached only as entries served from the cache is not followed:
+        each served entry already brought its own files, and what its code read
+        for OTHER entries is not this call's input. Once its body ran here with
+        no entry of its own (no key, a stream finished from the function), it
+        is followed again. A memo
         keyed by a path the call was given (``parse(path)``) adds only that
         path when it is among them; a memo of a fixed file adds what it read.
         The cached function's own history is left out -- it is per argument.
@@ -351,7 +377,8 @@ class FileDeps:
         own = getattr(func, "__code__", None)
         have = tracker.get_accessed_files()
         arg_paths: set[str] | None = None
-        for fn in self._registry.code_functions(func, func_name):
+        served = getattr(tracker, "served_functions", set()) - getattr(tracker, "unentered_functions", set())
+        for fn in self._registry.code_functions(func, func_name, served):
             code = getattr(fn, "__code__", None)
             if code is None or code is own or code in live:
                 continue

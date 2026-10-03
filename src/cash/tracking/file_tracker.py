@@ -153,6 +153,12 @@ class FileAccessTracker:
         # The user code that read a file in THIS block (see
         # `credit_read_to_stack`): its recorded reads are live, not remembered.
         self.reading_codes: set[Any] = set()
+        # Cached functions a call in this block served from an entry, and those
+        # whose body ran here with no entry of its own (no key, a stream
+        # finished from the function). A served entry brings exactly its own
+        # files; see `FileDeps.credit_remembered_reads`.
+        self.served_functions: set[str] = set()
+        self.unentered_functions: set[str] = set()
         # Files a memo handed this block data from that was read from an
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
@@ -462,6 +468,19 @@ class FileAccessTracker:
         in every tracker this one propagates to."""
         for tracker in self._self_and_parents():
             tracker.reading_codes.add(code)
+
+    def note_served(self, func_name: str) -> None:
+        """Record that a call of the cached *func_name* was served from an
+        entry in this block, here and in every tracker this one propagates to."""
+        for tracker in self._self_and_parents():
+            tracker.served_functions.add(func_name)
+
+    def note_unentered(self, func_name: str) -> None:
+        """Record that the body of the cached *func_name* ran in this block
+        without an entry of its own, here and in every tracker this one
+        propagates to."""
+        for tracker in self._self_and_parents():
+            tracker.unentered_functions.add(func_name)
 
     def track_absent(self, path) -> None:
         """Record *path* as looked-for-and-missing."""
