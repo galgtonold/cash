@@ -360,10 +360,10 @@ def control_structure_mutations(
     counts as a change to the receiver: the loop's per-statement path never
     classifies its body, so a receiver missed here keeps its pre-loop
     lineage and a statement reading it afterwards is served the value an
-    earlier version of the loop left. A module is never such a receiver
-    (*is_module*). A loop target is a rebinding, not a mutation, so a loop's
-    targets are left out within its body, and so are names *is_builtin*
-    says are builtins.
+    earlier version of the loop left. A module is never changed
+    (*is_module*): ``os.remove(f)`` is not ``list.remove``. A loop target
+    is a rebinding, not a mutation, so a loop's targets are left out within
+    its body, and so are names *is_builtin* says are builtins.
 
     The runtime (``update_lineage_after_execution``) and the simulation
     (``VirtualLineage``) both call this, each with its own builtin rule over
@@ -389,7 +389,9 @@ def _branch_mutations(
             pass  # nothing the analysis can see; the rules below still apply
         mutated.update(selfref_reassignment_targets(stmt))
         mutated.update(_bare_call_receivers(stmt, is_module))
-    return {v for v in mutated if not is_builtin(v)} - targets
+    # ``os.remove(f)`` reads as ``list.remove`` on ``os``; a module's lineage
+    # is its code, which no call through it changes.
+    return {v for v in mutated if not is_builtin(v) and not is_module(v)} - targets
 
 
 def _bare_call_receivers(stmt: ast.stmt, is_module: Callable[[str], bool]) -> set[str]:
