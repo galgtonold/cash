@@ -630,13 +630,14 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @59f18700 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @10faf361 -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
 what it holds when called (an instance memoising into `self`, a library
 wrapper filling its cache) is not reported: cash just stops folding what it
-holds, after one extra miss.
+holds, after one extra miss. Nor is a random generator the body draws from:
+it stays in the key, and a hit moves it on as the computed call did.
 
 **Why it matters.** A hit skips the change, so a counter stops counting. cash
 also stops folding that variable into the key, so a change you make to it

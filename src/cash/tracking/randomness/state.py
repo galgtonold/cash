@@ -278,6 +278,149 @@ def restore_object_rng_states(
             logger.debug("[RANDOMNESS] Failed to restore RNG state for %r: %s", name, e)
 
 
+def _carrier_state(obj: object, kind: str) -> object:
+    if kind == KIND_NP_GENERATOR:
+        return obj.bit_generator.state
+    if kind == KIND_NP_RANDOMSTATE:
+        return obj.get_state()
+    return obj.getstate()
+
+
+def capture_reachable_carrier_states(fn: object) -> list[tuple[object, object, tuple[str, str] | None]]:
+    """The live RNG carriers *fn* can reach, each with its current state.
+
+    A helper that draws from a generator held in a global (``rng`` built in a
+    cell, then ``rng.integers(...)`` inside ``boot(x)``) moves that
+    generator's stream, and :func:`capture_rng_state` -- the module channel --
+    cannot see it. Followed through the names *fn*'s code reads (nested code
+    too), its closure, and every user function those reach, so a draw two
+    helpers down is found as well.
+
+    Each entry is ``(carrier, state, where)``: *where* is ``(module, name)``
+    for a carrier bound to a module global, which a later process can find
+    again, and ``None`` for one only a closure holds. Compare with
+    :func:`moved_carriers`.
+    """
+    found: dict[int, tuple[object, object, tuple[str, str] | None]] = {}
+    seen_fns: set[int] = set()
+    stack = [fn]
+    while stack:
+        f = stack.pop()
+        f = getattr(f, "__func__", f)  # a bound method's function
+        code = getattr(f, "__code__", None)
+        if code is None or id(f) in seen_fns:
+            continue
+        seen_fns.add(id(f))
+        f_globals = getattr(f, "__globals__", None) or {}
+        module = f_globals.get("__name__")
+        named: list[tuple[object, tuple[str, str] | None]] = [
+            (cell.cell_contents, None) for cell in (getattr(f, "__closure__", None) or ()) if _cell_filled(cell)
+        ]
+        codes = [code]
+        while codes:
+            c = codes.pop()
+            named.extend(
+                (f_globals[name], (module, name) if isinstance(module, str) else None)
+                for name in c.co_names
+                if name in f_globals
+            )
+            codes.extend(const for const in c.co_consts if hasattr(const, "co_names"))
+        for value, where in named:
+            kind = rng_carrier_kind(value)
+            if kind is not None:
+                if id(value) not in found or found[id(value)][2] is None:
+                    try:
+                        state = _carrier_state(value, kind)
+                    except (TypeError, ValueError, AttributeError, NotImplementedError):
+                        # A carrier whose state cannot be read cannot be shown
+                        # unmoved either: record it as always moved.
+                        state = _UNREADABLE
+                    found[id(value)] = (value, state, where)
+            elif _is_user_function(value):
+                stack.append(value)
+    return list(found.values())
+
+
+def moved_carriers(
+    before: list[tuple[object, object, tuple[str, str] | None]],
+) -> list[tuple[tuple[str, str] | None, object, object]]:
+    """The carriers from :func:`capture_reachable_carrier_states` whose stream
+    moved since, as ``(where, state before, state now)``."""
+    moved = []
+    for obj, state, where in before:
+        try:
+            after = _carrier_state(obj, rng_carrier_kind(obj))
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
+            moved.append((where, state, _UNREADABLE))
+            continue
+        if state is _UNREADABLE or not _rng_states_equal(_flatten_state(state), _flatten_state(after)):
+            moved.append((where, state, after))
+    return moved
+
+
+def replayable(moved: list[tuple[tuple[str, str] | None, object, object]]) -> bool:
+    """Whether a later process can put every one of *moved* back where the
+    call left it: each bound to a module global, both states readable."""
+    return all(where is not None and _UNREADABLE not in (pre, post) for where, pre, post in moved)
+
+
+def carrier_states_changed(before: list[tuple[object, object, tuple[str, str] | None]]) -> bool:
+    """Whether any carrier from :func:`capture_reachable_carrier_states` moved."""
+    return bool(moved_carriers(before))
+
+
+def replay_carriers(moved: list) -> None:
+    """Move each recorded carrier to where the computed call left it -- only
+    while it is where that call found it, as the module channel does.
+
+    *moved* is :func:`moved_carriers`' output, every *where* set.
+    """
+    for where, pre, post in moved:
+        try:
+            module, name = where
+            obj = getattr(sys.modules.get(module), "__dict__", {}).get(name)
+            kind = rng_carrier_kind(obj)
+            if kind is None:
+                continue
+            if not _rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
+                continue
+            if kind == KIND_NP_GENERATOR:
+                obj.bit_generator.state = post
+            elif kind == KIND_NP_RANDOMSTATE:
+                obj.set_state(post)
+            else:
+                obj.setstate(post)
+        except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
+            logger.debug("[RANDOMNESS] Failed to replay RNG state for %r: %s", where, e)
+
+
+_UNREADABLE = object()
+
+
+def _is_user_function(value: object) -> bool:
+    """A function the user wrote: walked into. Library code is not, both for
+    cost and because a library's own generators are its business."""
+    from ...install_paths import is_user_code_file
+
+    code = getattr(getattr(value, "__func__", value), "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename)
+
+
+def _cell_filled(cell) -> bool:
+    try:
+        cell.cell_contents
+    except ValueError:  # an empty cell: the closure variable is not bound yet
+        return False
+    return True
+
+
+def _flatten_state(state: object) -> object:
+    """A numpy Generator's state is a nested dict; compare it as a tuple."""
+    if isinstance(state, dict):
+        return tuple((k, _flatten_state(v)) for k, v in sorted(state.items()))
+    return state
+
+
 def rng_modules_changed(before: dict, after: dict) -> set[str]:
     """Modules whose captured RNG state differs between *before* and *after*.
 

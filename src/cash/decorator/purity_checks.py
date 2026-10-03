@@ -37,6 +37,7 @@ from ..exceptions import (
 )
 from ..install_paths import is_user_module
 from ..source_reading import getsource, getsourcelines
+from ..tracking.randomness import rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from .closure_fold import iter_code_scopes, unsafe_uses_of
 from .function_identity import func_key
@@ -394,6 +395,7 @@ class PurityChecks:
         own_globals = getattr(func, "__globals__", None)
         cells = dict(zip(getattr(code, "co_freevars", ()) or (), getattr(func, "__closure__", ()) or ()))
         for name, (before, scope, owner, reader) in watched.items():
+            value = None
             try:
                 if scope == "closure":
                     cell = cells.get(name)
@@ -404,7 +406,8 @@ class PurityChecks:
                     mapping, key = owner
                     if key not in mapping:
                         continue
-                    after = self._values.carried_global_hash(mapping[key], getattr(func, "__module__", None))
+                    value = mapping[key]
+                    after = self._values.carried_global_hash(value, getattr(func, "__module__", None))
                 elif scope == "binding":
                     after = self._values.carried_state_digest(resolve_binding(*owner))
                 elif scope == "classdata":
@@ -420,6 +423,11 @@ class PurityChecks:
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
             if after == before:
+                continue
+            if scope in ("carrier", "global") and rng_carrier_kind(value) is not None:
+                # A random generator the body drew from: a hit moves it on
+                # to where the body left it (`replay_rng_state`), so its
+                # state stays a true input and the next call keys on it.
                 continue
             if scope in ("carrier", "binding", "instance", "classdata"):
                 # What a callable carries, moved by calling it: a library's

@@ -18,6 +18,7 @@ from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning
 from ..tracking.file_tracker import FileAccessTracker
+from ..tracking.randomness import capture_reachable_carrier_states, moved_carriers, replayable
 from .arg_hashing import PLAIN_CENSUS
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
@@ -636,6 +637,11 @@ class CallRunner:
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
         run.rng_pre = capture_rng_pre_state()
+        # And the generators it can reach through its globals and closure
+        # (`rng = np.random.default_rng(42)` at module level, drawn from
+        # inside): the module channel above cannot see those move.
+        run.carriers_pre = capture_reachable_carrier_states(func)
+        run.carriers_moved = []
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
             body_t0 = _perf_counter()
@@ -655,6 +661,7 @@ class CallRunner:
             run.body_seconds = max(0.0, _perf_counter() - body_t0 - run.tracker.read_hash_seconds - nested[0])
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.rng_new = self._rng.note_draw(func_name, run.rng_pre)
+            run.carriers_moved = moved_carriers(run.carriers_pre)
 
     def finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
@@ -693,6 +700,11 @@ class CallRunner:
         refusal = self._store.refusal(
             func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
         )
+        if refusal is None and not replayable(run.carriers_moved):
+            # A hit must leave the generator where the body did, or the
+            # caller's next draw repeats what this call drew. One only a
+            # closure holds cannot be found again by a later process.
+            refusal = "it drew from a random generator a cached result cannot advance"
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal)
         else:
@@ -709,7 +721,9 @@ class CallRunner:
                     auto_file_deps=auto_file_deps,
                     body_seconds=run.body_seconds,
                     saves_seconds=run.saves_seconds,
-                    rng_replay=self._rng.replay_parts(bool(self._registry.cached[func_name].rng_modules), run.rng_pre),
+                    rng_replay=self._rng.replay_parts(
+                        bool(self._registry.cached[func_name].rng_modules), run.rng_pre, run.carriers_moved
+                    ),
                 ),
                 res,
             )

@@ -23,6 +23,7 @@ from ..tracking.randomness import (
     capture_rng_state,
     describe_random_call,
     get_seeding_rng_modules,
+    replay_carriers,
     restore_rng_state,
     rng_modules_changed,
     seed_epoch_component,
@@ -286,6 +287,8 @@ def replay_rng_state(metadata: Any) -> None:
     """Put the global RNG where the computed call left it (see
     :meth:`RngWatch.replay_parts`), when it is where that call started."""
     replay = getattr(metadata, "rng_replay", None) or {}
+    if replay.get("carriers"):
+        replay_carriers(replay["carriers"])
     post, pre = replay.get("rng_post"), replay.get("rng_pre")
     if not post or not pre:
         return
@@ -443,7 +446,7 @@ class RngWatch:
         if own:
             self._self_seeded[func_name] = set(own)
 
-    def replay_parts(self, drew: bool, pre_state: dict | None) -> dict:
+    def replay_parts(self, drew: bool, pre_state: dict | None, carriers: list | None = None) -> dict:
         """What a later hit needs to leave the RNG where this call left it.
 
         A hit never runs the body, so the stream it advanced stays where it was
@@ -457,12 +460,13 @@ class RngWatch:
         checks first -- a program that drew somewhere else in between is left
         alone rather than rewound.
         """
+        parts: dict = {"carriers": carriers} if carriers else {}
         if not drew or pre_state is None:
-            return {}
+            return parts
         try:
-            return {"rng_pre": pre_state, "rng_post": capture_rng_state()}
+            return {**parts, "rng_pre": pre_state, "rng_post": capture_rng_state()}
         except Exception:  # noqa: BLE001 - never break a call over this
-            return {}
+            return parts
 
     def warn_unseeded_randomness(
         self,

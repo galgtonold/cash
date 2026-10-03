@@ -80,7 +80,17 @@ class Call:
 class BodyRun:
     """What `CallRunner.body_scope` observed while the body ran, and what it returned."""
 
-    __slots__ = ("tracker", "observer", "rng_pre", "res", "body_seconds", "saves_seconds", "rng_new")
+    __slots__ = (
+        "tracker",
+        "observer",
+        "rng_pre",
+        "carriers_pre",
+        "carriers_moved",
+        "res",
+        "body_seconds",
+        "saves_seconds",
+        "rng_new",
+    )
 
 
 def run_to_completion(make_coroutine: Callable[[], Any]) -> Any:

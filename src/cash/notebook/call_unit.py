@@ -64,7 +64,12 @@ from cash.notebook.call_refs import (
 )
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
-from cash.tracking.randomness import capture_rng_state, rng_modules_changed
+from cash.tracking.randomness import (
+    capture_reachable_carrier_states,
+    capture_rng_state,
+    carrier_states_changed,
+    rng_modules_changed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -700,7 +705,9 @@ class CallUnit:
         #
         # File deps and stdout/stderr are recorded around the call so a
         # LATER hit can replay them (:meth:`_serve_hit`). RNG is not
-        # recorded -- a call that consumed it is refused.
+        # recorded -- a call that consumed it is refused, whether it drew from
+        # a module's stream or from a generator it reaches through its globals
+        # (``rng`` built in a cell, drawn from inside the helper).
         #
         # A NESTED tracker, not a before/after diff against the ambient
         # (statement-wide) one, as the decorator wraps its call in a fresh
@@ -718,7 +725,7 @@ class CallUnit:
         # stop -- and ``propagate_to_parent=True`` still surfaces every read
         # to the enclosing statement's tracker immediately, so the miss-path
         # "recorded for free" behaviour holds.
-        rng_before = capture_rng_state()
+        rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
         arg_hashes_before = hash_args(call.args, call.kwargs)
         started = _perf_counter()
         call_tracker = FileAccessTracker(
@@ -750,7 +757,8 @@ class CallUnit:
     @staticmethod
     def _did_what_a_hit_cannot(call: _Call, rng_before, arg_hashes_before: tuple) -> bool:
         """Whether the call just run had an effect a hit would silently skip."""
-        if rng_modules_changed(rng_before, capture_rng_state()):
+        modules_before, carriers_before = rng_before
+        if rng_modules_changed(modules_before, capture_rng_state()) or carrier_states_changed(carriers_before):
             # RNG is a consumed linear resource -- what matters is stream
             # POSITION, not membership. A hit leaves the global stream
             # where it was, so every downstream draw would diverge from
