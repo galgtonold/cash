@@ -7,6 +7,373 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-04
+
+This release takes the hidden limits out of the key and makes a cache hit
+cheap, and lets you choose what a call's arguments contribute to it. Every walk that decides what reaches a key used to stop at a fixed
+depth or count, and keyed what lay beyond by name or not at all; each now
+follows everything, and a value or helper graph cash cannot finish keying runs
+uncached with a warning instead of being keyed on part of itself. A class can
+say what identifies its instances with `__cash_key__`, DataFrames are now
+pickled instead of written as Parquet, `key=` and `ignore=` let a cached
+function leave arguments such as a verbose flag out of its key, and a repeat call on a big pandas frame
+no longer reads the whole frame. Around that, another sweep for stale answers
+found more code and data the key never saw: a class's own data, a docstring
+the code reads, a seed set by the caller, a helper reached as `module.f`.
+311 commits in all.
+
+A few names and one setting are gone, so read **Breaking** first. Some cached
+entries miss once after you upgrade, but the cache folder is kept — see
+**Upgrading** at the end.
+
+### Breaking
+
+- **`file_hash_full_max_bytes` is removed.** Every tracked file is now hashed
+  in full whatever its size (see **Changed**), so the setting did nothing.
+  `Cash(file_hash_full_max_bytes=...)` now raises as for any name that is not
+  a setting, and a config file that sets it warns `CONFIG-UNKNOWN-KEY`.
+- **`ParquetSerializer` and `get_serializer` are removed** from
+  `cash.backends`: DataFrames are pickled like every other result. Use
+  `PickleSerializer` where you named a serializer.
+- **`cash.config` no longer re-exports its names.** Import `CashConfig`,
+  `get_config` and `create_default_config` from `cash`, and `TierConfig` from
+  `cash.config.schema`.
+
+### Added
+
+- **Choose what the arguments contribute to the key.** Every argument used to
+  go into the key, so a `verbose` flag, a logger, or `"1"` against `1` split
+  the cache, and wrapping a library function with such a parameter needed a
+  hand-written wrapper. `@cash.cache(ignore=["verbose"])` leaves parameters out
+  (a name that is not a parameter raises when the function is decorated), and
+  so does annotating one as `cash.Ignore[bool]` (or `Annotated[bool,
+  cash.Ignore]`); the two combine. `@cash.cache(key=fn)` hands `fn` the call's
+  arguments with defaults filled in, and its return value stands for them. The
+  key function's own code is part of the key, so editing it clears the
+  entries; one that reads a file, the clock, randomness, the network or the
+  environment warns `KEY-FUNCTION-IMPURE`, and one that raises runs the call
+  uncached with `KEY-FUNCTION-RAISED`. `explain()` says when a hit was matched
+  this way. Decorator only.
+- **`__cash_key__` for objects that hold big data.** An object holding several
+  large DataFrames was pickled and hashed whole on every call that took it,
+  including as `self` in a cached method: about 0.7 s a call for eight 40 MB
+  frames, even for a method returning a row count. A class can now define
+  `__cash_key__(self)` returning what identifies an instance (a version, a path
+  and mtime); the key uses it wherever the object sits, the call drops to about
+  2 ms, and the entry is found again after a restart. A hasher registered for
+  the type still wins. The first time an object is keyed this way in a process,
+  a background check compares its content with what the same key stood for
+  before and warns `KEY-STALE-CASH-KEY` on a mismatch; `check_cash_keys=False`
+  turns the check off.
+- **`RANDOM-UNSEEDED` for library draws.** `train_test_split(X)`,
+  `KFold(shuffle=True)`, `SGDClassifier()`, `make_classification()` and
+  `df.sample(3)` in a cached function froze the first split, fit or sample
+  without a word, because the draw happens in library code. A library call that
+  takes `random_state=None` and is called without one, or `.sample(...)` without
+  `random_state` or `seed`, now warns and names the call.
+- **New warnings for calls that run uncached**, each with its own page:
+  `KEY-HELPERS-UNWALKABLE` (the helpers a call reaches cannot all be found or
+  never end), `KEY-UNHASHABLE-CAPTURE` (a closure reads a captured object cash
+  cannot hash), `CACHE-RETURNS-AWAITABLE` (a plain wrapper around an
+  `async def` returns a coroutine; put `@cash.cache` on the `async def`) and,
+  in notebooks, `NOTEBOOK-ANALYSIS-FAILED` (a safety check crashed, so the
+  statement runs every time).
+
+### Changed
+
+- **DataFrames are pickled, not written as Parquet.** Parquet was 5 to 40
+  times slower to write and 2 to 20 times slower to read than pickle protocol 5,
+  and changed frames it could not store exactly: list and dict cells, UUIDs,
+  `datetime64[s]`, integer axis names, `attrs`, and subclasses such as a
+  GeoDataFrame. Every result is now stored with pickle protocol 5, so a hit
+  hands back the frame the call returned. Parquet files were smaller for columns
+  with few distinct values; if disk space matters more than speed, the
+  `compress` setting recovers most of that. pyarrow is no longer used for
+  storage.
+- **No hidden depth or count limits on what reaches a key.** The helper walk
+  stopped six calls down, the search for code in an argument eight containers
+  down, the walk of a value 50 levels down, nested code four or eight levels
+  down, and several other walks at fixed limits; what lay beyond was keyed by
+  name or left out, and editing it served the old result. Which helpers fell
+  past the cut even depended on `PYTHONHASHSEED`, so deep helper graphs never
+  hit after a restart. Every walk now follows everything, in a fixed order, and
+  ends cycles by what it has seen. The value walk is iterative, so a deeply
+  nested value no longer overflows the stack and kills the process. When a call
+  cannot be keyed whole — helpers that cannot all be found or that never end,
+  a value deeper than pickle can follow — it runs uncached with a warning
+  (`KEY-HELPERS-UNWALKABLE`, or `KEY-UNHASHABLE-ARG`, which now says the
+  argument is nested too deeply instead of asking for a hasher). The notebook's
+  checks for file writes, kept state and the globals a call reads follow every
+  function a call reaches too, and the check for a matplotlib Figure in a result
+  looks at every item at every depth.
+- **Every tracked file is hashed in full.** A file over 256 MiB was hashed from
+  three samples with its timestamps standing in for the rest, so a same-size
+  edit between the samples with its modification time put back was served from
+  the cache. Content now decides at any size. A full hash costs about one
+  second per GiB, paid when the body reads the file or when its size or
+  timestamps moved; a settled, unchanged file is still one `stat`.
+- **Objects holding big data are keyed part by part.** Without `__cash_key__`,
+  an object holding a pandas frame, or an array, frame or table of 1 MiB or
+  more (sparse matrices included), is opened up and each part keyed on its own,
+  so its frames go through the same fast check as a frame passed directly.
+  Objects holding only small arrays, such as a fitted random forest, are still
+  pickled whole, which is faster for them.
+- **Cache hits cost less.**
+  - A repeat call on a big pandas frame no longer reads the frame when the frame
+    came from a numpy array, `read_csv` or a groupby, or shares its data with
+    another frame (`df.assign`, `df[cols]`, `df.reset_index()`): 150–190 ms a
+    hit on a 1M × 20 frame is now well under a millisecond.
+  - A call with only numbers, strings, bytes or `None` builds its key about 30
+    times faster; module constants are hashed once while they hold the same
+    object; a list of 20,000 JSON-like records keys in under 100 ms instead of
+    850 ms; dataclass methods and metadata lookups are no longer redone on every
+    hit.
+  - A file read soon after it was written is no longer hashed in full on every
+    hit for the life of the entry once it has settled.
+  - A polars result is served from RAM instead of being read back from disk on
+    every hit in the same process, and a RAM hit on a pandas frame no longer
+    scans its object columns each time.
+- **Storing and starting cost less.** Large arrays and frames are written and
+  read without being copied again and again (a store took about 5× `np.save`,
+  a disk hit about 5× `np.load`). A plain script no longer imports IPython,
+  and on Linux and Windows no longer imports psutil (175 ms → 125 ms for a
+  one-function script). The first call after a restart reads each source file
+  once (about 340 ms → 180 ms on a 3000-line module).
+- **Notebooks cost less.** A loop that reads a folder of files
+  (`for f in files: d = pd.read_csv(f)`) runs as one unit and still depends on
+  every file it read: 1000 CSVs took 10.6 s cold and 14.1 s after a restart,
+  now about 2.4 s. Notebook statement writes stay in the background, and the
+  cost records behind `%cash_stats` are no longer rewritten after every cell.
+
+### Fixed
+
+**Wrong or stale answers in decorated functions.**
+
+- **Data the key never saw.** A user class's own data — a module global read by
+  an inherited method, property or `__init__`, a class attribute set at run
+  time, `cfg.Cfg.RATE`, the fields of a namedtuple or dataclass made at run
+  time — was served stale after it changed (a namedtuple whose fields were
+  reordered even swapped values on a hit). Also keyed now: a module constant
+  read through a package path (`pkg.conf.RATE`), a constant read by a lambda
+  default, data set on a function (`scale.k = 1`), a docstring the code reads
+  (`f.__doc__`, a tool description built from it), environment variables read
+  through `os.path.expandvars`, `expanduser`, `Path.home()`,
+  `tempfile.gettempdir()` and `shutil.which`, and a clock helper called as
+  `clocks.now()` or `self.stamp()`.
+- **Code the key never saw.** A helper handed on as `helper.g`
+  (`df.apply(features.row)`, `map(helper.g, xs)`), or looked up by a
+  written-out name (`sys.modules["helper"].g`, `attrgetter("g")`), a function
+  inside an object inside a global, user code in a numpy object array or an
+  object column, the state of a callable instance passed to `cash.cache` or
+  captured by a factory, and what a callback passed as an argument reads. Each
+  edit was served the old result; each is now keyed. `cash.cache(Scaler(2))`
+  also finds its entries in a new process.
+- **Cached functions calling cached functions.** A cached function reached
+  through a helper, a static or class method or an import inside the body, one
+  passed as an argument, held in a list or captured by a factory, one cached by
+  another `Cash` instance, and one swapped by `importlib.reload` did not carry
+  its edits, globals or TTL into the caller's key.
+- **Arguments that shared an entry.** `functools.partial` bound values keyed by
+  their `repr` (numpy elides the middle of a long array), a set inside a
+  partial, deque or iterator keyed in a per-process order, a list shared by two
+  arguments keyed like two equal lists, numpy scalars next to an empty list
+  (which dropped `*args` from the key), and two lambdas on one line differing
+  only in a comprehension or inner lambda. A config written with literals and
+  the equal one parsed from JSON now share a key.
+- **A caller's seed is part of the key.** `np.random.seed(s)` at module level or
+  in an outer function used to serve every seed the first seed's draw; a
+  function seen drawing is now keyed by where the stream stands. A function
+  that seeds itself is not, so it still hits. An optional generator written
+  `rng or np.random.default_rng()` or with `if ... else` now warns
+  `RANDOM-UNSEEDED`.
+- **A hit moves a generator on.** A cached function drawing from a generator
+  held in a global (`rng = np.random.default_rng(42)`) or handed in as an
+  argument (`boot(x, rng)`) left it where it was on a hit, so the caller's
+  next draws came from the wrong place in the stream. A miss now records where
+  the call moved the generator and a hit moves it on the same way. A generator
+  passed in no longer needs `assume_safe` to be cached, and is no longer
+  reported as an argument mutation.
+- **What can't be keyed runs uncached.** A closure over an object cash cannot
+  hash (a settings object holding a lock) and a passed function whose default
+  cannot be keyed were left out of the key without a word; they now run
+  uncached with `KEY-UNHASHABLE-CAPTURE` and `KEY-UNHASHABLE-DEFAULT`.
+- **Calls that never cached now do.** Any function reaching a dataclass or an
+  annotated class on Python 3.14; every scipy sparse argument; any function
+  calling `pl.col(...)`; a function logging through a module logger in Jupyter
+  (every call missed with "global log changed"); a function that writes, reads
+  back and removes a scratch file or unzips into a temporary directory; and
+  keying an object held in a global on Python 3.10.
+- A library writing into a big argument is caught on every miss, not only for
+  arguments that hash quickly, so the warm run no longer skips the change.
+
+**What a hit hands back.**
+
+- A nested cache hit brings only the file reads of the entry it served: after
+  `fit("r1")` and `fit("r2")` ran, `scen("r2")` no longer recomputes when
+  `r1`'s file changes.
+- A cached generator replays the items it yielded, even if the caller edited
+  them, and passes on its return value (what `yield from` evaluates to).
+- A read-only numpy array comes back read-only, and a module-level sentinel
+  (`MISSING = object()`) comes back as itself, so `is MISSING` holds on a hit.
+- Lists, dicts and arrays inside a DataFrame's object column are copied on a
+  RAM hit, so appending to one no longer changes the next call's result.
+- A result no longer gains `_cash_lineage_*` attributes in its `__dict__`, so
+  `vars()`, `==` on a `SimpleNamespace` and an object you passed in and got back
+  stay as they were.
+- A Figure or Axes anywhere inside a result is refused, so pyplot's current
+  figure is never swapped for the cache's copy.
+
+**Files.**
+
+- `file_depends_on=` a directory or a glob tracks what it holds: an edited,
+  added or removed file recomputes. A glob used to be recorded as a missing
+  file of that literal name.
+- Reads that were not recorded: package data read through `pkgutil.get_data`
+  or `importlib.resources`, sizes from `os.lstat` and `os.scandir` entries, a
+  path whose `os.stat`, `getsize` or `listdir` failed because it was missing
+  (it is now an input that recomputes once it appears), the `-wal` file of a
+  SQLite database in WAL mode, and every file a memoised loader read (more than
+  sixteen used to be dropped).
+- A metadata or existence check records a path by one rule, whichever spelling
+  the code used.
+- A package first imported inside a cached call or with notebook tracking on
+  can open its own data files again.
+- With `cache_dir=".cash"`, a write to `.cash_exports/` is reported as the
+  function's effect again, and on Windows a differently cased spelling of the
+  cache folder is not.
+
+**Notebooks.**
+
+- **Re-seeding brings back the right draws.** After `rng =
+  np.random.default_rng(7)` was re-run, a slow cell drawing from `rng` was
+  served the draws a moved generator gave, which no top-to-bottom run gives,
+  and Restart & Run All could do the same. A statement that draws now moves
+  the generator on, also through a helper that reads it as a global. Running a
+  later draw cell on its own first runs or restores the draws above it, even
+  after a restart and even cheap ones cash did not store, so it shows what a
+  top-to-bottom run shows; plain Jupyter would draw on from where the
+  generator stands. A helper call that moves a generator it reaches is no
+  longer cached per call.
+- **Cells that clear and redraw a folder of files.** An unrelated cell, even
+  `x = 41 + 1`, re-ran a chart cell that empties its folder with `unlink`,
+  `os.remove` or an `os.listdir` loop, deleting its files, sometimes without
+  drawing them again. Clearing a folder now counts as writing it and listing
+  one as reading it, so only cells that read the folder re-run the writer, and
+  a reader of a file in the folder re-runs after it. A replay clears the
+  folder first, so a chart dropped from the cell or a file put there from
+  outside no longer survives.
+- **A deleted temporary is rebuilt.** After a repair left
+  `m = clean.merge(...)`, `m['hour'] = ...`, `del m` partly re-run, the next
+  edit of `clean` re-ran the column write on the old `m` and skipped the
+  merge, so the aggregates below came from the old cleaning while the badge
+  said the chain was refreshed.
+- **A broken module fails the cell.** Editing a project module into one that
+  no longer imports (a syntax error, say) gave an empty error, and the next
+  cell ran the module's old code as if the edit had loaded. Every cell now
+  fails, showing the error with file and line, until the module loads again;
+  a cell of only `%cash` magics still runs.
+- **Values are hashed whole.** The value hash read a frame's first five rows,
+  an array's first 100 elements and a long list's ends, so an edit past them
+  read as no change: a statement below was served the old result, and a call
+  that rewrote row 500 of its argument was skipped on a hit.
+- A closure that keeps state is never restored, however deep it sits in a
+  result, and a value whose storability check fails is not stored.
+- A statement whose safety check crashes runs every time instead of being
+  judged pure.
+- The notebook and the decorator give one answer to which globals a function
+  changes, following helpers at any depth: `x = f(data)` no longer runs every
+  time because a loop variable looked like a global, and a hit no longer skips
+  a helper's append to a global.
+- A restart no longer skips statements that write into an object they did not
+  copy (`b = a.astype(float, copy=False); b += 1`), so `a` keeps its new value.
+- Editing a function that a module passed whole (`run(helpers)`) reaches, a
+  `%reset` that deletes no variable, a reloaded module whose function landed on
+  a freed address, and a loop body's bare method call (`buf.write(...)`) each
+  left a later statement on the old value; each is now seen.
+- A user function named like a builtin (`sorted`, `next`) and marked
+  `@cash.stateful` runs every time; another cell calling a class-decorated
+  function is counted; a write through `np.asarray(arg)` is reported; and an
+  installed copy of a function no longer shares the project copy's verdict.
+- `# @cash:no-cache` on a statement ending in `;` is kept when cash re-runs it,
+  and `# @cash: assume-safe` is read by one parser on both paths.
+- A cell with top-level `await` runs uncached when the upstream check fails,
+  as other cells do, instead of failing.
+- A statement's time no longer includes cash's own setup, so `x = 1 + 1` as a
+  kernel's first statement is not stored.
+- A value nested too deeply to pickle no longer ends the cell with an internal
+  error.
+
+**Warnings.**
+
+- Work on an object the function made (`h = hashlib.sha256(); h.update(b)`,
+  `m = LinearRegression(); m.fit(X, y)`, `d = deque(xs); d.popleft()`) is no
+  longer reported as a side effect.
+- Reading `sys.stdin` is reported like `input()`.
+- An attribute that shares a module global's name (`b.lock`) no longer warns
+  `KEY-UNHASHABLE-GLOBAL` about that global.
+- Once one cached function returned `time.time()`, every cached callee in the
+  process was reported as a clock read; and a library function such as
+  `os.path.isdir` no longer adds `<frozen genericpath>` as a file dependency.
+
+**Storage, backends and the CLI.**
+
+- A failed lookup no longer fails the call: a Redis server that is down, or an
+  entry naming a class that is gone, reads as a miss in every backend.
+- The RAM tier is locked against use from several threads, which could raise
+  `KeyError` or "dictionary changed size" out of your call; a process forked
+  while cash was writing no longer hangs.
+- A wrong or unwritable `cache_dir` with the SQLite tier warns
+  `CACHE-DIR-UNWRITABLE` and carries on, instead of making `Cash()` or
+  `%cash_on` raise.
+- One TTL rule in every backend, the decorator and `cash clear --expired`: a
+  bare file backend no longer serves entries cleanup deletes.
+- A cache without a RAM tier no longer reports a value written to disk as
+  "RAM only, gone at the next restart".
+- `explain()` reports a miss for a generator entry whose chunk is gone, as the
+  next call does.
+- `cash clear --entry`, `--function` or `--tool` with an empty value exits with
+  an error instead of clearing every entry.
+- `cash info` shows the cap each tier is built with, and a cap you set as you
+  wrote it (`2GB`, not `1.9 GiB`); `cash inspect` totals only entry files.
+- The cache explorer no longer writes its display fields into stored entries,
+  and escapes names and source in its HTML view.
+- On a console that cannot print emoji, every status marker turns into its
+  ASCII stand-in instead of vanishing.
+
+### Upgrading
+
+**The cache folder is kept.** The storage format version did not change: new
+entries are written beside the old ones, and entries 0.12 wrote are still read.
+An older version of cash reads a large array or frame stored by 0.13 as a miss.
+
+**Some entries miss once**, where the key now holds more than it did:
+
+- functions that build classes, and functions reading a global list that holds
+  one inner list twice;
+- calls taking an object that holds a pandas frame or an array, frame or table
+  of 1 MiB or more (it is now keyed part by part);
+- arguments holding one string, date or `Decimal` object in several places,
+  which now key like the same values written out separately;
+- functions reaching a user class with class-level data, a cached function, or
+  a callback, whose key now folds what those read;
+- cached `functools.partial`s and callable instances, now named by content and
+  by class;
+- values more than 50 levels deep, and `dict` or `list` subclasses with
+  attributes of their own;
+- an entry whose input file over 256 MiB was hashed from samples;
+- notebook calls and statements keyed by the value hash, which now reads whole
+  values;
+- a DataFrame 0.12 stored as Parquet, which is read as a miss and stored again
+  as a pickle.
+
+Then:
+
+- Remove `file_hash_full_max_bytes` from your settings, and replace
+  `ParquetSerializer`, `get_serializer` and imports from `cash.config` as listed
+  under **Breaking**.
+- If your cache holds many DataFrames with low-variety columns and disk space
+  matters, turn on `compress`.
+
 ## [0.12.0] - 2026-09-27
 
 This release makes cash smaller to learn and harder to fool. There is one plain

@@ -11,7 +11,7 @@ search:
 What the test suites cover, where each one runs, and how to run them
 yourself. Figures on this page are derived from the repository by
 `scripts/doc_numbers.py` and checked in CI; they are current as of
-<!-- docnum:version -->0.12.0<!-- /docnum -->.
+<!-- docnum:version -->0.13.0<!-- /docnum -->.
 
 ## The suites
 
@@ -20,8 +20,8 @@ yourself. Figures on this page are derived from the repository by
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~7,710<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
-| Notebook integration | <!-- docnum:tests_integration -->~4,050<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
+| Unit | <!-- docnum:tests_unit -->~7,720<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Notebook integration | <!-- docnum:tests_integration -->~4,060<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
 | Docs | <!-- docnum:tests_docs -->~580<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
 ## What runs where

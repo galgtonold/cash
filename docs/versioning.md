@@ -34,8 +34,8 @@ recompute to a file or a database yourself.
 ## Pinning
 
 Pin cash like any dependency you rely on, for example
-`cash-lib<!-- docnum:version_pin -->~=0.12.0<!-- /docnum -->` to take patch
-releases but not <!-- docnum:version_next_minor -->0.13<!-- /docnum -->, and
+`cash-lib<!-- docnum:version_pin -->~=0.13.0<!-- /docnum -->` to take patch
+releases but not <!-- docnum:version_next_minor -->0.14<!-- /docnum -->, and
 read the CHANGELOG before you move to a new minor release.
 
 ## Related

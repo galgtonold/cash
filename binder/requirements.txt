@@ -4,6 +4,6 @@
 # src/cash/__init__.py), so the tour runs against the version it was written
 # for. pandas brings the numpy the tour imports; pyarrow lets cash store
 # DataFrames as Parquet.
-cash-lib~=0.12.0
+cash-lib~=0.13.0
 pandas
 pyarrow
