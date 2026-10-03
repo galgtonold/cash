@@ -101,3 +101,34 @@ def test_a_cell_listing_the_folder_sees_what_else_changes_it(nb_runner, tmp_path
     nb_runner.set_cell_source(2, "N = 3")
     nb_runner.run_cell(4)
     assert "'c2.txt'" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+
+
+@pytest.mark.parametrize("dropped", [False, True], ids=["fewer_charts", "file_dropped_in"])
+@pytest.mark.parametrize("clear", sorted(CLEARS))
+def test_a_replayed_redraw_clears_the_folder_first(nb_runner, tmp_path, clear, dropped):
+    """An edit above the chart cell replays its drawing for the cell listing
+    the folder; the deletion that clears the folder replays with it. Without
+    it, ``N`` going from 3 to 2 left ``c2.txt`` behind, and a file dropped in
+    from outside survived a replay that a run of the cell removes."""
+    out = tmp_path / "charts"
+    cells = [
+        "import cash\n%cash_on",
+        "N = 3",
+        _chart_cell(out, clear, n="N"),
+        "names = sorted(os.listdir(OUT))\nprint('NAMES', names)",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "NAMES ['c0.txt', 'c1.txt', 'c2.txt']" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+
+    if dropped:
+        (out / "added.txt").write_text("a", encoding="utf-8")
+        nb_runner.set_cell_source(2, "N = 4")
+        want = ["c0.txt", "c1.txt", "c2.txt", "c3.txt"]
+    else:
+        nb_runner.set_cell_source(2, "N = 2")
+        want = ["c0.txt", "c1.txt"]
+    nb_runner.run_cell(4)
+    assert f"NAMES {want!r}" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+    assert sorted(p.name for p in out.iterdir()) == want
