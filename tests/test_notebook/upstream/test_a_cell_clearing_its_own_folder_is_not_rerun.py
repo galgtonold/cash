@@ -38,7 +38,7 @@ def test_an_unrelated_cell_leaves_the_folder_alone(cash_magics, tmp_path, clear)
         run_cash_cell(cash_magics, cells[0], cells=cells)
         run_cash_cell(cash_magics, cells[1], cells=cells)
         # Not the cell's own file: a re-run of the chart cell deletes it.
-        (out / "kept.txt").write_text("kept")
+        (out / "kept.txt").write_text("kept", encoding="utf-8")
         for _ in range(3):
             run_cash_cell(cash_magics, cells[1], cells=cells)
 

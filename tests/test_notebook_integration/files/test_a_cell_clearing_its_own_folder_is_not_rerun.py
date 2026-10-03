@@ -38,7 +38,7 @@ def _chart_cell(out, clear, n="3"):
 def test_an_unrelated_cell_does_not_rerun_it(nb_runner, tmp_path, clear, unrelated):
     out = tmp_path / "charts"
     out.mkdir()
-    (out / "from_last_session.txt").write_text("old")
+    (out / "from_last_session.txt").write_text("old", encoding="utf-8")
     nb_runner.create_notebook(
         ["import cash\n%cash_on", _chart_cell(out, clear), unrelated + "\nprint('RUN unrelated', x)"]
     )
@@ -47,7 +47,7 @@ def test_an_unrelated_cell_does_not_rerun_it(nb_runner, tmp_path, clear, unrelat
     assert sorted(p.name for p in out.iterdir()) == ["c0.txt", "c1.txt", "c2.txt"]
 
     # Not the cell's file: a re-run of the chart cell deletes it.
-    (out / "kept.txt").write_text("kept")
+    (out / "kept.txt").write_text("kept", encoding="utf-8")
     for _ in range(3):
         nb_runner.run_cell(3)
         assert "RUN unrelated" in nb_runner.get_output(3)
@@ -64,7 +64,7 @@ def test_an_unrelated_cell_does_not_rerun_it_after_a_restart(nb_runner, tmp_path
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.restart()
-    (out / "kept.txt").write_text("kept")
+    (out / "kept.txt").write_text("kept", encoding="utf-8")
     nb_runner.run_cell(1)
     nb_runner.run_cell(3)
     assert "RUN unrelated" in nb_runner.get_output(3)
@@ -93,7 +93,7 @@ def test_a_cell_listing_the_folder_sees_what_else_changes_it(nb_runner, tmp_path
 
     # Something else changes the folder: the listing is read again, and the
     # chart cell, which did not change, is not re-run (it would delete the file).
-    (out / "added.txt").write_text("a")
+    (out / "added.txt").write_text("a", encoding="utf-8")
     nb_runner.run_cell(4)
     assert "NAMES ['added.txt', 'c0.txt', 'c1.txt']" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
 
