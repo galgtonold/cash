@@ -30,7 +30,6 @@ from ...tracking.randomness import (
     advanced_carrier_lineage,
     hidden_lineage_writes,
     hidden_write_lineage,
-    rng_carrier_kind,
 )
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
@@ -47,7 +46,7 @@ from ..lineage_formula import (
 )
 from ..run_memo import stats_this_run
 from ..statement import is_control_body
-from ..statement.carrier_advances import carrier_candidates
+from ..statement.carrier_advances import reachable_generators
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
@@ -754,10 +753,7 @@ class StatementLineage:
         if recorded is None:
             recorded = self.tracking_state.carrier_advances.get(statement_source_hash(stmt_code))
         if recorded is None:
-            user_ns = self.shell.user_ns
-            recorded = {
-                name for name in carrier_candidates(inputs, user_ns) if rng_carrier_kind(user_ns.get(name)) is not None
-            }
+            recorded = reachable_generators(inputs, self.shell.user_ns)
         return set(recorded) - outputs
 
     def _advance_carriers_without_outputs(
@@ -777,10 +773,7 @@ class StatementLineage:
         recorded = self.tracking_state.carrier_advances.get(statement_source_hash(stmt_code))
         if recorded is not None and not recorded:
             return set()
-        user_ns = self.shell.user_ns
-        if recorded is None and not any(
-            rng_carrier_kind(user_ns.get(name)) is not None for name in carrier_candidates(inputs, user_ns)
-        ):
+        if recorded is None and not reachable_generators(inputs, self.shell.user_ns):
             return set()
         cache_key = self._key(
             stmt_code, inputs | hidden_reads, set(), virtual_lineage, virtual_modules, occurrence_index

@@ -20,6 +20,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
+from cash.tracking.randomness import rng_carrier_kind
 
 from .lineage_formula import (
     is_cash_instrumentation,
@@ -239,6 +240,7 @@ def called_function_dependencies(
     user_ns: Mapping[str, Any],
     variable_lineage: Mapping[str, str],
     virtual: VirtualNamespace | None = None,
+    simulated: Mapping[str, str] | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -262,6 +264,13 @@ def called_function_dependencies(
     *virtual* (simulation only) stands in for a callee that is not in
     ``user_ns``. When one is used, every name is answered by the simulation --
     the runtime's key was built with all of them live, at that position.
+
+    *simulated* (simulation only) is the simulation's lineage at the call. A
+    random generator the callees draw from is answered from it: its lineage
+    moves on with every statement that draws from it (``carrier_advances``),
+    so the one recorded now is where the generator stands after the
+    statements below the call, not at it. The runtime keyed the call with
+    the lineage it had then, which is the simulated one.
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
@@ -321,6 +330,8 @@ def called_function_dependencies(
     else:
 
         def lineage(ref: str) -> str:
+            if simulated and ref in simulated and rng_carrier_kind(user_ns.get(ref)) is not None:
+                return simulated[ref]
             return variable_lineage.get(ref, "ABSENT")
 
     return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)
@@ -582,7 +593,9 @@ def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
         if ctx.virtual_callables
         else None
     )
-    callee_deps = called_function_dependencies(sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual)
+    callee_deps = called_function_dependencies(
+        sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual, simulated=ctx.virtual_lineage
+    )
     return f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
 

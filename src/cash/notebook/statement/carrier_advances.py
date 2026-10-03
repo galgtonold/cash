@@ -22,13 +22,19 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from ...tracking.randomness import advanced_carrier_lineage, carrier_positions, moved_carrier_names
+from ...tracking.randomness import advanced_carrier_lineage, carrier_positions, moved_carrier_names, rng_carrier_kind
 from ..cache_key import called_function_globals
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
 
-__all__ = ["PAYLOAD_FIELD", "advance_carriers", "carrier_candidates", "carriers_an_entry_advanced"]
+__all__ = [
+    "PAYLOAD_FIELD",
+    "advance_carriers",
+    "carrier_candidates",
+    "carriers_an_entry_advanced",
+    "reachable_generators",
+]
 
 #: The names a stored statement drew from, in its value entry.
 PAYLOAD_FIELD = "rng_carriers_moved"
@@ -43,6 +49,12 @@ def carrier_candidates(inputs: Iterable[str], user_ns: dict[str, Any]) -> set[st
         return inputs | called_function_globals(inputs, user_ns)
     except (TypeError, ValueError, AttributeError, RecursionError):
         return inputs
+
+
+def reachable_generators(inputs: Iterable[str], user_ns: dict[str, Any]) -> set[str]:
+    """The variables among :func:`carrier_candidates` that hold a random
+    generator: what a statement reading *inputs* can draw from."""
+    return {name for name in carrier_candidates(inputs, user_ns) if rng_carrier_kind(user_ns.get(name)) is not None}
 
 
 def advance_carriers(

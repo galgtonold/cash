@@ -16,6 +16,7 @@ from ..server_discovery import (
     warn_notebook_not_found_once,
 )
 from ..staleness import StalenessTracker
+from ..statement.carrier_advances import reachable_generators
 from ..tracking_state import TrackingState
 from .notebook_vetting import NotebookVetter
 from .replay import StatementReplay
@@ -241,6 +242,10 @@ class UpstreamChecker:
         # the reset below restores that global's producer too.
         effects = cell_effects(cell_code, self._notebook_sources(cell_code, notebook_path), self.shell.user_ns)
         required_inputs = required_inputs | effects.hidden_inputs
+        # A generator a called function draws from (`def boot(x): rng...`)
+        # moves without being named, as a generator named in the cell does: an
+        # isolated re-run first puts it where a top-to-bottom run has it.
+        required_inputs = required_inputs | reachable_generators(required_inputs, self.shell.user_ns)
 
         # Simulate the notebook statement by statement and compare the virtual
         # lineage with the in-memory state to find changed code.
