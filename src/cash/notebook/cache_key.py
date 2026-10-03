@@ -110,6 +110,19 @@ def mutation_verdict_key(source_hash: str) -> str:
     return "mutverdict:" + source_hash
 
 
+def carrier_advances_key(source_hash: str) -> str:
+    """Backend key for which generators a statement drew from when it last ran.
+
+    ``TrackingState.carrier_advances`` holds it for the session; the upstream
+    simulation reads it to move each generator's lineage on as the runtime
+    did. A cheap draw (``x0 = rng.normal()``) is never stored, so after a
+    restart nothing else says it drew: the simulation left ``rng`` where the
+    fresh generator has it, and an isolated re-run of a later draw rebuilt
+    ``rng`` without the draw above it and started from the wrong position.
+    """
+    return "rngdraw:" + source_hash
+
+
 def control_outcome_key(code: str) -> str:
     """Backend key for what a top-level loop left behind when it last ran.
 

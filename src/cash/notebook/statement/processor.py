@@ -306,6 +306,13 @@ class StatementProcessor:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
 
+    def _advance_carriers(self, source_hash: str, names: frozenset[str] | set[str] | None, key: str, code: str) -> None:
+        """``advance_carriers`` for the statement *code*, keyed *key*, and the
+        same record kept for a later kernel: a cheap draw is never stored, and
+        without it the simulation after a restart does not know it drew."""
+        advance_carriers(self.tracking_state, source_hash, names, key, code, self.shell.user_ns)
+        self._records.persist_carrier_advances(source_hash, names)
+
     def advance_carriers_of_a_structure(self, code: str, positions: dict, before: dict[str, str]) -> None:
         """Move on the generators a top-level loop or branch *code* drew from.
 
@@ -324,7 +331,7 @@ class StatementProcessor:
             key = self.key_as_one_statement(code, before)
         except Exception:  # noqa: BLE001 - unkeyable: a lineage no statement shares
             key = "unkeyable:" + secrets.token_hex(16)
-        advance_carriers(self.tracking_state, statement_source_hash(code), moved, key, code, user_ns)
+        self._advance_carriers(statement_source_hash(code), moved, key, code)
 
     def key_as_one_statement(self, code: str, lineages: dict[str, str]) -> str:
         """The key the upstream simulation gives *code* as one statement, with
@@ -645,7 +652,7 @@ class StatementProcessor:
             return None
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
-        advance_carriers(self.tracking_state, run.source_hash, advanced, run.cache_key, run.code, self.shell.user_ns)
+        self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
         self.analytics_manager.record_event(
             status="HIT",
             execution_time=hit_result["total_time"],
@@ -774,14 +781,7 @@ class StatementProcessor:
         if not result.success:
             # A draw before the error still moved the generator.
             if run.carriers_advanced:
-                advance_carriers(
-                    self.tracking_state,
-                    run.source_hash,
-                    run.carriers_advanced,
-                    run.cache_key,
-                    run.code,
-                    self.shell.user_ns,
-                )
+                self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
             metrics["status"] = CacheStatus.ERROR
             metrics["error"] = result.error
             metrics["total_time"] = _perf_counter() - run.process_start
@@ -938,9 +938,7 @@ class StatementProcessor:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
-        advance_carriers(
-            self.tracking_state, run.source_hash, run.carriers_advanced, run.cache_key, run.code, self.shell.user_ns
-        )
+        self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
         self._report_saved(run, saved_metadata)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._rebuild_cost.note(

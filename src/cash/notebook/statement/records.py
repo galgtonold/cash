@@ -23,6 +23,7 @@ from cash.analysis.namespace_effects import statement_written_paths
 from cash.notebook.cache_key import (
     called_function_dependencies,
     called_function_globals,
+    carrier_advances_key,
     import_bindings_key,
     mutation_verdict_key,
     read_provenance_key,
@@ -65,6 +66,7 @@ class StatementRecords:
         # record is not written again.
         self._import_bindings_written: dict[str, dict[str, dict[str, Any]]] = {}
         self._mutation_verdicts_written: dict[str, list[str]] = {}
+        self._carrier_advances_written: dict[str, list[str]] = {}
         self._read_provenance_written: dict[str, list[str]] = {}
 
     def begin_cell(self) -> None:
@@ -209,6 +211,33 @@ class StatementRecords:
             written[source_hash] = verdict
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s mutation-verdict persistence failed", _LOG_PROCESSOR)
+
+    def persist_carrier_advances(self, source_hash: str, names: frozenset[str] | set[str] | None) -> None:
+        """Record, across restarts, which generators this statement drew from.
+
+        See :func:`~cash.notebook.cache_key.carrier_advances_key`. *names* is
+        None when the statement read no generator: nothing is written. Written
+        only when the record is new this session. Best-effort: without it the
+        simulation after a restart assumes a draw from every generator the
+        statement can reach that it can recognise.
+        """
+        if names is None:
+            return
+        record = sorted(names)
+        written = self._carrier_advances_written
+        if written.get(source_hash) == record:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            backend.set_metadata_only(
+                carrier_advances_key(source_hash),
+                {"carrier_advances": True, "names": record, "ttl": None},
+            )
+            written[source_hash] = record
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s carrier-advance persistence failed", _LOG_PROCESSOR)
 
     def persist_read_provenance(self, code: str, accessed_files: set[str]) -> None:
         """Record, across restarts, which files this statement read.

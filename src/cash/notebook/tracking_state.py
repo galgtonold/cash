@@ -197,8 +197,10 @@ class TrackingState:
     # (empty: it read one and left it where it was). Each such variable takes
     # a new lineage (``advanced_carrier_lineage``); the simulation reads this
     # to give it the same one. Absent: the statement read no generator, or has
-    # not run this session.
-    # W: StatementProcessor. R: StatementLineage (simulation).
+    # not run this session. The processor also keeps it for a later kernel
+    # (``carrier_advances_key``).
+    # W: StatementProcessor, StatementLineage (read back from that record
+    # after a restart). R: StatementLineage (simulation).
     carrier_advances: dict[str, frozenset[str]] = field(default_factory=dict)
 
     # Variable -> the ``consumables.consumable_state`` token a consumable,

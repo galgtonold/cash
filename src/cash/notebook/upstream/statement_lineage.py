@@ -45,6 +45,7 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..run_memo import stats_this_run
+from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
 from ..statement.derivation_edges import bump_derived_lineages
@@ -133,6 +134,12 @@ class StatementLineage:
         #: ``{name: source}`` of every top-level def in the notebook's cells
         #: (see ``set_notebook_functions``).
         self._notebook_functions: dict[str, str] = {}
+        #: Lineages the simulation gave a variable that holds a random
+        #: generator: one bound by a call that makes one, and each lineage a
+        #: draw moved it on to. After a restart the namespace has no
+        #: generator to look at, and a draw no record describes is assumed
+        #: from these (see ``_advanced_carriers``).
+        self._generator_lineages: set[str] = set()
 
     # -- What a statement reads and writes ------------------------------------
 
@@ -668,13 +675,15 @@ class StatementLineage:
 
         # The generators it draws from move on, as the runtime moves them on
         # after the run or the hit (`carrier_advances`).
-        advanced = self._advanced_carriers(stmt_code, lookup.carriers, inputs, outputs)
+        advanced = self._advanced_carriers(stmt_code, lookup.carriers, inputs, outputs, virtual_lineage)
         for name in advanced:
             virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            self._generator_lineages.add(virtual_lineage[name])
 
         if lookup.hit:
             # Union derivation-bumped vars so this cached mutation statement
             # is still recorded as a producer of the aliased base.
+            self._note_made_generators(stmt_code, outputs, virtual_lineage)
             outputs = outputs | lookup.bumped | advanced
             self._register_callables(stmt_code, tree, virtual_lineage, is_import)
             return StatementOutcome(outputs, lookup.lookup_time, False, lookup.file_deps)
@@ -705,6 +714,7 @@ class StatementLineage:
         _log_lineage_calc(stmt_code, source_hash, input_lineages_all, file_hash_component, lineage_by_out)
 
         virtual_lineage.update(lineage_by_out)
+        self._note_made_generators(stmt_code, outputs, virtual_lineage)
         outputs = outputs | advanced
         self._register_callables(stmt_code, tree, virtual_lineage, is_import)
 
@@ -736,24 +746,61 @@ class StatementLineage:
 
         return StatementOutcome(outputs, lookup.lookup_time, lookup.files_stale, stmt_file_deps)
 
+    def _note_made_generators(self, stmt_code: str, outputs: set[str], virtual_lineage: Mapping[str, str]) -> None:
+        """Remember the lineages *stmt_code* gave its *outputs* when its code
+        makes a random generator (``rng = np.random.default_rng(42)``)."""
+        if carrier_kind_from_producer(stmt_code) not in _GENERATOR_KINDS:
+            return
+        for name in outputs:
+            if name in virtual_lineage:
+                self._generator_lineages.add(virtual_lineage[name])
+
+    def _recorded_draws(self, stmt_code: str) -> frozenset[str] | None:
+        """The generators *stmt_code* drew from when it last ran: this
+        session's record, else an earlier kernel's, kept in
+        ``carrier_advances`` once read (the runtime overwrites it when the
+        statement runs again). None when neither says."""
+        source_hash = statement_source_hash(stmt_code)
+        recorded = self.tracking_state.carrier_advances.get(source_hash)
+        if recorded is not None:
+            return recorded
+        recorded = self.probe.carrier_advances(source_hash) if self.probe.cash_instance else None
+        if recorded is not None:
+            self.tracking_state.carrier_advances.setdefault(source_hash, recorded)
+        return recorded
+
+    def _reachable_generators(self, inputs: set[str], virtual_lineage: Mapping[str, str]) -> set[str]:
+        """The generators a statement reading *inputs* can draw from: the live
+        ones, and those not live yet whose simulated lineage is a generator's."""
+        user_ns = self.shell.user_ns
+        dead = {
+            name for name in inputs if name not in user_ns and virtual_lineage.get(name) in self._generator_lineages
+        }
+        return reachable_generators(inputs, user_ns) | dead
+
     def _advanced_carriers(
-        self, stmt_code: str, in_entry: list[str] | None, inputs: set[str], outputs: set[str]
+        self,
+        stmt_code: str,
+        in_entry: list[str] | None,
+        inputs: set[str],
+        outputs: set[str],
+        virtual_lineage: Mapping[str, str],
     ) -> set[str]:
         """The variables holding a generator that *stmt_code* draws from.
 
         As its cache entry recorded them (*in_entry*: the runtime moves those
-        on after a hit), else as its last run this session saw them. A
-        statement never seen run is assumed to draw from every live generator
-        it can reach: when it does not, the simulation only re-runs something
-        it could have kept.
+        on after a hit), else as its last run saw them (this session's, or an
+        earlier kernel's record: a cheap draw has no entry). A statement never
+        seen run is assumed to draw from every generator it can reach: when it
+        does not, the simulation only re-runs something it could have kept.
         """
         if is_control_body(stmt_code):
             return set()
         recorded = in_entry
         if recorded is None:
-            recorded = self.tracking_state.carrier_advances.get(statement_source_hash(stmt_code))
+            recorded = self._recorded_draws(stmt_code)
         if recorded is None:
-            recorded = reachable_generators(inputs, self.shell.user_ns)
+            recorded = self._reachable_generators(inputs, virtual_lineage)
         return set(recorded) - outputs
 
     def _advance_carriers_without_outputs(
@@ -770,10 +817,10 @@ class StatementLineage:
         reads a generator, or its last run drew from one."""
         if is_control_body(stmt_code) or not inputs:
             return set()
-        recorded = self.tracking_state.carrier_advances.get(statement_source_hash(stmt_code))
+        recorded = self._recorded_draws(stmt_code)
         if recorded is not None and not recorded:
             return set()
-        if recorded is None and not reachable_generators(inputs, self.shell.user_ns):
+        if recorded is None and not self._reachable_generators(inputs, virtual_lineage):
             return set()
         cache_key = self._key(
             stmt_code, inputs | hidden_reads, set(), virtual_lineage, virtual_modules, occurrence_index
@@ -783,9 +830,10 @@ class StatementLineage:
         except (KeyError, TypeError, ValueError, OSError, AttributeError):
             metadata = None
         in_entry = metadata.get("carriers_advanced") if metadata else None
-        advanced = self._advanced_carriers(stmt_code, in_entry, inputs, set())
+        advanced = self._advanced_carriers(stmt_code, in_entry, inputs, set(), virtual_lineage)
         for name in advanced:
             virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            self._generator_lineages.add(virtual_lineage[name])
         return advanced
 
     def _register_callables(
@@ -795,6 +843,10 @@ class StatementLineage:
         self.callables.register_def(stmt_code, tree, virtual_lineage)
         if is_import:
             self.callables.register_imports(tree, virtual_lineage, stmt_code)
+
+
+#: The kinds ``carrier_kind_from_producer`` gives a random generator.
+_GENERATOR_KINDS = frozenset({"numpy Generator", "random.Random"})
 
 
 def _apply_deletes(tree: ast.Module | None, virtual_lineage: dict[str, str], virtual_modules: set[str]) -> None:

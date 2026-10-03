@@ -65,14 +65,15 @@ are **not** flagged and are cached silently:
 - a draw inside a helper function (`arr = make_data()`);
 - an anonymous generator: `z = np.random.default_rng().normal(size=3)`.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @b6c1ea9f -->
 A statement that draws from a generator held in a variable, or calls a function
 that does, counts as changing that variable. With `rng =
 np.random.default_rng(0)` in one cell and draws from `rng` in the next two,
 re-running the third cell alone first runs or restores the two above it, so it
-draws where a top-to-bottom run does. A stored draw from such a generator is
+draws where a top-to-bottom run does, also after a restart and when a draw
+above it was too cheap to store. A stored draw from such a generator is
 kept apart from one made with it in another position, so a reseed or a restart
-does not bring back a value drawn elsewhere in its stream. Three gaps on an
+does not bring back a value drawn elsewhere in its stream. Four gaps on an
 isolated re-run:
 
 - **A generator held by an object.** One reached only through an attribute
@@ -83,6 +84,12 @@ isolated re-run:
   `seed(1)` and run only a later draw: the draw does not see the new seed,
   because a bare `seed()` binds no variable. Re-run the seed cell after editing
   it, or seed in the cell that draws.
+- **A cache kept only in memory, after a restart.** Which generator a cheap
+  draw moved is noted on disk for the next kernel. Without a disk tier that
+  note is gone, and cash recognises the generator only by the call that made
+  it (`default_rng`, `RandomState`, `random.Random`, ...). With `rng =
+  make_rng(0)`, your own function, re-running a later draw alone after a
+  restart skips the cheap draws above it. Run the cells above it first.
 - **TensorFlow.** `tf.random.*` draws are flagged, but TensorFlow's stream cannot
   be saved and put back, so a cache hit leaves it where it was. Put
   `# @cash:no-cache` above such draws when later draws must match a clean run.

@@ -17,7 +17,7 @@ from typing import Any
 
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from .._protocols import CashInstanceProtocol
-from ..cache_key import control_outcome_key, import_bindings_key, mutation_verdict_key
+from ..cache_key import carrier_advances_key, control_outcome_key, import_bindings_key, mutation_verdict_key
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
 from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
 
@@ -40,10 +40,13 @@ class CacheProbe:
         self._split_store = None
         #: :meth:`import_bindings` answers by statement; cleared by :meth:`reset`.
         self._import_bindings_memo: dict[str, dict[str, dict]] = {}
+        #: :meth:`carrier_advances` answers by statement; cleared by :meth:`reset`.
+        self._carrier_advances_memo: dict[str, frozenset[str] | None] = {}
 
     def reset(self) -> None:
-        """Forget the memoized import bindings."""
+        """Forget the memoized import bindings and generator draws."""
         self._import_bindings_memo.clear()
+        self._carrier_advances_memo.clear()
 
     def backend(self):
         """The cache backend the simulation probes, or None without a Cash."""
@@ -112,6 +115,24 @@ class CacheProbe:
         if not record or not record.get("mutation_verdict"):
             return None
         return set(record.get("receivers") or ())
+
+    def carrier_advances(self, source_hash: str) -> frozenset[str] | None:
+        """The generators a statement drew from when an earlier kernel ran it,
+        or None when nothing was recorded. See ``carrier_advances_key``.
+        Memoized until :meth:`reset`: every statement the simulation meets
+        asks, and most never read a generator."""
+        memo = self._carrier_advances_memo
+        if source_hash in memo:
+            return memo[source_hash]
+        found = None
+        record = self.record(carrier_advances_key(source_hash))
+        if record and record.get("carrier_advances"):
+            try:
+                found = frozenset(str(name) for name in record.get("names") or ())
+            except TypeError:
+                found = None
+        memo[source_hash] = found
+        return found
 
     def control_outcome(self, stmt_code: str, lineage_now: Callable[[str], str]) -> ControlOutcome | None:
         """A loop's outcome from an earlier kernel, when it may still be trusted.
