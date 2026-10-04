@@ -509,6 +509,11 @@ class NotebookTestRunner:
         except Exception:  # replaced below, whatever the failure
             self._replace_kernel()
         self._restore_working_directory()
+        if self._warm is not None:
+            # A new process: the module/sys.path baseline the warm kernel's
+            # between-test purge relies on went with the old one. Take it now,
+            # before this test imports anything, or the next test inherits it.
+            self._warm.capture_baseline()
         if self._inject_path:
             self._inject_notebook_path()
         return self

@@ -507,6 +507,10 @@ class _WarmKernel:
         # called us, does exactly that (reset_session + %cash_on) and works the
         # same on a freshly booted kernel as on a reused one.
 
+    def capture_baseline(self) -> None:
+        """Record what a clean kernel holds, after a restart replaced the process."""
+        self._exec("# @cash:no-cache\n" + _REUSE_CAPTURE_BASELINE)
+
     def _exec(self, code: str) -> None:
         self.run_async(self.kc._async_execute_interactive(code, store_history=False, output_hook=lambda msg: None))
 
@@ -750,14 +754,37 @@ except Exception:
     pass
 """
 
+# Take the baseline the purge above protects, unconditionally. Run by
+# NotebookTestRunner.restart() on a warm kernel, right after the restart and
+# before the test runs anything in the new process.
+#
+# The baseline lives IN the kernel process, as attributes on `sys`, so a
+# restart throws it away. Left alone, the next test's prepare_for_test found
+# none and snapshotted the restarted test's own imports as "baseline", so they
+# were never purged: test_the_second_run_hits[plain-module] restarts after
+# importing its `helpers`, and the next test on that worker that did
+# `import helpers` got that one -- `helpers.announce` missing, or "cannot
+# import name 'double' from 'helpers' (.../test_the_second_run_hits_plain0/
+# helpers.py)". Reproduced with that test and the @stateful marker file, -n 0.
+_REUSE_CAPTURE_BASELINE = """
+import sys as _sys
+_sys._cash_test_baseline_modules = frozenset(_sys.modules)
+_sys._cash_test_baseline_syspath = list(_sys.path)
+del _sys
+"""
+
 _REUSE_PURGE_TEST_MODULES = """
 try:
     import sys as _sys, os as _os, importlib as _il
     _base = getattr(_sys, '_cash_test_baseline_modules', None)
     if _base is None:
-        # First reused test: snapshot the post-%cash_on module set and sys.path
-        # as the protected baseline (stdlib + cash + cash deps, clean import
-        # roots). Only state introduced by tests AFTER this point is reset.
+        # First reused test on this kernel process: snapshot the module set and
+        # sys.path as the protected baseline (stdlib + cash + cash deps, clean
+        # import roots). Only state introduced by tests AFTER this point is
+        # reset. This is only clean because nothing has run here yet; a kernel
+        # restarted mid-test is a new process that has, so restart() takes its
+        # baseline at once (_REUSE_CAPTURE_BASELINE) and this branch never
+        # sees it.
         _sys._cash_test_baseline_modules = frozenset(_sys.modules)
         _sys._cash_test_baseline_syspath = list(_sys.path)
     else:
