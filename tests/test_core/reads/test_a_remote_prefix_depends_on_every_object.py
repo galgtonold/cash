@@ -64,7 +64,7 @@ def _moto_server():
     pytest.importorskip("s3fs")
     moto_server = pytest.importorskip("moto.server")
 
-    server = moto_server.ThreadedMotoServer(port=0, verbose=False)
+    server = moto_server.ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
     server.start()
     try:
         yield f"http://127.0.0.1:{server.get_host_and_port()[1]}"
