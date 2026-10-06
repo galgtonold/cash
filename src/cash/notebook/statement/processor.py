@@ -956,7 +956,9 @@ class StatementProcessor:
     def _refuse_unrestorable_outputs(self, run: StatementRun, captured_vars: dict[str, Any]) -> None:
         """Skip-cache *run* when one of its output values cannot be stored and
         restored faithfully (:func:`unrestorable_output_reason`)."""
-        reason = unrestorable_output_reason(run.outputs, captured_vars, self.shell.user_ns)
+        reason = unrestorable_output_reason(
+            run.outputs, captured_vars, self.shell.user_ns, cash_held=self._calls.held_call_results()
+        )
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)

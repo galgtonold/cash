@@ -162,8 +162,12 @@ df = df.assign(score=expensive(df))
 ```
 
 A statement that changes an object made in an earlier cell runs every time. The
-same statement on an object made in the same cell caches normally. **Fix:**
-rebind with `df = df.assign(...)`.
+same statement on an object made in the same cell caches normally, unless
+another variable or container holds that object too (`d = dfs[0]`, or
+`for d in dfs:`): a restored copy would not be the object `dfs` holds, so the
+statement runs every time. So does one whose result holds an object that
+already existed (`models = {"m": m}`). **Fix:** rebind with
+`df = df.assign(...)`.
 
 ### Mutating global state inside a function
 

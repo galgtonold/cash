@@ -49,21 +49,14 @@ BUILD = (
 MUTATE = "obj.inner.append(42)\nobj.tag = 'mutated'"
 
 # (id, bind statement, identity expression, value expression, expected value)
-# `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not lst`).
-# Refusing to cache the binding would not fix that, and `list(...)` is a call that
-# can do real work, so it is deliberately outside the computed-alias fix.
-_ELEMENT_ALIAS = pytest.mark.xfail(
-    reason="element-level aliasing through a freshly-built container; the binding "
-    "itself is not the alias, so the computed-alias refusal does not apply",
-)
-
 FORMS = [
     ("attr", "b = obj.inner", "b is obj.inner", "b", "[42]"),
     ("subscript", "b = holder['k']", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated"),
     ("index", "b = lst[0]", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated"),
-    pytest.param(
-        "call", "b = list(lst)", "b[0] is obj", "getattr(b[0], 'tag', 'MISSING')", "mutated", marks=_ELEMENT_ALIAS
-    ),
+    # `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not
+    # lst`): the new list holds an object `lst` holds too, so it is never
+    # restored as a copy either.
+    ("call", "b = list(lst)", "b[0] is obj", "getattr(b[0], 'tag', 'MISSING')", "mutated"),
     ("ternary", "b = obj if True else None", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated"),
 ]
 

@@ -227,6 +227,14 @@ class CallRouting:
         """Whether a loop iteration's body is running."""
         return bool(self._loop_vars)
 
+    def held_call_results(self) -> list[tuple]:
+        """The entries by which the call cache holds this cell's call results,
+        to refer to them (`with_call_refs`): references of cash's own, not
+        the user's. Each entry's first item is the result."""
+        if self._call_cache is None:
+            return []
+        return list(self._call_cache.held_results().values())
+
     def with_call_refs(self, variables: dict[str, Any], code: str, referenced: dict[str, int]) -> dict[str, Any]:
         """*variables* with the call results the call cache holds stored by
         reference (see :func:`~cash.notebook.call_refs.with_call_refs`)."""
