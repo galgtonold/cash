@@ -143,3 +143,25 @@ def test_the_open_ipython_puts_in_every_namespace_counts_as_the_builtin(path):
 
     ipython_open = InteractiveShell.instance().user_ns["open"]
     assert _safe("open(path)", {"path": path, "open": ipython_open})
+
+
+def test_a_progress_bar_around_a_long_loop_does_not_keep_it_per_iteration(cash_magics, mock_shell):
+    """`for i, x in tqdm(enumerate(rows)):` is the commonest loop header in a
+    notebook that parses data, and a bar is no reason to run every iteration
+    as its own statement: 7 s without cash was 5 minutes with it."""
+    tqdm = pytest.importorskip("tqdm")
+    mock_shell.user_ns["rows"] = list(range(3000))
+    code = "total = 0\nfor i, x in tqdm(enumerate(rows)):\n    total += x\n    last = i"
+    mock_shell.user_ns["tqdm"] = tqdm.tqdm
+    run_cash_cell(cash_magics, code)
+    assert mock_shell.user_ns["total"] == sum(range(3000)) and mock_shell.user_ns["last"] == 2999
+    statements = cash_magics.cash_status("dict")["last_cell"].get("statements", [])
+    assert len(statements) < 10, f"one statement per iteration: {len(statements)} statements"
+
+
+def test_a_notebooks_own_tqdm_gets_no_benefit_of_the_doubt():
+    def tqdm(it):
+        return it
+
+    node = ast.parse("for x in tqdm(rows):\n    pass").body[0]
+    assert not policy.header_safe_to_reevaluate(node.iter, [1, 2], {"tqdm": tqdm, "rows": [1, 2]})
