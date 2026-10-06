@@ -26,9 +26,8 @@ from .lineage_formula import (
     is_cash_instrumentation,
     is_module_like,
     module_read_lineage,
-    statement_environment_component,
-    statement_module_data,
 )
+from .recorded_reads import ReadRecord, choose, read_parts, watch
 
 logger = logging.getLogger(__name__)
 
@@ -196,16 +195,18 @@ class CacheKeyContext:
     #: named as an input that is not live in ``user_ns``. The runtime never
     #: sets it, so its keys are unchanged.
     virtual_callables: Mapping[str, VirtualCallable] | None = None
-    #: ``TrackingState.recorded_reads`` / ``recorded_reads_by_key``: what the
-    #: environment and the data of the user's modules a statement reads held
-    #: when the runtime keyed it (:func:`_recorded_reads_component`). None:
-    #: read them now.
-    recorded_reads: dict[str, str] | None = None
-    recorded_reads_by_key: dict[str, str] | None = None
+    #: ``TrackingState.reads``: what the environment and the data of the
+    #: user's modules a statement reads held when the runtime keyed it, and
+    #: what changed them since (:func:`_recorded_reads_component`). None: read
+    #: them now.
+    reads: ReadRecord | None = None
     #: The runtime's own key for a statement it is about to run: they are
     #: read now and recorded. Every other key (the simulation's, a restore's)
-    #: reads back what the runtime recorded.
+    #: takes what the runtime recorded where the notebook itself changed them.
     record_reads: bool = False
+    #: Whether a statement's text is one of the notebook's cells: a change it
+    #: made is the notebook's own (``recorded_reads.choose``). None: none is.
+    in_notebook: Callable[[str], bool] | None = None
 
 
 class CacheKeyResult(NamedTuple):
@@ -624,34 +625,31 @@ def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
 
 
 def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -> str:
-    """What the environment reads in *code* return
-    (``lineage_formula.statement_environment_component``) and what the data of
-    the user's modules it reads holds (``lineage_formula.module_data_component``),
-    for its key.
+    """What the environment reads in *code* return and what the data of the
+    user's modules it reads holds (``recorded_reads.read_parts``), for its key.
 
     Read now for the runtime's own key, and recorded under *statement* (the
-    rest of the key). Any other key -- the simulation's above all -- reads
-    back what the runtime recorded: it runs where the environment and the
-    modules hold what the whole notebook left in them, so an
-    ``os.environ["MODE"] = "b"`` or a ``mylib.K = 7`` in a cell below a reader
-    would re-key the reader and send it to run again. Read now when the
-    runtime has not keyed the statement yet.
+    rest of the key). Any other key -- the simulation's above all -- runs
+    where the environment and the modules hold what the whole notebook left
+    in them, so an ``os.environ["MODE"] = "b"`` or a ``mylib.K = 7`` in a
+    cell below a reader would re-key the reader and send it to run again: a
+    value a statement of the notebook changed is taken from the record. One
+    changed outside the notebook's cells is read now
+    (``recorded_reads.choose``).
     """
-    seen = ctx.recorded_reads
-    if seen is None:
-        return _reads_now(code, ctx)
+    record = ctx.reads
+    live = read_parts(code, ctx.user_ns)
+    if record is None:
+        return live.component()
     digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
-    if not ctx.record_reads and digest in seen:
-        return seen[digest]
-    component = _reads_now(code, ctx)
     if ctx.record_reads:
-        seen[digest] = component
-    return component
-
-
-def _reads_now(code: str, ctx: CacheKeyContext) -> str:
-    """The environment and module-data components of *code*, read now."""
-    return statement_environment_component(code, ctx.user_ns) + statement_module_data(code, ctx.user_ns)
+        record.seen[digest] = live
+        watch(live, record)
+        return live.component()
+    recorded = record.seen.get(digest)
+    if recorded is None:
+        return live.component()
+    return choose(recorded, live, record.writes, ctx.in_notebook).component()
 
 
 def compute_cache_key(
@@ -740,8 +738,8 @@ def compute_cache_key(
     combined_hash_str += reads
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
-    if reads and ctx.recorded_reads_by_key is not None:
-        ctx.recorded_reads_by_key[cache_key] = reads
+    if reads and ctx.reads is not None:
+        ctx.reads.by_key[cache_key] = reads
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(

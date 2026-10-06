@@ -83,6 +83,7 @@ from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..callee_reach import module_state_writes
 from ..lineage_formula import key_hidden_reads
+from ..recorded_reads import note_writes, snapshot
 from ..run_memo import forget_file_state_this_run
 from ..write_observer import observe_writes
 
@@ -353,8 +354,7 @@ class StatementProcessor:
                 user_ns=self.shell.user_ns,
                 function_tracker=self.function_tracker,
                 compute_hash_fn=self.compute_hash,
-                recorded_reads=self.tracking_state.recorded_reads,
-                recorded_reads_by_key=self.tracking_state.recorded_reads_by_key,
+                reads=self.tracking_state.reads,
             ),
             outputs=set(effects.outputs),
         )
@@ -734,6 +734,15 @@ class StatementProcessor:
             if is_control_body(run.code)
             else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
         )
+        # The environment and module data statements were keyed on, as they
+        # stand before this one: a change it makes is the notebook's own
+        # (`recorded_reads`).
+        reads = self.tracking_state.reads
+        try:
+            watched_before = snapshot(run.code, self.shell.user_ns, reads.watched)
+        except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
+            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            watched_before = {}
         try:
             with make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured:
                 execution.captured = captured
@@ -755,6 +764,8 @@ class StatementProcessor:
             execution.result = error_result(e)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        if watched_before:
+            note_writes(watched_before, run.code, reads)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
@@ -1263,8 +1274,7 @@ class StatementProcessor:
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     compute_hash_fn=self.compute_hash,
-                    recorded_reads=self.tracking_state.recorded_reads,
-                    recorded_reads_by_key=self.tracking_state.recorded_reads_by_key,
+                    reads=self.tracking_state.reads,
                     record_reads=True,
                 ),
                 outputs=outputs,

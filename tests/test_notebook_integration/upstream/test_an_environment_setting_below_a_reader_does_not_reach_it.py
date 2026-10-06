@@ -68,3 +68,17 @@ def test_after_a_restart(nb_runner, var):
     assert nb_runner.peek("u") == "'aNone!'", nb_runner.get_raw_output(4)
     nb_runner.run_cell(4)
     assert nb_runner.peek("u") == "'aNone!'", nb_runner.get_raw_output(4)
+
+
+def test_a_change_from_outside_is_seen(nb_runner, var):
+    """Set outside the notebook's cells, as a shell or a launcher would: the
+    reader follows it, though a cell below sets the variable too."""
+    nb_runner.create_notebook(_cells(var, f"t = os.environ['{var}'] + slow()"))
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_cell(4)
+    assert nb_runner.peek("u") == "'aNone!'", nb_runner.get_raw_output(4)
+
+    nb_runner.peek(f"__import__('os').environ.__setitem__('{var}', 'z')")
+    nb_runner.run_cell(4)
+    assert nb_runner.peek("u") == "'zNone!'", nb_runner.get_raw_output(4)
