@@ -13,19 +13,23 @@ that what CAN change still reaches the key:
   hashed array by array, 2.5x slower than its pickle;
 * ``dataclasses.fields()`` read on every hit to decode the entry's metadata;
 * primitive arguments sent through the general canonical walk;
-* three failed ``inspect.getsource`` calls per dataclass per hit.
+* three failed ``inspect.getsource`` calls per dataclass per hit;
+* a dataclass argument's generated methods analysed again, and their source
+  looked for, on every hit (8 to 22 ``inspect.findsource`` calls).
 """
 
 from __future__ import annotations
 
 import builtins
 import dataclasses
+import inspect
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from cash import _annotation_refs, canonical_form, content_hashers
+from cash.analysis import purity_analyzer
 from cash.decorator import arg_hashing, cache_metadata, function_identity
 from cash.decorator.arg_hashing import ArgHasher
 from cash.decorator.module_attrs import ModuleAttrFold
@@ -232,6 +236,43 @@ def test_a_generated_method_s_identity_is_read_once(monkeypatch):
     first = function_identity.hash_callable_source(init)
     assert function_identity.hash_callable_source(init) == first
     assert len(reads) == 1
+
+
+@dataclasses.dataclass(frozen=True, order=True)
+class Config:
+    alpha: float = 0.3
+    name: str = "m"
+
+
+def test_a_dataclass_argument_is_not_analysed_again_on_a_hit(disk_cash, monkeypatch):
+    @disk_cash.cache
+    def alpha(cfg):
+        return cfg.alpha
+
+    assert alpha(Config()) == 0.3
+    assert alpha(Config()) == 0.3
+    looked = []
+    real = inspect.findsource
+    monkeypatch.setattr(inspect, "findsource", lambda obj: looked.append(obj) or real(obj))
+    walks = []
+    real_run = purity_analyzer.HelperWalk.run
+    monkeypatch.setattr(purity_analyzer.HelperWalk, "run", lambda self: walks.append(self) or real_run(self))
+    assert alpha(Config()) == 0.3
+    assert alpha(Config(alpha=0.5)) == 0.5
+    assert alpha.cache_info()["hits"] >= 2
+    assert looked == [] and walks == []
+
+
+def test_a_report_by_code_is_not_served_once_the_code_is_replaced():
+    @dataclasses.dataclass
+    class Point:
+        x: int = 0
+
+    key, owner = purity_analyzer._memo_key(Point.__eq__)
+    assert key is not None and owner() is Point.__eq__
+    Point.__eq__.__code__ = (lambda self, other: True).__code__
+    assert owner() is None
+    assert purity_analyzer._memo_key(Point.__eq__)[0] != key
 
 
 def test_what_is_worth_keying_on_its_own_is_decided_by_size():
