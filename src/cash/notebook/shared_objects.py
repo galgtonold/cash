@@ -20,7 +20,8 @@ never a wrong value.
 
 The walk goes through what restoring copies wholesale and what identity
 matters in: the builtin containers, and the attributes of objects of the
-notebook's own classes and of ``SimpleNamespace`` / dataclass instances, and
+notebook's own classes, of ``SimpleNamespace`` / dataclass instances and of
+estimators (a ``Pipeline`` holds the step objects it was built from), and
 the object a bound method is bound to and the cells a closure keeps
 (``hooks = {'log': tracker.log}``). Everything else is one leaf, whose own
 count is checked. Values with no identity worth keeping (numbers, strings,
@@ -145,12 +146,34 @@ def _is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
 
 
+_ESTIMATOR_CLASSES: dict[type, bool] = {}
+
+
+def _is_estimator_class(cls: type) -> bool:
+    """Whether *cls* has scikit-learn's estimator interface. A pipeline or an
+    ensemble holds the estimators it was built from (``Pipeline([('s',
+    scaler), ...])``), and a restore copies them along with it."""
+    known = _ESTIMATOR_CLASSES.get(cls)
+    if known is None:
+        try:
+            known = callable(getattr(cls, "get_params", None)) and callable(getattr(cls, "fit", None))
+        except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
+            known = False
+        _ESTIMATOR_CLASSES[cls] = known
+    return known
+
+
 def _attributes_of(value: Any) -> dict[str, Any] | None:
     """The attributes a restore copies with *value* and the caller can reach,
-    for an object of the notebook's own classes, a ``SimpleNamespace`` or a
-    dataclass; ``None`` for anything else (a leaf)."""
+    for an object of the notebook's own classes, a ``SimpleNamespace``, a
+    dataclass or an estimator; ``None`` for anything else (a leaf)."""
     cls = type(value)
-    if not (cls.__module__ == "__main__" or cls is types.SimpleNamespace or dataclasses.is_dataclass(cls)):
+    if not (
+        cls.__module__ == "__main__"
+        or cls is types.SimpleNamespace
+        or dataclasses.is_dataclass(cls)
+        or _is_estimator_class(cls)
+    ):
         return None
     try:
         own = object.__getattribute__(value, "__dict__")

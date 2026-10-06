@@ -245,16 +245,13 @@ class StatementRestorer:
         both -- is transferred exactly as it would be unpickled. Falls back to a
         ``__dict__`` swap for a plain object (whose ``object.__setstate__`` is
         absent). Raises on failure; the caller catches and rebinds.
+
+        The estimators *existing* holds keep their identity too
+        (`_keep_estimators`): ``Pipeline.fit`` fits the very step objects it
+        was built from, so ``scaler`` and ``clf`` must come out fitted, and
+        ``pipe.named_steps['s']`` still be ``scaler``.
         """
-        getstate = getattr(value, "__getstate__", None)
-        setstate = getattr(existing, "__setstate__", None)
-        if callable(getstate) and callable(setstate):
-            state = getstate()
-            if state is not None:
-                setstate(state)
-                return
-        existing.__dict__.clear()
-        existing.__dict__.update(value.__dict__)
+        transfer_state_in_place(existing, value)
 
     def _replay_cached_outputs(
         self,
@@ -269,3 +266,49 @@ class StatementRestorer:
         t_output = _perf_counter()
         replay_outputs(stdout, stderr, rich_outputs)
         return _perf_counter() - t_output
+
+
+def _is_estimator(value: Any) -> bool:
+    """An object with scikit-learn's estimator interface."""
+    return callable(getattr(value, "get_params", None)) and callable(getattr(value, "fit", None))
+
+
+def _state_of(obj: Any) -> Any:
+    getstate = getattr(obj, "__getstate__", None)
+    state = getstate() if callable(getstate) else None
+    return state if state is not None else dict(obj.__dict__)
+
+
+def transfer_state_in_place(existing: Any, value: Any, seen: set[int] | None = None) -> None:
+    """Set *value*'s state on *existing*, keeping the estimators *existing*
+    holds where the state holds their counterparts (`_keep_estimators`)."""
+    seen = set() if seen is None else seen
+    seen.add(id(existing))
+    state = _keep_estimators(_state_of(existing), _state_of(value), seen)
+    setstate = getattr(existing, "__setstate__", None)
+    if callable(setstate) and callable(getattr(value, "__getstate__", None)):
+        setstate(state)
+        return
+    existing.__dict__.clear()
+    existing.__dict__.update(state)
+
+
+def _keep_estimators(old: Any, new: Any, seen: set[int]) -> Any:
+    """*new*, with each estimator in it that stands where *old* has one of the
+    same type replaced by *old*'s, given *new*'s state in place.
+
+    Matched by position: the same key of a dict, the same index of a list or
+    a tuple of the same length. A restored state holds copies; the run fitted
+    the objects themselves, which other variables may name.
+    """
+    if old is new:
+        return new
+    if _is_estimator(new) and type(old) is type(new) and id(old) not in seen:
+        transfer_state_in_place(old, new, seen)
+        return old
+    if type(new) in (list, tuple) and type(old) is type(new) and len(old) == len(new):
+        items = [_keep_estimators(o, n, seen) for o, n in zip(old, new)]
+        return items if type(new) is list else tuple(items)
+    if type(new) is dict and type(old) is dict:
+        return {k: _keep_estimators(old[k], v, seen) if k in old else v for k, v in new.items()}
+    return new
