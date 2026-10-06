@@ -27,6 +27,7 @@ from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
+from cash.notebook.statement.run import ECHO_FIELD
 from cash.sizing import estimate_object_size
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
@@ -642,6 +643,10 @@ class StatementStore:
             # rather than continue the stream.
             "rng_epochs": dict(seed_epochs),
         }
+        # The value the statement echoed as its cell's result, which a hit
+        # hands to IPython's output history as a run does.
+        if execution.echo:
+            payload[ECHO_FIELD] = execution.echo[0]
 
         # the module-global RNG post-state above misses generators the
         # user holds in a variable (``rng = np.random.default_rng(42)``).
