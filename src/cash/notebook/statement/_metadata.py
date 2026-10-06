@@ -65,6 +65,12 @@ class StatementCacheMetadata:
     #: (``b = a`` before ``a['x'] = ...``). The entry restores only while each
     #: still has that lineage, and gives it `held_lineage` of it.
     holders: dict[str, str] | None = None
+    #: Whether the statement changed an object of its outputs in place, which
+    #: the variables in ``holders`` hold too: their lineages move on then
+    #: (`held_lineage`), at its run and at each hit. A statement that only
+    #: builds a new object around theirs (``report = {'totals': totals}``)
+    #: leaves them as they were.
+    holders_moved: bool | None = None
     storage: list[str] | None = None
     source: str | None = None
     skipped_reason: str | None = None

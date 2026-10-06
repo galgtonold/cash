@@ -525,6 +525,10 @@ class StatementProcessor:
             if hit_result is not None:
                 return hit_result
 
+        user_ns = self.shell.user_ns
+        run.bound_before = {
+            name: id(user_ns[name]) for name in run.outputs | run.mut_observe | run.mut_assumed if name in user_ns
+        }
         self._route_calls(run)
         return None
 
@@ -1041,13 +1045,16 @@ class StatementProcessor:
 
         Only for an entry with its value: the simulation moves them on where
         it sees the entry, and a metadata-only record carries none, nor is it
-        kept by every backend. A run that stores none leaves them where they
-        are, as it always did, and the record says so: the entry another run
-        left may still name some.
+        kept by every backend. And only when the run changed their object in
+        place (``holders_moved``): ``report = {'totals': totals}`` leaves
+        ``totals`` as it was, and moving it would change the key of the very
+        statement that reads it, on every run. A run that moves none leaves
+        them where they are, as it always did, and the record says so: the
+        entry another run left may still name some.
         """
         cache_key = run.cache_key
         holders = None
-        if metadata is not None and metadata.storage and not metadata.metadata_only:
+        if metadata is not None and metadata.storage and not metadata.metadata_only and metadata.holders_moved:
             holders = metadata.holders
         if holders or run.entry_holders or cache_key in self.tracking_state.held_with:
             self.tracking_state.held_with[cache_key] = dict(holders or {})
@@ -1081,6 +1088,9 @@ class StatementProcessor:
                 f"a restore against, so the statement re-runs every time"
             )
         run.holders = {name: lineage[name] for name in holders}
+        run.moves_holders = any(
+            id(captured_vars[name]) == run.bound_before.get(name) for name in run.outputs if name in captured_vars
+        )
         captured_vars.update(holders)
         return None
 

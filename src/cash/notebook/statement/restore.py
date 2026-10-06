@@ -132,16 +132,18 @@ class StatementRestorer:
             t_var = _perf_counter()
             inplace = inplace_restore or frozenset()
             holders = (metadata.holders if metadata is not None else None) or {}
+            moved = holders if metadata is not None and metadata.holders_moved else {}
             if metadata is not None and metadata.key:
-                tracking_state.held_with[metadata.key] = dict(holders)
+                tracking_state.held_with[metadata.key] = dict(moved)
             for var_name, value in restored_vars.items():
                 if var_name in holders:
                     self.shell.user_ns[var_name] = value
+                    before = holders[var_name]
                     apply_held_var(
                         tracking_state,
                         var_name,
                         value,
-                        held_lineage(holders[var_name], metadata.key or ""),
+                        held_lineage(before, metadata.key or "") if var_name in moved else before,
                         compute_hash=self.compute_hash,
                     )
                     continue
