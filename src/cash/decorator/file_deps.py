@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -206,6 +207,14 @@ def _glob_base(pattern: str) -> str:
     return "/".join(base) or ("/" if pattern.startswith("/") else ".")
 
 
+def _code_of(fn: Any) -> types.CodeType | None:
+    """*fn*'s code object, or None. A class whose metaclass answers every
+    attribute (a catch-all ``__getattr__``) hands back a value for
+    ``__code__`` too; that is not code."""
+    code = getattr(fn, "__code__", None)
+    return code if isinstance(code, types.CodeType) else None
+
+
 class FileDeps:
     """The files a cached call depends on: declared with ``file_depends_on=``,
     and read by the body or its helpers."""
@@ -374,12 +383,12 @@ class FileDeps:
         if func is None or tracker is None:
             return
         live = getattr(tracker, "reading_codes", set())
-        own = getattr(func, "__code__", None)
+        own = _code_of(func)
         have = tracker.get_accessed_files()
         arg_paths: set[str] | None = None
         served = getattr(tracker, "served_functions", set()) - getattr(tracker, "unentered_functions", set())
         for fn in self._registry.code_functions(func, func_name, served):
-            code = getattr(fn, "__code__", None)
+            code = _code_of(fn)
             if code is None or code is own or code in live:
                 continue
             remembered = credited_reads(code)
@@ -418,7 +427,7 @@ class FileDeps:
         stats: dict[str, tuple[int, int] | None] = {}
         moved: list[str] = []
         for fn in self._registry.code_functions(func, func_name):
-            code = getattr(fn, "__code__", None)
+            code = _code_of(fn)
             rec = CODE_KEYED_STATS.get(id(code)) if code is not None else None
             if rec is None or rec[0] is not code:
                 continue
