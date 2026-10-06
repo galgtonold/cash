@@ -261,11 +261,15 @@ def is_cow_pandas(value: Any) -> bool:
 def frame_memoable(value: Any) -> bool:
     """Can the copy-on-write memo check *value* instead of reading it
     (`ArgHasher._memo_content_digest`)? A pandas frame under copy-on-write
-    whose blocks pandas alone can write (`frame_borrows_its_data`)."""
+    whose blocks pandas alone can write (`frame_borrows_its_data`).
+
+    A handle recorded and dropped since does not count: it costs the memo a
+    fresh hash, and how a walk keys an object holding the frame must not
+    change because ``.values`` was read once."""
     if not is_cow_pandas(value):
         return False
     try:
-        return not frame_borrows_its_data(value)
+        return not frame_borrows_its_data(value, since=sys.maxsize)
     except Exception:  # noqa: BLE001 - a pandas internals change: no memo
         return False
 
@@ -287,8 +291,9 @@ def frame_signature(obj: Any) -> tuple:
     Two ways around copy-on-write are closed separately. An Arrow-backed
     array (pandas 3's strings, in a column or an axis) is written by
     swapping the Arrow array it holds, so that array's identity is in the
-    signature. Every other array is written in place through ``.array``,
-    which is recorded, or is not memoised at all (`frame_borrows_its_data`).
+    signature. Every other array is written in place through a handle
+    pandas hands out, which is recorded (`watch_array_handles`), or is not
+    memoised at all (`frame_borrows_its_data`).
     """
     mgr = obj._mgr
     blocks = tuple((id(block.values), id(getattr(block.values, "_pa_array", None))) for block in mgr.blocks)
@@ -316,7 +321,7 @@ def _axis_arrays(axis: Any) -> list:
     return [axis._data]
 
 
-def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
+def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
     """Whether *obj*'s data sits in memory something outside pandas may write.
 
     The memo trusts copy-on-write: while the memo's shallow copy *held*
@@ -343,9 +348,10 @@ def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
     shared in ways no reference count shows, and so can an extension array
     other than dates, durations and Arrow strings (a categorical or nullable
     array is handed out writable by ``.values``). Such frames are hashed on
-    every call. The same goes for any handle ``.array`` has handed out since
-    the memo started (`watch_array_handles`), and for a check that cannot
-    run (a pandas internals change).
+    every call. The same goes for a frame some of whose memory a handle has
+    reached (`watch_array_handles`) since its content was hashed (*since*,
+    an `exposure_mark`), and for a check that cannot run (a pandas
+    internals change).
 
     Called when the memo stores a frame, as well as when it is looked up:
     a caller's array written and then dropped between two calls leaves no
@@ -358,7 +364,7 @@ def frame_borrows_its_data(obj: Any, held: Any = None) -> bool:
         if found is None:
             return True
         arrays, pandas_refs = found
-        if _EXPOSED and any(id(array) in _EXPOSED for array in arrays):
+        if _EXPOSED and any(_EXPOSED.get(id(array), _NOT_EXPOSED)[1] > since for array in arrays):
             return True
         return any(extra != _refcount_baseline() for extra in _refs_beyond(arrays, pandas_refs))
     except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
@@ -512,15 +518,25 @@ def _refcount_baseline() -> int:
 _REFCOUNT_BASELINE: int | None = None
 
 
-#: ``id -> weak reference`` for every array ``.array`` has handed out
-#: since the frame memo started (`watch_array_handles`).
-_EXPOSED: dict[int, Any] = {}
+#: ``id -> (weak reference, exposure number)`` for every array a handle
+#: has reached since the frame memo started (`watch_array_handles`), with
+#: the number of the latest handle that reached it.
+_EXPOSED: dict[int, tuple[Any, int]] = {}
+_NOT_EXPOSED = (None, 0)
+#: How many handles have been recorded (`exposure_mark`).
+_EXPOSURES = [0]
+
+
+def exposure_mark() -> int:
+    """The number of the latest handle recorded: a frame hashed after it is
+    unaffected by every handle up to it, if no handle is still alive."""
+    return _EXPOSURES[0]
 
 
 def watch_array_handles() -> None:
-    """Record each writable handle pandas gives out to the memory it keeps.
-    Done once, when the frame memo first stores a frame: until then nothing
-    relies on a frame staying unwritten.
+    """Record each handle pandas gives out to the memory it keeps, through
+    which that memory can be written. Done once, when the frame memo first
+    stores a frame: until then nothing relies on a frame staying unwritten.
 
     ``.array`` (of a Series or an Index), ``pd.array(s, copy=False)`` and a
     date index's ``asi8`` are the public handles to a numpy-backed array
@@ -532,6 +548,18 @@ def watch_array_handles() -> None:
     ``.array`` or ``pd.array`` itself, so an ordinary workload records
     nothing; it reads ``asi8`` (``resample``, ``rolling``), so that one is
     recorded only when code outside pandas asks for it.
+
+    The read-only views ``.values``, ``to_numpy()`` and ``np.asarray`` give
+    of a numpy-backed column or index are handles too: numpy lets
+    ``arr.flags.writeable = True`` make one writable again (the block under
+    it is), which is the usual answer to pandas' "assignment destination is
+    read-only". pandas reads these itself all the time, so they are recorded
+    only when code outside pandas and cash asks, and only a read-only view.
+
+    A recorded handle that is dropped leaves its write, if any, in the
+    frame; it costs the frame one fresh hash (*since* in
+    `frame_borrows_its_data`), not the memo for good. One still alive keeps
+    a reference that `frame_borrows_its_data` counts.
     """
     global _WATCHING
     if _WATCHING:
@@ -539,12 +567,28 @@ def watch_array_handles() -> None:
     import pandas as pd
     from pandas.core.indexes.datetimelike import DatetimeIndexOpsMixin
 
+    from pandas.core.base import IndexOpsMixin
+    from pandas.core.generic import NDFrame
+    from pandas.core.indexes.datetimelike import DatetimeTimedeltaMixin
+
     for cls, name, outside_only in (
         (pd.Series, "array", False),
         (pd.Index, "array", False),
         (DatetimeIndexOpsMixin, "asi8", True),
+        (pd.Series, "values", _READ_ONLY_VIEW),
+        (pd.DataFrame, "values", _READ_ONLY_VIEW),
+        (pd.Index, "values", _READ_ONLY_VIEW),
+        (DatetimeTimedeltaMixin, "values", _READ_ONLY_VIEW),
+        (IndexOpsMixin, "to_numpy", _READ_ONLY_VIEW),
+        (pd.DataFrame, "to_numpy", _READ_ONLY_VIEW),
+        (pd.Series, "__array__", _READ_ONLY_VIEW),
+        (NDFrame, "__array__", _READ_ONLY_VIEW),
+        (pd.Index, "__array__", _READ_ONLY_VIEW),
     ):
         original = cls.__dict__.get(name)
+        if isinstance(original, types.FunctionType):  # a method: wrapped as it is
+            setattr(cls, name, _noting(original, outside_only))
+            continue
         if isinstance(original, property) and original.fget is not None:
             getter = original.fget
         elif hasattr(original, "__get__"):  # Index.array: a cached property
@@ -571,16 +615,26 @@ def _get_through(descriptor: Any, instance: Any) -> Any:
     return descriptor.__get__(instance, type(instance))
 
 
-def _noting(accessor: Callable, outside_only: bool) -> Callable:
+#: `_noting`'s *outside_only* for a read-only view (`watch_array_handles`).
+_READ_ONLY_VIEW = "read-only view"
+
+
+def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
     @functools.wraps(accessor)
     def noting(*args: Any, **kwargs: Any) -> Any:
         handle = accessor(*args, **kwargs)
-        if outside_only and sys._getframe(1).f_globals.get("__name__", "").startswith("pandas."):
-            return handle
+        if outside_only:
+            caller = sys._getframe(1).f_globals.get("__name__", "")
+            if caller.startswith("pandas."):
+                return handle
+            if outside_only is _READ_ONLY_VIEW:
+                flags = getattr(handle, "flags", None)
+                if flags is None or flags.writeable or caller.startswith("cash."):
+                    return handle  # a copy, an extension array, or cash's own read
         try:
             _note_exposed(handle)
         except Exception:  # noqa: BLE001 - recording must never break the user's read
-            _EXPOSED[-1] = None  # unknown: treat every memoised frame as written
+            _EXPOSED[-1] = (None, sys.maxsize)  # unknown: treat every memoised frame as written
         return handle
 
     return noting
@@ -588,14 +642,18 @@ def _noting(accessor: Callable, outside_only: bool) -> Callable:
 
 def _note_exposed(handle: Any) -> None:
     """Record the arrays a writable *handle* reaches (`_memory_of`)."""
+    _EXPOSURES[0] += 1
+    number = _EXPOSURES[0]
     for part in _memory_of(handle):
         key = id(part)
-        if key in _EXPOSED:
+        known = _EXPOSED.get(key)
+        if known is not None:
+            _EXPOSED[key] = (known[0], number)
             continue
         try:
-            _EXPOSED[key] = weakref.ref(part, lambda _ref, key=key: _EXPOSED.pop(key, None))
+            _EXPOSED[key] = (weakref.ref(part, lambda _ref, key=key: _EXPOSED.pop(key, None)), number)
         except TypeError:
-            _EXPOSED[key] = part
+            _EXPOSED[key] = (part, number)
 
 
 def _memory_of(value: Any) -> list:
@@ -988,8 +1046,8 @@ class ArgHasher:
         entry = self._frame_memo.get(id(obj))
         if entry is None:
             return None
-        wref, held, signature, content_hash = entry
-        if frame_borrows_its_data(obj, held):
+        wref, held, signature, content_hash, since = entry
+        if frame_borrows_its_data(obj, held, since):
             self._frame_memo.pop(id(obj), None)
             return None
         try:
@@ -1000,8 +1058,11 @@ class ArgHasher:
         self._frame_memo.pop(id(obj), None)
         return None
 
-    def _frame_memo_store(self, obj: Any, content_hash: str) -> None:
+    def _frame_memo_store(self, obj: Any, content_hash: str, since: int) -> None:
         """Remember *obj*'s content hash, and hold a shallow copy of it.
+
+        *since* is the `exposure_mark` taken before the content was hashed:
+        a handle recorded up to it no longer matters once it is gone.
 
         The shallow copy shares the data and is what makes the signature
         exact: while cash references the blocks, pandas must copy before any
@@ -1016,7 +1077,7 @@ class ArgHasher:
         try:
             watch_array_handles()
             held = obj.copy(deep=False)
-            if frame_borrows_its_data(obj, held):
+            if frame_borrows_its_data(obj, held, since):
                 return
             signature = frame_signature(obj)
             memo = self._frame_memo
@@ -1024,7 +1085,7 @@ class ArgHasher:
             wref = weakref.ref(obj, lambda _ref, key=key, memo=memo: memo.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
-        self._frame_memo[key] = (wref, held, signature, content_hash)
+        self._frame_memo[key] = (wref, held, signature, content_hash, since)
 
     def cash_key_hash(self, value: Any, method: Callable) -> str:
         """*value*'s identity from its class's ``__cash_key__``.
@@ -1085,9 +1146,10 @@ class ArgHasher:
             digest = self._frame_memo_lookup(value)
             if digest is not None:
                 return digest
+        since = exposure_mark()
         digest = builtin_hash(value)
         if cow and digest is not None:
-            self._frame_memo_store(value, digest)
+            self._frame_memo_store(value, digest, since)
         return digest
 
     def plain_value_digest(self, value: Any) -> str | None:
@@ -1238,12 +1300,13 @@ class ArgHasher:
                 if isinstance(arg, type_):
                     return f"{src_hash}:{hasher_fn(arg)}"
 
+        since = exposure_mark()
         content_digest = builtin_hash(arg)
         if content_digest is not None:
             if lineage is not None:
                 self._memo_arg_hash(arg, lineage, content_digest)
             elif frame_memo:
-                self._frame_memo_store(arg, content_digest)
+                self._frame_memo_store(arg, content_digest, since)
             return content_digest
         # Notebook lineage hash: the authoritative, cheap identity for
         # values that carry NO content hasher (custom objects). Kept ahead
