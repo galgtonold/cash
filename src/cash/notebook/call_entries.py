@@ -27,6 +27,7 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
+from cash.notebook.shared_objects import holds_part_of
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
@@ -39,11 +40,6 @@ __all__ = ["CallEntries"]
 #: A call cheaper than this gets no content digest, so a statement refers to it
 #: only when it is that statement's plain value (``b = f(a)``), which needs none.
 _REF_MIN_COMPUTE_S = 0.1
-
-#: Result types whose identity no program can rely on -- see
-#: :meth:`CallEntries.storable`. Exact types only: a subclass may carry state.
-_IDENTITY_FREE = frozenset({int, float, complex, bool, str, bytes, type(None)})
-
 
 class CallEntries:
     """Reads and writes one notebook session's call entries.
@@ -138,15 +134,17 @@ class CallEntries:
         Three families, all of which the statement path already refuses in its
         own vocabulary:
 
-        1. **The result IS one of the arguments.** ``def f(d): d['k']=1;
-           return d`` -- a hit would hand back a deserialised copy, so
-           ``a = f(d)`` gives ``a is not d`` where Python guarantees identity.
-           The statement path's alias rule only reaches a bare bind
-           (``b = a``); the computed-RHS version is
-           structurally unfixable per-statement. At the call node the live
-           arguments are in hand, so it is one ``is`` check.
+        1. **The result IS, or holds, one of the arguments or an object
+           inside one.** ``def f(d): d['k']=1; return d`` -- a hit would hand
+           back a deserialised copy, so ``a = f(d)`` gives ``a is not d``
+           where Python guarantees identity. Likewise ``bundle(model, df)``
+           returning ``{'model': model, ...}`` and ``pick(cfg, 'a')``
+           returning ``cfg['a']``: a later ``model.fit()`` or ``c['n'] = 5``
+           would not be seen through the other name. At the call node the
+           live arguments are in hand
+           (:func:`~cash.notebook.shared_objects.holds_part_of`).
 
-           Not for a plain scalar. CPython shares one object for small ints
+           Not for a plain value. CPython shares one object for small ints
            and interned strings, so ``score(1, 10)`` returns the very ``10``
            it was passed -- the check refused that call on every run, and it
            was always the first iteration of a sweep that re-ran. No program
@@ -175,16 +173,10 @@ class CallEntries:
         not: it is exactly the silent wrong answer this method exists to
         prevent, handed back on every hit.
         """
-        if type(result) not in _IDENTITY_FREE:
-            for arg in args:
-                if result is arg:
-                    return False
-            for arg in kwargs.values():
-                if result is arg:
-                    return False
         try:
             return (
-                identity_coupled_reason("<intercepted call>", result) is None
+                not holds_part_of(result, (*args, *kwargs.values()))
+                and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
             )

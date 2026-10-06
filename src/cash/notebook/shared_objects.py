@@ -41,7 +41,7 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-__all__ = ["output_history", "share_group", "shared_names"]
+__all__ = ["holds_part_of", "output_history", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 _VALUE_TYPES: tuple[type, ...] = (
@@ -138,6 +138,39 @@ def _children(value: Any) -> Iterable[Any] | None:
         return list(value)
     attrs = _attributes_of(value)
     return None if attrs is None else list(attrs.values())
+
+
+def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
+    """The ids of the objects *value* is and holds, as `_walk` goes through
+    them, that have an identity of their own: not values, nor tuples and
+    frozensets (their contents are yielded)."""
+    seen: set[int] = set()
+    stack = [value]
+    while stack:
+        obj = stack.pop()
+        if isinstance(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if not isinstance(obj, _IMMUTABLE_CONTAINERS):
+            yield id(obj)
+        stack.extend(_children(obj) or ())
+
+
+def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
+    """Whether *value* is or holds an object one of *sources* is or holds.
+
+    A function's result restored as a copy is only the same as calling the
+    function when it holds nothing the caller has too: ``bundle(model, df)``
+    returning ``{'model': model, ...}``, or ``pick(cfg, 'a')`` returning
+    ``cfg['a']``, hand back an object a later ``model.fit()`` or
+    ``c['n'] = 5`` must reach through both names. Walked as `_walk` walks:
+    the builtin containers and the attributes of the notebook's own objects.
+    """
+    value_types = _VALUE_TYPES + _library_value_types()
+    own = set(_identities(value, value_types))
+    if not own:
+        return False
+    return any(key in own for source in sources for key in _identities(source, value_types))
 
 
 def _excess(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:
