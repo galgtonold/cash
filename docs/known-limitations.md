@@ -192,16 +192,23 @@ cell that is only the call runs it.
 
 ### A setting on your module or the environment, run out of order
 
-<!-- claim: cash/notebook/cache_key.py:_recorded_reads_component @5a728de9 -->
+<!-- claim: cash/notebook/cache_key.py:_recorded_reads_component @f1b01bbf, cash/notebook/recorded_reads.py:choose @515ac169 -->
 A cell that sets data on one of your modules (`mylib.K = 7`,
 `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`) or an environment variable
 (`os.environ["MODE"] = "b"`) reaches the statements that read it, in your
 functions too, when they run: run the notebook. A statement is keyed on the
-values it saw when it last ran, so a setting in a cell below it does not
+values it saw when it last ran, so a setting a cell below it makes does not
 reach it. Edit a setting, run it or not, and run only a cell below the
 statements that read it, and cash answers as a plain kernel would, with what
 they read when they ran, not as a top-to-bottom run would. **Fix:** run the
 notebook, or the cells from the edited one down.
+
+A change made outside the notebook's cells (the shell or a launcher setting a
+variable, a console attached to the kernel, an edit of the module's file) is
+seen: running only the last cell rebuilds what was built on the old value. So
+is a change to the environment made inside a function a cell calls, without
+the cell spelling it (`setup()` doing `os.environ["MODE"] = "b"`): cash
+cannot tell it from one made outside.
 
 ### Re-running a cell above an in-place change
 

@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..._clock import perf_counter as _perf_counter
+from ...control_markers import strip_markers
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import parse_cell_source
 from ...analysis.mutation_effects import (
@@ -139,6 +140,9 @@ class StatementLineage:
         #: ``{name: source}`` of every top-level def in the notebook's cells
         #: (see ``set_notebook_functions``).
         self._notebook_functions: dict[str, str] = {}
+        #: The notebook's cells, joined (see ``set_notebook_functions``): a
+        #: statement found in them is the notebook's (``in_notebook``).
+        self._notebook_text = ""
         #: Lineages the simulation gave a variable that holds a random
         #: generator: one bound by a call that makes one, and each lineage a
         #: draw moved it on to. After a restart the namespace has no
@@ -157,6 +161,7 @@ class StatementLineage:
         defs win (last definition), matching the runtime namespace. A cell's
         magics are stripped first, as the simulation reads every cell.
         """
+        self._notebook_text = "\n".join(notebook_cells)
         sources: dict[str, str] = {}
         for code in notebook_cells:
             tree = parse_cell_source(code)
@@ -280,9 +285,16 @@ class StatementLineage:
             virtual_modules=virtual_modules,
             compute_hash_fn=self.compute_hash_fn,
             virtual_callables=self.callables.by_lineage,
-            recorded_reads=self.tracking_state.recorded_reads,
-            recorded_reads_by_key=self.tracking_state.recorded_reads_by_key,
+            reads=self.tracking_state.reads,
+            in_notebook=self.in_notebook,
         )
+
+    def in_notebook(self, code: str) -> bool:
+        """Whether the statement *code* is written in one of the notebook's
+        cells: a change it made to the environment or a module is the
+        notebook's own, not one made from outside it."""
+        statement = strip_markers(code).strip()
+        return bool(statement) and statement in self._notebook_text
 
     def _input_lineages(
         self, stmt_code: str, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str]

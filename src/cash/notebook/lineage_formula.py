@@ -329,17 +329,32 @@ def module_data_component(reach: Reach) -> str:
     the old answer. The values are folded, as the decorator folds the module
     globals a cached function reads, however they were set.
     """
-    if not reach.data:
-        return ""
-    parts = []
-    for label, value in reach.data:
-        try:
-            digest = compute_hash(value)
-        except Exception:  # noqa: BLE001 - hashing arbitrary user data
-            logger.debug("Could not hash module data %s", label, exc_info=True)
-            digest = "unhashable:" + secrets.token_hex(16)
-        parts.append(f"{label}={digest}")
-    return ":moddata:" + ":".join(parts)
+    return module_data_parts_component(module_data_digests(reach))
+
+
+#: How a module value that cannot be hashed starts its digest: one of its
+#: own each time, so it never matches.
+UNHASHABLE = "unhashable:"
+
+
+def module_data_digest(label: str, value: Any) -> str:
+    """The digest of *value*, the module data at *label*."""
+    try:
+        return compute_hash(value)
+    except Exception:  # noqa: BLE001 - hashing arbitrary user data
+        logger.debug("Could not hash module data %s", label, exc_info=True)
+        return UNHASHABLE + secrets.token_hex(16)
+
+
+def module_data_digests(reach: Reach) -> list[tuple[str, str]]:
+    """``(label, digest)`` of each piece of module data *reach* reads, in its order."""
+    return [(label, module_data_digest(label, value)) for label, value in reach.data]
+
+
+def module_data_parts_component(parts: Iterable[tuple[str, str]]) -> str:
+    """The key component of the ``(label, digest)`` *parts*."""
+    joined = ":".join(f"{label}={digest}" for label, digest in parts)
+    return f":moddata:{joined}" if joined else ""
 
 
 def statement_environment_component(code: str, user_ns: Mapping[str, Any] | None = None) -> str:
@@ -368,12 +383,13 @@ def recorded_reads_lineage_component(
 ) -> str:
     """The environment and the module data the statement keyed *cache_key*
     read, for its outputs' lineage: what its key folded
-    (``TrackingState.recorded_reads_by_key``), so a reader below misses when a
+    (``TrackingState.reads``), so a reader below misses when a
     value changed. A key nothing recorded reads the environment now. ONE
     lookup for the runtime (``statement/lineage.py``) and the simulation
     (``upstream/statement_lineage.py``).
     """
-    by_key = getattr(tracking_state, "recorded_reads_by_key", None)
+    reads = getattr(tracking_state, "reads", None)
+    by_key = getattr(reads, "by_key", None)
     if by_key and cache_key and cache_key in by_key:
         return by_key[cache_key]
     return statement_environment_component(code, user_ns)

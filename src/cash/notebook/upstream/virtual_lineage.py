@@ -29,6 +29,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
 )
+from ..recorded_reads import outside_changes
 from ..run_memo import stats_this_run
 from ..tracking_state import TrackingState
 from ._types import (
@@ -200,6 +201,11 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
+        if outside_changes(self.tracking_state.reads):
+            # The environment or a module's data, read by a statement, was
+            # changed outside the notebook's cells: no cell's code says so, so
+            # simulate them all again, as for a changed file.
+            return first_changed_cell, cache_had_hash_mismatch
         for idx in range(min(current_cell_idx, len(self.cache.entries))):
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = exact_source_digest(cell_code)

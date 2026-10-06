@@ -56,6 +56,9 @@ __all__ = [
     "dotted_name",
     "environ_membership",
     "environment_component",
+    "environment_digests",
+    "environment_entry_digest",
+    "environment_parts_component",
     "environment_input",
     "is_open_write_mode",
     "writes_to_console",
@@ -747,6 +750,26 @@ def _environment_digest(entry: EnvironmentInput) -> str:
     return "unset" if value is None else hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
+def environment_digests(entries: Iterable[EnvironmentInput]) -> list[tuple[str, str]]:
+    """``(kind:name, digest of the current value)`` of each of the
+    environment reads *entries*, sorted: the parts of
+    :func:`environment_component`."""
+    return [(f"{entry[0]}:{entry[1]}", _environment_digest(entry)) for entry in sorted(set(entries))]
+
+
+def environment_entry_digest(part: str) -> str:
+    """The digest of the current value of the read named *part* (a
+    ``kind:name`` of :func:`environment_digests`)."""
+    kind, _, name = part.partition(":")
+    return _environment_digest((kind, name))
+
+
+def environment_parts_component(parts: Iterable[tuple[str, str]]) -> str:
+    """The key component of the ``(kind:name, digest)`` *parts*."""
+    joined = ":".join(f"{label}={digest}" for label, digest in parts)
+    return f":env:{joined}" if joined else ""
+
+
 def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[str, str], None] | None = None) -> str:
     """The key component for the environment reads *entries*: their current
     values, digested. Empty when there are none, so a key that reads no
@@ -757,8 +780,8 @@ def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[s
         digest = _environment_digest(entry)
         if note is not None:
             note(environment_label(entry), digest)
-        parts.append(f"{entry[0]}:{entry[1]}={digest}")
-    return f":env:{':'.join(parts)}" if parts else ""
+        parts.append((f"{entry[0]}:{entry[1]}", digest))
+    return environment_parts_component(parts)
 
 
 def _reads_clock_when_omitted(name: str, call: ast.Call) -> bool:
