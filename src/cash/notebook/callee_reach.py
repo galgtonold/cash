@@ -206,8 +206,29 @@ class _Found:
                 self._body_reads(value.__code__)
             else:
                 self._module_body_reads(value)
+            # A decorator's wrapper reaches the function it wraps through
+            # its closure (``def w(*a): return f(*a)``).
+            for cell in value.__closure__ or ():
+                try:
+                    self.value(cell.cell_contents)
+                except ValueError:  # an empty cell
+                    pass
+            self._wrapped(value)
+        elif isinstance(value, types.FunctionType):
+            # A wrapper that is not the user's code (``@cash.cache``'s): what
+            # calling it runs is the function it wraps.
+            self._wrapped(value)
         elif label is not None and _is_data(value):
             self.data.setdefault(label, value)
+
+    def _wrapped(self, value: Any) -> None:
+        """The function *value* wraps (``functools.wraps``' ``__wrapped__``)."""
+        try:
+            wrapped = inspect.getattr_static(value, "__wrapped__", None)
+        except Exception:  # noqa: BLE001 - an object's attribute lookup
+            return
+        if isinstance(wrapped, types.FunctionType):
+            self.value(wrapped)
 
     def _class(self, cls: type) -> None:
         """A class: its ``__init__``, and when it is the user's, the data it
