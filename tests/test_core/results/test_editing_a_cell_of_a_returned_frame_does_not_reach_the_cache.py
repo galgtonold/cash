@@ -10,49 +10,69 @@ appended list. Frames holding such cells are now copied with their cells.
 
 from __future__ import annotations
 
+import dataclasses
+import types
+
 import pytest
 
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
 
+@dataclasses.dataclass
+class Report:
+    table: object
+    n: int
+
+
+#: How each shape wraps the frame, and how to get the frame back out.
 SHAPES = {
-    "frame": lambda r: r,
-    "series": lambda r: r["tags"],
-    "frame in a dict": lambda r: {"df": r},
-    "frame in a list": lambda r: [r, 1],
-    "frame in a tuple": lambda r: (r, 1),
+    "frame": (lambda r: r, lambda r: r),
+    "frame in a dict": (lambda r: {"df": r}, lambda r: r["df"]),
+    "frame in a list": (lambda r: [r, 1], lambda r: r[0]),
+    "frame in a tuple": (lambda r: (r, 1), lambda r: r[0]),
+    "frame in a dataclass": (lambda r: Report(r, 2), lambda r: r.table),
+    "frame in an object": (lambda r: types.SimpleNamespace(table=r), lambda r: r.table),
+    "frame in a tuple in a list": (lambda r: [(r, "summary")], lambda r: r[0][0]),
+    "frame in a nested tuple": (lambda r: ((r,),), lambda r: r[0][0]),
+    "frame in a deep dict": (
+        lambda r: {"a": {"b": {"c": {"d": {"e": {"f": r}}}}}},
+        lambda r: r["a"]["b"]["c"]["d"]["e"]["f"],
+    ),
 }
-
-
-def _tags(result, shape):
-    if shape == "series":
-        return result
-    if shape == "frame in a dict":
-        return result["df"]["tags"]
-    if shape in ("frame in a list", "frame in a tuple"):
-        return result[0]["tags"]
-    return result["tags"]
 
 
 @pytest.mark.parametrize("shape", SHAPES)
 @pytest.mark.parametrize("edited", ["miss", "hit"])
 def test_an_edited_cell_does_not_reach_later_hits(disk_cash, shape, edited):
+    wrap, unwrap = SHAPES[shape]
+
     @disk_cash.cache
     def load():
-        frame = pd.DataFrame({"tags": [["a"], ["b"]], "rec": [{"k": 1}, {"k": 2}], "n": [1.0, 2.0]})
-        return SHAPES[shape](frame)
+        return wrap(pd.DataFrame({"tags": [["a"], ["b"]], "rec": [{"k": 1}, {"k": 2}], "n": [1.0, 2.0]}))
+
+    first = load()
+    frame = unwrap(first if edited == "miss" else load())
+    frame["tags"].iloc[0].append("X")
+    frame["rec"].iloc[1]["k"] = 99
+
+    frame = unwrap(load())
+    assert frame["tags"].tolist() == [["a"], ["b"]]
+    assert frame["rec"].tolist() == [{"k": 1}, {"k": 2}]
+    assert load.cache_info()["hits"] >= 1
+
+
+@pytest.mark.parametrize("edited", ["miss", "hit"])
+@pytest.mark.parametrize("where", ["alone", "in a list in a dict"])
+def test_an_edited_cell_of_a_series_does_not_reach_later_hits(disk_cash, edited, where):
+    @disk_cash.cache
+    def load():
+        series = pd.Series([["a"], ["b"]])
+        return series if where == "alone" else {"k": [series]}
 
     first = load()
     target = first if edited == "miss" else load()
-    _tags(target, shape).iloc[0].append("X")
-    if shape != "series":
-        frame = target if shape == "frame" else (target["df"] if shape == "frame in a dict" else target[0])
-        frame["rec"].iloc[1]["k"] = 99
-
+    (target if where == "alone" else target["k"][0]).iloc[0].append("X")
     again = load()
-    assert _tags(again, shape).tolist() == [["a"], ["b"]]
-    if shape != "series":
-        frame = again if shape == "frame" else (again["df"] if shape == "frame in a dict" else again[0])
-        assert frame["rec"].tolist() == [{"k": 1}, {"k": 2}]
+    assert (again if where == "alone" else again["k"][0]).tolist() == [["a"], ["b"]]
     assert load.cache_info()["hits"] >= 1

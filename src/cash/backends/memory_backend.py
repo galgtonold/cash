@@ -173,15 +173,14 @@ class InMemoryBackend(CacheBackend):
                 # for one object still come back as one object.
                 memo: dict[int, Any] = {}
                 InMemoryBackend._premade_copies(value, memo, known_cells, record_cells)
-                return copy.deepcopy(value, memo)
+                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
             if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
-                # ``frame, summary, n = build()``: a call's result is a tuple,
-                # and deepcopy copies a frame in it deep even where a shallow
-                # copy is safe (`_copy_frame`).
+                # ``frame, summary, n = build()``: a call's result is a tuple;
+                # its frames are copied as `_copy_frame` copies them.
                 memo = {}
                 InMemoryBackend._premade_copies(dict(enumerate(value)), memo, known_cells, record_cells)
-                return copy.deepcopy(value, memo)
-            return copy.deepcopy(value)
+                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
+            return InMemoryBackend._deep_copy(value, {}, known_cells, record_cells)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
             if required:
                 # Storing it would hand every caller the SAME object: a caller
@@ -236,6 +235,44 @@ class InMemoryBackend(CacheBackend):
         if record_cells is not None:
             record_cells[id(copied)] = mutable
         return copied
+
+    @staticmethod
+    def _deep_copy(
+        value: Any,
+        memo: dict[int, Any],
+        known_cells: dict[int, bool] | None,
+        record_cells: dict[int, bool] | None,
+    ) -> Any:
+        """``copy.deepcopy(value, memo)``, with every pandas frame in it copied
+        as `_copy_frame` copies it, wherever it sits.
+
+        deepcopy copies a frame with ``DataFrame.__deepcopy__``, which leaves
+        the lists and dicts in its object columns shared. `_premade_copies`
+        reaches the frames of the common shapes before the copy; one held by
+        an object, a nested tuple or a deep dict is found in deepcopy's own
+        memo afterwards (it keeps every original it copied alive there). If
+        one of those holds mutable cells, the value is copied again with each
+        such frame copied by `_copy_frame` up front.
+        """
+        before = dict(memo)
+        copied = copy.deepcopy(value, memo)
+        if "pandas" not in sys.modules:
+            return copied
+        frames = [item for item in memo.get(id(memo), ()) if _is_pandas_frame(type(item))]
+        if not frames:
+            return copied
+        cells = {}
+        for frame in frames:
+            mutable = known_cells.get(id(frame)) if known_cells is not None else None
+            cells[id(frame)] = _holds_mutable_cells(frame) if mutable is None else mutable
+        if not any(cells.values()):
+            if record_cells is not None:
+                for frame in frames:
+                    record_cells[id(memo[id(frame)])] = False
+            return copied
+        for frame in frames:
+            before[id(frame)] = InMemoryBackend._copy_frame(frame, cells, record_cells)
+        return copy.deepcopy(value, before)
 
     @staticmethod
     def _premade_copies(
