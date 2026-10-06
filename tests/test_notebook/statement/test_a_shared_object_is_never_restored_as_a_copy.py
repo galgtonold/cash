@@ -102,3 +102,32 @@ def test_a_shared_output_says_why_it_runs_again(cash_magics, statement_processor
 def _run_all_cells(magics, cells):
     for cell in cells:
         run_cash_cell(magics, cell, cells=cells)
+
+
+
+def _show(user_ns, n, value, *, ipython=True):
+    """What IPython's displayhook leaves behind after showing *value* as Out[n]."""
+    out = {n: value}
+    user_ns["Out"] = out
+    user_ns["_oh"] = out if ipython else {}
+    user_ns["_"] = user_ns[f"_{n}"] = value
+
+
+def _after_showing(cash_magics, statement_processor, **show):
+    run_cash_cell(cash_magics, SETUP)
+    run_cash_cell(cash_magics, "rows = [1.0]")
+    _show(statement_processor.shell.user_ns, 2, statement_processor.shell.user_ns["rows"], **show)
+    return statement_processor.process_statement("rows += slow([2.0])")
+
+
+def test_the_output_history_is_not_a_holder(cash_magics, statement_processor):
+    """``rows`` was displayed, so ``Out[2]``, ``_`` and ``_2`` hold it too.
+    Nothing in a program depends on the history holding the very object, so
+    the statement is still stored instead of running every time."""
+    metrics = _after_showing(cash_magics, statement_processor)
+    assert _stored(metrics), metrics.get("uncacheable_reasons")
+
+
+def test_a_dict_named_out_that_is_not_the_history_is_a_holder(cash_magics, statement_processor):
+    metrics = _after_showing(cash_magics, statement_processor, ipython=False)
+    assert not _stored(metrics)

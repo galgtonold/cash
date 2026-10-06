@@ -166,7 +166,8 @@ same statement on an object made in the same cell caches normally, unless
 another variable or container holds that object too (`d = dfs[0]`, or
 `for d in dfs:`): a restored copy would not be the object `dfs` holds, so the
 statement runs every time. So does one whose result holds an object that
-already existed (`models = {"m": m}`). **Fix:** rebind with
+already existed (`models = {"m": m}`). IPython's output history (`Out`,
+`_`) holding a value you displayed is not such a holder. **Fix:** rebind with
 `df = df.assign(...)`.
 
 ### Mutating global state inside a function

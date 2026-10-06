@@ -40,7 +40,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-__all__ = ["shared_names"]
+__all__ = ["output_history", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 _VALUE_TYPES: tuple[type, ...] = (
@@ -142,8 +142,33 @@ def _calibrate() -> int:
 _OVERHEAD = _calibrate()
 
 
+def output_history(user_ns: Mapping[str, Any]) -> tuple[list[Any], list[tuple[Mapping[str, Any], str]]]:
+    """The references IPython's output history makes, as ``(containers,
+    named)`` for `shared_names`: the ``Out`` dict, and the ``_``, ``__``,
+    ``___`` and ``_<n>`` names bound to a value in it.
+
+    Displaying a value stores it there, so without this a statement that
+    keeps an object only the history holds (``df = _`` after a cell that
+    showed ``load()``) would count the history as a holder and run every
+    time. Nothing in a program depends on the history holding the very
+    object, so its references are not a reason to re-run. ``Out`` counts only
+    when it is IPython's (the same dict as ``_oh``), and a ``_`` the user
+    bound to something never displayed is a holder like any other.
+    """
+    out = user_ns.get("Out")
+    if type(out) is not dict or user_ns.get("_oh") is not out:
+        return [], []
+    shown = {id(v) for v in out.values() if v is not None}
+    named = [n for n in ("_", "__", "___") if user_ns.get(n) is not None and id(user_ns.get(n)) in shown]
+    named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
+    return [out], [(user_ns, n) for n in named]
+
+
 def shared_names(
-    roots: Mapping[str, Any], bindings: Iterable[Mapping[str, Any]], cash_held: Iterable[Any] = ()
+    roots: Mapping[str, Any],
+    bindings: Iterable[Mapping[str, Any]],
+    cash_held: Iterable[Any] = (),
+    named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
 ) -> set[str]:
     """The names in *roots* whose value, or an object inside it, has a holder
     outside *roots*.
@@ -154,9 +179,13 @@ def shared_names(
     the references made by the containers in *cash_held*, which cash holds
     itself, and by the containers inside them. Anything above that
     -- another variable, a container in an earlier cell's value, a library's
-    registry -- makes the name shared.
+    registry -- makes the name shared. *named_held* are ``(mapping, name)``
+    references not to count either (IPython's ``_``, see `output_history`):
+    passed by name, because a container listing them would add as many
+    references as it discounts.
     """
     cash_held = list(cash_held)
+    named_held = list(named_held)
     value_types = _VALUE_TYPES + _library_value_types()
     bindings = list(bindings)
     shared: set[str] = set()
@@ -167,6 +196,9 @@ def shared_names(
         expected = 1 + sum(1 for m in bindings if m.get(name) is roots[name])
         nodes, inbound, checked = _walk(roots[name], expected, value_types)
         _count_held(cash_held, nodes, inbound, value_types)
+        for mapping, key in named_held:
+            if id(mapping.get(key)) in nodes:
+                inbound[id(mapping.get(key))] += 1
         if _excess(nodes, inbound, checked):
             shared.add(name)
     return shared

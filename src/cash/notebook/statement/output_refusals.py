@@ -12,7 +12,7 @@ from typing import Any
 
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
-from ..shared_objects import shared_names
+from ..shared_objects import output_history, shared_names
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = ["unrestorable_output_reason"]
@@ -94,9 +94,11 @@ def shared_output_reason(
 
     Asked by reference count, so the frames above must not hold an output's
     value in a local: `unrestorable_output_reason` keeps the per-value loop
-    in its own function for that reason."""
+    in its own function for that reason. IPython's output history (``Out``,
+    ``_``) is not a holder (`output_history`)."""
     roots = {out: captured_vars[out] for out in outputs if captured_vars.get(out) is not None}
-    shared = shared_names(roots, (captured_vars, user_ns), cash_held)
+    history, named = output_history(user_ns)
+    shared = shared_names(roots, (captured_vars, user_ns), [*cash_held, *history], named)
     if not shared:
         return None
     names = ", ".join(f"'{n}'" for n in sorted(shared))
