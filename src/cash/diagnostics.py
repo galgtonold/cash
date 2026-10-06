@@ -253,6 +253,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
+        "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded and a
+        # statement that set state on it raised when run again
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
         # -- RANDOM: a cached value that randomness makes non-reproducible ------

@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @375aaed8 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @cd3f6661 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -56,7 +56,7 @@ its warning class.
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 19 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 4 | Notebook-wide machinery rather than one statement. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 6 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 7 | The call succeeded, but its result was not written. |
@@ -1287,6 +1287,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
+| [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload dropped state a cell set on a module, and setting it again failed |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
@@ -1359,6 +1360,26 @@ notebook.
 
 **When it is safe to ignore.** In a run that executes the notebook top to
 bottom once. It is shown once per session.
+
+### NOTEBOOK-RELOAD-STATE {#notebook-reload-state}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._replay_module_state @afa118c0 -->
+**What happened.** You edited one of your modules, so cash reloaded it. A
+reload runs the module's top level again, which drops what cells set on it
+(`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash runs those
+statements again right after the reload, and one of them raised. The message
+names the statement and the error.
+
+**Why it matters.** The module holds the file's value for what that statement
+set, not the one the notebook set, until the statement runs.
+
+**What to do.** Fix the statement or the module and run the cell that sets it
+again.
+
+**When it is safe to ignore.** When you removed what the statement sets on
+purpose and no cell reads it any more.
 
 ### NOTEBOOK-SAVEFIG-SKIP {#notebook-savefig-skip}
 

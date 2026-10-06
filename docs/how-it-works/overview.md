@@ -6,7 +6,7 @@
 cash has two caching engines. They share building blocks, but each decides on
 its own terms, so this section explains them separately.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5, cash/notebook/cache_key.py:compute_cache_key @b5d2b064 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5, cash/notebook/cache_key.py:compute_cache_key @24453147 -->
 - **The decorator** (`@cash.cache`) caches a function's return value. A call is
   keyed on the function's code, everything the function reads that is not an
   argument, and the arguments. A script that uses it never loads anything

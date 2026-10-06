@@ -21,6 +21,7 @@ The single public entry point is :meth:`ModuleInvalidator.invalidate`.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import sys
 from types import ModuleType
@@ -35,6 +36,19 @@ if TYPE_CHECKING:
     from .statement import StatementProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def _defined_in_a_module(value: Any) -> bool:
+    """Is *value* a function or class, which a ``from ... import`` binds by name?
+
+    An instance reports its class's module as its ``__module__`` too:
+    ``m = model.Model()`` was taken for a name imported from ``model``, its
+    tracking was dropped like an import's, and nothing re-ran it, so after
+    an edit to the class ``m`` kept the old class -- stale method results and
+    ``isinstance(m, model.Model)`` False. An instance is a value built from
+    the module, which the propagation step re-runs.
+    """
+    return isinstance(value, type) or inspect.isroutine(value)
 
 
 class ModuleInvalidator:
@@ -229,7 +243,7 @@ class ModuleInvalidator:
         load(6)` refused as "Input variable missing lineage".
         """
         for var_name, var_value in list(self._shell.user_ns.items()):
-            if var_name.startswith("_"):
+            if var_name.startswith("_") or not _defined_in_a_module(var_value):
                 continue
             value_module = getattr(var_value, "__module__", None)
             if value_module and (value_module == mod_name or value_module.startswith(mod_name + ".")):
