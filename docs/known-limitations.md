@@ -270,9 +270,10 @@ cash reads a cell's Python, not what IPython makes of its magics. A name bound
 by one (`files = !ls`, `t = %time f()`, `%%capture out`, `%%bash --out o`) has
 no producer cash knows of, so editing a cell the command reads and re-running a
 cell below does not run the command again. The body of a cell magic other than
-`%%time`, `%%capture`, `%%prun` and `%%debug` is not Python in the notebook's
-namespace (`%%writefile`, `%%script`, `%%timeit`, `%%bash`), and cash never runs
-it. **Fix:** re-run the magic's cell after such an edit.
+`%%time`, `%%capture` and `%%prun` is not Python in the notebook's namespace
+(`%%writefile`, `%%script`, `%%timeit`, `%%bash`) or runs under a debugger
+(`%%debug`), and cash never runs it. **Fix:** re-run the magic's cell after
+such an edit.
 
 <!-- claim: cash/analysis/code_analyzer.py:_exec_literal @ba4cb7eb -->
 The same holds for `exec(code)` when `code` is not a string literal: cash reads

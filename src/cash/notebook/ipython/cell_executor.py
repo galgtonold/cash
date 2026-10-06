@@ -65,6 +65,7 @@ from ..statement import ProcessResult
 from ..statement.capture import replay_outputs
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
+from .ipython_cell import CellMagic, IPythonCell, ipython_cell
 from .notifications import (
     function_change_rows,
     module_load_failed_row,
@@ -101,6 +102,8 @@ class _CellRun:
     timing_breakdown: TimingBreakdown
     #: The TTL the cell's statements are stored with.
     ttl: int | None = None
+    #: The cell as IPython's transform writes it, when it holds IPython syntax.
+    ipython: IPythonCell | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +189,15 @@ def _is_cash_line_magic(line: str) -> bool:
     return line.startswith("%") and line[1:].startswith("cash")
 
 
+#: The name a ``%%time``/``%%prun`` body runs under, for the magic to call.
+_BODY_HOOK = "__cash_cell_body__"
+
+
+class _BodyNotRun(Exception):
+    """A cell magic raised before it ran the body it was handed (a usage
+    error): IPython runs the cell instead and reports it."""
+
+
 def _set_written_later(executor: Any, names: frozenset[str]) -> None:
     """Tell the statement processor which names the rest of the cell writes."""
     processor = getattr(executor, "_statement_processor", None)
@@ -249,8 +261,12 @@ class CellExecutor:
             cell = self._prepare_cell(raw_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
                 return cell
-            with self._statements_scope(cell):
-                result = self._execute_cell_statements(cell)
+            try:
+                with self._statements_scope(cell):
+                    result = self._execute_cell_statements(cell)
+            except _BodyNotRun:
+                self._badges.close(cell.badge_display_id)
+                return PipelineSyntaxError()
             return self._complete_cell(cell, result)
 
     async def execute_cell_async(
@@ -270,8 +286,12 @@ class CellExecutor:
             cell = self._prepare_cell(raw_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
                 return cell
-            with self._statements_scope(cell):
-                result = await self._execute_cell_statements_async(cell)
+            try:
+                with self._statements_scope(cell):
+                    result = await self._execute_cell_statements_async(cell)
+            except _BodyNotRun:
+                self._badges.close(cell.badge_display_id)
+                return PipelineSyntaxError()
             return self._complete_cell(cell, result)
 
     @contextlib.contextmanager
@@ -343,11 +363,15 @@ class CellExecutor:
 
         # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
+        ipython = None
         try:
             tree = CodeAnalyzer.parse_cell(raw_cell)
         except SyntaxError:
-            self._badges.close(badge_display_id)
-            return PipelineSyntaxError()
+            ipython = ipython_cell(raw_cell, self.shell.transform_cell)
+            if ipython is None:
+                self._badges.close(badge_display_id)
+                return PipelineSyntaxError()
+            tree = ipython.tree
 
         # 6. Pre-execution notifications
         all_metrics = self._build_pre_execution_notifications(
@@ -355,7 +379,7 @@ class CellExecutor:
             pre_upstream_metrics,
             upstream_metrics,
         )
-        return _CellRun(raw_cell, tree, all_metrics, badge_display_id, hook_start, timing_breakdown, ttl)
+        return _CellRun(raw_cell, tree, all_metrics, badge_display_id, hook_start, timing_breakdown, ttl, ipython)
 
     @contextlib.contextmanager
     def _statements_scope(self, cell: _CellRun) -> Iterator[None]:
@@ -681,12 +705,55 @@ class CellExecutor:
         on success, or raises if a statement raised an error (after first
         rendering the error badge via :meth:`_finalize_error_badge`).
         """
-        return _drive(self._cell_steps(cell, awaitable=False), self._run_step)
+
+        def run() -> tuple[list[ProcessResult], list, float]:
+            return _drive(self._cell_steps(cell, awaitable=False), self._run_step)
+
+        magic = cell.ipython.magic if cell.ipython is not None else None
+        return run() if magic is None else self._under_cell_magic(magic, run)
 
     async def _execute_cell_statements_async(self, cell: _CellRun) -> tuple[list[ProcessResult], list, float]:
         """:meth:`_execute_cell_statements`, awaiting each statement, so a
-        top-level ``await`` runs on IPython's live loop."""
+        top-level ``await`` runs on IPython's live loop. A ``%%time`` body
+        runs inside the magic, which does not await: synchronously."""
+        if cell.ipython is not None and cell.ipython.magic is not None:
+            return self._execute_cell_statements(cell)
         return await _drive_async(self._cell_steps(cell, awaitable=True), self._run_step_async)
+
+    def _under_cell_magic(
+        self, magic: CellMagic, run: Callable[[], tuple[list[ProcessResult], list, float]]
+    ) -> tuple[list[ProcessResult], list, float]:
+        """*run* the cell's statements as the body of ``%%time``/``%%prun``.
+
+        The magic is handed a body that calls *run*, so it times or profiles
+        the run cash makes, prints what it prints, and the body runs once.
+        An error from the body is raised as the cell's, as ``%%time`` raises
+        it; under ``--no-raise-error`` too, since cash has shown it as the
+        cell's error already.
+        """
+        outcome: dict[str, Any] = {}
+
+        def body() -> None:
+            outcome["started"] = True
+            try:
+                outcome["result"] = run()
+            except BaseException as exc:
+                outcome["error"] = exc
+                raise
+
+        ns = self.shell.user_ns
+        ns[_BODY_HOOK] = body
+        try:
+            self.shell.run_cell_magic(magic.name, magic.line, f"{_BODY_HOOK}()")
+        except BaseException:
+            if "started" not in outcome:
+                raise _BodyNotRun() from None
+            raise
+        finally:
+            ns.pop(_BODY_HOOK, None)
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def _run_step(self, step: _Step) -> Any:
         return self._statement_processor.process_statement(**step.kwargs)
@@ -725,10 +792,12 @@ class CellExecutor:
                     tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
                 )
                 planned = {i + k: m for k, m in (plan or {}).items()}
-            texts = statement_texts(raw_cell, node)
+            texts = statement_texts(cell.ipython.source if cell.ipython is not None else raw_cell, node)
             if texts is None:
                 continue
             stmt_code, stmt_display, stmt_exec_source = texts
+            if cell.ipython is not None:
+                stmt_display = cell.ipython.display_text(raw_cell, node) or stmt_display
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1

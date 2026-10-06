@@ -69,7 +69,7 @@ from ...analysis.cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
 )
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -98,6 +98,9 @@ _LOG_CACHE_DEBUG = "[CACHE DEBUG]"
 _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
+
+#: Why a statement that runs a magic or a shell command is not cached.
+_IPYTHON_REASON = "Runs an IPython magic or shell command, which cash cannot see into, so it runs every time"
 
 
 logger = logging.getLogger(__name__)
@@ -495,6 +498,9 @@ class StatementProcessor:
         effects, analysis_time, hash_time = self._analyze(run)
         if effects.unanalysed:
             run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
+            run.skip_cache = True
+        if run.tree is not None and calls_ipython(run.tree):
+            run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
 
         done = self._check_redundant_import(run)
