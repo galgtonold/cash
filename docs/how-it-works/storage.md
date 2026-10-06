@@ -208,7 +208,7 @@ that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @cdbe9167 -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @3267884e -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

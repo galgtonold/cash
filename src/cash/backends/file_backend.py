@@ -41,7 +41,7 @@ from .entry_format import (
     update_metadata_in_place,
 )
 from .file_eviction import FileEvictor
-from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, restore_value
+from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, rebuild, restore_value
 from .touched_entries import TouchedEntries, stat_signature
 from .versions import VersionIndex, superseded_to_drop
 
@@ -474,7 +474,7 @@ class FileBackend(CacheBackend):
 
             if isinstance(payload, SplitPayload):
                 # Written only for a PickleSerializer value (`set`).
-                value = PickleSerializer().deserialize_split(payload.stream, payload.buffers)
+                value = rebuild(PickleSerializer().deserialize_split, payload.stream, payload.buffers)
             else:
                 value = restore_value(metadata, payload)
 

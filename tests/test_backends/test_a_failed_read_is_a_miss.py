@@ -1,8 +1,9 @@
 """A stored entry that cannot be read back is a miss, never an exception in
 the caller's program.
 
-A damaged entry, or one that names a class this process no longer has, is
-recomputed in every backend. A tier that cannot read at all (a server down)
+A damaged entry, one that names a class this process no longer has, or one
+whose own code raises while it is rebuilt (torch's RuntimeError for a CUDA
+tensor read without a GPU), is recomputed in every backend. A tier that cannot read at all (a server down)
 is skipped by the tiered backend, and a cached function whose only backend
 fails to read computes its result, just as a failed store does not fail it.
 """
@@ -15,6 +16,7 @@ import time
 import pytest
 
 import cash
+from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.sqlite_backend import SQLiteBackend
 from cash.backends.tiered_backend import TieredBackend
@@ -88,6 +90,43 @@ class _Unreachable(InMemoryBackend):
 
     def get(self, key):
         raise CacheBackendError("connection refused")
+
+
+_RESTORABLE = True
+
+
+def _rebuild(w):
+    if not _RESTORABLE:
+        raise RuntimeError("Attempting to deserialize object on a CUDA device")
+    return _NeedsAGpu(w)
+
+
+class _NeedsAGpu:
+    """Raises while it is rebuilt where it cannot be, like a CUDA tensor."""
+
+    def __init__(self, w):
+        self.w = w
+
+    def __reduce__(self):
+        return _rebuild, (self.w,)
+
+
+def _backend(kind, tmp_path):
+    if kind == "file":
+        return FileBackend(cache_dir=str(tmp_path / "c"))
+    return SQLiteBackend(db_path=str(tmp_path / "c.db"))
+
+
+@pytest.mark.parametrize("kind", ["file", "sqlite"])
+def test_a_value_whose_restore_raises_is_a_miss(tmp_path, monkeypatch, kind):
+    backend = _backend(kind, tmp_path)
+    backend.set("k", _NeedsAGpu([1, 2]), {})
+    backend._writes.wait_all()
+    backend.shutdown()
+    monkeypatch.setitem(globals(), "_RESTORABLE", False)  # "the other machine"
+    backend = _backend(kind, tmp_path)
+    assert backend.get("k") == (None, None)
+    backend.shutdown()
 
 
 def test_the_tiered_backend_reads_past_a_tier_that_cannot_read():
