@@ -35,11 +35,9 @@ def test_post_raise_list_mutation(nb_runner):
     assert "LEN 2" in nb_runner.get_output(3), f"got: {nb_runner.get_output(3)!r}"
 
 
-@pytest.mark.xfail(
-    reason="a failing assert is runtime-dependent; the pure simulation can't know it aborts without evaluating it",
-)
 def test_post_assert_failure_variable(nb_runner):
-    # a failing assert halts the cell -> x is never defined.
+    # a failing assert halts the cell -> x is never defined. The simulation
+    # cannot evaluate the assert, but the run records where the cell stopped.
     nb_runner.create_notebook(
         ["flag = False", "assert flag, 'off'\nx = 99", "print('X', x if 'x' in dir() else 'MISSING')"]
     )
