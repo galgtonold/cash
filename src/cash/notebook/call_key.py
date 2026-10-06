@@ -186,6 +186,9 @@ def changes_its_closure(fn) -> bool:
 #: Values with nothing inside them to look at: skipped without a call.
 _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 
+#: The same, by exact type, plus dates: one set lookup instead of a scan of `_ATOMS`.
+_EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedelta})
+
 
 def holds_a_closure_with_state(value) -> bool:
     """Whether *value* is, or holds in its tuples, lists, sets and dicts
@@ -202,9 +205,11 @@ def holds_a_closure_with_state(value) -> bool:
     """
     stack = [value]
     seen: set[int] = set()
+    atoms = _EXACT_ATOMS
     while stack:
         item = stack.pop()
-        if isinstance(item, _ATOMS):
+        kind = type(item)
+        if kind in atoms or isinstance(item, _ATOMS):
             continue
         if isinstance(item, _types.FunctionType):
             if changes_its_closure(item):
@@ -213,8 +218,23 @@ def holds_a_closure_with_state(value) -> bool:
         if isinstance(item, (tuple, list, set, frozenset, dict)):
             if id(item) in seen:
                 continue
-            seen.add(id(item))  # the containers stay alive inside *value*
-            stack.extend(item.values() if isinstance(item, dict) else item)
+            # A container holding only atoms (a million small tuples of a
+            # record list) has nothing to look into and is not remembered.
+            pushed = False
+            for child in item.values() if isinstance(item, dict) else item:
+                ctype = type(child)
+                if ctype in atoms:
+                    continue
+                if ctype is tuple:
+                    for part in child:
+                        if type(part) not in atoms:
+                            break
+                    else:
+                        continue
+                stack.append(child)
+                pushed = True
+            if pushed:
+                seen.add(id(item))  # the containers stay alive inside *value*
     return False
 
 

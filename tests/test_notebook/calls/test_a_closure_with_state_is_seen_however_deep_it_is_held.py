@@ -44,6 +44,14 @@ def test_a_value_that_holds_no_such_closure_is_still_storable():
     assert not holds_a_closure_with_state([[[len]]])
 
 
+def test_a_closure_among_many_tuples_of_plain_values_is_seen():
+    records = [("user", [("action", 1, 2.5, None, b"x"), ("other", True)]) for _ in range(50)]
+
+    assert not holds_a_closure_with_state(records)
+    records[7][1].append((1, (make_counter(),)))
+    assert holds_a_closure_with_state(records)
+
+
 def test_a_factory_returning_nested_handlers_is_not_served_the_last_run_s(call_unit_harness):
     unit = call_unit_harness(lineage={"make_handlers": "hash-make-handlers"}, user_ns={})
     site = CallSite(source="make_handlers()", free_names=frozenset({"make_handlers"}), occurrence_index=0)

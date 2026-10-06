@@ -74,6 +74,29 @@ _VALUE_TYPES: tuple[type, ...] = (
     types.CodeType,
 )
 
+#: The commonest value types, by exact type: one set lookup tells a string or a
+#: datetime from a container where `isinstance` against `_VALUE_TYPES` walks the
+#: whole tuple (and its abstract classes), the cost of a walk over millions of
+#: leaves. A subclass or any other type still goes through `isinstance`.
+_EXACT_VALUE_TYPES: frozenset[type] = frozenset(
+    {
+        int,
+        float,
+        complex,
+        str,
+        bytes,
+        bool,
+        type(None),
+        datetime.datetime,
+        datetime.date,
+        datetime.time,
+        datetime.timedelta,
+    }
+)
+
+#: The builtin containers by exact type: never a value type, so no `isinstance`.
+_EXACT_CONTAINER_TYPES: frozenset[type] = frozenset({list, dict, set, tuple, frozenset})
+
 #: The builtin containers a restore copies along with their contents.
 _CONTAINERS = (list, dict, set, tuple, frozenset)
 
@@ -344,24 +367,38 @@ def _find_holders(
     return None
 
 
-def _count_held(held: list[Any], nodes: dict[int, Any], inbound: dict[int, int], value_types: tuple[type, ...]) -> set[int]:
+def _count_held(
+    held: list[Any], nodes: dict[int, Any], inbound: dict[int, int], value_types: tuple[type, ...]
+) -> set[int]:
     """Add to *inbound* the references that the containers in *held*, which
     cash holds itself, and the containers inside them make to *nodes*; the
     ids of those containers."""
     seen: set[int] = set()
     stack = list(held)
+    exact = _EXACT_VALUE_TYPES
+    containers = _EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
         if id(obj) in seen:
             continue
         seen.add(id(obj))
         for child in _children(obj) or ():
-            if isinstance(child, value_types):
+            ctype = type(child)
+            if ctype in exact or (ctype not in containers and isinstance(child, value_types)):
                 continue
-            if id(child) in nodes:
+            ckey = id(child)
+            if ckey in nodes:
                 # A walked node: its own references are counted already.
-                inbound[id(child)] += 1
+                inbound[ckey] += 1
             else:
+                if ctype is tuple or ctype is frozenset:
+                    for item in child:
+                        itype = type(item)
+                        if itype not in exact and (itype in containers or not isinstance(item, value_types)):
+                            break
+                    else:
+                        # Nothing inside to count, and not a node (see `_walk`).
+                        continue
                 stack.append(child)
     return seen
 
@@ -389,6 +426,8 @@ def _walk(
     owner: dict[int, str] = {}
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
+    exact = _EXACT_VALUE_TYPES
+    containers = _EXACT_CONTAINER_TYPES
     # The roots whose identity counts first: what they reach is checked.
     first = [name for name in group if name in identity]
     reached: int | None = None
@@ -411,8 +450,20 @@ def _walk(
             if not children:
                 continue
             for child in children:
-                if isinstance(child, value_types):
+                ctype = type(child)
+                if ctype in exact or (ctype not in containers and isinstance(child, value_types)):
                     continue
+                if ctype is tuple or ctype is frozenset:
+                    for item in child:
+                        itype = type(item)
+                        if itype not in exact and (itype in containers or not isinstance(item, value_types)):
+                            break
+                    else:
+                        # Holds nothing but values: no identity to count, and
+                        # not a node (the loop below reads that as "carries
+                        # nothing"). A walk over millions of such pairs is
+                        # most of what a list of records costs.
+                        continue
                 ckey = id(child)
                 inbound[ckey] = inbound.get(ckey, 0) + 1
                 if ckey not in nodes:
@@ -428,6 +479,11 @@ def _walk(
     for ckey in reversed(order):
         value = nodes[ckey]
         if isinstance(value, _IMMUTABLE_CONTAINERS):
-            carries[ckey] = any(not isinstance(c, value_types) and carries.get(id(c), True) for c in value)
+            carries[ckey] = any(
+                type(c) not in exact
+                and (type(c) in containers or not isinstance(c, value_types))
+                and carries.get(id(c), id(c) in nodes)
+                for c in value
+            )
     candidates = order[:reached]
     return nodes, inbound, [k for k in candidates if carries.get(k, True)], owner
