@@ -353,3 +353,50 @@ def test_an_edit_to_a_helper_of_the_key_function_rekeys(tmp_path):
     assert "HITS 1" in run_python("job.py", "3", cwd=tmp_path).stdout
     write("int(unit) + 0")
     assert "HITS 0 MISSES 1" in run_python("job.py", "3", cwd=tmp_path).stdout
+
+
+def _by(field):
+    return lambda rec: rec[field]
+
+
+class _Pick:
+    def __init__(self, field):
+        self.field = field
+
+    def __call__(self, rec):
+        return rec[self.field]
+
+
+@pytest.mark.parametrize("make", [_by, _Pick], ids=["factory closure", "callable object"])
+def test_what_the_key_function_holds_is_part_of_the_key(cash_instance, make):
+    """``key=by("id")`` edited to ``key=by("sku")`` shares the key function's
+    code; only the captured field (or the object's state) differs. Keyed by
+    code alone, the record stored under id 1 was served for sku 1."""
+
+    def price(rec):
+        return rec["price"]
+
+    assert cash_instance.cache(key=make("id"))(price)({"id": 1, "sku": 5, "price": 10}) == 10
+    by_sku = cash_instance.cache(key=make("sku"))(price)
+    assert by_sku({"id": 7, "sku": 1, "price": 99}) == 99, "an entry keyed by id was served for a sku"
+
+
+def test_a_key_function_holding_what_cannot_be_hashed_runs_uncached(cash_instance):
+    class Conn:
+        offset = 0
+
+        def __reduce__(self):
+            raise TypeError("a live connection")
+
+    conn = Conn()
+
+    @cash_instance.cache(key=lambda x: x + conn.offset)
+    def f(x):
+        return x
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert f(1) == 1
+        assert f(1) == 1
+    assert "KEY-UNHASHABLE-CAPTURE" in _codes(caught)
+    assert f.cache_info()["hits"] == 0

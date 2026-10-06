@@ -481,7 +481,9 @@ returns.
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key
-too, with the helpers it calls, so editing it re-keys every call.
+too, with the helpers it calls and what it holds: the values a key function
+made by a factory captured (`key=by("id")`), or the state of a callable
+object (`key=Pick("id")`). Editing any of them re-keys every call.
 
 !!! warning "The key is a promise"
     `key=` and `ignore=` promise that calls with equal keys return equal

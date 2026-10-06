@@ -363,13 +363,16 @@ class KeyBuilder:
     def _fold_key_function(self, spec: CachedFunction, state_hash: str) -> str:
         """Fold the ``key=`` function's code into the state, as a function
         passed as an argument is folded: its code, the user code it reaches
-        and the globals that code reads. An edit to it re-keys every call."""
+        and the globals that code reads, plus what it holds -- captured
+        values, defaults, a callable object's state
+        (`ClosureFold.key_function_part`). An edit to any of them re-keys
+        every call."""
         key_fn = spec.arg_key.key_fn
         if key_fn is None:
             part = f"ignore:{sorted(spec.arg_key.ignored)}"
             ledger_note(("ignored parameters", ", ".join(sorted(spec.arg_key.ignored))), part)
         else:
-            parts = [f"{func_key(key_fn)}:{hash_callable_source(key_fn)}"]
+            parts = [f"{func_key(key_fn)}:{hash_callable_source(key_fn)}", self._closures.key_function_part(key_fn)]
             parts.extend(
                 self._code_args.carrier_parts(key_fn, spec.name, "key", owner_code=getattr(spec.func, "__code__", None))
             )

@@ -1221,11 +1221,12 @@ and give the captured values as arguments
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:unhashable_capture @b432a5b6 -->
-**What happened.** The function, or a helper it calls, is a closure that reads
-a captured variable whose value could not be hashed -- an object holding a
-lock, a socket or a file handle. The call was not cached. The message names
-the variable and its type.
+<!-- claim: cash/decorator/closure_fold.py:unhashable_capture @b432a5b6, cash/decorator/closure_fold.py:ClosureFold.key_function_part @e027b066 -->
+**What happened.** The function, a helper it calls, or its `key=` function
+is a closure that reads a captured variable whose value could not be hashed
+-- an object holding a lock, a socket or a file handle -- or the `key=`
+function is a callable object whose state could not be hashed. The call was
+not cached. The message names the variable or the object's type.
 
 **Why it matters.** The function is not cached while it captures that value.
 Keyed without it, a change to what the value carries (a setting on a config

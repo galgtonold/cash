@@ -888,6 +888,39 @@ class ClosureFold:
             ) from e
         return hashlib.sha256(f"{state_hash}:partial:{bound}".encode("utf-8")).hexdigest()
 
+    def key_function_part(self, key_fn: Callable) -> str:
+        """What a ``key=`` function holds besides its code, for the key.
+
+        A function's captured values and defaults (`HelperIdentity.identity`):
+        ``key=by("id")`` and ``key=by("sku")`` share their code and differ
+        only in the cell. A callable object's state, hashed as an argument
+        is: ``key=Pick("id")``. A bound method's instance, the same. Keyed by
+        code alone, editing ``by("id")`` to ``by("sku")`` kept the entries
+        and served one record's result for another.
+
+        Raises `KeyBuildFailed` when that state cannot be hashed.
+        """
+        if isinstance(key_fn, types.FunctionType):
+            return self._helpers.identity(key_fn)
+        if is_user_callable_instance(key_fn):
+            owner = key_fn
+        elif inspect.ismethod(key_fn):
+            owner = key_fn.__self__
+        else:
+            return ""
+        try:
+            return "state:" + self._args.hash_payload((owner,), {})
+        except _UNHASHABLE_CAPTURE_ERRORS as e:
+            kind = type(owner).__qualname__
+            raise KeyBuildFailed(
+                "KEY-UNHASHABLE-CAPTURE",
+                f"@cash.cache: the key= function is a {kind} whose state could not be hashed "
+                f"({type(e).__name__}), so the call ran uncached rather than risk keying it with "
+                f"a key function that changed.",
+                f"make the key function a plain function of the arguments, or register a hasher "
+                f"with cash.register_hasher({kind}, ...).",
+            ) from e
+
     def fold_bound_self(
         self,
         func: Callable,
