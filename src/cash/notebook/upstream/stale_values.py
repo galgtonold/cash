@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -48,6 +49,13 @@ class StaleValueGuard:
         self.tracking_state = tracking_state
         self.unsaved_edits = unsaved_edits
         self.compute_hash_fn = compute_hash_fn
+        #: ``(cell index, name) -> (id, weak reference or None)`` of the object
+        #: the cell last started from, for a value whose content is not
+        #: compared (`hashed_by_lineage`). Never a strong reference: holding
+        #: the value would keep it alive and count as a second holder.
+        self._started_from: dict[tuple[int, str], tuple[int, Any]] = {}
+        #: The cell the current check is for.
+        self._cell_idx: int | None = None
 
     def mark_stale_value_inputs_broken(
         self,
@@ -103,6 +111,7 @@ class StaleValueGuard:
         for fn in effects.stateful_funcs:
             if fn in self.shell.user_ns:
                 broken_vars.add(fn)
+        self._cell_idx = current_cell_idx
         if not required_inputs:
             return
         reassigned = effects.reassigned
@@ -462,14 +471,25 @@ class StaleValueGuard:
         if base_content is None:
             return
         if hashed_by_lineage(live_value):
-            # Its session hash is a lineage, which no content hash equals:
-            # hashing it in full only to find it different costs seconds.
-            live_content = "(its lineage)"
-        else:
-            try:
-                live_content = self.compute_hash_fn(live_value)
-            except (TypeError, ValueError, AttributeError, RecursionError):
-                return
+            # Its session hash is a lineage, which no content hash equals, and
+            # hashing it in full costs seconds. Its identity answers instead:
+            # the value is this cell's own prior output when it is the very
+            # object the cell started from last time. On a forward run the
+            # producer above has bound a new one (or this cell never ran),
+            # and rebuilding it would cut the views, aliases and containers
+            # that share the object.
+            if self._started_from_before(var_name, live_value):
+                logger.debug(
+                    "[UPSTREAM_DEBUG] in-place mutation '%s' holds its own prior output on "
+                    "re-run (the cell already started from this object); marking broken.",
+                    var_name,
+                )
+                broken_vars.add(var_name)
+            return
+        try:
+            live_content = self.compute_hash_fn(live_value)
+        except (TypeError, ValueError, AttributeError, RecursionError):
+            return
         if live_content != base_content:
             logger.debug(
                 "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "
@@ -480,6 +500,42 @@ class StaleValueGuard:
                 live_content[:8],
             )
             broken_vars.add(var_name)
+
+    def _started_from_before(self, var_name: str, live_value: Any) -> bool:
+        """Whether the current cell started from *live_value* last time it ran.
+
+        Fails closed: a recorded ``id`` without a weak reference (a list or
+        dict takes none) that a new object happens to reuse reads as the same
+        object, which costs a needless rebuild, never a doubled write.
+        """
+        if self._cell_idx is None:
+            return True
+        seen = self._started_from.get((self._cell_idx, var_name))
+        if seen is None:
+            return False
+        seen_id, ref = seen
+        if ref is not None:
+            return ref() is live_value
+        return seen_id == id(live_value)
+
+    def note_cell_start(self, cell_idx: int, names: set[str]) -> None:
+        """Record the objects cell *cell_idx* starts from, among *names*, once
+        the upstream check has restored and re-run what it found stale.
+
+        Only for values whose content is not compared (`hashed_by_lineage`),
+        which :meth:`_started_from_before` asks about on the cell's next run.
+        """
+        user_ns = self.shell.user_ns
+        for var_name in names:
+            value = user_ns.get(var_name)
+            if value is None or not hashed_by_lineage(value):
+                self._started_from.pop((cell_idx, var_name), None)
+                continue
+            try:
+                ref = weakref.ref(value)
+            except TypeError:
+                ref = None
+            self._started_from[(cell_idx, var_name)] = (id(value), ref)
 
     @staticmethod
     def _lineage_invisible_writes(

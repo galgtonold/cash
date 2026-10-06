@@ -65,6 +65,8 @@ class UpstreamChecker:
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
         #: The index of the cell checked last, for a run whose own index is unknown.
         self.last_cell_index: int | None = None
+        #: The index of the cell the current check found, None until it does.
+        self._checked_cell_idx: int | None = None
 
         # Proven-stale verdict for the saved .ipynb, held for the session.
         # Populated at the cell-ID match site below, where both the running
@@ -226,6 +228,7 @@ class UpstreamChecker:
 
         # A name the previous cell's forward probe held and no restore filled.
         self.simulator.restorer.drop_probe_placeholders()
+        self._checked_cell_idx = None
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site
@@ -262,6 +265,14 @@ class UpstreamChecker:
         )
 
         return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
+
+    def note_cell_start(self, names: set[str]) -> None:
+        """Record what the checked cell starts from among *names*, after the
+        check has settled the namespace and before the cell body runs: the
+        baseline its next run is compared with
+        (``StaleValueGuard.note_cell_start``)."""
+        if self._checked_cell_idx is not None:
+            self.simulator.stale_values.note_cell_start(self._checked_cell_idx, names)
 
     def _resolve_notebook_path(self) -> str | None:
         """Resolve the current notebook path once per cell's upstream check.
@@ -508,6 +519,7 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
+            self._checked_cell_idx = current_cell_idx
             self.vetter.vet(notebook_cells, cell_code, current_cell_idx, required_inputs)
 
             records_before = self.simulator.lineage_records()

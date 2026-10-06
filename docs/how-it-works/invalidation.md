@@ -135,7 +135,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @2893c33a, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @1b88e7ac -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @4d82e125, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @1b88e7ac -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would

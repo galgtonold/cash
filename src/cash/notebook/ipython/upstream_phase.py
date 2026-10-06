@@ -218,6 +218,10 @@ class UpstreamResolution:
             # re-execution, or an isolated re-run would record the drained state
             # and destroy the signal for the run after it.
             self._record_consumable_bases(inputs)
+            # The same cell-entry baseline for a frame, an array or a large
+            # collection the cell may change in place: the very object it
+            # starts from, which its next run compares with.
+            self._upstream_checker.note_cell_start(inputs)
 
         except (RuntimeError, SyntaxError, AmbiguousCellError, ForwardReferenceError):
             raise
