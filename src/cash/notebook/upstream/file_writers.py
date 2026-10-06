@@ -35,6 +35,7 @@ from .._trace import trace_event
 from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
+from ..consumables import is_write_stream
 from ._types import key_lineages
 
 if TYPE_CHECKING:
@@ -458,6 +459,16 @@ class FileWriterScheduler:
             if statement_write_repeatability(stmt_code) == REPEATABILITY_ACCUMULATING:
                 logger.debug(
                     "[UPSTREAM] File-writer is a non-idempotent append; not re-firing (repeatability): %s",
+                    stmt_code[:60],
+                )
+                continue
+            # A write through a file handle held in a variable continues
+            # that handle: re-firing it writes the same bytes a second time.
+            # Its producer is never re-run either (``is_write_stream``).
+            user_ns = self._user_ns()
+            if user_ns and any(is_write_stream(user_ns.get(v)) for v in inputs):
+                logger.debug(
+                    "[UPSTREAM] File-writer writes through an open handle; not re-firing: %s",
                     stmt_code[:60],
                 )
                 continue

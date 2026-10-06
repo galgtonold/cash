@@ -553,6 +553,7 @@ class UpstreamChecker:
             self.rng.restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
 
             self.simulator.resync_after_replay(records_before)
+            self.simulator.record_consumable_bases(required_inputs, current_cell_idx, cell_code)
 
             all_metrics = self.replay.in_notebook_order(restored_info + executed_metrics, notebook_cells)
             return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
