@@ -434,6 +434,11 @@ class CodeSurface:
             for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
                 parts.extend(self._member_parts(cls, base, name, member, _path))
         parts.extend(self._field_factory_parts(cls))
+        # Its metaclass's code runs too: `cls()` calls the metaclass's
+        # `__call__`, `cls.factor` can be a property on it.
+        meta = type(cls)
+        if meta is not type and meta not in _path and not is_opaque(meta) and is_user_code_object(meta):
+            parts.extend(("__metaclass__", *part) for part in self.class_surface_parts(meta, (*_path, cls)))
         return parts
 
     def _member_parts(self, cls: type, base: type, name: str, member: Any, path: tuple[type, ...]) -> list[tuple]:

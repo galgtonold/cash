@@ -512,8 +512,16 @@ class HelperIdentity:
             ]
             if bases:
                 source = f"{source}:bases:{','.join(bases)}"
-        defaults = getattr(fn, "__defaults__", None)
-        kwdefaults = getattr(fn, "__kwdefaults__", None)
+            # Its metaclass's code runs too: `Model()` calls the metaclass's
+            # `__call__`, `Model.factor` can be a property on it.
+            meta = type(fn)
+            if meta is not type and not is_opaque(meta) and is_user_code_object(meta):
+                source = f"{source}:metaclass:{self.identity(meta)}"
+        # A class has no defaults and no closure. Not asked for them either: a
+        # metaclass with a catch-all `__getattr__` answers both.
+        is_class = isinstance(fn, type)
+        defaults = None if is_class else getattr(fn, "__defaults__", None)
+        kwdefaults = None if is_class else getattr(fn, "__kwdefaults__", None)
         memo_key = id(fn)
         cached = self._defaults_memo.get(memo_key)
         if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
@@ -521,10 +529,10 @@ class HelperIdentity:
         # After the memo: its entry already holds the captures, and hashing
         # a captured object on every call only to throw the digest away cost
         # as much as the object is large.
-        captured = self._capture_part(fn)
+        captured = "" if is_class else self._capture_part(fn)
         if captured:
             source = f"{source}:captures:{captured}"
-        pos, kwd = defaults_of(fn)
+        pos, kwd = ((), {}) if is_class else defaults_of(fn)
         try:
             digest = self._args.hash_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
