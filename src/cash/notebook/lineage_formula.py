@@ -350,16 +350,20 @@ def statement_module_data(code: str, user_ns: Mapping[str, Any] | None) -> str:
     return module_data_component(reached_user_code(code, user_ns))
 
 
-def module_data_lineage_component(tracking_state: Any, cache_key: str | None) -> str:
-    """The module data the statement keyed *cache_key* read, for its outputs'
-    lineage: what its key folded (``TrackingState.module_data_by_key``), so a
-    reader below misses when the data changed. ONE lookup for the runtime
-    (``statement/lineage.py``) and the simulation (``upstream/statement_lineage.py``).
+def recorded_reads_lineage_component(
+    tracking_state: Any, cache_key: str | None, code: str, user_ns: Mapping[str, Any] | None
+) -> str:
+    """The environment and the module data the statement keyed *cache_key*
+    read, for its outputs' lineage: what its key folded
+    (``TrackingState.recorded_reads_by_key``), so a reader below misses when a
+    value changed. A key nothing recorded reads the environment now. ONE
+    lookup for the runtime (``statement/lineage.py``) and the simulation
+    (``upstream/statement_lineage.py``).
     """
-    by_key = getattr(tracking_state, "module_data_by_key", None)
-    if not by_key or not cache_key:
-        return ""
-    return by_key.get(cache_key, "")
+    by_key = getattr(tracking_state, "recorded_reads_by_key", None)
+    if by_key and cache_key and cache_key in by_key:
+        return by_key[cache_key]
+    return statement_environment_component(code, user_ns)
 
 
 def callable_source_component(function_tracker: Any, inputs: set[str], user_ns: dict) -> str:

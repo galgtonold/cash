@@ -187,15 +187,18 @@ holds after a restart what a top-to-bottom run leaves in it. A slow call inside
 an assignment (`n = metrics.increment(5)`) is still served from the cache; a
 cell that is only the call runs it.
 
-### An edited setting on your module that has not run
+### A setting on your module or the environment, run out of order
 
-<!-- claim: cash/notebook/cache_key.py:_module_data_component @93fc12c8 -->
+<!-- claim: cash/notebook/cache_key.py:_recorded_reads_component @5a728de9 -->
 A cell that sets data on one of your modules (`mylib.K = 7`,
-`mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`) reaches the statements that read
-that data, in the module's functions too, once it has run: run it, or run
-the notebook. Edit it and run only a cell below it, and cash answers with
-what the module holds, as a plain kernel would, not as a top-to-bottom run
-would. **Fix:** run the edited cell first.
+`mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`) or an environment variable
+(`os.environ["MODE"] = "b"`) reaches the statements that read it, in your
+functions too, when they run: run the notebook. A statement is keyed on the
+values it saw when it last ran, so a setting in a cell below it does not
+reach it. Edit a setting, run it or not, and run only a cell below the
+statements that read it, and cash answers as a plain kernel would, with what
+they read when they ran, not as a top-to-bottom run would. **Fix:** run the
+notebook, or the cells from the edited one down.
 
 ### Re-running a cell above an in-place change
 
