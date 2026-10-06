@@ -168,6 +168,10 @@ class FileAccessTracker:
         # block's own records them and asks them again on lookup
         # (`pass_dynamic_sources_up`, `dynamic_sources_fresh`).
         self.dynamic_sources: dict[tuple[str, str, int], tuple[Any, str]] = {}
+        # The resolver calls behind them, each to be asked again by this
+        # process (`dynamic_sources.Resolution`): a resolver may hand out a
+        # new source object, which the recorded one never answers for.
+        self.dynamic_resolutions: dict[tuple, Any] = {}
         # Files and directories this block CREATED (opened with "w"/"x",
         # made with mkdir/mkdtemp), resolved. What the block reads back from
         # them is its own output, not an input: unzipping into a temporary
@@ -600,6 +604,12 @@ class FileAccessTracker:
         moved within the block makes the entry miss on its next lookup."""
         for tracker in self._self_and_parents():
             tracker.dynamic_sources.setdefault((source_id, token, id(source)), (source, token))
+
+    def add_dynamic_resolution(self, key: tuple, resolution: Any) -> None:
+        """Record a ``dynamic_depends_on=`` resolver call this block depends
+        on, here and on the parents (`dynamic_sources.Resolution`)."""
+        for tracker in self._self_and_parents():
+            tracker.dynamic_resolutions.setdefault(key, resolution)
 
 
 #: Seconds spent recording reads; `tracking_seconds`.

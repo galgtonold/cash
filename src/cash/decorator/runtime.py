@@ -52,7 +52,14 @@ from .call_state import (
 )
 from .class_data import CLASSES_FOLDED
 from .closure_fold import EVERY_PARAMETER, defaults_of
-from .dynamic_sources import dynamic_sources_fresh, held_sources, recorded_sources
+from .dynamic_sources import (
+    Resolution,
+    asked_again_here,
+    dynamic_sources_fresh,
+    held_resolutions,
+    held_sources,
+    recorded_sources,
+)
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import (
     note_unentered_body,
@@ -160,6 +167,28 @@ def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
     if spec.arg_key.key_fn is not None:
         return EVERY_PARAMETER
     return spec.arg_key.ignored
+
+
+def _resolution_of(
+    func_name: str, resolvers: Any, args: tuple, kwargs: dict, sources: list[tuple[Any, str]]
+) -> dict[tuple, Resolution]:
+    """The resolver call that just resolved to *sources*, keyed so that the
+    same call met again in one block is held once (`Resolution`)."""
+    expected = [(source.get_id(), token) for source, token in sources]
+
+    def redo() -> list[tuple[str, str]]:
+        now: list[tuple[Any, str]] = []
+        resolve_dynamic_dependencies(func_name, resolvers, args, kwargs, now)
+        return [(source.get_id(), token) for source, token in now]
+
+    key = (
+        func_name,
+        id(resolvers),
+        tuple(id(a) for a in args),
+        tuple((k, id(v)) for k, v in kwargs.items()),
+        tuple(expected),
+    )
+    return {key: Resolution(redo, expected)}
 
 
 def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -442,8 +471,10 @@ class KeyBuilder:
             dynamic_state_hash = resolve_dynamic_dependencies(
                 func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources
             )
-            if dynamic_sources and not _EXPLAINING.get():
-                pass_dynamic_sources_up(dynamic_sources)
+            if spec.dynamic_depends_on and not _EXPLAINING.get():
+                pass_dynamic_sources_up(
+                    dynamic_sources, _resolution_of(func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources)
+                )
             failure: list = []
             if keyed is normalized_args:
                 args_hash = self._args.serialize_args(
@@ -662,11 +693,12 @@ class CallRunner:
             propagate_file_deps_to_active_tracker(metadata, func_name)
             # And the sources its callees resolved, which the verdict just
             # found unchanged: the enclosing call depends on them too.
-            if metadata.dynamic_sources:
-                held = held_sources(cache_key, metadata.dynamic_sources)
+            if metadata.dynamic_sources or asked_again_here(cache_key):
+                held = held_sources(cache_key, metadata.dynamic_sources) if metadata.dynamic_sources else []
                 if held is not None:
                     pass_dynamic_sources_up(
-                        [(source, record["token"]) for source, record in zip(held, metadata.dynamic_sources)]
+                        [(source, record["token"]) for source, record in zip(held, metadata.dynamic_sources or [])],
+                        held_resolutions(cache_key),
                     )
             # Re-attach the lineage hash to the restored value. It's a plain
             # attribute that doesn't survive pickling, so a value restored
@@ -714,7 +746,9 @@ class CallRunner:
             return MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
         if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
             return MissReason(MissKind.FILE, describe_stale_files(metadata))
-        if metadata.dynamic_sources and not dynamic_sources_fresh(cache_key, metadata.dynamic_sources):
+        if (metadata.dynamic_sources or asked_again_here(cache_key)) and not dynamic_sources_fresh(
+            cache_key, metadata.dynamic_sources or []
+        ):
             return MissReason(
                 MissKind.DYNAMIC,
                 "a dynamic_depends_on= source of a cached function it calls changed, or could not be asked",

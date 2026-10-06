@@ -265,3 +265,64 @@ def test_two_sources_with_one_id_are_both_checked(cash_instance):
     finally:
         VERSIONS["b"] = 1
     assert len(runs) == 2
+
+
+class Snapshot(DataSource):
+    """A handle on one catalog version: a refresh builds a new one."""
+
+    def __init__(self, name, version):
+        self.name, self.version = name, version
+
+    def get_id(self) -> str:
+        return "dataset:" + self.name
+
+    def state_token(self):
+        return self.version
+
+
+def test_a_resolver_that_hands_out_a_new_source_is_asked_again(cash_instance):
+    handles = {"prices": Snapshot("prices", "1")}
+    runs: list = []
+
+    @cash_instance.cache(dynamic_depends_on=lambda name: handles[name], assume_safe=True)
+    def load(name):
+        return name
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load("prices")
+
+    report()
+    report()
+    assert len(runs) == 1
+    handles["prices"] = Snapshot("prices", "2")  # the catalog refreshed
+    report()  # the old handle still answers "1"; the resolver does not
+    assert len(runs) == 2
+    report()
+    assert len(runs) == 2
+
+
+def test_a_resolver_that_names_another_file_is_asked_again(cash_instance, tmp_path):
+    from cash import FileDataSource
+
+    (tmp_path / "v1.txt").write_text("one", encoding="utf-8")
+    (tmp_path / "v2.txt").write_text("two", encoding="utf-8")
+    latest = {"path": str(tmp_path / "v1.txt")}
+    runs: list = []
+
+    @cash_instance.cache(dynamic_depends_on=lambda: FileDataSource(latest["path"]), assume_safe=True)
+    def load():
+        return 1
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load()
+
+    report()
+    report()
+    assert len(runs) == 1
+    latest["path"] = str(tmp_path / "v2.txt")
+    report()
+    assert len(runs) == 2

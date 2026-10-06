@@ -91,8 +91,12 @@ own key never sees them. cash keeps them in its entry instead:
   its token again: the same token serves the entry, another one recomputes
   it, and so does a `state_token()` that raises.
 
-In the process that wrote the entry, the source object itself is asked. A
-later process asks the copy pickled with the entry, so **`state_token()` must
+In the process that wrote the entry, the source object itself is asked, and
+so is the resolver, with the arguments `load` was called with: a resolver
+that hands out a new source object after a catalog refresh, or names another
+file, recomputes the caller even when the old object still gives its old
+token. That process holds those arguments for as long as it holds the entry.
+A later process asks the copy pickled with the entry, so **`state_token()` must
 read the version from where it lives** (the catalog, the database, the
 server), not from an attribute the object set when it was made, as
 `DatasetVersion` above does.
