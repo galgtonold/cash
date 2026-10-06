@@ -22,7 +22,6 @@ from ..install_paths import is_user_code_module
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
-from .cash_key import cash_key_method
 from .class_data import class_surface_functions
 from .user_code import cached_function_in, is_user_code_object
 
@@ -389,20 +388,19 @@ class CodeArgs:
             # still walked every logger, handler and stream in the process
             # (a logger holds its manager), and a handler holding a bound
             # builtin warned that its code was not in the key.
-            # So does one its class's ``__cash_key__`` keys.
+            # One its class's ``__cash_key__`` keys is the user's own object:
+            # the key stands for its DATA, and the code it holds (a `self.db`
+            # whose `query` the method calls) still counts.
             # Inline, not `_keyed_by_registration`: this runs per element.
-            if cash_key_method(value) is None and not (
-                (self._registries[0] or self._registries[1]) and self._args.keys_by_registration(value)
-            ):
+            if not ((self._registries[0] or self._registries[1]) and self._args.keys_by_registration_only(value)):
                 yield from self._iter_attribute_carriers(value, _depth, _seen)
 
     def _keyed_by_registration(self, value: Any) -> bool:
-        """`ArgHasher.keys_by_registration`, skipped while nothing is registered
-        and *value* has no ``__cash_key__``."""
-        if cash_key_method(value) is not None:
-            return True
+        """`ArgHasher.keys_by_registration_only`, skipped while nothing is
+        registered. Not ``__cash_key__``: it keys an object's data, not the
+        code the object holds."""
         override, typed = self._registries
-        return bool(override or typed) and self._args.keys_by_registration(value)
+        return bool(override or typed) and self._args.keys_by_registration_only(value)
 
     def _iter_attribute_carriers(self, value: Any, _depth: int, _seen: set):
         """Code carried by what an instance of the user's own class HOLDS.

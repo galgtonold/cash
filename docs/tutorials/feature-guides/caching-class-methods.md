@@ -48,8 +48,9 @@ Loader("sales", FakeDB()).load(1)   # a hit: same dataset_id
 # test:inject: load = Loader.load  # lets the harness read cache_info
 ```
 
-`self` is then keyed by what `__cash_key__` returns, and nothing else it holds
-is read. The method's other arguments are hashed as usual.
+`self` is then keyed by what `__cash_key__` returns, and none of the data it
+holds is read. The code it holds still counts: editing `FakeDB.query`
+recomputes. The method's other arguments are hashed as usual.
 
 The key must name **everything** that changes the result. Here two loaders
 with the same `dataset_id` but different databases share entries. That is
