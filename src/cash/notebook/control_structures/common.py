@@ -140,14 +140,39 @@ def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[
         user_ns[target.id] = value
         bindings[target.id] = value
     elif isinstance(target, (ast.Tuple, ast.List)):
+        if any(isinstance(elt, ast.Starred) for elt in target.elts):
+            return _bind_by_assignment(target, value, user_ns)
         vals = list(value)
-        for elt, val in zip(target.elts, vals, strict=False):
+        if len(vals) != len(target.elts):
+            raise _unpack_error(len(target.elts), len(vals))
+        for elt, val in zip(target.elts, vals, strict=True):
             bindings.update(bind_target_values(elt, val, user_ns))
     elif isinstance(target, ast.Starred):
         if isinstance(target.value, ast.Name):
             user_ns[target.value.id] = value
             bindings[target.value.id] = value
     return bindings
+
+
+def _unpack_error(expected: int, got: int) -> ValueError:
+    """The error Python raises when ``a, b = value`` finds the wrong count."""
+    if got > expected:
+        return ValueError(f"too many values to unpack (expected {expected})")
+    return ValueError(f"not enough values to unpack (expected {expected}, got {got})")
+
+
+def _bind_by_assignment(target: ast.AST, value: Any, user_ns: dict[str, Any]) -> dict[str, Any]:
+    """Bind a target with a starred part by running the assignment itself,
+    so ``for a, *rest, z in rows`` unpacks, and fails, as Python does."""
+    scratch = "__cash_loop_value__"
+    assign = ast.Assign(targets=[target], value=ast.Name(id=scratch, ctx=ast.Load()))
+    module = ast.fix_missing_locations(ast.Module(body=[assign], type_ignores=[]))
+    user_ns[scratch] = value
+    try:
+        exec(compile(module, "<cash: loop target>", "exec", dont_inherit=True), user_ns)
+    finally:
+        user_ns.pop(scratch, None)
+    return {name: user_ns[name] for name in extract_target_names(target) if name in user_ns}
 
 
 #: Context entries under this prefix hold the content digest of a hashable,
