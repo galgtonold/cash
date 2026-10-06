@@ -30,7 +30,8 @@ from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
 )
-from ..recorded_reads import outside_changes
+from ..callee_reach import reached_user_code
+from ..recorded_reads import outside_changes, watched_module_data
 from ..run_memo import stats_this_run
 from ..tracking_state import TrackingState
 from ._types import (
@@ -191,10 +192,54 @@ class VirtualLineage:
                 return True
         return False
 
+    def _reaches_watched_module_data(
+        self,
+        current_cell_idx: int,
+        notebook_cells: list[str],
+        required_inputs: set[str] | None,
+        cell_code: str | None,
+    ) -> bool:
+        """Whether the cell about to run can be reached by watched module
+        data: it reads some itself, or a statement it derives an input from
+        does (the cached trace, read backwards from *required_inputs*, as
+        ``read_scope`` scopes file reads). Unknown inputs or cell: yes.
+
+        Checking that data for changes made outside the notebook hashes all
+        of it, before every cell: once ``v = helpers.score(3)`` had read a
+        128 MB table, ``x = 1`` cost 350 ms. A cell no reader reaches cannot
+        be told anything by it, and leaves it to the next cell that can.
+        """
+        labels = watched_module_data(self.tracking_state.reads)
+        if not labels:
+            return False
+        if required_inputs is None:
+            return True
+        if cell_code is None and current_cell_idx < len(notebook_cells):
+            cell_code = notebook_cells[current_cell_idx]
+        if cell_code is None:
+            return True
+        namespace = self.shell.user_ns
+
+        def reads(code: str) -> bool:
+            return any(label in labels for label, _value in reached_user_code(code, namespace).data)
+
+        if reads(clean_cell_source(cell_code.replace("\r\n", "\n"))):
+            return True
+        needed = set(required_inputs)
+        for cached in reversed(self.cache.entries[: min(current_cell_idx, len(self.cache.entries))]):
+            for entry in reversed(cached.trace_segment):
+                if entry.outputs & needed:
+                    if reads(entry.stmt_code):
+                        return True
+                    needed |= entry.inputs
+        return False
+
     def _scan_main_cache_for_changes(
         self,
         current_cell_idx: int,
         notebook_cells: list[str],
+        required_inputs: set[str] | None = None,
+        cell_code: str | None = None,
     ) -> tuple[int, bool]:
         """Scan the main simulation cache to find the first changed cell.
 
@@ -202,7 +247,8 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
-        if outside_changes(self.tracking_state.reads):
+        module_data = self._reaches_watched_module_data(current_cell_idx, notebook_cells, required_inputs, cell_code)
+        if outside_changes(self.tracking_state.reads, module_data=module_data):
             # The environment or a module's data, read by a statement, was
             # changed outside the notebook's cells: no cell's code says so, so
             # simulate them all again, as for a changed file.
@@ -294,6 +340,8 @@ class VirtualLineage:
         self,
         current_cell_idx: int,
         notebook_cells: list[str],
+        required_inputs: set[str] | None = None,
+        cell_code: str | None = None,
     ) -> IncrementalStartResult:
         """Find the first upstream cell that changed since last simulation.
 
@@ -318,7 +366,7 @@ class VirtualLineage:
 
         if self.cache.entries:
             first_changed_cell, cache_had_hash_mismatch = self._scan_main_cache_for_changes(
-                current_cell_idx, notebook_cells
+                current_cell_idx, notebook_cells, required_inputs, cell_code
             )
 
         # A reloaded helper module changes what cells compute without changing
@@ -376,10 +424,18 @@ class VirtualLineage:
             simulation=sim,
         )
 
-    def simulate(self, current_cell_idx: int, notebook_cells: list[str]) -> SimulationResult:
+    def simulate(
+        self,
+        current_cell_idx: int,
+        notebook_cells: list[str],
+        required_inputs: set[str] | None = None,
+        cell_code: str | None = None,
+    ) -> SimulationResult:
         """Pass 1: simulate every cell above *current_cell_idx*, starting from
-        the first one changed since the previous simulation."""
-        start = self.find_incremental_start(current_cell_idx, notebook_cells)
+        the first one changed since the previous simulation. *required_inputs*
+        and *cell_code* are the cell's (None: not known), see
+        `_reaches_watched_module_data`."""
+        start = self.find_incremental_start(current_cell_idx, notebook_cells, required_inputs, cell_code)
         sim = start.simulation
         self.simulate_cells_pass1(
             sim, start.first_changed_cell, current_cell_idx, notebook_cells, start.new_cache_entries

@@ -310,7 +310,7 @@ class NotebookSimulator:
         if self._adopt_untracked_pending:
             self._track_modules_bound_before_cash_on()
 
-        sim = self.virtual_lineage.simulate(current_cell_idx, notebook_cells)
+        sim = self.virtual_lineage.simulate(current_cell_idx, notebook_cells, required_inputs, cell_code)
 
         # Hand the simulation's view of every name to the runtime about to
         # execute this cell. A control structure records the lineages of what

@@ -208,7 +208,10 @@ variable, a console attached to the kernel, an edit of the module's file) is
 seen: running only the last cell rebuilds what was built on the old value. So
 is a change to the environment made inside a function a cell calls, without
 the cell spelling it (`setup()` doing `os.environ["MODE"] = "b"`): cash
-cannot tell it from one made outside.
+cannot tell it from one made outside. Your module's data is looked at for
+such a change (hashed in full) only before a cell that reads it or uses
+something built from it; a cell that does neither runs without paying for
+it, and the change is seen by the next one that does.
 
 ### Re-running a cell above an in-place change
 

@@ -43,6 +43,7 @@ __all__ = [
     "choose",
     "note_writes",
     "outside_changes",
+    "watched_module_data",
     "read_parts",
     "snapshot",
     "watch",
@@ -123,16 +124,29 @@ def watch(parts: ReadParts, record: ReadRecord) -> None:
             record.known[(kind, label)] = digest
 
 
-def outside_changes(record: ReadRecord) -> bool:
+def outside_changes(record: ReadRecord, *, module_data: bool = True) -> bool:
     """Whether a watched value changed since the runtime last read it, so
-    outside the notebook's cells; and take the new values as known."""
+    outside the notebook's cells; and take the new values as known.
+
+    Without *module_data*, only the environment is looked at: the module
+    data is hashed in full to be compared (an 80 MB table: 0.2 s), so a
+    caller that cannot be reached by it leaves it out. What it holds stays
+    known as it was, so the next look at it still sees the change.
+    """
     changed = False
     for key in record.watched:
+        if key[0] == _MOD and not module_data:
+            continue
         digest = _current(*key)
         if record.known.get(key) != digest and not digest.startswith(UNHASHABLE):
             changed = True
         record.known[key] = digest
     return changed
+
+
+def watched_module_data(record: ReadRecord) -> frozenset[str]:
+    """The labels of the module data the record watches (``mylib.K``)."""
+    return frozenset(label for kind, label in record.watched if kind == _MOD)
 
 
 def snapshot(
