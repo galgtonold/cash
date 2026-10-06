@@ -72,3 +72,16 @@ def test_a_call_that_leaves_its_receiver_alone_is_stored(cash_magics, statement_
     assert not metrics.get("uncacheable_reasons"), metrics.get("uncacheable_reasons")
     again = statement_processor.process_statement("s = net.score(X)")
     assert again["status"] == CacheStatus.RESTORED
+
+
+def test_a_stream_is_left_to_the_draw_check():
+    """A queue cannot be pickled, so watching it would count ``n = q.qsize()``
+    as a change and re-run an inspection; the draw check judges streams."""
+    import ast
+    import queue
+
+    from cash.notebook.consumables import watched_call_receivers
+
+    ns = {"q": queue.Queue(), "net": Net()}
+    assert watched_call_receivers(ast.parse("n = q.qsize()"), ns) == frozenset()
+    assert watched_call_receivers(ast.parse("h = net.fit([1])"), ns) == {"net"}

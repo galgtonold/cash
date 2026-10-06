@@ -47,6 +47,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
 
 logger = logging.getLogger(__name__)
@@ -300,9 +301,24 @@ def drawn_stream_inputs(
         value = user_ns.get(name)
         if value is None:
             continue
-        try:
-            if _is_self_iterator(value) or is_consumable_unrestorable(value):
-                found.append(name)
-        except (TypeError, ValueError, AttributeError, RecursionError):
-            continue
+        if is_stream(value):
+            found.append(name)
     return found
+
+
+def is_stream(obj: Any) -> bool:
+    """True when reading *obj* moves it: an iterator, generator, queue or
+    open file, the values `drawn_stream_inputs` answers for."""
+    try:
+        return _is_self_iterator(obj) or is_consumable_unrestorable(obj)
+    except (TypeError, ValueError, AttributeError, RecursionError):
+        return False
+
+
+def watched_call_receivers(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> frozenset[str]:
+    """`captured_call_receivers` without the streams: a call on a queue, an
+    iterator or a file (`n = q.qsize()`, `line = fh.readline()`) is judged by
+    `drawn_stream_inputs`, which tells a draw from an inspection. Watching
+    it as well would fingerprint an object that cannot be pickled, count it
+    as changed, and re-run an inspection a hit serves correctly."""
+    return frozenset(name for name in captured_call_receivers(tree, user_ns) if not is_stream(user_ns.get(name)))

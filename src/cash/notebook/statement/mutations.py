@@ -17,10 +17,11 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from cash.analysis.cacheability_decision import receiver_is_identity_coupled
-from cash.analysis.mutation_effects import captured_call_receivers, classify_receivers, drawn_on_arguments
+from cash.analysis.mutation_effects import classify_receivers, drawn_on_arguments
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from cash.analysis.namespace_effects import bare_call_arguments, fits_its_receiver, is_estimator
 from cash.mutation_fingerprint import mutation_fingerprint
+from cash.notebook.consumables import watched_call_receivers
 from cash.notebook.restored_var import hashed_by_lineage
 
 if TYPE_CHECKING:
@@ -176,10 +177,10 @@ class MutationClassifier:
         """The names to fingerprint around the statement: the arguments of a
         bare call (``namespace_effects.bare_call_arguments``) and the
         receivers of a method call whose result is bound
-        (``mutation_effects.captured_call_receivers``), both shared with the
+        (``consumables.watched_call_receivers``), both shared with the
         simulation."""
         user_ns = self.shell.user_ns
-        return set(bare_call_arguments(tree, user_ns) | captured_call_receivers(tree, user_ns)) - outputs
+        return set(bare_call_arguments(tree, user_ns) | watched_call_receivers(tree, user_ns)) - outputs
 
     def estimator_fit_receivers(
         self,

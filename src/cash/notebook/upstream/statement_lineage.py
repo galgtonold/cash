@@ -22,12 +22,12 @@ from ...analysis.code_analyzer import parse_cell_source
 from ...analysis.mutation_effects import (
     StatementEffects,
     captured_call_receiver_names,
-    captured_call_receivers,
     classify_receivers,
     live_function_source,
     statement_effects,
 )
 from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
+from ..consumables import watched_call_receivers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
     hidden_lineage_writes,
@@ -221,7 +221,7 @@ class StatementLineage:
         # (`history = net.fit(X)`), which the runtime fingerprints too.
         arguments = (
             bare_call_arguments(tree, user_ns)
-            | captured_call_receivers(tree, user_ns)
+            | watched_call_receivers(tree, user_ns)
             | {n for n in bare_call_argument_names(tree) | captured_call_receiver_names(tree) if n not in user_ns}
         )
         classes = classify_receivers(
