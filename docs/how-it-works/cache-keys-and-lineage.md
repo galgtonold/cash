@@ -81,7 +81,7 @@ colons, in this order, and hashes the result:
 | Local modules | `name:hash` per local module it reads, sorted. |
 | Occurrence | `occ` and a 0-based index, which tells a statement repeated in the cell apart. |
 | Callee globals | `callees:`, then `name:lineage` per global a called function reads. |
-| Environment | `env:`, then a digest per `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` it reads. |
+| Environment | `env:`, then a digest per `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` it, or a function of yours it calls, reads. |
 
 The key is `namespace:` followed by the SHA-256 of the joined parts, for
 example `stmt:ffd3d255…`.

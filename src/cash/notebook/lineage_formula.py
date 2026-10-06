@@ -23,11 +23,13 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
+from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
 from ..effects import environment_component, environment_input
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import compute_hash, is_identity_fallback_hash
+from .callee_reach import reached_user_code
 
 logger = logging.getLogger(__name__)
 
@@ -249,13 +251,16 @@ _ENVIRONMENT_MARKERS = ("environ", "getenv", "getcwd")
 
 
 def statement_environment_reads(code: str, user_ns: Mapping[str, Any] | None = None) -> set[tuple[str, str]]:
-    """The environment reads written in *code* whose value a key can fold
+    """The environment reads whose value a key can fold
     (`cash.effects.environment_input`): ``os.getenv("NAME")``,
-    ``os.environ["NAME"]``, ``os.getcwd()``.
-
-    Only the statement's own text: a read inside a function it calls is not
-    seen here.
+    ``os.environ["NAME"]``, ``os.getcwd()``, written in *code* or in a
+    function of the user's it calls (:func:`callee_environment_reads`).
     """
+    return _written_environment_reads(code, user_ns) | callee_environment_reads(code, user_ns)
+
+
+def _written_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> set[tuple[str, str]]:
+    """The environment reads written in *code* itself."""
     if not code or not any(marker in code for marker in _ENVIRONMENT_MARKERS):
         return set()
     try:
@@ -267,6 +272,31 @@ def statement_environment_reads(code: str, user_ns: Mapping[str, Any] | None = N
         entry = environment_input(node, user_ns)
         if entry is not None:
             found.add(entry)
+    return found
+
+
+def callee_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> set[tuple[str, str]]:
+    """The environment reads inside the user's functions *code* calls.
+
+    ``m = mylib.mode()`` with ``mode`` reading ``os.environ["MODE"]``: the
+    statement's text reads no environment, and the cell setting ``MODE`` was
+    edited and the notebook run again, the old mode was served. The functions
+    are found by :func:`~cash.notebook.callee_reach.reached_user_code` and read
+    by the decorator's own analysis (`PurityReport.environment_reads`), which
+    follows the helpers they call, in their module and in others of the user's.
+    """
+    if not user_ns:
+        return set()
+    found: set[tuple[str, str]] = set()
+    for fn in reached_user_code(code, user_ns).functions:
+        if fn.__globals__ is user_ns:
+            # Defined in a cell: its reads are the notebook's own business
+            # (the reach still follows it to the module functions it calls).
+            continue
+        try:
+            found |= get_analyzer().analyze(fn).environment_reads
+        except Exception:  # noqa: BLE001 - the analysis of arbitrary user code
+            logger.debug("Could not analyse %r for the environment it reads", fn, exc_info=True)
     return found
 
 

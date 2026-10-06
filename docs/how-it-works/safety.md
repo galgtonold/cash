@@ -171,7 +171,9 @@ A statement that reads the clock (`time.time()`, `datetime.now()`), makes a
 fresh id (`uuid.uuid4()`) or asks for input (`input()`, `getpass.getpass()`)
 runs every time too. A statement that reads an environment variable by name
 (`os.getenv("TENANT")`) or `os.getcwd()` is cached, with a digest of the value
-in its key. A read inside a function the statement calls is not seen.
+in its key. So is a read inside a function of your own the statement calls,
+in a cell or in a local module, however deep; a read inside an installed
+package is not seen.
 
 When a side effect is harmless to skip, put `# @cash:assume-safe` on the
 statement: it is cached, and a hit skips the call. It waives side effects
