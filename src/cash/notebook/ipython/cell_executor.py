@@ -508,7 +508,7 @@ class CellExecutor:
                 done.add(code)
                 try:
                     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                        exec(compile(code, "<cash: module state>", "exec"), self.shell.user_ns)  # noqa: S102
+                        exec(compile(code, "<cash: module state>", "exec"), self.shell.user_ns)  # noqa: S102 - replays the user's own statement
                 except Exception as exc:  # noqa: BLE001 - arbitrary user code
                     writers[module].remove(code)
                     first_line = code.strip().splitlines()[0] if code.strip() else code

@@ -289,7 +289,7 @@ def test_deepcopyable_iterators_left_alone(nb_runner):
 
 
 def test_cells_reading_one_file_in_turn_continue_where_the_last_stopped(nb_runner):
-    (nb_runner.work_dir / "data.csv").write_text("name,score\nann,1\nbob,2\n")
+    (nb_runner.work_dir / "data.csv").write_text("name,score\nann,1\nbob,2\n", encoding="utf-8")
     nb_runner.create_notebook(
         [
             "fh = open('data.csv')",
