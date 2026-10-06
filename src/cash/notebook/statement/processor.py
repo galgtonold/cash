@@ -969,7 +969,11 @@ class StatementProcessor:
         """Skip-cache *run* when one of its output values cannot be stored and
         restored faithfully (:func:`unrestorable_output_reason`)."""
         reason = unrestorable_output_reason(
-            run.outputs, captured_vars, self.shell.user_ns, cash_held=self._calls.held_call_results()
+            run.outputs,
+            captured_vars,
+            self.shell.user_ns,
+            cash_held=self._calls.held_call_results(),
+            shell=self.shell,
         )
         if reason is not None:
             run.skip_cache = True

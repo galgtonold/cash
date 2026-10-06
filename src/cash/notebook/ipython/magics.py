@@ -1039,10 +1039,15 @@ class CashMagics(Magics):
         Called after the ``"pass"`` stand-in ran, so the execution count is the
         cell's own, as when IPython's hook runs inside the cell.
         """
-        cell_rows = [m for m in done.all_metrics if not m.get("is_upstream")]
-        if not cell_rows or ECHO_FIELD not in cell_rows[-1]:
+        # Taken out of every row, which outlive the cell (``%cash_status``
+        # reads them): one held there was one more holder of the value to the
+        # shared-object check, so a statement updating it in place in a later
+        # cell re-ran every time.
+        echoed = [(m.pop(ECHO_FIELD, None), m.get("is_upstream")) for m in done.all_metrics]
+        cell_echoes = [value for value, upstream in echoed if not upstream]
+        if not cell_echoes:
             return
-        value = cell_rows[-1][ECHO_FIELD]
+        value = cell_echoes[-1]
         if value is None:
             return
         try:

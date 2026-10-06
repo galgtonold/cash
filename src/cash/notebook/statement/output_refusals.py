@@ -51,6 +51,7 @@ def unrestorable_output_reason(
     user_ns: dict[str, Any],
     *,
     cash_held: Iterable[Any] = (),
+    shell: Any = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. *cash_held* are containers cash itself
@@ -63,7 +64,7 @@ def unrestorable_output_reason(
     would write the cache's snapshot, a blank PNG on the first run.
     """
     return _value_refusal(outputs, captured_vars, user_ns) or shared_output_reason(
-        outputs, captured_vars, user_ns, cash_held
+        outputs, captured_vars, user_ns, cash_held, shell
     )
 
 
@@ -84,7 +85,11 @@ def _value_refusal(outputs: set[str], captured_vars: dict[str, Any], user_ns: di
 
 
 def shared_output_reason(
-    outputs: set[str], captured_vars: dict[str, Any], user_ns: dict[str, Any], cash_held: Iterable[Any] = ()
+    outputs: set[str],
+    captured_vars: dict[str, Any],
+    user_ns: dict[str, Any],
+    cash_held: Iterable[Any] = (),
+    shell: Any = None,
 ) -> str | None:
     """Nor an output whose object, or one inside it, something else holds too
     (`shared_names`): a restore would bind a copy, and that holder would keep
@@ -95,9 +100,10 @@ def shared_output_reason(
     Asked by reference count, so the frames above must not hold an output's
     value in a local: `unrestorable_output_reason` keeps the per-value loop
     in its own function for that reason. IPython's output history (``Out``,
-    ``_``) is not a holder (`output_history`)."""
+    ``_``, and *shell*'s copies of them) is not a holder
+    (`output_history`)."""
     roots = {out: captured_vars[out] for out in outputs if captured_vars.get(out) is not None}
-    history, named = output_history(user_ns)
+    history, named = output_history(user_ns, shell)
     shared = shared_names(roots, (captured_vars, user_ns), [*cash_held, *history], named)
     if not shared:
         return None

@@ -142,7 +142,9 @@ def _calibrate() -> int:
 _OVERHEAD = _calibrate()
 
 
-def output_history(user_ns: Mapping[str, Any]) -> tuple[list[Any], list[tuple[Mapping[str, Any], str]]]:
+def output_history(
+    user_ns: Mapping[str, Any], shell: Any = None
+) -> tuple[list[Any], list[tuple[Mapping[str, Any], str]]]:
     """The references IPython's output history makes, as ``(containers,
     named)`` for `shared_names`: the ``Out`` dict, and the ``_``, ``__``,
     ``___`` and ``_<n>`` names bound to a value in it.
@@ -154,6 +156,13 @@ def output_history(user_ns: Mapping[str, Any]) -> tuple[list[Any], list[tuple[Ma
     object, so its references are not a reason to re-run. ``Out`` counts only
     when it is IPython's (the same dict as ``_oh``), and a ``_`` the user
     bound to something never displayed is a holder like any other.
+
+    The display hook binds those names twice more in the *shell*: in its own
+    ``_``, ``__`` and ``___`` attributes, and in ``user_ns_hidden``, where
+    ``push(..., interactive=False)`` records them; and the previous cell's
+    ``last_execution_result.result`` holds its value. A cell ending in ``df``
+    left ``df`` held there, and the statement updating ``df`` in place in the
+    next cell ran every time.
     """
     out = user_ns.get("Out")
     if type(out) is not dict or user_ns.get("_oh") is not out:
@@ -161,7 +170,17 @@ def output_history(user_ns: Mapping[str, Any]) -> tuple[list[Any], list[tuple[Ma
     shown = {id(v) for v in out.values() if v is not None}
     named = [n for n in ("_", "__", "___") if user_ns.get(n) is not None and id(user_ns.get(n)) in shown]
     named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
-    return [out], [(user_ns, n) for n in named]
+    held = [(user_ns, n) for n in named]
+    hidden = getattr(shell, "user_ns_hidden", None)
+    if isinstance(hidden, dict):
+        held += [(hidden, n) for n in named if hidden.get(n) is user_ns.get(n)]
+    hook_attrs = getattr(getattr(shell, "displayhook", None), "__dict__", None)
+    if hook_attrs is not None:
+        held += [(hook_attrs, n) for n in ("_", "__", "___") if id(hook_attrs.get(n)) in shown]
+    last = getattr(getattr(shell, "last_execution_result", None), "__dict__", None)
+    if last is not None and id(last.get("result")) in shown:
+        held.append((last, "result"))
+    return [out], held
 
 
 def shared_names(

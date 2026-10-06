@@ -16,6 +16,8 @@ Each case runs "Run All" twice and must match plain Python both times.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
@@ -104,7 +106,6 @@ def _run_all_cells(magics, cells):
         run_cash_cell(magics, cell, cells=cells)
 
 
-
 def _show(user_ns, n, value, *, ipython=True):
     """What IPython's displayhook leaves behind after showing *value* as Out[n]."""
     out = {n: value}
@@ -131,3 +132,24 @@ def test_the_output_history_is_not_a_holder(cash_magics, statement_processor):
 def test_a_dict_named_out_that_is_not_the_history_is_a_holder(cash_magics, statement_processor):
     metrics = _after_showing(cash_magics, statement_processor, ipython=False)
     assert not _stored(metrics)
+
+
+def test_the_shells_copies_of_the_output_history_are_not_holders(cash_magics, statement_processor):
+    """IPython's display hook binds a shown value three more times outside
+    ``user_ns``: its own ``_`` attribute, ``user_ns_hidden`` (``push`` with
+    ``interactive=False``), and the cell's ``last_execution_result``. Once a
+    cell's result went through the hook, each of them made the statement
+    updating ``rows`` in the next cell run every time."""
+    run_cash_cell(cash_magics, SETUP)
+    run_cash_cell(cash_magics, "rows = [1.0]")
+    shell = statement_processor.shell
+    rows = shell.user_ns["rows"]
+    _show(shell.user_ns, 2, rows)
+    shell.displayhook = types.SimpleNamespace(_=rows, __=None, ___=None)
+    shell.user_ns_hidden = {"_": rows, "_2": rows}
+    shell.last_execution_result = types.SimpleNamespace(result=rows)
+    del rows
+
+    metrics = statement_processor.process_statement("rows += slow([2.0])")
+
+    assert _stored(metrics), metrics.get("uncacheable_reasons")
