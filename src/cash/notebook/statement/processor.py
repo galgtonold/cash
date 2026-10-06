@@ -185,9 +185,7 @@ class StatementProcessor:
         self._file_deps = StatementFileDeps()
 
         # Statement-level cache restorer. Hydrates outputs from a cached
-        # payload + replays stdout/stderr/rich-outputs.  Distinct from the
-        # variable-granular Restorer in restore.py (owned by CashMagics) —
-        # see that module's docstring for the unit-of-work distinction.
+        # payload + replays stdout/stderr/rich-outputs.
         # Stateless w.r.t. tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)

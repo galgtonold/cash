@@ -1,8 +1,8 @@
 """What restoring a variable from a cache entry records about it.
 
 A value comes back from the cache two ways: the statement restorer hydrates
-a statement's outputs on a hit, and the variable restorer brings one
-upstream variable back for a cell that needs it. Either way the value is
+a statement's outputs on a hit, and the upstream check restores an upstream
+statement's outputs for a cell that needs them. Either way the value is
 exactly the entry's value, so :func:`apply_restored_var` records it the same
 way: its lineage, what it was built from, the statement that produced it, the
 files it depends on, and its session hash.

@@ -30,7 +30,6 @@ from ..control_structures import ControlStructureProcessor
 from ..live_cells import install_expiry_hook, register_target
 from ..live_cells import reset as _reset_live_cells
 from ..module_invalidator import ModuleInvalidator
-from ..restore import Restorer
 from ..server_discovery import (
     extract_notebook_path_from_vscode_cell_id,
     in_colab,
@@ -149,12 +148,6 @@ class CashMagics(Magics):
 
         self._module_invalidator = ModuleInvalidator(shell)
 
-        self._restorer = Restorer(
-            shell,
-            backend=cash_instance.backend,
-            tracking_state=self.tracking_state,
-        )
-
         self._cell_executor = CellExecutor(
             shell,
             cash_instance=cash_instance,
@@ -162,7 +155,6 @@ class CashMagics(Magics):
             tracking_state=self.tracking_state,
             statement_processor=self._statement_processor,
             upstream_checker=self._upstream_checker,
-            restorer=self._restorer,
             module_invalidator=self._module_invalidator,
             control_structure_processor=self._control_structure_processor,
         )

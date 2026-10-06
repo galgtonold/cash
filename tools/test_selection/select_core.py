@@ -65,7 +65,7 @@ FEATURES = {
     "tracking/function_tracker": "functions",
     "tracking/module_symbols": "modules",
     "tracking/randomness": "randomness",
-    "notebook/restore": "restore",
+    "notebook/restored_var": "restore",
     "notebook/statement/restore": "restore",
     "notebook/call_unit": "call_caching",
     "notebook/call_key": "call_caching",

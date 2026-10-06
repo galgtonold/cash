@@ -21,10 +21,9 @@ one cell-execution code path.
   ``publish_display_data()`` directly.  The badge and the error display are
   drawn by the :class:`BadgePresenter` it is given, the same one
   ``CashMagics`` draws the final badge with.
-- ``CellExecutor`` does not restore variables.  Variable-granular cache
-  work is :class:`Restorer`'s job.  The executor calls
-  ``restorer.restore_variable(var_name)`` during upstream resolution; it
-  never reaches into the backend itself.
+- ``CellExecutor`` does not restore variables.  What the cell reads is
+  brought up to date by :class:`UpstreamResolution`; the executor never
+  reaches into the backend itself.
 
 **Stepping aside**:
 
@@ -74,7 +73,6 @@ from .upstream_phase import UpstreamResolution
 if TYPE_CHECKING:
     from ..control_structures import ControlStructureProcessor
     from ..module_invalidator import ModuleInvalidator
-    from ..restore import Restorer
     from ..statement import StatementProcessor
     from ..upstream import UpstreamChecker
     from ._types import TimingBreakdown
@@ -205,7 +203,6 @@ class CellExecutor:
         tracking_state: "TrackingState",
         statement_processor: "StatementProcessor",
         upstream_checker: "UpstreamChecker",
-        restorer: "Restorer",
         module_invalidator: "ModuleInvalidator",
         control_structure_processor: "ControlStructureProcessor",
     ) -> None:
@@ -222,7 +219,6 @@ class CellExecutor:
             badges,
             statement_processor,
             upstream_checker,
-            restorer,
             control_structure_processor,
         )
 

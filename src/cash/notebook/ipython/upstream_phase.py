@@ -29,7 +29,6 @@ from ._types import RunInstead
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol
     from ..control_structures import ControlStructureProcessor
-    from ..restore import Restorer
     from ..statement import ProcessResult, StatementProcessor
     from ..upstream import UpstreamChecker
     from ._types import TimingBreakdown
@@ -81,8 +80,8 @@ def _close_pyplot_figures(nums: set[int]) -> None:
 class UpstreamResolution:
     """Makes the cell's inputs available and current before it runs.
 
-    Restores a missing input through the :class:`Restorer`, then has the
-    :class:`UpstreamChecker` re-run or restore what changed above the cell.
+    Has the :class:`UpstreamChecker` re-run or restore what is missing or
+    changed above the cell, as a top-to-bottom run would have it.
     Its one entry is :meth:`resolve`.
     """
 
@@ -92,14 +91,12 @@ class UpstreamResolution:
         badges: BadgePresenter,
         statement_processor: StatementProcessor,
         upstream_checker: UpstreamChecker,
-        restorer: Restorer,
         control_structure_processor: ControlStructureProcessor,
     ) -> None:
         self.shell = shell
         self._badges = badges
         self._statement_processor = statement_processor
         self._upstream_checker = upstream_checker
-        self._restorer = restorer
         self._control_structure_processor = control_structure_processor
 
     def _check_and_reexecute_upstream_cells(
@@ -166,9 +163,9 @@ class UpstreamResolution:
     ) -> tuple[list[ProcessResult], float, float]:
         """Ensure all required inputs are available in ``user_ns``.
 
-        First attempts a fast-path restore via :class:`Restorer`; then
-        falls through to upstream re-execution via
-        :meth:`_check_and_reexecute_upstream_cells`.
+        Through :meth:`_check_and_reexecute_upstream_cells`: an input is
+        brought back only when a top-to-bottom run would hold it here, so a
+        name deleted above the cell stays deleted.
         """
         # Reconstructing an upstream PLOT cell (to rebuild a fig/ax a downstream
         # cell needs) opens a matplotlib figure. The inline backend's

@@ -5,7 +5,7 @@ its library content hasher (`builtin_hash`), a collection of frames item by
 item, anything else pickled, and only when even pickling fails its identity
 (`identity_hash`), which `is_identity_fallback_hash` lets a caller recognise.
 It is the ``compute_hash_fn`` seam threaded into ``StatementProcessor`` and
-``UpstreamChecker``, what ``Restorer`` checks a restored object against, and
+``UpstreamChecker``, and
 the digest of a loop variable, a call's arguments and the globals a call
 writes. A sample would decide "unchanged" for an edit outside it.
 """
