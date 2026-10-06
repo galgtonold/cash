@@ -18,12 +18,12 @@ from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
-from ...lineage_tag import clear_tags
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
+from ..lineage_store import tag_value
 from ..lineage_formula import (
     key_hidden_reads,
 )
@@ -211,22 +211,13 @@ class CacheRestorer:
             if "output_lineages" in metadata:
                 new_lineage = metadata["output_lineages"].get(var)
                 if var in self.tracking_state.lineage and new_lineage is not None:
-                    # Recorded with the value, so the live object carries
-                    # _cash_lineage_hash too.
+                    # Recorded with the value, so the live object is tagged too.
                     self.tracking_state.lineage.record(var, new_lineage, value=val)
                 else:
                     # Variable wasn't tracked in the lineage store before, but
-                    # we still want the attribute attached so future cache-key
+                    # we still want the value tagged so future cache-key
                     # computation finds it via the ladder fallback.
-                    try:
-                        val._cash_lineage_hash = new_lineage
-                        val._cash_lineage_src = "statement"
-                        clear_tags(val)
-                    except (AttributeError, TypeError):
-                        logger.debug(
-                            "Cannot attach _cash_lineage_hash to restored variable %s",
-                            var,
-                        )
+                    tag_value(val, new_lineage)
         return restored_vars
 
     def _update_tracking_after_restore(

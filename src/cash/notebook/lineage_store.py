@@ -10,11 +10,11 @@ Invariants
   :meth:`LineageStore.clear`. Readers get a read-only view
   (:attr:`LineageStore.view`, which ``TrackingState.variable_lineage``
   returns), so a direct dict write fails loudly instead of skipping the tag.
-* When ``record`` is given a ``value`` whose type accepts attributes, the
-  entry and the value's ``_cash_lineage_hash`` attribute are written together
-  so they cannot drift.
+* When ``record`` is given a ``value`` that can be tagged, the entry and the
+  value's tag (`tag_value`, held beside the value) are written together so
+  they cannot drift.
 * The priority ladder lives in :func:`resolve_lineage`: virtual → store →
-  ``value._cash_lineage_hash`` → ``compute_hash_fn`` → ``sha256(str(value))``.
+  the value's own tag (`own_tag`) → ``compute_hash_fn`` → ``sha256(str(value))``.
 """
 
 from __future__ import annotations
@@ -25,11 +25,30 @@ from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any
 
-from cash.lineage_tag import clear_tags, own_tag, taggable
+from cash.lineage_tag import clear_tags, own_tag, set_tags
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["LineageStore", "resolve_lineage"]
+__all__ = ["LineageStore", "resolve_lineage", "tag_value"]
+
+
+def tag_value(value: Any, hash_: str) -> None:
+    """Tag *value* with the lineage *hash_* a statement gave it, beside it.
+
+    The tag lives in `cash.lineage_tag`'s side table, never on the object:
+    written into its ``__dict__``, it showed up in the user's own data
+    (``vars(args)``, ``json.dumps(vars(cfg))``, a ``SimpleNamespace``
+    comparison, the object's pickle). Never a class, module or function
+    either: a tag on a class is inherited by every instance, which then all
+    key alike. Values that take no tag (builtins, slotted types) keep only
+    the store's entry, which stays authoritative.
+    """
+    # Drop any tag the decorator left (its producer too): this newer tag wins.
+    clear_tags(value)
+    # This layer re-tags the value whenever it changes, which is what lets
+    # the decorator trust the tag for its content ("statement").
+    if not set_tags(value, _cash_lineage_hash=hash_, _cash_lineage_src="statement"):
+        logger.debug("LineageStore: cannot tag %s", type(value).__name__)
 
 
 def resolve_lineage(
@@ -42,7 +61,7 @@ def resolve_lineage(
 ) -> str | None:
     """Resolve a lineage hash for *var* using the priority ladder.
 
-    Order: ``virtual`` mapping → *lineage* → ``value._cash_lineage_hash`` →
+    Order: ``virtual`` mapping → *lineage* → the value's own tag (`own_tag`) →
     ``compute_hash_fn(value)`` → ``sha256(str(value))``.
     """
     if virtual is not None and var in virtual:
@@ -64,8 +83,7 @@ def resolve_lineage(
 
 
 class LineageStore(Mapping[str, str]):
-    """Owns every variable's lineage hash and the paired ``_cash_lineage_hash``
-    attribute. Reads through the ``Mapping`` interface or :attr:`view`; writes
+    """Owns every variable's lineage hash and the paired value tag. Reads through the ``Mapping`` interface or :attr:`view`; writes
     only through the methods below. See the module docstring for invariants."""
 
     def __init__(self) -> None:
@@ -92,25 +110,12 @@ class LineageStore(Mapping[str, str]):
     def record(self, var: str, hash_: str, *, value: Any = None) -> None:
         """Record the persistent lineage for *var*.
 
-        When *value* is provided and accepts attributes, also set
-        ``value._cash_lineage_hash`` so the entry and the attribute cannot drift.
+        When *value* is provided, also tag it (`tag_value`) so the entry and
+        the tag cannot drift.
         """
         self._lineage[var] = hash_
-        # Never a class, module or function: a tag on a class is inherited by
-        # every instance, which then all key alike (cash.lineage_tag).
-        if value is not None and taggable(value):
-            try:
-                value._cash_lineage_hash = hash_
-                # This layer re-tags the value whenever it changes, which is
-                # what lets the decorator trust the tag for its content.
-                value._cash_lineage_src = "statement"
-                # The decorator tags beside the value (`cash.lineage_tag`);
-                # this newer tag must win over one it left.
-                clear_tags(value)
-            except (AttributeError, TypeError):
-                # Builtins (int / str / ...) and slotted types reject attribute
-                # writes. The entry is still authoritative.
-                logger.debug("LineageStore: cannot attach _cash_lineage_hash to %r", var)
+        if value is not None:
+            tag_value(value, hash_)
 
     def reset_to(self, var: str, hash_: str) -> None:
         """Resynchronise *var*'s lineage to *hash_* without touching the value.
@@ -118,7 +123,7 @@ class LineageStore(Mapping[str, str]):
         Used by the simulator when downstream advancement leaves the recorded
         lineage 'ahead' of where simulation says it should be. Distinct from
         :meth:`record` because no fresh computation happened — only state-machine
-        correction. ``_cash_lineage_hash`` on the value reflects the value's
+        correction. The value's tag reflects the value's
         actual computation and must NOT be rewritten here.
         """
         self._lineage[var] = hash_

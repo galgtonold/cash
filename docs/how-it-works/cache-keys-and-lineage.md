@@ -169,13 +169,14 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @e6dc6918, cash/value_hash.py:compute_hash @c9f1fd3d -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @a7a489f1, cash/value_hash.py:compute_hash @c9f1fd3d -->
 For each input variable, the statement key uses the first of these that
 exists:
 
 1. The lineage the upstream check simulated for it, while a check is running.
 2. The lineage recorded when the variable was last assigned.
-3. A lineage tag on the value itself.
+3. The lineage tag cash keeps for that object (beside it, never in its
+   attributes).
 4. A content hash of the value, over all of it: every row of a DataFrame,
    every element of an array or a list.
 5. A hash of `str(value)`.
