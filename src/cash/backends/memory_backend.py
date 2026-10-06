@@ -15,7 +15,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from .. import _plain_data
+from .. import _plain_data, kept_state
 from .._lazy_module import LazyModule
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
@@ -227,7 +227,7 @@ class InMemoryBackend(CacheBackend):
         copied = None
         if mutable:
             try:
-                copied = pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+                copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
             except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                 logger.debug("could not copy the cells of a %s", type(frame).__name__)
         if copied is None:

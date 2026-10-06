@@ -10,6 +10,8 @@ import pickle
 from abc import ABC, abstractmethod
 from typing import Any
 
+from .. import kept_state
+
 __all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "restore_value"]
 
 #: Buffers at least this large are handed out of band by `serialize_split`;
@@ -43,7 +45,7 @@ class PickleSerializer(Serializer):
     """
 
     def serialize(self, data: Any) -> bytes:
-        return pickle.dumps(data, protocol=5)
+        return kept_state.dumps(data, protocol=5)
 
     def deserialize(self, data: bytes) -> Any:
         return pickle.loads(data)
@@ -66,7 +68,7 @@ class PickleSerializer(Serializer):
             buffers.append(raw.tobytes())
             return False
 
-        stream = pickle.dumps(data, protocol=5, buffer_callback=take)
+        stream = kept_state.dumps(data, protocol=5, buffer_callback=take)
         return stream, buffers
 
     def deserialize_split(self, stream: Any, buffers: list) -> Any:

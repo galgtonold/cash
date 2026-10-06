@@ -15,9 +15,7 @@ falls back to its general walk.
 
 from __future__ import annotations
 
-import copyreg
 import datetime
-import io
 import operator
 import pickle
 import random
@@ -25,6 +23,7 @@ import sys
 from itertools import chain, compress
 from typing import Any
 
+from . import kept_state
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
 
 MAX_LEVELS = 16
@@ -62,21 +61,13 @@ _FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
 
 
 def _dump(value: Any, fast: bool) -> bytes:
-    buf = io.BytesIO()
-    pickler = pickle.Pickler(buf, protocol=pickle.DEFAULT_PROTOCOL)
-    pickler.fast = fast
-    table = fake_clock()[1]
-    if table:
-        pickler.dispatch_table = {**copyreg.dispatch_table, **table}
-    pickler.dump(value)
-    return buf.getvalue()
+    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1])
 
 
 def key_dumps(value: Any) -> bytes:
     """``pickle.dumps(value)`` for a cache key: a clock test double's date
-    pickles as the date (`fake_clock`)."""
-    if not fake_clock()[1]:
-        return pickle.dumps(value)
+    pickles as the date (`fake_clock`), and a C base's reduce keeps the
+    subclass's attributes (`kept_state`)."""
     return _dump(value, fast=False)
 
 

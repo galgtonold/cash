@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import hashlib
 import os
-import pickle
 import sys
 import weakref
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
+from .. import kept_state
 from .._memo import FROZEN_RESULTS, LruMemo
 from ..content_hashers import builtin_hash
 from ..diagnostics import warn_diagnostic
@@ -173,7 +173,7 @@ class FrozenResults:
         )
         if due:
             try:
-                digest = hashlib.sha256(pickle.dumps(obj)).hexdigest()
+                digest = hashlib.sha256(kept_state.dumps(obj)).hexdigest()
             except Exception:  # noqa: BLE001 - cannot audit: the declaration stands
                 digest = None
             if digest is not None:
@@ -267,7 +267,7 @@ class FrozenResults:
         try:
             digest = builtin_hash(obj)
             if digest is None:
-                digest = hashlib.sha256(pickle.dumps(obj)).hexdigest()
+                digest = hashlib.sha256(kept_state.dumps(obj)).hexdigest()
         except Exception:  # noqa: BLE001 - cannot audit: the declaration stands
             return True
         if entry[2] is None:
