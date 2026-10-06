@@ -184,6 +184,30 @@ class CallSite:
             return value
 
 
+def _copy_tree(node):
+    """*node* and everything under it as new nodes, except the constants, which
+    the copy shares with the original.
+
+    ``copy.deepcopy`` of a cell with a long literal took 0.45 s a statement:
+    the copy was most of what a cell with no call to rewrite cost. Nothing
+    changes a constant in place, and the rewrite replaces whole nodes, so
+    the two trees may hold the same ones.
+    """
+    kind = type(node)
+    if kind is ast.Constant:
+        return node
+    new = kind.__new__(kind)
+    fields = new.__dict__
+    fields.update(node.__dict__)
+    for name in node._fields:
+        value = fields.get(name)
+        if isinstance(value, list):
+            fields[name] = [_copy_tree(item) if isinstance(item, ast.AST) else item for item in value]
+        elif isinstance(value, ast.AST):
+            fields[name] = _copy_tree(value)
+    return new
+
+
 def interceptable(fn) -> bool:
     """Whether a callee is one :meth:`CallCache.resolve` wraps.
 
@@ -318,7 +342,7 @@ def wrap_eligible_calls(
             return False
         return not (gate(call, local=local) if gate_takes_local else gate(call))
 
-    new_tree = copy.deepcopy(tree)
+    new_tree = _copy_tree(tree)
     sites: list[CallSite] = []
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
