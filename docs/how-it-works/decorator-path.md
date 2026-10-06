@@ -30,7 +30,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
 |---|---|
-| `function` | The module-qualified name, such as `pipeline.train`. A function in the script you ran is named after the script's file, so `python model.py` and `import model` share entries. A REPL or `python -c` keeps `__main__`. |
+| `function` | The module-qualified name, such as `pipeline.train`. A function in the script you ran is named as an import would name its file, so `python model.py` and `import model` share entries, as do `python pkg/model.py` and `import pkg.model` when `pkg` is a package. A REPL or `python -c` keeps `__main__`. |
 | `state` | The function's code and everything it reads that is not an argument ([below](#what-goes-into-the-state)). |
 | `dynamic` | What the `dynamic_depends_on=` resolvers returned for this call; empty without them. |
 | `args` | The arguments, hashed by content ([below](#how-arguments-are-hashed)). With `ignore=` or `cash.Ignore`, all but the ignored ones; with `key=`, what the key function returns ([below](#when-you-choose-the-arguments)). |

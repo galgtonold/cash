@@ -101,24 +101,39 @@ def expose_script_function(func: Callable, wrapper: Callable) -> None:
     path = g.get("__file__")
     if not isinstance(path, str) or not path:
         return
-    name = resolve_main_module(func)
-    if name in MAIN_MODULE_NAMES or not name.isidentifier():
-        return
     module = sys.modules.get(g["__name__"])
     if module is None or getattr(module, "__dict__", None) is not g:
         return
+    name = resolve_main_module(func)
+    # A script inside a package is keyed by its dotted name; a worker can
+    # import it by that name only when the package's parent is on the path.
+    # Otherwise the file's own name still imports it (the script's directory
+    # is on the path), keyed apart from the parent but pickled all the same.
+    for candidate in dict.fromkeys((name, name.rpartition(".")[2])):
+        if candidate in MAIN_MODULE_NAMES or not all(part.isidentifier() for part in candidate.split(".")):
+            continue
+        if _expose_as(candidate, module, path, wrapper):
+            return
+
+
+def _expose_as(name: str, module: object, path: str, wrapper: Callable) -> bool:
+    """Register *module*, the running script at *path*, as ``sys.modules[name]``
+    and name *wrapper*'s module after it, when an import of *name* would load
+    that same file. True when done."""
     try:
         present = sys.modules.get(name)
         if present is None:
             if not _has_main_guard(path):
-                return
+                return False
             spec = importlib.util.find_spec(name)
             origin = getattr(spec, "origin", None)
             if not origin or not os.path.exists(origin) or not os.path.samefile(origin, path):
-                return
+                return False
             sys.modules[name] = module
         elif present is not module:
-            return
+            return False
         wrapper.__module__ = name
+        return True
     except (ImportError, ValueError, OSError):
         logger.debug("could not expose %s for pickling by name", name, exc_info=True)
+        return False

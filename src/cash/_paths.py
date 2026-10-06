@@ -9,6 +9,7 @@ an import would.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import time
@@ -170,7 +171,9 @@ def resolve_main_module(func: Any) -> str:
     ``Cash.get_func_key`` and the purity analyzer both use this, so the
     function name and the state hash agree between a direct run and an
     import. Returns ``__main__`` when there is no ``__file__`` (a REPL,
-    ``python -c``, a notebook kernel).
+    ``python -c``, a notebook kernel). A script inside a package
+    (``python pkg/pipeline.py``, with ``pkg/__init__.py``) is named as
+    ``import pkg.pipeline`` names it (`script_module_name`).
     """
     g = getattr(func, "__globals__", None) or {}
     # `python -m pkg.mod` runs as `__main__`; its spec carries the dotted name
@@ -181,4 +184,32 @@ def resolve_main_module(func: Any) -> str:
     path = g.get("__file__")
     if not isinstance(path, str) or not path:
         return "__main__"
-    return os.path.splitext(os.path.basename(path))[0] or "__main__"
+    return script_module_name(path) or "__main__"
+
+
+@functools.lru_cache(maxsize=64)
+def script_module_name(path: str) -> str:
+    """The dotted name an import gives the module in the file at *path*.
+
+    The file's own name, prefixed by each enclosing directory that is a
+    package (holds an ``__init__.py``) and whose name an import can spell:
+    ``pkg/pipeline.py`` is ``pkg.pipeline``, which is what ``import
+    pkg.pipeline`` and ``python -m pkg.pipeline`` call it. The basename
+    alone keyed ``python pkg/pipeline.py`` apart from both. Empty when the
+    file has no usable name.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if not stem:
+        return ""
+    parts = [stem]
+    directory = os.path.dirname(os.path.abspath(path))
+    while os.path.isfile(os.path.join(directory, "__init__.py")):
+        name = os.path.basename(directory)
+        if not name.isidentifier():
+            break
+        parts.append(name)
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+    return ".".join(reversed(parts))

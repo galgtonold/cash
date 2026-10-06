@@ -113,6 +113,30 @@ def test_the_state_hash_agrees_too(tmp_path):
     )
 
 
+def test_a_script_inside_a_package_shares_entries_with_its_import(tmp_path):
+    """``python pkg/pipeline.py`` is the module ``import pkg.pipeline`` loads.
+
+    Named after its file alone, the script run keyed ``pipeline.work`` while
+    the import and ``python -m pkg.pipeline`` keyed ``pkg.pipeline.work``, so
+    switching between them recomputed everything.
+    """
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "pipeline.py").write_text(textwrap.dedent(WORKER), encoding="utf-8")
+    driver = _script(tmp_path, "driver", "import pkg.pipeline\npkg.pipeline.work(1)\n")
+
+    first = run_python("pkg/pipeline.py", cwd=tmp_path, check=False)
+    assert first.returncode == 0, first.stderr
+    assert "COMPUTED" in first.stdout, "the priming run should have computed"
+    second = _run(driver, tmp_path)
+    assert second.returncode == 0, second.stderr
+    assert "COMPUTED" not in second.stdout, "importing the package module recomputed what running it had cached"
+    third = run_python("-m", "pkg.pipeline", cwd=tmp_path, check=False)
+    assert third.returncode == 0, third.stderr
+    assert "COMPUTED" not in third.stdout, "python -m recomputed what running the file had cached"
+
+
 def test_two_scripts_with_different_names_stay_apart(tmp_path):
     """The module qualifier still has to separate unrelated scripts."""
     for name, value in (("alpha", 10), ("beta", 999)):
@@ -233,6 +257,15 @@ def test_it_reads_the_function_s_own_globals_not_the_entry_point():
     namespace = {"__file__": "/somewhere/else/defining_file.py"}
     exec("def f(): pass", namespace)
     assert resolve_main_module(namespace["f"]) == "defining_file"
+
+
+def test_a_file_in_a_package_is_named_with_its_package(tmp_path):
+    (tmp_path / "outer" / "inner").mkdir(parents=True)
+    (tmp_path / "outer" / "inner" / "__init__.py").write_text("", encoding="utf-8")
+    namespace = {"__file__": str(tmp_path / "outer" / "inner" / "defining_file.py")}
+    exec("def f(): pass", namespace)
+    # `outer` holds no __init__.py: the package starts at `inner`.
+    assert resolve_main_module(namespace["f"]) == "inner.defining_file"
 
 
 def test_a_notebook_style_namespace_stays_main():
