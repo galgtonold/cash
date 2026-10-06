@@ -51,7 +51,12 @@ from .call_state import (
 from .class_data import CLASSES_FOLDED
 from .closure_fold import defaults_of
 from .explain import MissKind, MissReason, describe_stale_files
-from .file_deps import note_unentered_body, propagate_file_deps_to_active_tracker, snapshot_tracked_deps
+from .file_deps import (
+    note_unentered_body,
+    pass_dynamic_sources_up,
+    propagate_file_deps_to_active_tracker,
+    snapshot_tracked_deps,
+)
 from .function_identity import func_key, hash_callable_source
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
@@ -386,7 +391,12 @@ class KeyBuilder:
                 *keyed, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
             )
             chain.append(state_hash)
-            dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
+            dynamic_sources: list = []
+            dynamic_state_hash = resolve_dynamic_dependencies(
+                func_name, dynamic_depends_on, args, kwargs, dynamic_sources
+            )
+            if dynamic_sources and not _EXPLAINING.get():
+                pass_dynamic_sources_up(dynamic_sources)
             failure: list = []
             if keyed is normalized_args:
                 args_hash = self._args.serialize_args(

@@ -45,11 +45,12 @@ def resolve_dynamic_dependencies(
     dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
     args: tuple,
     kwargs: dict,
+    sources: list[DataSource] | None = None,
 ) -> str:
     """The digest of the DataSources *dynamic_depends_on* resolves to for
-    this call, or ``""`` with none. Raises `KeyBuildFailed` when a resolver
-    fails or returns something else: the call then has no key, never a key
-    without the dependency."""
+    this call, or ``""`` with none; each source is appended to *sources*.
+    Raises `KeyBuildFailed` when a resolver fails or returns something
+    else: the call then has no key, never a key without the dependency."""
     if not dynamic_depends_on:
         return ""
 
@@ -79,6 +80,8 @@ def resolve_dynamic_dependencies(
                         fix,
                     )
                 dynamic_state_parts.append(state_token_of(ds))
+                if sources is not None:
+                    sources.append(ds)
         except KeyBuildFailed:
             raise
         except Exception as e:  # any failure here is the resolver's

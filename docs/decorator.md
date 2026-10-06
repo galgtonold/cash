@@ -382,7 +382,11 @@ def leaderboard():
 `dynamic_depends_on=` builds the dependency from the call's arguments, for
 example one file per tenant. If the resolver raises or returns something that is
 not a `DataSource`, the call runs uncached with
-[`KEY-DYNAMIC-DEP-FAILED`](warnings.md#key-dynamic-dep-failed). See
+[`KEY-DYNAMIC-DEP-FAILED`](warnings.md#key-dynamic-dep-failed). A cached
+function that calls this one depends on the same sources: a file source
+becomes a file its entry checks, and any other source leaves its result
+unstored, with
+[`STORE-UNTRACKED-SOURCE`](warnings.md#store-untracked-source). See
 [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
 
 ### `cache_if=`

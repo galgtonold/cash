@@ -16,7 +16,9 @@ from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
 from ..code_digest import own_source_digest
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
+from ..file_source import FileDataSource
 from ..remote_source import (
+    RemoteFileDataSource,
     measured_validation,
     remember_read_options,
     validation_is_expensive,
@@ -196,6 +198,49 @@ def _track_pattern(tracker: Any, pattern: str) -> None:
             tracker.add_tracked(normalize_path(os.path.realpath(directory)))
 
 
+def _track_declared(tracker: Any, path: str) -> None:
+    """Record a declared path on *tracker*: a pattern's matches, a
+    directory's files, a file, or its absence."""
+    if glob.has_magic(path):
+        _track_pattern(tracker, path)
+    elif os.path.isdir(path):
+        _track_directory(tracker, path)
+    elif os.path.exists(path):
+        tracker.add_tracked(normalize_path(os.path.realpath(path)))
+    else:
+        tracker.add_tracked_absent(normalize_path(path))
+
+
+def pass_dynamic_sources_up(sources: list) -> None:
+    """Make the cached calls around this one depend on the sources its
+    ``dynamic_depends_on=`` resolved to.
+
+    They are folded into this call's own key, which an enclosing cached
+    caller never sees: ``report()`` calling ``load("data.txt")`` kept serving
+    its old result after ``data.txt`` changed, while ``load`` recomputed. A
+    file -- local or remote -- is recorded on the enclosing tracker as a read,
+    so the caller's entry checks it on every lookup, as for a file
+    ``file_depends_on=`` names. Any other source is one only a call of this
+    function can check: the caller's entry is not stored
+    (`ResultStore.refusal`). Called while the key is built, on a hit as on a
+    miss, when the active tracker is the caller's.
+    """
+    tracker = active_tracker.get()
+    if tracker is None:
+        return
+    for source in sources:
+        if isinstance(source, FileDataSource):
+            _track_declared(tracker, source.filepath)
+        elif isinstance(source, RemoteFileDataSource):
+            if source.storage_options:
+                remember_read_options(source.url, source.storage_options)
+            tracker.add_tracked_remote(source.url)
+        else:
+            add = getattr(tracker, "add_untracked_source", None)
+            if add is not None:
+                add(source.get_id())
+
+
 def _glob_base(pattern: str) -> str:
     """The deepest directory of *pattern* with no wildcard in it."""
     parts = pattern.replace("\\", "/").split("/")
@@ -252,14 +297,7 @@ class FileDeps:
 
         cf = self._registry.cached.get(func_name)
         for _, path in cf.declared_files if cf is not None else ():
-            if glob.has_magic(path):
-                _track_pattern(tracker, path)
-            elif os.path.isdir(path):
-                _track_directory(tracker, path)
-            elif os.path.exists(path):
-                tracker.add_tracked(normalize_path(os.path.realpath(path)))
-            else:
-                tracker.add_tracked_absent(normalize_path(path))
+            _track_declared(tracker, path)
 
     def auto_file_deps_fresh(self, metadata: CacheMetadata, *, quiet: bool = False) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``

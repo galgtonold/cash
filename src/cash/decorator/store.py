@@ -224,6 +224,9 @@ class ResultStore:
                 f"a memoised helper handed it data read from an earlier version of "
                 f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now"
             )
+        untracked = getattr(tracker, "untracked_sources", None)
+        if refusal is None and untracked:
+            refusal = self._untracked_source_refusal(func_name, sorted(untracked))
         if refusal is None and self._files.code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
         if refusal is None and observer is not None and observer.mock_called:
@@ -245,6 +248,26 @@ class ResultStore:
                 f"it changed its argument{'s' if len(mutated) > 1 else ''} {names} in place, which a hit would not do"
             )
         return refusal
+
+    def _untracked_source_refusal(self, func_name: str, sources: list[str]) -> str:
+        """Warn (once) that a cached function this call ran depends on a
+        ``dynamic_depends_on=`` source this entry could not check, and say
+        why the result is not stored."""
+        shown = ", ".join(sources[:3]) + (f" and {len(sources) - 3} more" if len(sources) > 3 else "")
+        self._notices.warn_once(
+            CashCacheStoreFailedWarning,
+            func_name,
+            "untracked_source",
+            f"@cash.cache on {func_name}: a cached function it calls depends on {shown} "
+            f"through dynamic_depends_on=, which only a call of that function can check. "
+            f"The result was returned but not cached, so it is never served after the "
+            f"source changes.",
+            code="STORE-UNTRACKED-SOURCE",
+            fix="call that function outside this one and pass its result in as an argument, "
+            "or make the source a FileDataSource or RemoteFileDataSource, which a caller's "
+            "entry checks itself.",
+        )
+        return f"a cached function it calls depends on {sources[0]}, which this entry cannot check"
 
     def _result_ref(self, func_name: str, result: Any) -> list | None:
         """``["global" | "closure", name]`` when *result* is that variable's own
