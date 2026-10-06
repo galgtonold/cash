@@ -315,6 +315,10 @@ class EffectObserver:
         #: taken.
         self.arg_snapshot: dict[str, str] | None = None
         self.arg_identities: dict[str, tuple[Any, list]] | None = None
+        #: Random generators held by arguments a ``__cash_key__`` or a
+        #: registered hasher keys, with their state before the body
+        #: (`PurityChecks.held_generators`).
+        self.held_generators: list | None = None
         #: The parameters the call changed in place, once the decorator has
         #: compared (`PurityChecks.check_argument_mutation`); None when none did.
         self.mutated_args: list[str] | None = None

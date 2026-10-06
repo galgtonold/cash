@@ -37,8 +37,9 @@ from ..exceptions import (
 )
 from ..install_paths import is_user_module
 from ..source_reading import getsource, getsourcelines
-from ..tracking.randomness import rng_carrier_kind
+from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
+from .cash_key import cash_key_method_of_type
 from .closure_fold import iter_code_scopes, unsafe_uses_of
 from .function_identity import func_key
 from .key_values import is_immutable_capture, plain_data_kind
@@ -551,6 +552,31 @@ class PurityChecks:
             cf.argument_naming_retired = True
         return snapshot
 
+    def held_generators(self, func_name: str, args: tuple, kwargs: dict) -> list:
+        """The random generators held as attributes by arguments whose key is
+        not their content -- a ``__cash_key__`` or a registered hasher -- each
+        with its state before the body (`capture_argument_carrier_states`).
+
+        ``Sim(seed).run()`` keyed by ``__cash_key__`` returning the seed draws
+        from ``self.rng``: the key does not move with the generator, and the
+        in-place-change check hashes ``self`` by that same key, so the first
+        draw was stored and served for every later call.
+        """
+        try:
+            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
+        except Exception:  # noqa: BLE001 - best effort, like the check itself
+            canon_args, canon_kwargs = args, kwargs
+        named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
+        held: list[tuple[str, Any]] = []
+        for name, value in named:
+            attrs = getattr(value, "__dict__", None)
+            if not isinstance(attrs, dict) or not attrs:
+                continue
+            if cash_key_method_of_type(type(value)) is None and not self._args.keys_by_registration_only(value):
+                continue
+            held.extend((f"{name}.{attr}", v) for attr, v in attrs.items() if rng_carrier_kind(v) is not None)
+        return capture_argument_carrier_states(held) if held else []
+
     def argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
         """``{parameter: (value, identity snapshot)}`` for the plain lists and
         tuples a call receives, before the body runs.
@@ -598,7 +624,20 @@ class PurityChecks:
         them after the body. An argument that cannot be hashed again cannot
         be shown unchanged, so the result is not stored.
         """
-        if args_hash is None or observer is None:
+        if observer is None:
+            return
+        moved = moved_carriers(observer.held_generators) if observer.held_generators else []
+        if moved:
+            names = [where[1] for where, _pre, _post in moved]
+            observer.mutated_args = names
+            observer.record(
+                "argument mutation",
+                f"the call drew from the random generator {', '.join(repr(n) for n in names)}, which the "
+                f"argument's __cash_key__ or registered hasher leaves out of the key -- the result was not "
+                f"stored, so this call runs every time",
+            )
+            return
+        if args_hash is None:
             return
         identities = observer.arg_identities
         if identities:
