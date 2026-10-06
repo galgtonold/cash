@@ -89,6 +89,9 @@ class GlobalValues:
                 # not in this registry at all.
                 return "cached:" + state()
             fn = getattr(fn, "__wrapped__", fn)
+        if isinstance(fn, type):
+            # A class: its code, what it inherits and its metaclass.
+            return self._helpers.identity(fn)
         if not isinstance(fn, types.FunctionType):
             return hash_callable_source(fn)
         own = self._helpers.identity(fn)

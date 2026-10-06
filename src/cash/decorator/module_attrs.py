@@ -243,7 +243,7 @@ class ModuleAttrFold:
             return []
         parts: list[tuple[str, str]] = []
         if is_mod:
-            parts.extend(self._held_class_parts(reader, value))
+            parts.extend(self._held_class_parts(reader, label, value))
         if is_cls and wraps_code(value):
             # Read statically, a classmethod, property or cached_property is
             # its descriptor, which is neither callable nor data: hashing it
@@ -262,10 +262,12 @@ class ModuleAttrFold:
             parts.append((label, h))
         return parts
 
-    def _held_class_parts(self, reader: _AttrReader, value: Any) -> list[tuple[str, str]]:
-        """`ClassDataFold.class_parts` for the user classes of the instances
-        *value* holds. An instance read as `lib.SVC`: its pickle is its own
-        attributes, not what its class holds (`helper = CC(10)`)."""
+    def _held_class_parts(self, reader: _AttrReader, label: str, value: Any) -> list[tuple[str, str]]:
+        """Key parts for the user classes of the instances *value* holds: their
+        data (`ClassDataFold.class_parts`) and their code. An instance read as
+        `lib.SVC`: its pickle is its own attributes, not what its class holds
+        (`helper = CC(10)`), nor the methods that run on it without being
+        named -- a property, an operator, ``len()``, ``__getattr__``."""
         parts: list[tuple[str, str]] = []
         item_types = {type(item) for item in iter_contained(value) if type(item) not in CODELESS_PRIMS}
         for item_type in sorted(item_types, key=lambda t: f"{t.__module__}.{t.__qualname__}"):
@@ -275,6 +277,7 @@ class ModuleAttrFold:
                         item_type, reader.func_name, owner_code=reader.owner_code, seen=reader.seen, reader=reader.func
                     )
                 )
+                parts.append((f"{label}#cls:{item_type.__qualname__}", self._values.data_callable_identity(item_type)))
         return parts
 
     def _module_callable_parts(
