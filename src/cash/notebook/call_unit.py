@@ -241,8 +241,14 @@ def _in_cash(filename: str) -> bool:
         return False
 
 
-@contextlib.contextmanager
-def _warnings_at_the_caller():
+def _errors_on_every_warning() -> bool:
+    return any(
+        action == "error" and category is Warning and message is None and module is None
+        for action, message, category, module, _lineno in warnings.filters
+    )
+
+
+class _warnings_at_the_caller:
     """Re-emit warnings raised inside an intercepted call, at the user's line.
 
     ``warnings.warn(..., stacklevel=2)`` names the frame that called the
@@ -252,48 +258,63 @@ def _warnings_at_the_caller():
     a cash frame replaced by the first user frame above it, de-duplicated per
     location as the default filter would. A filter that turns warnings into
     errors is left to act as it would: recording would swallow the exception.
+
+    A class, not a generator: the plain-run calls of a loop pay this on every
+    call.
     """
-    if any(
-        action == "error" and category is Warning and message is None and module is None
-        for action, message, category, module, _lineno in warnings.filters
-    ):
-        yield
-        return
-    catcher = warnings.catch_warnings(record=True)
-    caught = catcher.__enter__()
-    warnings.simplefilter("always")
-    try:
-        yield
-    finally:
+
+    __slots__ = ("_caught", "_catcher")
+
+    def __enter__(self):
+        if _errors_on_every_warning():
+            self._catcher = None
+            return None
+        self._catcher = warnings.catch_warnings(record=True)
+        self._caught = self._catcher.__enter__()
+        warnings.simplefilter("always")
+        return None
+
+    def __exit__(self, *_exc):
+        catcher = self._catcher
+        if catcher is None:
+            return False
         catcher.__exit__(None, None, None)
-        for w in caught:
-            filename, lineno = w.filename, w.lineno
-            if _in_cash(filename):
-                frame = sys._getframe(1)
-                while frame is not None and (
-                    _in_cash(frame.f_code.co_filename) or frame.f_code.co_filename == contextlib.__file__
-                ):
-                    frame = frame.f_back
-                if frame is not None:
-                    # The line is read from linecache, where cash registered
-                    # the statement; passing the frame's globals asks for a
-                    # module loader a cell does not have.
-                    filename, lineno = frame.f_code.co_filename, frame.f_lineno
+        caught = self._caught
+        if caught:
+            _relay_warnings(caught)
+        return False
+
+
+def _relay_warnings(caught) -> None:
+    """Re-emit what an intercepted call warned, with cash's frames replaced."""
+    for w in caught:
+        filename, lineno = w.filename, w.lineno
+        if _in_cash(filename):
+            frame = sys._getframe(1)
+            while frame is not None and (
+                _in_cash(frame.f_code.co_filename) or frame.f_code.co_filename == contextlib.__file__
+            ):
+                frame = frame.f_back
+            if frame is not None:
+                # The line is read from linecache, where cash registered
+                # the statement; passing the frame's globals asks for a
+                # module loader a cell does not have.
+                filename, lineno = frame.f_code.co_filename, frame.f_lineno
+        try:
+            warnings.warn_explicit(
+                w.message,
+                w.category,
+                filename,
+                lineno,
+                registry=_WARNING_REGISTRIES.setdefault(filename, {}),
+                source=w.source,
+            )
+        except Exception:  # relaying a warning never breaks the call
+            logger.debug("call unit: could not relay a warning", exc_info=True)
             try:
-                warnings.warn_explicit(
-                    w.message,
-                    w.category,
-                    filename,
-                    lineno,
-                    registry=_WARNING_REGISTRIES.setdefault(filename, {}),
-                    source=w.source,
-                )
-            except Exception:  # relaying a warning never breaks the call
-                logger.debug("call unit: could not relay a warning", exc_info=True)
-                try:
-                    warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
-                except Exception:  # noqa: BLE001 - relaying a warning never breaks the call
-                    pass
+                warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+            except Exception:  # noqa: BLE001 - relaying a warning never breaks the call
+                pass
 
 
 @dataclasses.dataclass(frozen=True)
@@ -366,6 +387,8 @@ class CallUnit:
         #: Looks call entries up and writes them; holds the sites refused.
         self._entries = CallEntries(cash_instance, ttl_provider, persist_provider)
         self.call_log: list[dict] = []
+        #: The record each plain-run (site, callee) is counted in.
+        self._plain_records: dict[tuple[str, str, int], dict] = {}
         #: Per call site, how its calls went in the statement run under way
         #: (see :meth:`_entry_for`); emptied by :meth:`begin_statement`.
         self._site_runs: dict[CallSite, _SiteRun] = {}
@@ -855,31 +878,44 @@ class CallUnit:
         to keep in sync with the badge any more (see the note on
         ``CallCache.__init__`` where ``wrapped_names`` used to live).
         """
-        self.call_log.append(
-            {
-                "func_name": func_name,
-                "cache_hit": cache_hit,
-                "execution_time": elapsed,
-                "time_saved": time_saved,
-                "args_hash": "",
-                "cache_key": key,
-                "timestamp": _time.time(),
-                "call_source": site.source,
-                "occurrence_index": site.occurrence_index,
-                "intercepted": True,
-                # Run without the cache by the many-cheap-calls guard.
-                "ran_plain": ran_plain,
-                # A miss whose result went to the cache. False for a call below
-                # the cost floor or refused: the badge has nothing to say about it.
-                "stored": bool(stored),
-                # Why this call was not served: which part of its key moved since
-                # the site was last keyed. Only on a miss, and only when known.
-                "miss_reason": None if cache_hit else self._keys.why_missed(site),
-            }
-        )
+        if ran_plain:
+            # One record per site and callee, counting its calls: a loop
+            # over 85,000 lines made 2 million records for the badge to draw.
+            pooled_key = (func_name, site.source, site.occurrence_index)
+            pooled = self._plain_records.get(pooled_key)
+            if pooled is not None:
+                pooled["calls"] += 1
+                pooled["execution_time"] += elapsed
+                return
+        record = {
+            "func_name": func_name,
+            "cache_hit": cache_hit,
+            "execution_time": elapsed,
+            "time_saved": time_saved,
+            "args_hash": "",
+            "cache_key": key,
+            "timestamp": _time.time(),
+            "call_source": site.source,
+            "occurrence_index": site.occurrence_index,
+            "intercepted": True,
+            # Run without the cache by the many-cheap-calls guard.
+            "ran_plain": ran_plain,
+            # A miss whose result went to the cache. False for a call below
+            # the cost floor or refused: the badge has nothing to say about it.
+            "stored": bool(stored),
+            # Why this call was not served: which part of its key moved since
+            # the site was last keyed. Only on a miss, and only when known.
+            "miss_reason": None if cache_hit else self._keys.why_missed(site),
+            # How many calls this record stands for (see above).
+            "calls": 1,
+        }
+        if ran_plain:
+            self._plain_records[(func_name, site.source, site.occurrence_index)] = record
+        self.call_log.append(record)
 
     def drain(self) -> list[dict]:
         events, self.call_log = self.call_log, []
+        self._plain_records = {}
         return events
 
 

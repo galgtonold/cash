@@ -99,6 +99,13 @@ def _ints(seq: Any) -> tuple[int, ...]:
         return ()
 
 
+def _count(value: Any) -> int:
+    try:
+        return max(1, int(value or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 @dataclass(frozen=True)
 class _Call:
     """One ``decorator_calls`` event: a decorated or intercepted call."""
@@ -115,6 +122,9 @@ class _Call:
     ran_plain: bool
     #: ``False`` only when the runtime said the result was not stored.
     not_stored: bool
+    #: How many calls this event stands for: more than one for the plain-run
+    #: calls of one site, which the runtime counts together.
+    count: int
 
     @classmethod
     def parse(cls, e: dict[str, Any]) -> _Call:
@@ -134,6 +144,7 @@ class _Call:
             miss_reason=_opt_str(e.get("miss_reason")),
             ran_plain=bool(e.get("ran_plain")),
             not_stored=e.get("stored") is False,
+            count=_count(e.get("calls")),
         )
 
     @property
@@ -594,11 +605,12 @@ def _sub_unit_groups(calls: Iterable[_Call]) -> tuple[SubUnitGroup, ...]:
                 )
                 for c in cs
             ),
-            condensed=len(cs) > _CONDENSE_THRESHOLD,
+            condensed=sum(c.count for c in cs) > _CONDENSE_THRESHOLD,
             key_prefix=cs[0].cache_key[:13],
             miss_reason=next((c.miss_reason for c in cs if c.miss_reason), None),
-            ran_plain=sum(1 for c in cs if c.ran_plain),
-            unstored=sum(1 for c in cs if c.unstored_miss),
+            ran_plain=sum(c.count for c in cs if c.ran_plain),
+            unstored=sum(c.count for c in cs if c.unstored_miss),
+            pooled=sum(c.count - 1 for c in cs),
         )
         for (source, occ), cs in buckets.items()
     )

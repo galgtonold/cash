@@ -377,6 +377,11 @@ class DecoratorCallGroup:
     # Defaults False so pre-existing metrics keep reading as decorated.
     intercepted: bool = False
 
+    @property
+    def n_calls(self) -> int:
+        """How many calls the group stands for."""
+        return len(self.calls)
+
 
 @dataclass(frozen=True)
 class SubUnitGroup:
@@ -407,6 +412,14 @@ class SubUnitGroup:
     ran_plain: int = 0
     #: Misses whose result was not stored: below the cost floor, or refused.
     unstored: int = 0
+    #: Calls counted into the entries of ``calls`` beyond one each: the
+    #: plain-run calls of a site are kept as one entry with their total time.
+    pooled: int = 0
+
+    @property
+    def n_calls(self) -> int:
+        """How many calls the group stands for."""
+        return len(self.calls) + self.pooled
 
 
 @dataclass(frozen=True)

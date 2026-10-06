@@ -202,14 +202,14 @@ def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
     """
     return [
         f"{pad}    sub-call {g.call_source}: "
-        f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
+        f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{g.n_calls} hit"
         + (f", {g.ran_plain} run plain (too cheap to cache)" if getattr(g, "ran_plain", 0) else "")
         # Why it was not served, when the runtime worked it out. The HTML badge
         # shows this too; a bare "0/6 hit" reads a correct re-run as a bug
         # for want of the word after it.
         + (f" - {g.miss_reason}" if g.miss_reason else "")
         for g in row.sub_units
-        if not (g.unstored and g.unstored == len(g.calls) and not g.miss_reason)
+        if not (g.unstored and g.unstored == g.n_calls and not g.miss_reason)
     ]
 
 
@@ -396,7 +396,7 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
     for g in dec_section.items:
         if not isinstance(g, DecoratorCallGroup):
             continue
-        total = len(g.calls)
+        total = g.n_calls
         cached = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
         time_s = sum(c.time_s for c in g.calls)
         short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name

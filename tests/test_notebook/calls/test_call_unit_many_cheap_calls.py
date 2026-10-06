@@ -166,17 +166,18 @@ def test_every_call_is_counted_including_the_plain_ones(call_unit_harness, slow_
     """The badge read ``sub-call read_doc(p): 5220/5225`` for
     5,225 files, ``296/301``, ``495/500``: every count five short. The calls
     the guard ran plain -- its samples and the rest of the run -- were never
-    logged, so they vanished from the denominator. They are logged now, and
-    marked as run plain."""
+    logged, so they vanished from the denominator. They are counted now, and
+    marked as run plain, in one record per site."""
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
     wrapped = unit.wrap(lambda v: v * 2, SITE)
     for i in range(N):
         wrapped(i)
 
     events = unit.drain()
-    assert len(events) == N, f"{len(events)} of {N} calls logged"
+    assert sum(e["calls"] for e in events) == N, f"{sum(e['calls'] for e in events)} of {N} calls logged"
     plain = [e for e in events if e.get("ran_plain")]
-    assert len(plain) == N - cu._GUARD_AFTER_CALLS
+    assert sum(e["calls"] for e in plain) == N - cu._GUARD_AFTER_CALLS
+    assert len(plain) == 1, "the plain-run calls of one site are kept as one record"
     assert all(not e["cache_hit"] for e in plain)
 
 
@@ -210,6 +211,39 @@ def test_the_sub_call_line_says_how_many_ran_plain():
     )
     assert "sub-call work(v): 3/8 hit" in out, out
     assert "5 run plain" in out, out
+
+
+def test_one_record_for_many_plain_calls_counts_as_all_of_them():
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+
+    event = {
+        "func_name": "m.work",
+        "call_source": "work(v)",
+        "occurrence_index": 0,
+        "intercepted": True,
+        "cache_key": None,
+        "time_saved": 0.0,
+        "cache_hit": False,
+    }
+    calls = [
+        dict(event, execution_time=0.001, calls=1),
+        dict(event, execution_time=0.4, calls=2000, ran_plain=True),
+    ]
+    out = render_text(
+        build_interactive_badge(
+            [
+                {
+                    "status": "COMPUTED",
+                    "code": "out = [work(v) for v in xs]",
+                    "execution_time": 0.5,
+                    "decorator_calls": calls,
+                }
+            ]
+        )
+    )
+    assert "2000 run plain" in out, out
+    assert "0/2001 hit" in out, out
 
 
 def test_a_row_whose_calls_were_served_says_what_they_saved():

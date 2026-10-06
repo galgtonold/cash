@@ -60,6 +60,8 @@ class DecoratorCallMetric(TypedDict, total=False):
     intercepted: bool
     ran_plain: bool
     stored: bool
+    # A pooled record stands for this many plain-run calls of one site.
+    calls: int
     # --- stamped inside a loop ---
     loop_header: str
     loop_header_chain: list[str]

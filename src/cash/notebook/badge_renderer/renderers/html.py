@@ -426,12 +426,12 @@ def _rowtip_html(row: StatementRow, rp: _RenderPass) -> str:
         # site with its own hit ratio and cache-key prefix (the same-prefix-
         # across-runs signal the statement row already gives for itself).
         su_hits = sum(1 for g in row.sub_units for c in g.calls if c.status is BadgeStatus.RESTORED)
-        su_n = sum(len(g.calls) for g in row.sub_units)
+        su_n = sum(g.n_calls for g in row.sub_units)
         sites = " · ".join(_esc(g.call_source) for g in row.sub_units[:3])
         dl_parts.append(f"<dt>Sub-calls</dt><dd>{su_hits}/{su_n} hit · {sites}</dd>")
         for g in row.sub_units:
             g_hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
-            detail = f"{g_hits}/{len(g.calls)} hit"
+            detail = f"{g_hits}/{g.n_calls} hit"
             if g.key_prefix:
                 detail += f" · <code>{_esc(g.key_prefix)}</code>"
             if g.condensed:
@@ -696,11 +696,11 @@ def _loop_stmt_sub_units_html(sub_units: tuple[SubUnitGroup, ...]) -> str:
     if not sub_units:
         return ""
     hits = sum(1 for g in sub_units for c in g.calls if c.status is BadgeStatus.RESTORED)
-    n = sum(len(g.calls) for g in sub_units)
+    n = sum(g.n_calls for g in sub_units)
     rows = []
     for g in sub_units:
         g_hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
-        detail = f"{g_hits}/{len(g.calls)} hit"
+        detail = f"{g_hits}/{g.n_calls} hit"
         if g.key_prefix:
             detail += f" · <code>{_esc(g.key_prefix)}</code>"
         if g.condensed:
@@ -1128,7 +1128,7 @@ def _decorator_call_row_html(c: DecoratorCall, rp: _RenderPass, *, intercepted: 
 def _decorator_group_html(g: DecoratorCallGroup, rp: _RenderPass) -> str:
     if not g.condensed:
         return "".join(_decorator_call_row_html(c, rp, intercepted=g.intercepted) for c in g.calls)
-    n = len(g.calls)
+    n = g.n_calls
     hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
     misses = n - hits
     total_time = sum(c.time_s for c in g.calls)
