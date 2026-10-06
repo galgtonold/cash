@@ -440,6 +440,10 @@ class MismatchClassifier:
             return
 
         final_virtual_hash = virtual_lineage[var_name]
+        if actual_lineage != final_virtual_hash and self._magic_bound(var_name, sim):
+            # Its producer above is not what made it: a magic changed it after.
+            result.stale_magic_vars.add(var_name)
+            return
         if actual_lineage == final_virtual_hash:
             if var_name in result.tainted_vars:
                 logger.debug(
@@ -701,7 +705,9 @@ class MismatchClassifier:
             self._classify_one_broken_var(var_name, sim, check, result, loop_var_input_lineages)
 
         # Only required inputs matter here; temporary intermediates can stay missing.
-        self._check_missing_required_inputs(required_inputs, virtual_lineage, sim.virtual_modules, result.broken_vars)
+        self._check_missing_required_inputs(
+            required_inputs, virtual_lineage, sim.virtual_modules, result.broken_vars, result.stale_magic_vars
+        )
         self._repair_upstream_rerun_bindings(required_inputs, sim.trace, result.broken_vars)
 
         if logger.isEnabledFor(logging.DEBUG):
@@ -709,6 +715,12 @@ class MismatchClassifier:
             if not result.broken_vars:
                 logger.debug("[UPSTREAM_DEBUG] No broken vars, nothing to re-execute")
         return result
+
+    def _magic_bound(self, name: str, sim: SimulationResult) -> bool:
+        """Whether a magic is the last to bind or change *name* above
+        (``magic_effects``): its producer above did not make what it holds,
+        so it is never rebuilt from it."""
+        return sim.virtual_lineage.get(name) in self.tracking_state.magic_lineages
 
     def _check_tainted_input_valid(self, inp: str, sim: SimulationResult, result: ClassificationResult) -> bool:
         """Return True if *inp* is an unsaved-edit input that should be trusted.
@@ -883,6 +895,10 @@ class MismatchClassifier:
         # producer is scheduled when stale, instead of assuming it is a builtin
         # that is always available.
         if inp in BUILTIN_NAMES and inp not in self.tracking_state.variable_lineage:
+            return False
+        if self._magic_bound(inp, sim):
+            if self.tracking_state.variable_lineage.get(inp) != sim.virtual_lineage[inp]:
+                result.stale_magic_vars.add(inp)
             return False
         if self._check_inp_lineage_skip(inp, sim, result):
             return False
@@ -1102,8 +1118,10 @@ class MismatchClassifier:
         virtual_lineage: dict[str, str],
         virtual_modules: set[str],
         broken_vars: set[str],
+        stale_magic: set[str],
     ) -> None:
-        """Mark required inputs that exist in virtual lineage but are absent from memory."""
+        """Mark required inputs that exist in virtual lineage but are absent from
+        memory; one a magic binds goes to *stale_magic*, as nothing rebuilds it."""
         utility_vars = {"ip", "cash_magics", "get_ipython", "__builtins__", "In", "Out"}
         for var_name in required_inputs or []:
             if var_name not in virtual_lineage:
@@ -1144,6 +1162,9 @@ class MismatchClassifier:
 
             if var_name in utility_vars or var_name.startswith("_"):
                 logger.debug("[UPSTREAM_DEBUG] Skipping utility variable '%s'", var_name)
+                continue
+            if virtual_lineage[var_name] in self.tracking_state.magic_lineages:
+                stale_magic.add(var_name)
                 continue
 
             if logger.isEnabledFor(logging.DEBUG):

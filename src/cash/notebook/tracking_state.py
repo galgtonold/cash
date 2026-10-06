@@ -160,6 +160,18 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineageBuilder, VirtualLineage.
     no_cache_values: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # magic_base -> {name: digest of the value} for each name a line magic or
+    # shell command bound or changed on its last run (``magic_effects``), and
+    # every lineage such a name was given. The simulation reads the digests
+    # back to reach the same lineage; the upstream check never rebuilds a name
+    # holding one of those lineages from the Python above it.
+    # W: StatementProcessor, VirtualLineage. R: VirtualLineage, MismatchClassifier.
+    magic_values: dict[str, dict[str, str]] = field(default_factory=dict)
+    magic_lineages: set[str] = field(default_factory=set)
+    # Bumped each time a magic records its values: a simulation snapshot of a
+    # cell holding magics taken before is out of date.
+    magic_generation: int = 0
+
     # What the environment variables and the data of the user's modules a
     # statement reads held when the runtime last keyed it, and the last change
     # the runtime saw a statement make to each of them (``recorded_reads``).

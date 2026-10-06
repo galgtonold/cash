@@ -764,7 +764,7 @@ class CashMagics(Magics):
         if isinstance(result, RunInstead):
             return self._original_run_cell(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
-            with self._forgetting_what_ipython_binds():
+            with self._forgetting_what_ipython_binds(raw_cell):
                 return self._original_run_cell(raw_cell, *args, **kwargs)
 
         return self._finalize_cell_execution(raw_cell, result, args, kwargs)
@@ -833,17 +833,19 @@ class CashMagics(Magics):
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.
-            with self._forgetting_what_ipython_binds():
+            with self._forgetting_what_ipython_binds(raw_cell):
                 return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
         return await self._finalize_cell_execution_async(raw_cell, result, args, kwargs)
 
     @contextlib.contextmanager
-    def _forgetting_what_ipython_binds(self) -> Iterator[None]:
+    def _forgetting_what_ipython_binds(self, raw_cell: str) -> Iterator[None]:
         """Around a cell IPython runs on its own (a ``%%bash --out o`` or
         ``%%debug`` cell, ``files = !ls``): forget how each name it binds was
         computed (``StatementProcessor.forget_rebound``), but for the names
-        cash recorded as it ran a ``%%capture`` body through ``run_cell``."""
+        cash recorded as it ran a ``%%capture`` body through ``run_cell``.
+        A cell of line magics gives the names they are known to bind the
+        lineage of a magic's output (``StatementProcessor.record_magic_cell``)."""
         processor = self._statement_processor
         before = processor.bindings()
         lineage_before = dict(self.tracking_state.variable_lineage)
@@ -851,6 +853,10 @@ class CashMagics(Magics):
             yield
         finally:
             processor.forget_rebound(before, lineage_before)
+            try:
+                processor.record_magic_cell(raw_cell, lineage_before)
+            except Exception:  # noqa: BLE001 - the names then keep no lineage, as before
+                logger.debug("Recording what the magics bound failed", exc_info=True)
 
     def _substitute_cell_kwargs(self, source: str, kwargs: dict) -> dict:
         """Kwargs for delegating the stand-in cell *source* to ``run_cell_async``.
