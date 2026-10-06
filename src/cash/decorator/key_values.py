@@ -11,7 +11,7 @@ from typing import Any
 
 from ..analysis.helper_code import is_mock
 from ..value_types import IMMUTABLE_LEAF_TYPES
-from .user_code import is_user_class, own_package
+from .user_code import is_user_class, is_user_code_object, own_package
 
 
 def iter_contained(obj: Any):
@@ -182,7 +182,19 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         return v, False
     if id(v) in _path:
         return ("__cash_cycle__", type(v).__qualname__), False
-    if callable(v) and not isinstance(v, type):
+    if isinstance(v, type):
+        # A class pickles by name, which an edit does not move: a registry
+        # `REG = {"double": Double}` read as `models.REG[name]()` served the
+        # old result after `Double.run` was edited. The user's own class is
+        # its code; a library class is its name.
+        if not is_user_code_object(v):
+            return v, False
+        try:
+            ident = hash_callable(v)
+        except (OSError, TypeError, ValueError):
+            ident = v.__qualname__
+        return ("__cash_class__", f"{v.__module__}.{v.__qualname__}", ident), True
+    if callable(v):
         try:
             ident: Any = hash_callable(v)
         except (OSError, TypeError, ValueError):

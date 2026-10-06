@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import linecache
 import sys
 import types
 from collections.abc import Callable, Iterator
@@ -36,6 +37,28 @@ def _defining_module(obj: Any) -> Any:
         if module is not None:
             return module
     return inspect.getmodule(obj)
+
+
+def is_exec_built(obj: Any) -> bool:
+    """Was *obj*'s code compiled from a string by ``exec()`` / ``eval()``
+    into a fresh namespace, one with no ``__name__``?
+
+    ``ns = {}; exec(open("rules.txt").read(), ns)`` or ``eval(cfg["score"],
+    {"__builtins__": {}})``: the function has no source file (its file is a
+    pseudo-name such as ``<string>``) and no module to judge it by, so it read
+    as library code and was never keyed. Its text lives in a string the
+    program read from somewhere cash cannot follow. A namespace that names a
+    module (``globals()``, a module built in memory) makes its functions user
+    code, keyed by their bytecode. Code IPython compiled is not this either:
+    it registers each cell's text in `linecache`.
+    """
+    fn = getattr(obj, "__func__", obj)
+    if not isinstance(fn, types.FunctionType) or "__name__" in fn.__globals__:
+        return False
+    filename = fn.__code__.co_filename
+    if not (filename.startswith("<") and filename.endswith(">")) or linecache.getlines(filename):
+        return False
+    return _defining_module(fn) is None
 
 
 def own_code_is_user(obj: Any, root_module: str | None) -> bool:

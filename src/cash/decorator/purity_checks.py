@@ -39,7 +39,7 @@ from ..install_paths import is_user_module
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
-from .closure_fold import iter_code_scopes, unsafe_uses_of
+from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
 from .function_identity import func_key
 from .key_values import is_immutable_capture, plain_data_kind
 from .user_code import own_package
@@ -401,7 +401,7 @@ class PurityChecks:
                     cell = cells.get(name)
                     if cell is None:
                         continue
-                    after = self._args.hash_payload((cell.cell_contents,), {})
+                    after = capture_digest(self._args, cell.cell_contents)
                 elif scope == "carrier":
                     mapping, key = owner
                     if key not in mapping:

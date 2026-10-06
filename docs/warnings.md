@@ -59,7 +59,7 @@ its warning class.
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 4 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
-| [Storing results](#store-codes) | `STORE-` | 6 | The call succeeded, but its result was not written. |
+| [Storing results](#store-codes) | `STORE-` | 7 | The call succeeded, but its result was not written. |
 
 ## Annotations {#annot-codes}
 
@@ -674,7 +674,7 @@ Each finding has a line number and a label:
 | `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
-| `untrackable_dep` | `eval` / `exec` / `compile`, `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | raises `CashImpureFunctionError` |
+| `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | raises `CashImpureFunctionError` |
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 module-level table such as `HANDLERS[kind]()` is hashed as a global and is not
@@ -1574,6 +1574,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
+| [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source it cannot check; not stored |
 
 ### STORE-CHUNK-FAILED {#store-chunk-failed}
 
@@ -1695,6 +1696,27 @@ interrupted write.
 
 **When it is safe to ignore.** Usually. Look into it if it persists after
 `cache_clear()`.
+
+### STORE-UNTRACKED-SOURCE {#store-untracked-source}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @84f8eb79, cash/decorator/store.py:ResultStore._untracked_source_refusal @1ea7f346 -->
+**What happened.** The function calls a cached function whose
+`dynamic_depends_on=` returned a `DataSource` other than a file. Only a call
+of that function can check whether the source changed, and a hit of this
+function does not call it. The result was returned but not cached.
+
+**Why it matters.** Every call of this function recomputes; the cached
+function it calls is still served from its own entries. Nothing stale is
+served. A `FileDataSource` or `RemoteFileDataSource` does not warn: the
+caller's entry checks the file itself, as for one it read.
+
+**What to do.** Call that function outside this one and pass its result in as
+an argument, or make the source a `FileDataSource` or `RemoteFileDataSource`.
+
+**When it is safe to ignore.** When this function is cheap next to the one it
+calls.
 
 ## Related
 

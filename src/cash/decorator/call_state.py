@@ -60,6 +60,9 @@ class BuiltKey(NamedTuple):
     args_hash: str
     normalized_args: tuple[tuple, dict]
     call_args_hash: str | None = None
+    #: The shortest ttl among the cached functions the key reached outside
+    #: the dependency graph (`REACHED_TTLS`), or None.
+    reached_ttl: int | None = None
 
 
 class Call:
@@ -154,6 +157,13 @@ CALL_ENTRY: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cas
 #: before-hash did. Unset (None) outside a real call's key build, so
 #: `explain()` records nothing.
 CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_cash_capture_watch", default=None)
+
+
+#: The effective ttls of the cached functions a key build reached without a
+#: graph edge of its own registry -- passed as an argument, held in a dict, a
+#: list or a closure, on another instance (`KeyBuilder.callee_state`). The
+#: caller refreshes at least as often as each. None outside a key build.
+REACHED_TTLS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cash_reached_ttls", default=None)
 
 
 #: `ResultStore.refusal` was not handed a capture watch (the streaming path).

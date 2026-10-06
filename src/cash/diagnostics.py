@@ -275,6 +275,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "STORE-INPUT-CHANGED",  # a file the call read changed before it
         # returned, so the result was not stored
         "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked
+        "STORE-UNTRACKED-SOURCE",  # a cached callee depends on a dynamic source
+        # the caller's entry cannot check, so the result was not stored
         "STORE-METADATA-INVALID",  # a stored entry's metadata did not validate
     }
 )

@@ -162,6 +162,11 @@ class FileAccessTracker:
         # Files a memo handed this block data from that was read from an
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
+        # Sources a cached call in this block depends on through
+        # ``dynamic_depends_on=`` that are not files cash can check: an entry
+        # of this block's own could not tell when they change
+        # (`pass_dynamic_sources_up`).
+        self.untracked_sources: set[str] = set()
         # Files and directories this block CREATED (opened with "w"/"x",
         # made with mkdir/mkdtemp), resolved. What the block reads back from
         # them is its own output, not an input: unzipping into a temporary
@@ -585,6 +590,12 @@ class FileAccessTracker:
         """Record a remote *url* read, propagating to the enclosing tracker."""
         for tracker in self._self_and_parents():
             tracker.accessed_remote.add(url)
+
+    def add_untracked_source(self, source_id: str) -> None:
+        """Record a data source this block depends on that no entry can
+        check, here and on the parents."""
+        for tracker in self._self_and_parents():
+            tracker.untracked_sources.add(source_id)
 
 
 #: Seconds spent recording reads; `tracking_seconds`.

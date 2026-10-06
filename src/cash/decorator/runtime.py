@@ -38,6 +38,7 @@ from .call_state import (
     CACHE_MISS,
     CAPTURE_WATCH,
     NESTED_CASH_SECONDS,
+    REACHED_TTLS,
     THREADS_IN_CALLS,
     BodyRun,
     BuiltKey,
@@ -48,8 +49,14 @@ from .call_state import (
     run_to_completion,
 )
 from .class_data import CLASSES_FOLDED
+from .closure_fold import defaults_of
 from .explain import MissKind, MissReason, describe_stale_files
-from .file_deps import note_unentered_body, propagate_file_deps_to_active_tracker, snapshot_tracked_deps
+from .file_deps import (
+    note_unentered_body,
+    pass_dynamic_sources_up,
+    propagate_file_deps_to_active_tracker,
+    snapshot_tracked_deps,
+)
 from .function_identity import func_key, hash_callable_source
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
@@ -93,6 +100,17 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
+
+
+def _unhashable_callee_default(func_name: str) -> KeyBuildFailed:
+    """The failure of a caller's key when cached *func_name*'s default cannot be hashed."""
+    return KeyBuildFailed(
+        "KEY-UNHASHABLE-DEFAULT",
+        f"@cash.cache on {func_name}: a parameter default of this cached function, "
+        f"which another cached function calls, could not be hashed, so the caller "
+        f"cannot tell whether it changed and ran uncached.",
+        "give the default a hashable value, or register a hasher for its type with cash.register_hasher.",
+    )
 
 
 def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -195,6 +213,7 @@ class KeyBuilder:
             own_report=self._registry.report_for(func, func_name),
             note=note,
         )
+        state_hash = self._fold_callee_bindings(func_name, state_hash)
         state_hash = self._files.fold_declared_files(func_name, state_hash)
         chain.append(state_hash)
         state_hash = self._closures.fold_closure(func, func_name, state_hash)
@@ -222,6 +241,52 @@ class KeyBuilder:
             state_hash = self._fold_key_function(spec, state_hash)
         return state_hash
 
+    def _fold_callee_bindings(self, func_name: str, state_hash: str) -> str:
+        """Fold what each cached function *func_name* calls is bound to: its
+        captured variables and its parameter defaults, transitively.
+
+        The dependency state keys a cached callee by its code, helpers and
+        callees. Its captures and defaults live on the function object, not in
+        its code: ``def clip(x, limit=THRESHOLD)`` with ``THRESHOLD`` edited in
+        another module, or ``add = make(n)`` built with another ``n``, served
+        the caller's old result while the callee called directly recomputed.
+        They are folded by the same rules as the caller's own
+        (`ClosureFold.fold_closure`, `ClosureFold.fold_defaults`). A callee
+        another registry describes (`FunctionRegistry.reached_callee`) is
+        keyed whole by its own state already.
+
+        Raises `KeyBuildFailed` when a callee's default cannot be hashed.
+        """
+        parts: list[str] = []
+        graph = self._registry.graph
+        visited = {func_name}
+        stack = [(func_name, dep) for dep in sorted(graph.get_dependencies(func_name), reverse=True)]
+        # A callee's mutable capture is not this call's to watch.
+        watch_token = CAPTURE_WATCH.set(None)
+        try:
+            while stack:
+                node, dep = stack.pop()
+                if dep in visited:
+                    continue
+                visited.add(dep)
+                dep_func = self._registry.functions.get(dep)
+                if dep_func is None or self._registry.reached_callee(node, dep) is not None:
+                    continue
+                stack.extend((dep, d) for d in sorted(graph.get_dependencies(dep), reverse=True))
+                if not getattr(dep_func, "__closure__", None) and defaults_of(dep_func) == ((), {}):
+                    continue
+                bound = self._closures.fold_closure(dep_func, dep, "")
+                bound = self._closures.fold_defaults(dep_func, dep, bound)
+                if bound is None:
+                    raise _unhashable_callee_default(dep)
+                ledger_note(("captures and defaults of cached function", dep), bound)
+                parts.append(f"{dep}={bound}")
+        finally:
+            CAPTURE_WATCH.reset(watch_token)
+        if not parts:
+            return state_hash
+        return hashlib.sha256(f"{state_hash}:callee-bindings:{':'.join(parts)}".encode("utf-8")).hexdigest()
+
     def callee_state(self, func: Callable, func_name: str) -> str:
         """What a call of cached *func_name* depends on besides its arguments,
         as ONE digest: for a cached function another one reaches without a
@@ -242,6 +307,11 @@ class KeyBuilder:
 
         Raises `KeyBuildFailed` when the state cannot be built.
         """
+        reached_ttls = REACHED_TTLS.get()
+        if reached_ttls is not None:
+            # What the caller computes from this function is as fresh as it.
+            spec = self._registry.cached.get(func_name)
+            reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl if spec is not None else None))
         active = _CALLEE_STATES.get()
         if func_name in active:
             return f"cycle:{func_name}"
@@ -256,13 +326,7 @@ class KeyBuilder:
                 self._registry.ensure_closure_analyzed(func)
             return self._code_state(func, func_name, [])
         except UnhashableDefault:
-            raise KeyBuildFailed(
-                "KEY-UNHASHABLE-DEFAULT",
-                f"@cash.cache on {func_name}: a parameter default of this cached function, "
-                f"which another cached function calls, could not be hashed, so the caller "
-                f"cannot tell whether it changed and ran uncached.",
-                "give the default a hashable value, or register a hasher for its type with cash.register_hasher.",
-            ) from None
+            raise _unhashable_callee_default(func_name) from None
         finally:
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
@@ -297,6 +361,8 @@ class KeyBuilder:
         classes_token = CLASSES_FOLDED.set(set())
         # Each function's globals are folded once per key (`READS_FOLDED`).
         reads_token = READS_FOLDED.set({})
+        reached_ttls: list = []
+        ttls_token = REACHED_TTLS.set(reached_ttls)
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
@@ -325,7 +391,12 @@ class KeyBuilder:
                 *keyed, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
             )
             chain.append(state_hash)
-            dynamic_state_hash = resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
+            dynamic_sources: list = []
+            dynamic_state_hash = resolve_dynamic_dependencies(
+                func_name, dynamic_depends_on, args, kwargs, dynamic_sources
+            )
+            if dynamic_sources and not _EXPLAINING.get():
+                pass_dynamic_sources_up(dynamic_sources)
             failure: list = []
             if keyed is normalized_args:
                 args_hash = self._args.serialize_args(
@@ -336,13 +407,15 @@ class KeyBuilder:
             self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
+            REACHED_TTLS.reset(ttls_token)
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         call_args_hash = args_hash if spec.arg_key is None else None
-        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash)
+        ttls = [t for t in reached_ttls if t is not None]
+        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
 
     def key_arguments(self, spec: CachedFunction, args: tuple, kwargs: dict, normalized: tuple[tuple, dict]) -> tuple:
         """`keyed_arguments` for *spec*'s ``key=`` or ignored parameters.
@@ -674,6 +747,10 @@ class CallRunner:
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
+        if built.reached_ttl is not None:
+            # A cached function the key reached as a value, not by a graph
+            # edge: its ttl is per call, not per function.
+            call.ttl = built.reached_ttl if call.ttl is None else min(call.ttl, built.reached_ttl)
 
         raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None

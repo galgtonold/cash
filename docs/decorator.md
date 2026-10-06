@@ -339,6 +339,9 @@ After the ttl, the next call recomputes and replaces the entry.
   as it stands now: shortening it expires older entries at once, and
   lengthening it keeps them longer. `cash.cleanup()` judges them the same way
   while the function is decorated in that process.
+- **A caller refreshes as often.** A cached function that reaches one with a
+  ttl, whether it calls it by name, is passed it as an argument, or finds it
+  in a dict, list or closure, uses the shorter of the two ttls.
 - **A default for every function** comes from configuration: set
   `default_ttl` on the disk tier; see
   [Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).
@@ -379,7 +382,11 @@ def leaderboard():
 `dynamic_depends_on=` builds the dependency from the call's arguments, for
 example one file per tenant. If the resolver raises or returns something that is
 not a `DataSource`, the call runs uncached with
-[`KEY-DYNAMIC-DEP-FAILED`](warnings.md#key-dynamic-dep-failed). See
+[`KEY-DYNAMIC-DEP-FAILED`](warnings.md#key-dynamic-dep-failed). A cached
+function that calls this one depends on the same sources: a file source
+becomes a file its entry checks, and any other source leaves its result
+unstored, with
+[`STORE-UNTRACKED-SOURCE`](warnings.md#store-untracked-source). See
 [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
 
 ### `cache_if=`
@@ -582,7 +589,7 @@ would skip or get wrong:
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, or the working directory | Puts the value in the key. No warning |
-| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
+| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
 
 Logging calls are not side effects for this purpose.
 

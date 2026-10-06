@@ -55,10 +55,18 @@ from .helper_bindings import (
     resolve_in_class_namespaces,
     resolve_local_import,
 )
-from .helper_code import UnwalkableLayers, callable_layers, is_mock, is_user_code, own_code_is_user, qualname_of
+from .helper_code import (
+    UnwalkableLayers,
+    callable_layers,
+    is_exec_built,
+    is_mock,
+    is_user_code,
+    own_code_is_user,
+    qualname_of,
+)
 from .mutable_globals import mutable_global_reads
 from .purity_flow import fresh_name_nodes
-from .purity_report import ISSUE_AMBIENT_READ, ISSUE_IMPURE_CALL, PurityIssue, PurityReport
+from .purity_report import ISSUE_AMBIENT_READ, ISSUE_IMPURE_CALL, ISSUE_UNTRACKABLE_DEP, PurityIssue, PurityReport
 from .purity_visitor import PurityVisitor
 from .static_dispatch import MODULE_NAME_PREFIX, spell_static_dispatch
 
@@ -152,6 +160,8 @@ class HelperWalk:
         #: different method, which was then skipped as already walked.
         self._keep_alive: list[Any] = []
         self._unwalkable = ""
+        #: (id(body), id(callee)) for each exec()/eval()-built callee judged.
+        self._exec_built_sites: set[tuple[int, int]] = set()
         self._stack: list[_Entry] = self._start()
 
     # --- the walk ---
@@ -517,6 +527,26 @@ class HelperWalk:
                     line=line,
                 )
             )
+        if is_exec_built(callee) and not _captured_by_root(body, callee):
+            # Its source is a string the program built or read: as
+            # untrackable as `exec` / `eval` written in the body. Reported
+            # once per body, at the first site: a call site (which a waiver
+            # on its line covers) comes before the bare read of the name.
+            self._note_library_binding(callee, path)
+            site = (id(body.func), id(callee))
+            if site in self._exec_built_sites:
+                return
+            self._exec_built_sites.add(site)
+            if body.reported and line not in body.audited:
+                issue = PurityIssue(
+                    kind=ISSUE_UNTRACKABLE_DEP,
+                    description=f"{'.'.join(path[1]) if path else callee.__qualname__}(...) - built by "
+                    "exec()/eval() from a string, so an edit to that string is not seen",
+                    where=body.qualname,
+                    line=line,
+                )
+                self._issues += _anchor_issue_lines([issue], body.func)
+            return
         layers = self._user_layers(callee)
         if layers is None:
             return
@@ -688,6 +718,20 @@ def _param_names(func_def: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[
     if args.kwarg:
         names.add(args.kwarg.arg)
     return frozenset(names)
+
+
+def _captured_by_root(body: _Body, callee: Any) -> bool:
+    """Is *callee* held in a closure cell of the cached function itself?
+    Then `ClosureFold.fold_closure` keys it by its code, sourceless or not."""
+    if body.depth != 0:
+        return False
+    for cell in getattr(body.func, "__closure__", None) or ():
+        try:
+            if cell.cell_contents is callee:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _call_site_path(body: _Body, chain: tuple[str, ...] | None) -> BindingPath | None:

@@ -25,7 +25,7 @@ from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
-from .key_values import SYNC_TYPES, is_immutable_capture
+from .key_values import SYNC_TYPES, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
 from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
@@ -193,6 +193,18 @@ def defaults_of(func: Callable) -> tuple[tuple, dict]:
         fn = getattr(fn, "__wrapped__", None)
         depth += 1
     return tuple(pos), kwd
+
+
+def capture_digest(args: ArgHasher, value: Any) -> str:
+    """The digest a captured data value is keyed by, and checked against
+    after the call. What a dict, list or tuple holds that pickles by name --
+    a class in a registry ``{"d": Double}``, a function -- is keyed by its
+    code, as in a data global (`stabilize_for_global_hash`). Any other object
+    is hashed as it is, by its ``__cash_key__`` or registered hasher if it
+    has one. Raises what hashing raises."""
+    if type(value) in (dict, list, tuple) and plain_data_kind(value) is None:
+        value = stabilize_for_global_hash(value, hash_callable_source)
+    return args.hash_payload((value,), {})
 
 
 def fingerprint_default(v: Any) -> Any:
@@ -464,7 +476,7 @@ class HelperIdentity:
                     if name in provisional:
                         continue
             try:
-                captures.append((name, self._args.hash_payload((value,), {})))
+                captures.append((name, capture_digest(self._args, value)))
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(fn, name, value, e) from e
         if not captures:
@@ -500,8 +512,16 @@ class HelperIdentity:
             ]
             if bases:
                 source = f"{source}:bases:{','.join(bases)}"
-        defaults = getattr(fn, "__defaults__", None)
-        kwdefaults = getattr(fn, "__kwdefaults__", None)
+            # Its metaclass's code runs too: `Model()` calls the metaclass's
+            # `__call__`, `Model.factor` can be a property on it.
+            meta = type(fn)
+            if meta is not type and not is_opaque(meta) and is_user_code_object(meta):
+                source = f"{source}:metaclass:{self.identity(meta)}"
+        # A class has no defaults and no closure. Not asked for them either: a
+        # metaclass with a catch-all `__getattr__` answers both.
+        is_class = isinstance(fn, type)
+        defaults = None if is_class else getattr(fn, "__defaults__", None)
+        kwdefaults = None if is_class else getattr(fn, "__kwdefaults__", None)
         memo_key = id(fn)
         cached = self._defaults_memo.get(memo_key)
         if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
@@ -509,10 +529,10 @@ class HelperIdentity:
         # After the memo: its entry already holds the captures, and hashing
         # a captured object on every call only to throw the digest away cost
         # as much as the object is large.
-        captured = self._capture_part(fn)
+        captured = "" if is_class else self._capture_part(fn)
         if captured:
             source = f"{source}:captures:{captured}"
-        pos, kwd = defaults_of(fn)
+        pos, kwd = ((), {}) if is_class else defaults_of(fn)
         try:
             digest = self._args.hash_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
@@ -725,7 +745,7 @@ class ClosureFold:
             # cannot be hashed runs the call uncached rather than being
             # left out of the key.
             try:
-                h = self._args.hash_payload((v,), {})
+                h = capture_digest(self._args, v)
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(func, name, v, e) from e
             pending = CAPTURE_WATCH.get()
