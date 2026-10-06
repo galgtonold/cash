@@ -254,6 +254,11 @@ class InMemoryBackend(CacheBackend):
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
                 if _plain_data.immutable_below(item):
                     memo[id(item)] = item if item_type is tuple else list(item)
+                else:
+                    # Nested plain data (a parsed log: rows holding lists of
+                    # tuples). Every list it holds goes into the memo too, so
+                    # a name bound to one of them still shares it with the copy.
+                    _plain_data.spine_copy(item, memo)
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
