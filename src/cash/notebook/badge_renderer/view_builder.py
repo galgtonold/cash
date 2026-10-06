@@ -996,6 +996,11 @@ def _bug_report_url(metrics: list[_Metric], context: dict | None) -> str:
     prefix = f"{_ISSUES_BASE}?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body="
 
     def _url_len(body: str) -> int:
+        # Quoting never shortens: a body already too long is not quoted to
+        # find out. Every badge of a 400-cell notebook quoted the whole
+        # notebook twice, 15 ms a render, three renders a cell.
+        if len(prefix) + len(body) > _BUG_URL_MAX:
+            return len(prefix) + len(body)
         return len(prefix) + len(quote(body))
 
     for nb_chars in (300, 150):

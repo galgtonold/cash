@@ -526,3 +526,25 @@ def test_overhead_surfaces_remote_validation_with_its_count() -> None:
     other_time = other.time_s if other else 0.0
     assert sum(e.time_s for e in breakdown.entries) == pytest.approx(breakdown.total_s)
     assert other_time < 0.24
+
+
+def test_a_bug_report_body_too_long_is_not_quoted(monkeypatch) -> None:
+    """Quoting never shortens a body, so one already past the limit is not
+    quoted to find out: every badge of a 400-cell notebook quoted the whole
+    notebook twice, three renders a cell."""
+    from urllib.parse import unquote
+
+    from cash.notebook.badge_renderer import view_builder
+
+    quoted: list[int] = []
+    real = view_builder.quote
+
+    def counting(text, *args, **kwargs):
+        quoted.append(len(text))
+        return real(text, *args, **kwargs)
+
+    monkeypatch.setattr(view_builder, "quote", counting)
+    cells = [f"x{i} = x{i - 1} + 1" for i in range(1, 2000)]
+    url = build_bug_report_url([{"code": "f()", "status": "COMPUTED", "total_time": 0.1}], {"notebook_source": cells})
+    assert "too large to include" in unquote(url)
+    assert max(quoted) < 7800, "the whole notebook was quoted"
