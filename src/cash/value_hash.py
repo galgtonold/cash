@@ -155,7 +155,9 @@ def compute_hash(obj: Any) -> str:
 
     try:
         return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-    except (TypeError, pickle.PicklingError, RecursionError):
+    except HASH_ERRORS:
+        # Python 3.13 raises AttributeError for an instance of a class
+        # defined inside a function ("Can't get local object").
         pass
     except BaseException as exc:
         if not is_native_panic(exc):
