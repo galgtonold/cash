@@ -179,3 +179,16 @@ def test_the_collector_is_left_as_it_was_found(was_on):
 def test_the_copy_equals_what_pickle_would_have_made():
     rows = _log(200)
     assert _plain_data.spine_copy(rows) == pickle.loads(pickle.dumps(rows))
+
+
+@pytest.mark.parametrize("make", [lambda row: [row, row], lambda row: (row, "x", row)])
+def test_one_row_held_twice_comes_back_as_one_row(make):
+    """``[row, row]`` is one list twice, as plain Python and a disk hit keep
+    it: the RAM tier's list-per-row copy split it in two."""
+    b = InMemoryBackend()
+    b.set("k", make([0, 0, 0]))
+    for _ in range(2):  # the stored copy and a hit's
+        got = b.get("k")[1]
+        assert got[0] is got[-1]
+        got[0].append(1)
+        assert got[-1] == [0, 0, 0, 1]
