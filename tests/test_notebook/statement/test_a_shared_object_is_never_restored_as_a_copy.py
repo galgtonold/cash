@@ -193,3 +193,27 @@ def test_a_container_that_was_shown_still_holds_the_object(cash_magics, statemen
         held = user_ns[name][0 if name == "frames" else "cfg"]
         assert held is user_ns["d1"], f"{run} Run All"
         assert held.get("z") == 2, f"{run} Run All"
+
+
+TRACKER = f"{SETUP}\nclass Tracker:\n    def __init__(self):\n        self.items = []\n    def log(self, v):\n        self.items.append(v)"
+HOOKS = {
+    "a bound method": (["tracker = Tracker()", "hooks = {'log': tracker.log, 'n': slow(1)}", "hooks['log'](5)"], "tracker.items"),
+    "a builtin bound method": (["results = []", "hooks = {'add': results.append, 'n': slow(1)}", "hooks['add'](5)"], "results"),
+    "a closure": (
+        ["store = []\ndef make(lst):\n    return lambda v: lst.append(v)", "hooks = {'f': make(store), 'n': slow(1)}", "hooks['f'](5)"],
+        "store",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(HOOKS))
+def test_a_hook_writes_into_the_notebooks_object(cash_magics, name):
+    """A bound method pickles its object by value, and a deep copy keeps a
+    closure, or a builtin method like ``results.append``, bound to the
+    object of the run that stored it. Restored, the hook wrote into a copy
+    or into the last run's object, and ``tracker.items`` stayed empty."""
+    cells, probe = HOOKS[name]
+    cells = [TRACKER, *cells, f"r = list({probe})"]
+    for run in ("first", "second"):
+        _run_all_cells(cash_magics, cells)
+        assert eval(probe, cash_magics.shell.user_ns) == [5], f"{run} Run All"
