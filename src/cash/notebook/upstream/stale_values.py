@@ -56,6 +56,7 @@ class StaleValueGuard:
         self._started_from: dict[tuple[int, str], tuple[int, Any]] = {}
         #: The cell the current check is for.
         self._cell_idx: int | None = None
+        self._cells: list[str] | None = None
 
     def mark_stale_value_inputs_broken(
         self,
@@ -112,6 +113,7 @@ class StaleValueGuard:
             if fn in self.shell.user_ns:
                 broken_vars.add(fn)
         self._cell_idx = current_cell_idx
+        self._cells = notebook_cells
         if not required_inputs:
             return
         reassigned = effects.reassigned
@@ -217,7 +219,12 @@ class StaleValueGuard:
                     # stale (own-prior-mutation) value on an isolated re-run, while a
                     # fresh forward run (producer restored the base) leaves them equal.
                     #
+                    # Only a base this cell consumed: one a cell above
+                    # consumed (``df['x'] += 1`` there) is passed rightly on
+                    # a forward run (see `_mark_nolineage_self_write_broken`).
                     base_lineage = self.tracking_state.executed_input_lineages.get(var_name, {}).get(var_name)
+                    if base_lineage is not None and self._written_above(var_name, notebook_cells, current_cell_idx):
+                        base_lineage = None
                     if base_lineage is not None and live_lineage != base_lineage:
                         broken_vars.add(var_name)
                     else:
@@ -451,6 +458,18 @@ class StaleValueGuard:
             else:
                 bases[key] = (cell_code, token)
 
+    def _written_above(self, var_name: str, notebook_cells: list[str] | None, cell_idx: int | None) -> bool:
+        """Whether the statement that last wrote *var_name* is found in a cell
+        above *cell_idx* and not in it: the version it consumed is that
+        cell's starting state, not this one's."""
+        prod_code = self.tracking_state.executed_cell_codes.get(var_name)
+        if not prod_code or notebook_cells is None or cell_idx is None or not 0 <= cell_idx < len(notebook_cells):
+            return False
+        norm_prod = strip_markers(prod_code).strip()
+        if not norm_prod or norm_prod in notebook_cells[cell_idx]:
+            return False
+        return any(norm_prod in cell for cell in notebook_cells[:cell_idx])
+
     def _mark_nolineage_self_write_broken(
         self,
         var_name: str,
@@ -488,6 +507,14 @@ class StaleValueGuard:
         assignment would drop the intermediate cells' contributions.
         """
         base_lineage = self.tracking_state.executed_input_lineages.get(var_name, {}).get(var_name)
+        if base_lineage is not None and self._written_above(var_name, self._cells, self._cell_idx):
+            # The base is what a statement of another cell consumed
+            # (``c['n'] += 1`` above ``c.update()``): not this cell's entry
+            # state, and on a forward run the value has moved past it
+            # rightly. Re-running the producers then applied the update
+            # above a second time, onto the object an alias (``c =
+            # cfg['a']``) had kept.
+            base_lineage = None
         if base_lineage is not None:
             current_lineage = self.tracking_state.variable_lineage.get(var_name)
             if current_lineage is not None and current_lineage != base_lineage:
