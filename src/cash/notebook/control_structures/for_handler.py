@@ -21,6 +21,7 @@ and exercise it without going through ``ControlStructureProcessor.process()``.
 from __future__ import annotations
 
 import ast
+import io
 import logging
 import time as _time
 from typing import TYPE_CHECKING, Any
@@ -296,12 +297,20 @@ class ForLoopHandler:
         # first-run result. Only take the fast path when re-evaluating the
         # header is provably safe; otherwise the loop is decomposed, which
         # consumes the single, already evaluated ``iterable``.
+        #
+        # The header's safety is asked first: it is the cheaper question, and
+        # sizing a file loop reads the start of the file.
         if not (
-            single_unit_policy.should_run_as_single_unit(node, iterable, user_ns)
-            and single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns)
+            single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns)
+            and single_unit_policy.should_run_as_single_unit(node, iterable, user_ns)
         ):
             return None
         logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
+        # `for line in open(path)` was opened here and will be opened again by
+        # the unit: this handle is never read, so it is closed rather than
+        # left for the collector.
+        if isinstance(iterable, io.IOBase):
+            iterable.close()
         # Single-unit mode makes the loop ONE cache entry, so the unit
         # annotation (whole range) is the right scope — a body directive has
         # no finer entry to attach to here.
