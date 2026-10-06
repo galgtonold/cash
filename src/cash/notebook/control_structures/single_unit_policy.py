@@ -37,6 +37,11 @@ PER_STMT_OVERHEAD_SEC = 0.008
 # absolute overhead is small regardless.
 MIN_ITERATIONS_FOR_SINGLE_UNIT = 50
 
+# How many times a loop inside the body is assumed to run per iteration of the
+# one around it, when the policy has to guess: it is typically sized by a
+# variable the outer iteration binds, so it cannot be read before it runs.
+ASSUMED_INNER_ITERATIONS = 10
+
 # Minimum estimated overhead (in seconds) to trigger single-unit mode.
 MIN_OVERHEAD_SEC = 1.0
 
@@ -234,13 +239,17 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
         # Generators, iterators without __len__ — can't estimate
         return False
 
+    # What one pass of the body costs counts a loop inside it ten times over: a
+    # loop of 40 over a body that loops over each log line's actions ran
+    # 1,100 statements, 18 s of per-statement machinery around 5 ms of work.
+    n_body_stmts = count_body_statements(node.body, nested_loop_factor=ASSUMED_INNER_ITERATIONS)
+    reach = n_iterations * (ASSUMED_INNER_ITERATIONS if _holds_a_loop(node.body) else 1)
+
     # Small loops always benefit from per-iteration caching — the
     # absolute overhead is small and granular invalidation is valuable.
-    if n_iterations <= MIN_ITERATIONS_FOR_SINGLE_UNIT:
+    if reach <= MIN_ITERATIONS_FOR_SINGLE_UNIT:
         return False
 
-    # Count body statements (including nested control structure bodies)
-    n_body_stmts = count_body_statements(node.body)
     estimated_overhead = n_iterations * n_body_stmts * PER_STMT_OVERHEAD_SEC
     if estimated_overhead < MIN_OVERHEAD_SEC:
         return False
@@ -410,25 +419,33 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
         return None
 
 
-def count_body_statements(body: list[ast.AST]) -> int:
+def count_body_statements(body: list[ast.AST], nested_loop_factor: int = 1) -> int:
     """Count the total number of executable statements in a loop body,
-    including statements inside nested control structures."""
+    including statements inside nested control structures.
+
+    A statement in a loop inside the body counts *nested_loop_factor* times:
+    it runs that often per pass of the body."""
     count = 0
     for node in body:
         if isinstance(node, ast.If):
-            count += count_body_statements(node.body)
-            count += count_body_statements(node.orelse)
+            count += count_body_statements(node.body, nested_loop_factor)
+            count += count_body_statements(node.orelse, nested_loop_factor)
         elif isinstance(node, (ast.For, ast.While)):
-            count += count_body_statements(node.body)
+            count += nested_loop_factor * count_body_statements(node.body, nested_loop_factor)
         elif isinstance(node, ast.Try):
-            count += count_body_statements(node.body)
+            count += count_body_statements(node.body, nested_loop_factor)
             for handler in node.handlers:
-                count += count_body_statements(handler.body)
+                count += count_body_statements(handler.body, nested_loop_factor)
         elif isinstance(node, ast.With):
-            count += count_body_statements(node.body)
+            count += count_body_statements(node.body, nested_loop_factor)
         else:
             count += 1
     return count
+
+
+def _holds_a_loop(body: list[ast.AST]) -> bool:
+    """Whether a ``for`` or ``while`` statement is anywhere in *body*."""
+    return any(isinstance(sub, (ast.For, ast.While)) for node in body for sub in ast.walk(node))
 
 
 def writes_files(body: list[ast.AST]) -> bool:
@@ -466,6 +483,13 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
+def _is_constant_index(node: ast.AST) -> bool:
+    """A constant, or a slice whose bounds are constants (``[:40]``, ``[5:]``)."""
+    if isinstance(node, ast.Slice):
+        return all(part is None or isinstance(part, ast.Constant) for part in (node.lower, node.upper, node.step))
+    return isinstance(node, ast.Constant)
+
+
 def _is_pure_access(node: ast.AST) -> bool:
     """A name followed only by attribute reads and constant subscripts
     (``a.var["symbol"]``, ``df.x``): no calls, nothing that could run code but
@@ -473,5 +497,5 @@ def _is_pure_access(node: ast.AST) -> bool:
     if isinstance(node, ast.Attribute):
         return _is_pure_access(node.value)
     if isinstance(node, ast.Subscript):
-        return isinstance(node.slice, ast.Constant) and _is_pure_access(node.value)
+        return _is_constant_index(node.slice) and _is_pure_access(node.value)
     return isinstance(node, ast.Name)
