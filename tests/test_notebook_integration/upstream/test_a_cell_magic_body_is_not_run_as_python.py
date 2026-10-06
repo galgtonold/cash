@@ -6,9 +6,14 @@ re-ran ``threshold = 0.9`` and ``RATE = 99`` in the kernel. ``files = !echo``
 and ``%%bash`` cells were reported as syntax errors.
 """
 
+import sys
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
+
+# On Windows, bash is the WSL launcher, which fails without a distribution.
+SHELL_MAGIC = "%%cmd" if sys.platform == "win32" else "%%bash"
 
 
 def test_run_all_matches_a_plain_kernel(nb_runner):
@@ -18,7 +23,7 @@ def test_run_all_matches_a_plain_kernel(nb_runner):
             "%%script false --no-raise-error\nthreshold = 0.9",
             "%%writefile cfg.py\nRATE = 99",
             "files = !echo hi",
-            "%%bash\necho hi",
+            f"{SHELL_MAGIC}\necho hi",
             "y = (threshold, RATE * 2, len(files))",
         ]
     )
