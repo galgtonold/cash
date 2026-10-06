@@ -203,14 +203,16 @@ class InMemoryBackend(CacheBackend):
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
-        Under pandas copy-on-write -- always on from pandas 3 -- a SHALLOW copy
-        is that already: the first write to either side copies then, and only
-        what it writes, where a deep copy on every store and RAM hit dominates
-        cash's own cost on frame-heavy work. Without copy-on-write, deep.
+        Deep, on every store and every hit. A shallow copy is not enough even
+        under pandas copy-on-write: copy-on-write covers writes made through
+        pandas, but ``s.array`` of any column and ``s.values`` of a nullable
+        or categorical column are writable handles to the block itself, so
+        ``df["score"].values[0] = 100`` on a returned frame would land in the
+        stored entry and in every later hit.
 
-        Neither copies the Python objects in an object column: a list, dict
-        or array in a cell stayed one object shared by the entry, the caller
-        and every later hit, so ``df["tags"].iloc[0].append(...)`` changed
+        A deep pandas copy does not copy the Python objects in an object
+        column: a list, dict or array in a cell stayed one object shared by
+        the entry, the caller and every later hit, so ``df["tags"].iloc[0].append(...)`` changed
         what the next call got. A frame holding such cells is copied through
         pickle, which copies them too.
 
@@ -230,7 +232,7 @@ class InMemoryBackend(CacheBackend):
             except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                 logger.debug("could not copy the cells of a %s", type(frame).__name__)
         if copied is None:
-            copied = frame.copy(deep=not _pandas_copy_on_write())
+            copied = frame.copy(deep=True)
         if record_cells is not None:
             record_cells[id(copied)] = mutable
         return copied
@@ -631,9 +633,6 @@ def _memory_reading() -> Any | None:
     return mem if total > 0 else None
 
 
-_COW: list[bool] = []
-
-
 #: What ``pandas.api.types.infer_dtype`` calls an object column whose cells
 #: are all immutable (str, bytes, numbers, dates, Decimal...), so a copy of
 #: the column may share them. Anything else ("mixed", "unknown-array", ...)
@@ -683,23 +682,5 @@ def _holds_mutable_cells(frame: Any) -> bool:
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
         return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
-    except Exception:  # noqa: BLE001 - cannot tell: the shallow copy
+    except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
         return False
-
-
-def _pandas_copy_on_write() -> bool:
-    """Whether pandas copy-on-write is in force (always, from pandas 3)."""
-    if _COW:
-        return _COW[0]
-
-    pd = sys.modules.get("pandas")
-    if pd is None:
-        return False  # not decided yet: nothing to copy without pandas
-    try:
-        on = int(str(pd.__version__).split(".")[0]) >= 3
-        if not on:
-            on = bool(pd.get_option("mode.copy_on_write") is True)
-    except Exception:  # noqa: BLE001 - unknown: the safe answer is "deep copy"
-        on = False
-    _COW.append(on)
-    return on
