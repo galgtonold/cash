@@ -76,7 +76,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/shared_objects.py:shared_names @63af6451 -->
+<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/shared_objects.py:shared_names @63af6451, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
@@ -88,6 +88,7 @@ they talk to the outside world.
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
 | keeps or changes an object another variable or container also holds (`models = {"m": m}`, `fitted = m.fit()`, `d["a"] = ...` after `d = dfs[0]` or in `for d in dfs:`) | runs every time: a restored copy would not be that object |
+| keeps what a method returns and the call changed the object it was called on (`history = net.fit(X)`, `out = trainer.train()`) | runs every time; cash watches the object around the statement's first run, and one it cannot pickle counts as changed |
 | takes under 10 ms | runs every time: too cheap to store |
 | reads over the network (`requests.get`, `session.get`) | cached |
 | reads a database (`SELECT`, `pd.read_sql`) | cached |

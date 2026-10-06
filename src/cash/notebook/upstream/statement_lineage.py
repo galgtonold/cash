@@ -21,6 +21,8 @@ from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import parse_cell_source
 from ...analysis.mutation_effects import (
     StatementEffects,
+    captured_call_receiver_names,
+    captured_call_receivers,
     classify_receivers,
     live_function_source,
     statement_effects,
@@ -214,7 +216,13 @@ class StatementLineage:
         # Bare-call arguments: the live ones the runtime watches, and, after a
         # restart, the ones not live yet, whose recorded verdict is all there
         # is to go on (`heapq.heapify(xs)` must replay before `xs[0]`).
-        arguments = bare_call_arguments(tree, user_ns) | {n for n in bare_call_argument_names(tree) if n not in user_ns}
+        # Likewise the receivers of a method call whose result is bound
+        # (`history = net.fit(X)`), which the runtime fingerprints too.
+        arguments = (
+            bare_call_arguments(tree, user_ns)
+            | captured_call_receivers(tree, user_ns)
+            | {n for n in bare_call_argument_names(tree) | captured_call_receiver_names(tree) if n not in user_ns}
+        )
         classes = classify_receivers(
             tree, user_ns, load_verdict, arguments=arguments, virtual_modules=virtual_modules or ()
         )
