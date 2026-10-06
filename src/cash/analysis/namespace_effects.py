@@ -11,6 +11,7 @@ the objects the notebook holds, which the pure-AST modules
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import os
 import textwrap
@@ -18,7 +19,7 @@ import types
 from collections.abc import Mapping
 from typing import Any
 
-from .._memo import USER_CALLEES, LruMemo
+from .._memo import STATEMENTS, USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
@@ -102,18 +103,27 @@ def statement_user_writer_call(
     """
     if not namespace or "(" not in code:
         return None
-    if tree is None:
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    for node in calls:
         found = user_callee_writing_files(resolve_callee(node.func, namespace))
         if found:
             return ast.unparse(node.func), found
     return None
+
+
+@functools.lru_cache(maxsize=STATEMENTS)
+def _calls(code: str) -> tuple[ast.Call, ...]:
+    """The calls in *code*, in walk order; read them, never change them.
+
+    Memoised by the text: the upstream check asks about every statement
+    above the cell on every run. The callees are still resolved on every
+    question, since a name can be rebound.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return ()
+    return tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
 
 
 #: How many user functions one question may follow before cash gives up on

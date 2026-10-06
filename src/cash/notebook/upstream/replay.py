@@ -8,6 +8,7 @@ plan cash made.
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import re
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import strip_markers
 
+from ..._memo import NOTEBOOK_VERSIONS
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source, statement_code
@@ -28,6 +30,30 @@ if TYPE_CHECKING:
 __all__ = ["StatementReplay"]
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
+def _statement_order(notebook_cells: tuple[str, ...]) -> dict[str, int]:
+    """``{statement code: its place}`` across *notebook_cells*; read it, never
+    change it.
+
+    Memoised per notebook version: the check of every cell run in a settled
+    notebook asks again, and unparsing every statement above made each cell
+    cost more the longer the notebook grew.
+    """
+    order: dict[str, int] = {}
+    for cell in notebook_cells:
+        tree = parse_cell_source(cell)
+        if tree is None:
+            continue
+        for node in tree.body:
+            at = len(order)
+            order.setdefault(ast.unparse(node), at)
+            # A restored loop pass is keyed by its body statement.
+            for sub in ast.walk(node):
+                if sub is not node and isinstance(sub, ast.stmt):
+                    order.setdefault(ast.unparse(sub), at)
+    return order
 
 
 class StatementReplay:
@@ -49,18 +75,7 @@ class StatementReplay:
         by ``reexecute``) and keep their order. A metric whose
         statement is not found keeps its place after the ones that are.
         """
-        order: dict[str, int] = {}
-        for cell in notebook_cells or ():
-            tree = parse_cell_source(cell)
-            if tree is None:
-                continue
-            for node in tree.body:
-                at = len(order)
-                order.setdefault(ast.unparse(node), at)
-                # A restored loop pass is keyed by its body statement.
-                for sub in ast.walk(node):
-                    if sub is not node and isinstance(sub, ast.stmt):
-                        order.setdefault(ast.unparse(sub), at)
+        order = _statement_order(tuple(notebook_cells or ()))
         end = len(order)
 
         def place(item):

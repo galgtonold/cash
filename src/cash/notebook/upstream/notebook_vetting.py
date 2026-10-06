@@ -13,6 +13,7 @@ import hashlib
 import logging
 import types
 
+from ..._memo import NOTEBOOK_CELLS
 from ...analysis.ast_util import called_names
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
@@ -25,14 +26,19 @@ __all__ = ["NotebookVetter"]
 logger = logging.getLogger(__name__)
 
 
-def _cell_writes(cell_code: str) -> set[str]:
+@functools.lru_cache(maxsize=NOTEBOOK_CELLS)
+def _cell_writes(cell_code: str) -> frozenset[str]:
     """The names a cell binds or changes (by its source); raises SyntaxError
-    when it does not parse."""
+    when it does not parse.
+
+    Memoised: every cell run reads every cell above it, and the answer
+    depends on the source alone.
+    """
     tree = parse_cell_source(cell_code)
     if tree is None:
         # ``await`` at the top of a cell parses here and not in the simulation.
-        return CodeAnalyzer.analyze_code_block(cell_code)[1]
-    return CodeAnalyzer.analyze_code_block(cell_code, tree=tree)[1]
+        return frozenset(CodeAnalyzer.analyze_code_block(cell_code)[1])
+    return frozenset(CodeAnalyzer.analyze_code_block(cell_code, tree=tree)[1])
 
 
 @functools.lru_cache(maxsize=1024)

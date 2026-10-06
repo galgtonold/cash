@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...control_markers import strip_markers
@@ -45,6 +47,7 @@ class UpstreamResult(NamedTuple):
 logger = logging.getLogger(__name__)
 
 
+@functools.lru_cache(maxsize=NOTEBOOK_CELLS)
 def _statement_texts(cell_code: str) -> frozenset[str]:
     """Every statement of *cell_code*, at any depth, as cash records the code
     that produced a name (``TrackingState.executed_cell_codes``)."""
@@ -52,6 +55,13 @@ def _statement_texts(cell_code: str) -> frozenset[str]:
     if tree is None:
         return frozenset()
     return frozenset(ast.unparse(node).strip() for node in ast.walk(tree) if isinstance(node, ast.stmt))
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
+def _notebook_statement_texts(notebook_cells: tuple[str, ...]) -> frozenset[str]:
+    """Every statement of the notebook: asked on every cell run while an
+    unsaved run is on record, so once per notebook version."""
+    return frozenset().union(*map(_statement_texts, notebook_cells))
 
 
 def _mtime(path: str | None) -> float | None:
@@ -549,7 +559,7 @@ class UpstreamChecker:
             if name not in user_ns or code not in unplaced:
                 continue
             if saved is None:
-                saved = frozenset().union(*(_statement_texts(cell) for cell in notebook_cells))
+                saved = _notebook_statement_texts(tuple(notebook_cells))
             if code not in saved:
                 bindings[name] = code
         return bindings
