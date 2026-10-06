@@ -15,9 +15,7 @@ falls back to its general walk.
 
 from __future__ import annotations
 
-import copyreg
 import datetime
-import io
 import operator
 import pickle
 import random
@@ -25,6 +23,7 @@ import sys
 from itertools import chain, compress
 from typing import Any
 
+from . import kept_state
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
 
 MAX_LEVELS = 16
@@ -62,21 +61,13 @@ _FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
 
 
 def _dump(value: Any, fast: bool) -> bytes:
-    buf = io.BytesIO()
-    pickler = pickle.Pickler(buf, protocol=pickle.DEFAULT_PROTOCOL)
-    pickler.fast = fast
-    table = fake_clock()[1]
-    if table:
-        pickler.dispatch_table = {**copyreg.dispatch_table, **table}
-    pickler.dump(value)
-    return buf.getvalue()
+    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1])
 
 
 def key_dumps(value: Any) -> bytes:
     """``pickle.dumps(value)`` for a cache key: a clock test double's date
-    pickles as the date (`fake_clock`)."""
-    if not fake_clock()[1]:
-        return pickle.dumps(value)
+    pickles as the date (`fake_clock`), and a C base's reduce keeps the
+    subclass's attributes (`kept_state`)."""
     return _dump(value, fast=False)
 
 
@@ -205,11 +196,23 @@ def sharing(value: Any, *, tree: bool = False, held_twice_at: int | None = None)
     return tuple(repeats), first, has_numbers
 
 
+def is_tree(value: Any, leaves: tuple | None = None) -> bool:
+    """Is *value* JSON-like data over *leaves* (`tree_levels`)?"""
+    if type(value) not in TREE_NODES:
+        return False
+    try:
+        for _level in tree_levels(value, leaves):
+            pass
+    except (_NotPlain, TypeError):  # TypeError: an unhashable type among them
+        return False
+    return True
+
+
 #: What a tree nests in (`tree_levels`): exact dicts, lists and tuples.
 TREE_NODES = (dict, list, tuple)
 
 
-def tree_levels(value: Any):
+def tree_levels(value: Any, leaves: tuple | None = None):
     """`_levels` for JSON-like data: exact dicts, lists and tuples, nested,
     over the leaves of plain data; a dict's keys must be leaves too.
 
@@ -218,9 +221,12 @@ def tree_levels(value: Any):
     nothing else -- a dict keeps its order, a list and a tuple differ -- so
     records parsed from JSON are keyed by one pickle at C speed. Walked one
     container at a time, 20k records cost 16x ``json.dumps`` per hit.
+
+    *leaves*, when given, replaces the leaf types.
     """
-    fakes = fake_clock()[0]
-    leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
+    if leaves is None:
+        fakes = fake_clock()[0]
+        leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
     level = [value]
     for _ in range(MAX_LEVELS):
         kinds = set(map(type, level))

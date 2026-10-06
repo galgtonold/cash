@@ -15,7 +15,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from .. import _plain_data
+from .. import _plain_data, kept_state
 from .._lazy_module import LazyModule
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
@@ -173,15 +173,14 @@ class InMemoryBackend(CacheBackend):
                 # for one object still come back as one object.
                 memo: dict[int, Any] = {}
                 InMemoryBackend._premade_copies(value, memo, known_cells, record_cells)
-                return copy.deepcopy(value, memo)
+                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
             if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
-                # ``frame, summary, n = build()``: a call's result is a tuple,
-                # and deepcopy copies a frame in it deep even where a shallow
-                # copy is safe (`_copy_frame`).
+                # ``frame, summary, n = build()``: a call's result is a tuple;
+                # its frames are copied as `_copy_frame` copies them.
                 memo = {}
                 InMemoryBackend._premade_copies(dict(enumerate(value)), memo, known_cells, record_cells)
-                return copy.deepcopy(value, memo)
-            return copy.deepcopy(value)
+                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
+            return InMemoryBackend._deep_copy(value, {}, known_cells, record_cells)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
             if required:
                 # Storing it would hand every caller the SAME object: a caller
@@ -203,14 +202,16 @@ class InMemoryBackend(CacheBackend):
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
-        Under pandas copy-on-write -- always on from pandas 3 -- a SHALLOW copy
-        is that already: the first write to either side copies then, and only
-        what it writes, where a deep copy on every store and RAM hit dominates
-        cash's own cost on frame-heavy work. Without copy-on-write, deep.
+        Deep, on every store and every hit. A shallow copy is not enough even
+        under pandas copy-on-write: copy-on-write covers writes made through
+        pandas, but ``s.array`` of any column and ``s.values`` of a nullable
+        or categorical column are writable handles to the block itself, so
+        ``df["score"].values[0] = 100`` on a returned frame would land in the
+        stored entry and in every later hit.
 
-        Neither copies the Python objects in an object column: a list, dict
-        or array in a cell stayed one object shared by the entry, the caller
-        and every later hit, so ``df["tags"].iloc[0].append(...)`` changed
+        A deep pandas copy does not copy the Python objects in an object
+        column: a list, dict or array in a cell stayed one object shared by
+        the entry, the caller and every later hit, so ``df["tags"].iloc[0].append(...)`` changed
         what the next call got. A frame holding such cells is copied through
         pickle, which copies them too.
 
@@ -226,14 +227,52 @@ class InMemoryBackend(CacheBackend):
         copied = None
         if mutable:
             try:
-                copied = pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+                copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
             except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                 logger.debug("could not copy the cells of a %s", type(frame).__name__)
         if copied is None:
-            copied = frame.copy(deep=not _pandas_copy_on_write())
+            copied = frame.copy(deep=True)
         if record_cells is not None:
             record_cells[id(copied)] = mutable
         return copied
+
+    @staticmethod
+    def _deep_copy(
+        value: Any,
+        memo: dict[int, Any],
+        known_cells: dict[int, bool] | None,
+        record_cells: dict[int, bool] | None,
+    ) -> Any:
+        """``copy.deepcopy(value, memo)``, with every pandas frame in it copied
+        as `_copy_frame` copies it, wherever it sits.
+
+        deepcopy copies a frame with ``DataFrame.__deepcopy__``, which leaves
+        the lists and dicts in its object columns shared. `_premade_copies`
+        reaches the frames of the common shapes before the copy; one held by
+        an object, a nested tuple or a deep dict is found in deepcopy's own
+        memo afterwards (it keeps every original it copied alive there). If
+        one of those holds mutable cells, the value is copied again with each
+        such frame copied by `_copy_frame` up front.
+        """
+        before = dict(memo)
+        copied = copy.deepcopy(value, memo)
+        if "pandas" not in sys.modules:
+            return copied
+        frames = [item for item in memo.get(id(memo), ()) if _is_pandas_frame(type(item))]
+        if not frames:
+            return copied
+        cells = {}
+        for frame in frames:
+            mutable = known_cells.get(id(frame)) if known_cells is not None else None
+            cells[id(frame)] = _holds_mutable_cells(frame) if mutable is None else mutable
+        if not any(cells.values()):
+            if record_cells is not None:
+                for frame in frames:
+                    record_cells[id(memo[id(frame)])] = False
+            return copied
+        for frame in frames:
+            before[id(frame)] = InMemoryBackend._copy_frame(frame, cells, record_cells)
+        return copy.deepcopy(value, before)
 
     @staticmethod
     def _premade_copies(
@@ -631,9 +670,6 @@ def _memory_reading() -> Any | None:
     return mem if total > 0 else None
 
 
-_COW: list[bool] = []
-
-
 #: What ``pandas.api.types.infer_dtype`` calls an object column whose cells
 #: are all immutable (str, bytes, numbers, dates, Decimal...), so a copy of
 #: the column may share them. Anything else ("mixed", "unknown-array", ...)
@@ -683,23 +719,5 @@ def _holds_mutable_cells(frame: Any) -> bool:
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
         return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
-    except Exception:  # noqa: BLE001 - cannot tell: the shallow copy
+    except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
         return False
-
-
-def _pandas_copy_on_write() -> bool:
-    """Whether pandas copy-on-write is in force (always, from pandas 3)."""
-    if _COW:
-        return _COW[0]
-
-    pd = sys.modules.get("pandas")
-    if pd is None:
-        return False  # not decided yet: nothing to copy without pandas
-    try:
-        on = int(str(pd.__version__).split(".")[0]) >= 3
-        if not on:
-            on = bool(pd.get_option("mode.copy_on_write") is True)
-    except Exception:  # noqa: BLE001 - unknown: the safe answer is "deep copy"
-        on = False
-    _COW.append(on)
-    return on

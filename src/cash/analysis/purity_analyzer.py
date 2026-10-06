@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import inspect
+import linecache
 import threading
+import types
 import weakref
 from collections.abc import Callable
 from typing import Any
@@ -45,7 +48,7 @@ class PurityAnalyzer:
 
     def __init__(self) -> None:
         # memo key -> (report, the function it was built from); see `analyze`
-        self._cache: LruMemo[str, tuple[PurityReport, weakref.ref | None]] = LruMemo(PURITY_REPORTS)
+        self._cache: LruMemo[str, tuple[PurityReport, Any]] = LruMemo(PURITY_REPORTS)
         self._cache_lock = threading.Lock()
 
     def analyze(self, func: Callable[..., Any]) -> PurityReport:
@@ -100,7 +103,7 @@ class PurityAnalyzer:
         built_from = cached_owner() if cached_owner is not None else None
         if built_from is None:
             return None
-        if getattr(func, "__closure__", None) and built_from is not target:
+        if (getattr(func, "__closure__", None) or memo_key.startswith(_BY_CODE)) and built_from is not target:
             return None
         if getattr(built_from, "__globals__", None) is not getattr(func, "__globals__", None):
             return None
@@ -131,10 +134,13 @@ def get_analyzer() -> PurityAnalyzer:
         return _global_analyzer
 
 
-def _memo_key(func: Callable[..., Any]) -> tuple[str | None, weakref.ref | None]:
+def _memo_key(func: Callable[..., Any]) -> tuple[str | None, Any]:
     """The key *func*'s report is memoised under, and a reference to the
     function it is built from; ``(None, None)`` when it cannot be memoised."""
     target = getattr(func, "__func__", func)  # a bound method is made anew per access
+    by_code = _code_memo_key(target)
+    if by_code[0] is not None:
+        return by_code
     source_hash = _try_source_hash(func)
     if source_hash is None:
         return None, None
@@ -164,6 +170,58 @@ def _memo_key(func: Callable[..., Any]) -> tuple[str | None, weakref.ref | None]
     if getattr(func, "__closure__", None):
         source_hash = f"{source_hash}:{id(func)}"
     return source_hash, owner
+
+
+#: How a memo key made by `_code_memo_key` starts.
+_BY_CODE = "code:"
+
+
+def _code_memo_key(target: Any) -> tuple[str | None, Any]:
+    """The memo key of a function whose source cannot be read because it
+    never had any: code made by ``exec`` (a dataclass's ``__init__``,
+    ``__eq__`` and ``__repr__``, a namedtuple's ``__new__``), whose file is
+    ``<string>``. Its report then belongs to that function object and the
+    code it runs, which no edit can change: without a key it was analysed,
+    and its source looked for, again on every call that passed a
+    dataclass. A function with a real file whose source is unreadable
+    stays unmemoised.
+    """
+    try:
+        inner = inspect.unwrap(target)
+    except ValueError:  # a cycle of __wrapped__
+        return None, None
+    code = getattr(inner, "__code__", None)
+    if not isinstance(inner, types.FunctionType) or not code.co_filename.startswith("<"):
+        return None, None
+    if linecache.getlines(code.co_filename):
+        return None, None  # a source that went away, not code without one
+    try:
+        owner = _SameCode(target, inner, code)
+    except TypeError:
+        return None, None
+    return f"{_BY_CODE}{id(target)}:{id(inner)}:{id(code)}", owner
+
+
+class _SameCode:
+    """Gives back the function a report was built from while it still runs
+    the code it ran then (``__code__`` and ``__wrapped__`` can be
+    reassigned); else None."""
+
+    __slots__ = ("_code", "_function", "_inner")
+
+    def __init__(self, function: Any, inner: types.FunctionType, code: types.CodeType) -> None:
+        self._function = weakref.ref(function)
+        self._inner = weakref.ref(inner)
+        self._code = weakref.ref(code)
+
+    def __call__(self) -> Any:
+        function, inner = self._function(), self._inner()
+        if function is None or inner is None or inner.__code__ is not self._code():
+            return None
+        try:
+            return function if inspect.unwrap(function) is inner else None
+        except ValueError:
+            return None
 
 
 def _try_source_hash(func: Callable[..., Any]) -> str | None:

@@ -10,12 +10,12 @@ import sys
 import types
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data
+from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import ISSUE_UNTRACKABLE_DEP
-from ..content_hashers import held_objects
+from ..content_hashers import builtin_family_of, held_objects
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_code_module
@@ -370,8 +370,17 @@ class CodeArgs:
                 cls = self._instance_class_carrier(value, _seen)
                 if cls is not None:
                     yield cls
+            records = self._record_class(value)
+            if records is not None:
+                # Records holding JSON-like data: their class is all the code
+                # they carry, looked at once (`canonical_form.record_class`).
+                first = next(v for v in value if type(v) is records)
+                if not is_runtime_machinery(first):
+                    cls = self._instance_class_carrier(first, _seen)
+                    if cls is not None:
+                        yield cls
             for v in value:
-                if type(v) not in CODELESS_PRIMS:
+                if type(v) not in CODELESS_PRIMS and type(v) is not records:
                     yield from self._walk_carriers(v, _depth + 1, _seen)
         else:
             # An instance contributes its class's code. Deliberately NOT gated
@@ -394,6 +403,20 @@ class CodeArgs:
             # Inline, not `_keyed_by_registration`: this runs per element.
             if not ((self._registries[0] or self._registries[1]) and self._args.keys_by_registration_only(value)):
                 yield from self._iter_attribute_carriers(value, _depth, _seen)
+
+    def _record_class(self, value: Any) -> type | None:
+        """`canonical_form.record_class` for a list or tuple the carrier
+        walk meets, or None. Not while a frozen result could be among the
+        items (a namedtuple one is skipped, not walked), and not for a
+        callable record, which the walk treats as code."""
+        if not isinstance(value, (list, tuple)) or len(value) < canonical_form.RECORDS_FROM:
+            return None
+        if self._frozen.containers:
+            return None
+        records = canonical_form.record_class(value, builtin_family_of)
+        if records is None or callable(next(v for v in value if type(v) is records)):
+            return None
+        return records
 
     def _keyed_by_registration(self, value: Any) -> bool:
         """`ArgHasher.keys_by_registration_only`, skipped while nothing is

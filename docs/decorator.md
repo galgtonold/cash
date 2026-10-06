@@ -548,7 +548,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @abb5aa4c, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @2571147a, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:

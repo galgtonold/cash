@@ -88,7 +88,7 @@ Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
 everything else is pickled.
 
-<!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @7adf4b09 -->
+<!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @8ce1698e -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
 dict attribute, is keyed part by part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. That happens when it holds

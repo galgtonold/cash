@@ -145,7 +145,7 @@ def hash_pandas(value: Any) -> str | None:
             h.update(canonical_bytes(value.attrs, BUILTIN_CONTENT))
         _fold_pandas_values(h, value, pd)
         return h.hexdigest()
-    except (ImportError, TypeError, ValueError, AttributeError, pickle.PicklingError):
+    except (ImportError, TypeError, ValueError, AttributeError, NotImplementedError, pickle.PicklingError):
         logger.debug("Failed to hash pandas %s via hash_pandas_object", type(value).__name__)
         return None
 
@@ -199,6 +199,8 @@ def _pandas_value_route(dtype: Any, pd: Any) -> str | None:
         return "codes"
     if str(dtype) == "object" or isinstance(dtype, pd.StringDtype):
         return "objects"
+    if isinstance(dtype, getattr(pd, "ArrowDtype", ())):
+        return "arrow"
     return None
 
 
@@ -209,8 +211,27 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
         h.update(_np_bytes(values.codes if isinstance(values, pd.Index) else values.cat.codes))
     elif route == "objects":
         h.update(_object_items_bytes(_np_array(values, object).tolist()))
+    elif route == "arrow":
+        _fold_arrow_array(h, values)
     else:
         h.update(_np_bytes(pd.util.hash_pandas_object(values, index=False)))
+
+
+def _fold_arrow_array(h: Any, values: Any) -> None:
+    """Fold a pyarrow-backed Series' or Index's values into *h*, as Arrow.
+
+    ``hash_pandas_object`` reads them through ``to_numpy()``: an integer
+    column with a missing value becomes float64, so ids beyond 2**53 that
+    differ hashed alike, and a float null and a NaN both became NaN; list
+    and struct columns lost the same. The column is written as an Arrow IPC
+    stream instead, as `hash_pyarrow` writes a table: the validity bitmap
+    and the values as they are, in every type.
+    """
+    import pyarrow as pa
+
+    table = pa.table({"v": values.array.__arrow_array__()})
+    with pa.ipc.new_stream(pa.PythonFile(_HashSink(h), mode="w"), table.schema) as writer:
+        writer.write(table)
 
 
 def _np_array(values: Any, dtype: Any = None) -> Any:

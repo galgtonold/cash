@@ -6,6 +6,10 @@ getting new block arrays. ``s.array`` (every dtype), and ``s.values`` or
 write through them lands in place with the identities unchanged. The memo
 answered with the old content hash and the call was served 6.0 where the
 series summed to 105.0.
+
+The read-only views ``to_numpy()``, ``.values`` and ``np.asarray`` give of a
+numpy column are handles too: numpy lets ``view.flags.writeable = True``
+make one writable again, since the block under it is.
 """
 
 from __future__ import annotations
@@ -101,15 +105,58 @@ def test_arrow_strings_written_through_values_are_seen():
     assert joined(series) == "zb"
 
 
+def _flip_and_write(view):
+    """What people do about pandas' "assignment destination is read-only"."""
+    view.flags.writeable = True
+    view[0] = 100.0
+
+
+VIEW_WRITES = {
+    "series to_numpy": lambda f: _flip_and_write(f["a"].to_numpy()),
+    "series values": lambda f: _flip_and_write(f["a"].values),
+    "np.asarray of a series": lambda f: _flip_and_write(np.asarray(f["a"])),
+    "frame values": lambda f: _flip_and_write(f.values[:, 0]),
+    "frame to_numpy": lambda f: _flip_and_write(f.to_numpy()[:, 0]),
+}
+
+
+@pytest.mark.parametrize("write", list(VIEW_WRITES.values()), ids=list(VIEW_WRITES))
+def test_a_write_through_a_view_made_writable_is_seen(total, write):
+    frame = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+    assert total(frame) == 10.0
+    assert total(frame) == 10.0  # the memo holds it now
+    write(frame)
+    assert float(frame["a"].sum() + frame["b"].sum()) == 109.0
+    assert total(frame) == 109.0
+
+
+def test_a_write_to_an_index_through_a_view_made_writable_is_seen():
+    cash = Cash(backend=InMemoryBackend(), register_magic=False)
+
+    @cash.cache
+    def labels(s):
+        return s.index.tolist()
+
+    series = pd.Series([1, 2], index=np.array([1.0, 2.0]))
+    assert labels(series) == [1.0, 2.0]
+    assert labels(series) == [1.0, 2.0]
+    _flip_and_write(series.index.to_numpy())
+    assert labels(series) == [100.0, 2.0]
+
+
 def test_an_untouched_frame_still_uses_the_memo(total, monkeypatch):
-    """Positive control: reading and hashing without a writable handle keeps
-    the memo, so the content is hashed once."""
+    """Positive control: an unread frame is hashed once; a read-only view
+    read and dropped costs one fresh hash, then the memo holds again."""
     frame = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
     assert total(frame) == 10.0
     calls = []
     real = arg_hashing.builtin_hash
     monkeypatch.setattr(arg_hashing, "builtin_hash", lambda v: calls.append(1) or real(v))
-    frame.to_numpy()  # a read-only view: no handle to write through
-    frame["a"].values  # the same
     assert total(frame) == 10.0
     assert calls == []
+    frame.to_numpy()
+    frame["a"].values
+    assert total(frame) == 10.0
+    assert calls == [1]
+    assert total(frame) == 10.0
+    assert calls == [1]

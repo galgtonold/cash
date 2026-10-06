@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import pickle
 from dataclasses import dataclass
 from typing import Any
+
+from .. import kept_state
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def digest_and_size(value: Any) -> tuple[str, int] | None:
     """
     try:
         buffers: list = []
-        head = pickle.dumps(value, protocol=5, buffer_callback=buffers.append)
+        head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append)
         digest = hashlib.sha256(head)
         size = len(head)
         for buffer in buffers:

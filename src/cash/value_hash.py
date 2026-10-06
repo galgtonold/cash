@@ -17,6 +17,7 @@ import logging
 import pickle
 from typing import Any
 
+from . import kept_state
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def _hash_collection(obj: Any) -> str:
         else:
             parts.extend(compute_hash(v) for v in values)
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-    return hashlib.sha256(pickle.dumps(obj)).hexdigest()
+    return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
 
 
 def identity_hash(obj: Any) -> str:
@@ -145,7 +146,7 @@ def compute_hash(obj: Any) -> str:
             # Exact types: a subclass is pickled whole, with the attributes
             # it holds beside its items.
             return _hash_collection(obj)
-        return hashlib.sha256(pickle.dumps(obj)).hexdigest()
+        return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
     except BaseException as exc:
@@ -154,7 +155,7 @@ def compute_hash(obj: Any) -> str:
         return identity_hash(obj)
 
     try:
-        return hashlib.sha256(pickle.dumps(obj)).hexdigest()
+        return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
     except (TypeError, pickle.PicklingError, RecursionError):
         pass
     except BaseException as exc:
