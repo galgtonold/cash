@@ -1,8 +1,12 @@
-"""A statement whose outputs hold an object something else holds too runs again.
+"""A statement whose outputs hold an object something else holds too is never
+restored as a copy.
 
 A hit binds each output name to a deserialised copy. When another variable or
 container also holds the object (or an object inside it), that holder keeps the
-object the statement really produced or changed, and the change is lost:
+object the statement really produced or changed, and the change is lost. So
+the holder is stored and restored with the outputs when it is a variable of
+the notebook (test_an_alias_between_variables_is_restored_with_it), and the
+statement runs again when it is anything else, or in a loop body:
 
 * ``d = dfs[0]`` then ``d['a'] = slow(...)``: the hit rebinds ``d`` to a changed
   copy, and ``dfs[0]`` keeps its old contents on the next Run All;
@@ -94,11 +98,27 @@ def test_an_object_made_in_the_same_statement_is_stored(cash_magics, statement_p
 
 
 def test_a_shared_output_says_why_it_runs_again(cash_magics, statement_processor):
+    """A closure holds the model: no restore can rebind it. (A notebook
+    variable holding it is stored with the outputs instead, see
+    test_an_alias_between_variables_is_restored_with_it.)"""
     run_cash_cell(cash_magics, MODEL)
-    run_cash_cell(cash_magics, "m = Model()")
+    run_cash_cell(cash_magics, "m = Model()\nkeep = (lambda held: lambda: held)(m)")
     metrics = statement_processor.process_statement("models = {'m': m, 'tag': slow('v1')}")
     reasons = " ".join(metrics.get("uncacheable_reasons") or [])
     assert "'models' holds an object another variable or container also holds" in reasons, reasons
+
+
+def test_a_library_module_holding_the_object_still_refuses(cash_magics, statement_processor):
+    """A module of a library holds the dict: no restore can rebind it."""
+    run_cash_cell(cash_magics, f"{SETUP}\nimport json")
+    statement_processor.process_statement("a = {'v': 1}")
+    statement_processor.process_statement("json._held_by_a_test = a")
+    try:
+        metrics = statement_processor.process_statement(f"a['x'] = (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), 1)[1]")
+    finally:
+        statement_processor.process_statement("del json._held_by_a_test")
+    reasons = " ".join(metrics["uncacheable_reasons"])
+    assert "'a' holds an object another variable or container also holds" in reasons, reasons
 
 
 def _run_all_cells(magics, cells):

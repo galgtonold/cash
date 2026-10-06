@@ -33,14 +33,15 @@ import datetime
 import decimal
 import enum
 import fractions
+import gc
 import pathlib
 import sys
 import types
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-__all__ = ["output_history", "shared_names"]
+__all__ = ["output_history", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 _VALUE_TYPES: tuple[type, ...] = (
@@ -183,11 +184,19 @@ def output_history(
     return [out], held
 
 
+#: How many times `share_group` widens the group before it gives up, and how
+#: many containers deep it looks for the variable that holds one. Giving up
+#: refuses the statement as before, never drops a holder.
+_MAX_ROUNDS = 8
+_MAX_DEPTH = 16
+
+
 def shared_names(
     roots: Mapping[str, Any],
     bindings: Iterable[Mapping[str, Any]],
     cash_held: Iterable[Any] = (),
     named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
+    keep_identity: Iterable[str] | None = None,
 ) -> set[str]:
     """The names in *roots* whose value, or an object inside it, has a holder
     outside *roots*.
@@ -202,30 +211,143 @@ def shared_names(
     references not to count either (IPython's ``_``, see `output_history`):
     passed by name, because a container listing them would add as many
     references as it discounts.
+
+    The roots are counted as one graph: one root holding another's object
+    (``models`` holding ``m``'s model) is an expected reference. With
+    *keep_identity*, only what those roots reach is checked; the other roots'
+    references still count as expected.
     """
-    cash_held = list(cash_held)
-    named_held = list(named_held)
-    value_types = _VALUE_TYPES + _library_value_types()
-    bindings = list(bindings)
-    shared: set[str] = set()
-    for name in roots:
-        if isinstance(roots[name], value_types):
-            continue
-        # The caller's *roots* holds the root too.
-        expected = 1 + sum(1 for m in bindings if m.get(name) is roots[name])
-        nodes, inbound, checked = _walk(roots[name], expected, value_types)
-        _count_held(cash_held, nodes, inbound, value_types)
-        for mapping, key in named_held:
-            if id(mapping.get(key)) in nodes:
-                inbound[id(mapping.get(key))] += 1
-        if _excess(nodes, inbound, checked):
-            shared.add(name)
+    shared, _found = _check_group(roots, list(bindings), list(cash_held), list(named_held), keep_identity)
     return shared
 
 
-def _count_held(held: list[Any], nodes: dict[int, Any], inbound: dict[int, int], value_types: tuple[type, ...]) -> None:
+def share_group(
+    names: Iterable[str],
+    values: Mapping[str, Any],
+    user_ns: Mapping[str, Any],
+    cash_held: Iterable[Any] = (),
+    named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
+    foreign: Callable[[str], bool] = lambda name: False,
+) -> tuple[dict[str, Any], set[str]]:
+    """``(holders, shared)`` for the outputs *names*, bound in *values*.
+
+    When an output's object, or one inside it, has a holder outside the
+    outputs (`shared_names`), the holder is looked for: a variable of
+    *user_ns*, directly or through containers and attributes a restore
+    copies along (`gc.get_referrers`, asked only then). Those variables join
+    the group and the count is taken again, until nothing is left over:
+    *holders* maps each variable that joined to its value, and *shared* is
+    empty. Stored and restored with the outputs as one graph, they keep
+    holding the very objects the outputs hold.
+
+    When a holder is anything else -- a library's registry, a closure, a
+    module of a library, a suspended frame, an object cash does not copy
+    along -- or a variable *foreign* names (IPython's own), *shared* names
+    the outputs still shared and *holders* is empty.
+    """
+    group = {name: values[name] for name in names if values.get(name) is not None}
+    bindings = [values, user_ns]
+    cash_held = list(cash_held)
+    named_held = list(named_held)
+    joined: set[str] = set()
+    for _round in range(_MAX_ROUNDS):
+        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns)
+        if not shared:
+            return {name: group[name] for name in joined}, set()
+        if not found or any(foreign(name) for name in found):
+            break
+        joined |= found
+        group.update((name, user_ns[name]) for name in found)
+    outputs = set(group) - joined
+    return {}, (shared & outputs) or outputs
+
+
+def _check_group(
+    group: Mapping[str, Any],
+    bindings: list[Mapping[str, Any]],
+    cash_held: list[Any],
+    named_held: list[tuple[Mapping[str, Any], str]],
+    keep_identity: Iterable[str] | None,
+    user_ns: Mapping[str, Any] | None = None,
+) -> tuple[set[str], set[str] | None]:
+    """``(shared, found)`` for *group*: the names whose objects are held
+    beyond what the group, *bindings*, *cash_held* and *named_held* account
+    for, and -- with *user_ns* -- the variables of *user_ns* outside the
+    group that hold them (`_find_holders`), None when one holder is not such
+    a variable."""
+    value_types = _VALUE_TYPES + _library_value_types()
+    nodes, inbound, checked, owner = _walk(group, bindings, value_types, keep_identity)
+    internal = _count_held(cash_held, nodes, inbound, value_types)
+    named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
+    for mapping, key in named_held:
+        if id(mapping.get(key)) in nodes:
+            inbound[id(mapping.get(key))] += 1
+    excess = _excess(nodes, inbound, checked)
+    if not excess:
+        return set(), set()
+    shared = {owner[k] for k in excess}
+    if user_ns is None:
+        return shared, None
+    internal |= {id(group), id(bindings), id(cash_held), id(named_held), id(nodes), *nodes, *named}
+    internal |= {id(m) for m in bindings if m is not user_ns}
+    discounted = {key for mapping, key in named_held if mapping is user_ns}
+    return shared, _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted)
+
+
+def _find_holders(
+    targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
+) -> set[str] | None:
+    """The variables of *user_ns* not in *known* that hold one of *targets*,
+    directly or through containers and attributes a restore copies along;
+    None when a holder is anything else.
+
+    Walks up `gc.get_referrers`, one level of containers per call. The ids in
+    *internal* are references already accounted for (the group's own
+    objects, the mappings that bind it, cash's own containers); this
+    function's own frame and its callers' are too. An object holding a
+    reference without telling the garbage collector is not found at all; the
+    count taken again afterwards still sees it, and refuses.
+    """
+    stack = set()
+    frame = sys._getframe()
+    while frame is not None:
+        stack.add(id(frame))
+        frame = frame.f_back
+    del frame
+    seen = set(internal) | stack
+    found: set[str] = set()
+    level = targets
+    for _depth in range(_MAX_DEPTH):
+        # Passed as one tuple, which the call hands on as it is: it is a
+        # referrer too.
+        args = tuple(level)
+        seen.update((id(level), id(args)))
+        level_ids = {id(obj) for obj in level}
+        referrers = gc.get_referrers(*args)
+        seen.add(id(referrers))
+        upper = []
+        for holder in referrers:
+            if id(holder) in seen:
+                continue
+            if holder is user_ns:
+                found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
+                continue
+            if not (isinstance(holder, _CONTAINERS) or _attributes_of(holder) is not None):
+                # A frame, a closure cell, a module, a library's object.
+                return None
+            seen.add(id(holder))
+            upper.append(holder)
+        del referrers, args
+        if not upper:
+            return found
+        level = upper
+    return None
+
+
+def _count_held(held: list[Any], nodes: dict[int, Any], inbound: dict[int, int], value_types: tuple[type, ...]) -> set[int]:
     """Add to *inbound* the references that the containers in *held*, which
-    cash holds itself, and the containers inside them make to *nodes*."""
+    cash holds itself, and the containers inside them make to *nodes*; the
+    ids of those containers."""
     seen: set[int] = set()
     stack = list(held)
     while stack:
@@ -241,35 +363,65 @@ def _count_held(held: list[Any], nodes: dict[int, Any], inbound: dict[int, int],
                 inbound[id(child)] += 1
             else:
                 stack.append(child)
+    return seen
 
 
-def _walk(root: Any, expected: int, value_types: tuple[type, ...]) -> tuple[dict[int, Any], dict[int, int], list[int]]:
-    """``(nodes, inbound, checked)`` for the objects reachable from *root*.
+def _walk(
+    group: Mapping[str, Any],
+    bindings: list[Mapping[str, Any]],
+    value_types: tuple[type, ...],
+    keep_identity: Iterable[str] | None = None,
+) -> tuple[dict[int, Any], dict[int, int], list[int], dict[int, str]]:
+    """``(nodes, inbound, checked, owner)`` for the objects reachable from
+    the roots in *group*, walked as one graph.
 
     *nodes* holds each object once by id, *inbound* counts the references to
-    it the walk accounts for (*expected* for the root), and *checked* are the
-    ids whose count must be compared: all but the tuples and frozensets that
-    hold nothing mutable. Returns before the counts are read, so none of its
-    local references are left to inflate them.
+    it the walk accounts for (for a root: *group* itself and each of
+    *bindings* that binds it under its name), *checked* are the ids whose
+    count must be compared: all but the tuples and frozensets that hold
+    nothing mutable, and with *keep_identity* only what those roots reach.
+    *owner* names the root each object was first reached from. Returns
+    before the counts are read, so none of its local references are left to
+    inflate them.
     """
-    key = id(root)
-    nodes: dict[int, Any] = {key: root}
-    inbound: dict[int, int] = {key: expected}
-    order = [key]
-    stack = [root]
-    while stack:
-        children = _children(stack.pop())
-        if not children:
+    nodes: dict[int, Any] = {}
+    inbound: dict[int, int] = {}
+    owner: dict[int, str] = {}
+    order: list[int] = []
+    identity = set(group) if keep_identity is None else set(keep_identity)
+    # The roots whose identity counts first: what they reach is checked.
+    first = [name for name in group if name in identity]
+    reached: int | None = None
+    for name in [*first, *(name for name in group if name not in identity)]:
+        if name not in identity and reached is None:
+            reached = len(order)
+        root = group[name]
+        if isinstance(root, value_types):
             continue
-        for child in children:
-            if isinstance(child, value_types):
+        key = id(root)
+        inbound[key] = inbound.get(key, 0) + 1 + sum(1 for m in bindings if m.get(name) is root)
+        if key in nodes:
+            continue
+        nodes[key] = root
+        owner[key] = name
+        order.append(key)
+        stack = [root]
+        while stack:
+            children = _children(stack.pop())
+            if not children:
                 continue
-            ckey = id(child)
-            inbound[ckey] = inbound.get(ckey, 0) + 1
-            if ckey not in nodes:
-                nodes[ckey] = child
-                order.append(ckey)
-                stack.append(child)
+            for child in children:
+                if isinstance(child, value_types):
+                    continue
+                ckey = id(child)
+                inbound[ckey] = inbound.get(ckey, 0) + 1
+                if ckey not in nodes:
+                    nodes[ckey] = child
+                    owner[ckey] = name
+                    order.append(ckey)
+                    stack.append(child)
+    if reached is None:
+        reached = len(order)
     # Children before parents: a tuple counts only when something mutable
     # is inside it, however deep.
     carries: dict[int, bool] = {}
@@ -277,4 +429,5 @@ def _walk(root: Any, expected: int, value_types: tuple[type, ...]) -> tuple[dict
         value = nodes[ckey]
         if isinstance(value, _IMMUTABLE_CONTAINERS):
             carries[ckey] = any(not isinstance(c, value_types) and carries.get(id(c), True) for c in value)
-    return nodes, inbound, [k for k in order if carries.get(k, True)]
+    candidates = order[:reached]
+    return nodes, inbound, [k for k in candidates if carries.get(k, True)], owner

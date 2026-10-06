@@ -139,6 +139,8 @@ class CacheFreshnessChecker:
                 cached_data = self._invalidate_if_ttl_expired(metadata, cached_data, ttl)
             if cached_data:
                 cached_data = self._invalidate_if_direct_file_changed(metadata, cached_data)
+            if cached_data and metadata.holders:
+                cached_data = self._invalidate_if_holder_changed(tracking_state, metadata, cached_data)
             # CRITICAL: also check file dependencies inherited from INPUT variables.
             # Fixes the bug where `df` cell was cached even when the source CSV changed.
             if cached_data and inputs:
@@ -208,6 +210,20 @@ class CacheFreshnessChecker:
             logger.debug("[CACHE DEBUG] File dependency stale: %s", stale)
             return None
         self._remember_fresh(file_deps)
+        return cached_data
+
+    def _invalidate_if_holder_changed(
+        self, tracking_state: "TrackingState", metadata: "StatementCacheMetadata", cached_data: Any
+    ) -> Any:
+        """Return None if a variable the entry stores with its outputs
+        (``holders``) no longer has the lineage it had when the entry was
+        written: the entry would restore it as it was then. Its lineage is
+        not in the key, which is built before the run finds the holders."""
+        lineage = tracking_state.variable_lineage
+        for name, before in (metadata.holders or {}).items():
+            if lineage.get(name) != before:
+                self.last_miss_reason = f"'{name}', stored with this statement's outputs, has changed"
+                return None
         return cached_data
 
     def _source_file_deps(self, tracking_state: "TrackingState", input_var: str) -> dict | None:

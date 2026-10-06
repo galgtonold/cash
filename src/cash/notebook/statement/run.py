@@ -90,6 +90,12 @@ class StatementRun:
     #: The input variables holding a random generator that the statement drew
     #: from (``carrier_advances``); None when it read no generator.
     carriers_advanced: set[str] | None = None
+    #: The variables that hold an output's object too, stored and restored
+    #: with the outputs as one graph, each with its lineage before the
+    #: statement (``StatementCacheMetadata.holders``).
+    holders: dict[str, str] = field(default_factory=dict)
+    #: Whether the entry the lookup found under ``cache_key`` stores holders.
+    entry_holders: bool = False
 
 
 @dataclass

@@ -421,6 +421,7 @@ class StatementStore:
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
             carriers_advanced=_carriers_advanced(run),
+            holders=run.holders or None,
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             **cost_fields,
@@ -628,7 +629,10 @@ class StatementStore:
         captured_output = execution.captured
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
-        variables = self._calls.with_call_refs(variables, run.code, referenced)
+        if not run.holders:
+            # A reference restores a call's result on its own: with holders
+            # it would no longer be the object they hold.
+            variables = self._calls.with_call_refs(variables, run.code, referenced)
         payload = {
             "variables": variables,
             "stdout": captured_output.stdout,

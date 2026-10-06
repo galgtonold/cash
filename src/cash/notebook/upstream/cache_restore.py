@@ -26,8 +26,10 @@ from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
 from ..lineage_store import tag_value
 from ..lineage_formula import (
+    held_lineage,
     key_hidden_reads,
 )
+from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
@@ -40,13 +42,6 @@ if TYPE_CHECKING:
 __all__ = ["CacheRestorer", "lineage_confirmed_vars", "lineage_conflict"]
 
 logger = logging.getLogger(__name__)
-
-
-# Stands in the namespace for a variable the forward probe found a current-cell
-# cache hit for: a statement whose input is not in the namespace is never
-# looked up (``cacheability_decision._has_missing_lineage``), so without it the
-# hit that restores the variable could not happen. The restore replaces it.
-_FORWARD_PROBE_PLACEHOLDER = object()
 
 
 def lineage_conflict(
@@ -94,7 +89,7 @@ class CacheRestorer:
         self.probe = probe
         #: Keys each statement as the forward simulation does.
         self.statements = statements
-        #: Names the forward probe bound to ``_FORWARD_PROBE_PLACEHOLDER``.
+        #: Names the forward probe bound to ``FORWARD_PROBE_PLACEHOLDER``.
         self._probe_placeholders: set[str] = set()
         #: Called with the names a restore is about to bind, before it binds
         #: them; raises to stop it (the checker's unsaved-run refusal).
@@ -158,6 +153,13 @@ class CacheRestorer:
                 if conflict is not None:
                     logger.debug("[UPSTREAM] Restore failed: lineage mismatch for %s", conflict)
                     return set(), _perf_counter() - start_time, 0.0
+                holders = metadata.get("holders") or {}
+                lineage = self.tracking_state.variable_lineage
+                if any(lineage.get(name) != before for name, before in holders.items()):
+                    # As at a hit (``CacheFreshnessChecker``): the entry would
+                    # restore a variable stored with the outputs as it was.
+                    logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs changed")
+                    return set(), _perf_counter() - start_time, 0.0
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
@@ -169,6 +171,8 @@ class CacheRestorer:
                     metadata,
                     lineage_confirmed_vars(metadata, file_deps, expected_lineages),
                 )
+                if holders and restored_vars:
+                    self.tracking_state.held_with[cache_key] = dict(holders)
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 return restored_vars, _perf_counter() - start_time, saved_time
 
@@ -190,7 +194,16 @@ class CacheRestorer:
         establish that keeps the conservative behaviour.
         """
         restored_vars: set[str] = set()
+        holders = metadata.get("holders") or {}
+        if holders and self._blocked(variables_to_restore, lineage_confirmed):
+            # The outputs and the variables stored with them hold one another's
+            # objects: restored in part, they would not.
+            return restored_vars
         for var, val in variables_to_restore.items():
+            if var in holders:
+                self.shell.user_ns[var] = val
+                apply_held_var(self.tracking_state, var, val, held_lineage(holders[var], metadata.get("key") or ""))
+                continue
             if var in self.shell.user_ns and var not in lineage_confirmed:
                 # Refuse to let an empty cached value clobber live data UNLESS
                 # its lineage was confirmed above. Without that confirmation an
@@ -226,6 +239,18 @@ class CacheRestorer:
                     tag_value(val, new_lineage)
         return restored_vars
 
+    def _blocked(self, variables_to_restore: dict, lineage_confirmed: frozenset[str]) -> bool:
+        """Whether `_restore_vars_from_cache` would keep one live value of
+        *variables_to_restore* rather than restore its empty cached one."""
+        for var, val in variables_to_restore.items():
+            if var in self.shell.user_ns and var not in lineage_confirmed:
+                try:
+                    if len(self.shell.user_ns[var]) > 0 and len(val) == 0:
+                        return True
+                except (TypeError, AttributeError):
+                    pass
+        return False
+
     def _update_tracking_after_restore(
         self,
         restored_vars: set[str],
@@ -249,7 +274,11 @@ class CacheRestorer:
                 if resolved is not None:
                     resolved_paths.add(resolved)
 
+        holders = metadata.get("holders") or {}
         for var in restored_vars:
+            if var in holders:
+                # Not produced by the statement: only its lineage moved on.
+                continue
             lin = output_lineages.get(var) if output_lineages else None
             if lin is not None:
                 state.lineage.record(var, lin)
@@ -370,7 +399,7 @@ class CacheRestorer:
                     # with it.
                     self.tracking_state.lineage.record(var, virtual_lineage[var])
                 if var not in self.shell.user_ns:
-                    self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
+                    self.shell.user_ns[var] = FORWARD_PROBE_PLACEHOLDER
                     self._probe_placeholders.add(var)
             logger.debug(
                 "[UPSTREAM] Forward probe: cache hit for '%s' resolves broken vars: %s",
@@ -396,7 +425,7 @@ class CacheRestorer:
         next check and to the user. It goes, with the lineage recorded for it.
         """
         for var in self._probe_placeholders:
-            if self.shell.user_ns.get(var) is _FORWARD_PROBE_PLACEHOLDER:
+            if self.shell.user_ns.get(var) is FORWARD_PROBE_PLACEHOLDER:
                 del self.shell.user_ns[var]
                 self.tracking_state.lineage.discard(var)
         self._probe_placeholders.clear()

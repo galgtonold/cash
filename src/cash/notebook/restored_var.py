@@ -22,7 +22,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["apply_restored_var", "hashed_by_lineage"]
+__all__ = ["FORWARD_PROBE_PLACEHOLDER", "apply_held_var", "apply_restored_var", "hashed_by_lineage"]
+
+#: Stands in the namespace for a variable the upstream check's forward probe
+#: found a current-cell cache hit for: a statement whose input is not in the
+#: namespace is never looked up (``cacheability_decision._has_missing_lineage``),
+#: so without it the hit that restores the variable could not happen. The
+#: restore replaces it; it is no object of the notebook's, so nothing holding
+#: it stops that hit.
+FORWARD_PROBE_PLACEHOLDER = object()
 
 #: Values whose session hash is their entry's lineage rather than a content
 #: hash: hashing a large frame or array on every restore costs more than the
@@ -82,6 +90,27 @@ def apply_restored_var(
             state.executed_file_deps[name] = set(metadata.file_dependencies)
         if metadata.key is not None:
             state.variable_sources[name] = metadata.key
+    _record_session_hash(state, name, value, lineage, compute_hash)
+
+
+def apply_held_var(
+    state: TrackingState,
+    name: str,
+    value: Any,
+    lineage: str,
+    *,
+    compute_hash: Callable[[Any], str] | None = None,
+) -> None:
+    """Record in *state* that *name*, a variable a statement's entry stores
+    with its outputs because it holds one of their objects too
+    (``StatementCacheMetadata.holders``), now has *lineage*
+    (``lineage_formula.held_lineage``) and holds *value*.
+
+    Its lineage alone moves on: the statement did not produce it, so what it
+    was built from, its code and its files stay its own producer's. The same
+    whether the statement ran or its entry was restored.
+    """
+    state.lineage.record(name, lineage, value=value)
     _record_session_hash(state, name, value, lineage, compute_hash)
 
 
