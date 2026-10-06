@@ -780,11 +780,11 @@ class StatementProcessor:
             else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
         )
         # The environment and module data statements were keyed on, as they
-        # stand before this one: a change it makes is the notebook's own
-        # (`recorded_reads`).
+        # stand before this one, whatever it is: a change it makes, itself
+        # or in a function it calls, is the notebook's own (`recorded_reads`).
         reads = self.tracking_state.reads
         try:
-            watched_before = snapshot(run.code, self.shell.user_ns, reads.watched)
+            watched_before = snapshot(reads.watched)
         except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
             logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, run.code[:80], exc_info=True)
             watched_before = {}

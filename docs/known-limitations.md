@@ -205,10 +205,10 @@ notebook, or the cells from the edited one down.
 
 A change made outside the notebook's cells (the shell or a launcher setting a
 variable, a console attached to the kernel, an edit of the module's file) is
-seen: running only the last cell rebuilds what was built on the old value. So
-is a change to the environment made inside a function a cell calls, without
-the cell spelling it (`setup()` doing `os.environ["MODE"] = "b"`): cash
-cannot tell it from one made outside.
+seen: running only the last cell rebuilds what was built on the old value. A
+change a cell makes is the notebook's own however the cell makes it: itself,
+in a function it calls (`setup()` doing `os.environ["MODE"] = "b"`) or by
+reloading the module.
 
 ### Re-running a cell above an in-place change
 

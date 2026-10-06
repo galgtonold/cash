@@ -12,10 +12,12 @@ notebook's cells -- by the shell that started the kernel, a launcher, a
 debugger, an edit of the module's file -- is the live value, and is seen.
 
 The runtime tells the two apart by watching the values the records hold
-around each statement that may change them (:func:`snapshot`,
-:func:`note_writes`): the last statement that changed one, and what it left.
-A live value equal to what a statement of the notebook left is the
-notebook's doing; any other is not.
+around every statement it runs (:func:`snapshot`, :func:`note_writes`): the
+last statement that changed one, and what it left. A live value equal to
+what a statement of the notebook left is the notebook's doing; any other is
+not. Every statement, not only one whose text spells a change: a function
+it calls (``setmode("b")``, ``mylib.configure()``), a magic (``%env``,
+``%cd``) or ``importlib.reload(mylib)`` changes them as surely.
 """
 
 from __future__ import annotations
@@ -26,8 +28,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from typing import Any, NamedTuple
 
+from .._memo import CODE_OBJECTS, LruMemo
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
-from .callee_reach import module_state_writes, reached_user_code
+from .callee_reach import reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
     module_data_digest,
@@ -51,12 +54,6 @@ __all__ = [
 #: ``"env"`` for an environment read, ``"mod"`` for module data.
 _ENV = "env"
 _MOD = "mod"
-
-#: Spellings a statement must contain to change the environment itself.
-#: One that changes it only inside a function it calls is not watched: the
-#: change then counts as made outside the notebook, and is seen.
-_ENVIRONMENT_WRITE_MARKERS = ("environ", "putenv", "unsetenv", "chdir", "dotenv")
-
 
 class ReadParts(NamedTuple):
     """``(label, digest)`` of each environment read and each piece of module
@@ -135,31 +132,16 @@ def outside_changes(record: ReadRecord) -> bool:
     return changed
 
 
-def snapshot(
-    code: str, user_ns: Mapping[str, Any] | None, watched: Iterable[tuple[str, str]]
-) -> dict[tuple[str, str], str]:
-    """The current digest of each watched value *code* may change: the
-    environment when it spells a change of it, the data of a module it sets
-    state on (``module_state_writes``)."""
-    watched = list(watched)
-    if not watched or not code:
-        return {}
-    env = any(marker in code for marker in _ENVIRONMENT_WRITE_MARKERS)
-    modules = module_state_writes(code, user_ns) if any(kind == _MOD for kind, _ in watched) else frozenset()
-    if not env and not modules:
-        return {}
-    found: dict[tuple[str, str], str] = {}
-    for kind, label in watched:
-        if (kind == _ENV and env) or (kind == _MOD and _module_of(label) in modules):
-            found[(kind, label)] = _current(kind, label)
-    return found
+def snapshot(watched: Iterable[tuple[str, str]]) -> dict[tuple[str, str], str]:
+    """The current digest of each watched value, before a statement runs."""
+    return {key: _current(*key) for key in watched}
 
 
 def note_writes(before: Mapping[tuple[str, str], str], code: str, record: ReadRecord) -> None:
     """Record, for each value in *before* that *code* changed, what it left."""
     for (kind, label), digest in before.items():
         after = _current(kind, label)
-        if after != digest:
+        if after != digest and not (after.startswith(UNHASHABLE) and digest.startswith(UNHASHABLE)):
             record.writes[f"{kind}:{label}"] = Write(after, code)
             record.known[(kind, label)] = after
 
@@ -206,7 +188,27 @@ def _current(kind: str, label: str) -> str:
     if kind == _ENV:
         return environment_entry_digest(label)
     found, value = _module_value(label)
-    return module_data_digest(label, value) if found else "missing"
+    if not found:
+        return "missing"
+    if not _immutable(value):
+        return module_data_digest(label, value)
+    # Watched around every statement: a constant the module still holds is
+    # not hashed again. The value is held, so its id is not reused.
+    held = _IMMUTABLE_DIGESTS.get(id(value))
+    if held is None or held[0] is not value:
+        held = _IMMUTABLE_DIGESTS[id(value)] = (value, module_data_digest(label, value))
+    return held[1]
+
+
+#: id(value) -> (value, digest) of the immutable module data :func:`_current` read.
+_IMMUTABLE_DIGESTS: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
+
+
+def _immutable(value: Any) -> bool:
+    """A number, string or bytes, or a tuple or frozenset of them."""
+    if isinstance(value, (bool, int, float, complex, str, bytes)):
+        return True
+    return isinstance(value, (tuple, frozenset)) and all(_immutable(item) for item in value)
 
 
 def _module_of(label: str) -> str | None:
