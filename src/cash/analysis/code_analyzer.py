@@ -641,14 +641,17 @@ class CodeAnalyzer:
         depth = 0  # open bracket/paren/brace nesting (outside strings)
         in_str: str | None = None  # open triple-quote delimiter, or None
         prev_backslash = False
+        in_magic = False  # the line before was a magic that ends in a backslash
         for line in lines:
             is_start = depth == 0 and in_str is None and not prev_backslash
             flags.append(is_start)
-            # A dropped magic is a self-contained logical line; do not let its
-            # characters perturb the scanner state for following lines.
-            if is_start and _is_magic_line(line):
-                prev_backslash = False
+            # A dropped magic is a self-contained logical line, but for the
+            # lines it continues with a trailing backslash (``!pip install a \\``):
+            # do not let its characters perturb the scanner state.
+            if (is_start and _is_magic_line(line)) or (in_magic and not is_start):
+                prev_backslash = in_magic = line.rstrip().endswith("\\")
                 continue
+            in_magic = False
             i, n = 0, len(line)
             backslash = False
             while i < n:
@@ -748,8 +751,12 @@ class CodeAnalyzer:
         code = _cell_magic_body(code)
         starts = CodeAnalyzer._logical_line_start_flags(code)
         out: list[str] = []
+        in_magic = False  # dropping a magic's backslash-continued lines
         for line, is_start in zip(code.split("\n"), starts):
-            if is_start and _is_magic_line(line):
+            if in_magic and not is_start:
+                continue
+            in_magic = is_start and _is_magic_line(line)
+            if in_magic:
                 indent = line[: len(line) - len(line.lstrip())]
                 if indent:
                     # An indented magic is the leading (often sole) statement of
@@ -984,12 +991,21 @@ def calls_ipython(tree: ast.AST) -> bool:
 
 #: A line that assigns the result of a magic or a shell command, as IPython's
 #: ``MagicAssign`` and ``SystemAssign`` transforms read it.
-_MAGIC_ASSIGN = re.compile(r"\s*[A-Za-z_][\w.]*(\s*,\s*[A-Za-z_][\w.]*)*\s*=\s*[%!]")
+_TARGET = r"[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*|\[[^\]\n]*\])*"
+_MAGIC_ASSIGN = re.compile(rf"\s*\(?{_TARGET}(\s*,\s*{_TARGET})*\s*,?\s*\)?\s*=\s*[%!]")
+
+#: A help request, as IPython's ``help_end`` and ``EscapedCommand`` transforms
+#: read it: ``obj?``, ``obj??``, ``?obj``, ``??obj`` (a wildcard ``np.*load*?`` too).
+_HELP = re.compile(r"\s*(\?{1,2}\s*[\w.*%]+|[\w.*%]+\?{1,2})\s*(#.*)?$")
 
 
 def _is_magic_line(line: str) -> bool:
     """Whether *line*, beginning a logical line, is IPython syntax rather than Python."""
-    return line.strip().startswith(("%", "!")) or _MAGIC_ASSIGN.match(line) is not None
+    return (
+        line.strip().startswith(("%", "!", "?"))
+        or _MAGIC_ASSIGN.match(line) is not None
+        or _HELP.match(line) is not None
+    )
 
 
 def _cell_magic_body(code: str) -> str:

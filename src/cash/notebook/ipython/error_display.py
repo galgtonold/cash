@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def show_clean_error(
-    exc: Exception,
+    exc: BaseException,
     raw_cell: str,
     node: ast.AST,
     shell: ShellProtocol,
@@ -51,6 +51,10 @@ def show_clean_error(
         optionally ``showtraceback``).
     """
     exc_type = type(exc)
+    if isinstance(exc, SystemExit) and hasattr(shell, "showtraceback"):
+        # As IPython shows a cell's ``sys.exit()``: the exception line only.
+        shell.showtraceback(exc_tuple=(exc_type, exc, None), exception_only=True)
+        return
 
     # Determine the cell filename that IPython would use.
     try:

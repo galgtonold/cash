@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @208acd72 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @c4315362 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1320,6 +1320,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a magic bound is kept, though the magic would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload dropped state a cell set on a module, and setting it again failed |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
@@ -1375,6 +1376,29 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665 -->
+**What happened.** The cell reads a name that a line magic or a shell command
+above binds or changes (`%time df = clean(df)`, `files = !ls`,
+`%time model.fit()`), and that magic has not run since something it reads
+changed, or the name is not in memory at all (after a restart). The message
+names the variable and quotes the magic's line.
+
+**Why it matters.** cash rebuilds what a cell above would compute, but it never
+runs a magic or a shell command for you, and rebuilding the name from the
+Python before the magic would drop what the magic did (an untrained model, an
+uncleaned frame). So the cell runs on the value the name holds now, which is
+not the one a run from the top would give it; a name that is gone raises
+NameError.
+
+**What to do.** Re-run the cell the message names, then this cell.
+
+**When it is safe to ignore.** When the change above does not affect what the
+magic computes.
 
 ### NOTEBOOK-NOT-FOUND {#notebook-not-found}
 

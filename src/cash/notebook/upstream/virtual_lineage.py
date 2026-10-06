@@ -29,6 +29,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
 )
+from ..magic_effects import is_magic_statement, magic_base, magic_effects, magic_output_lineage, simulation_cell
 from ..recorded_reads import outside_changes
 from ..run_memo import stats_this_run
 from ..tracking_state import TrackingState
@@ -69,6 +70,12 @@ def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[Tr
 RESET_ALL = re.compile("")
 
 
+#: ``get_ipython().run_line_magic("name", "arg")`` on a line of its own.
+_RUN_LINE_MAGIC = re.compile(
+    r"""\s*get_ipython\(\)\.run_line_magic\(\s*(['"])(?P<magic>\w+)\1\s*,\s*(['"])(?P<arg>[^'"]*)\3\s*\)\s*$"""
+)
+
+
 def reset_magic_deletes(line: str) -> re.Pattern[str] | None:
     """Which user variables the IPython magic on *line* deletes.
 
@@ -82,8 +89,18 @@ def reset_magic_deletes(line: str) -> re.Pattern[str] | None:
       make every other name fall back to its live lineage and hide an edit
       above, so it deletes nothing here.
     - ``%reset_selective regex`` deletes the names ``re.search`` matches.
+    - ``%xdel name`` deletes *name*.
+
+    A hand-written ``get_ipython().run_line_magic("xdel", "name")`` counts as
+    the magic it runs.
     """
+    call = _RUN_LINE_MAGIC.match(line)
+    if call is not None:
+        line = f"%{call['magic']} {call['arg']}"
     parts = line.split()
+    if parts and parts[0] == "%xdel":
+        names = [p for p in parts[1:] if not p.startswith("-")]
+        return re.compile(rf"\A{re.escape(names[0])}\Z") if len(names) == 1 else None
     if not parts or parts[0] not in ("%reset", "%reset_selective"):
         return None
     flags = [p for p in parts[1:] if p.startswith("-")]
@@ -222,6 +239,9 @@ class VirtualLineage:
                     cached.cell_code_hash[:12],
                     cell_hash[:12],
                 )
+                break
+            if cached.magic_generation not in (None, self.tracking_state.magic_generation):
+                # A magic has run since: what the cell's magics left changed.
                 break
             if cached.stopped_at != self._stop_index(cell_code):
                 # The cell has run (or failed) since: what of it ran changed,
@@ -441,6 +461,25 @@ class VirtualLineage:
         if stmt_has_stale_deps:
             vars_with_stale_files.update(outputs)
 
+    def _simulate_magic(self, sim: SimulationResult, node: ast.stmt, stmt_code: str) -> None:
+        """Give each name the magic statement *node* binds or changes the
+        lineage its last run left (``StatementProcessor.record_magic``).
+
+        From the lineages it reads here and the digest of the value it left
+        when it last ran with those: when what it reads differs from that
+        run, no digest is found, and the lineage differs from the live one.
+        A magic is not keyed or rebuilt, so it leaves no trace entry.
+        """
+        virtual_lineage = sim.virtual_lineage
+        live = self.tracking_state.variable_lineage
+        changed, read = magic_effects(node, sim.virtual_modules.__contains__)
+        base = magic_base(stmt_code, {name: virtual_lineage.get(name, live.get(name)) for name in read})
+        digests = self.tracking_state.magic_values.get(base, {})
+        for name in changed:
+            lineage = magic_output_lineage(base, digests.get(name, "not run"))
+            self.tracking_state.magic_lineages.add(lineage)
+            virtual_lineage[name] = lineage
+
     def simulate_one_node(
         self,
         sim: SimulationResult,
@@ -470,6 +509,10 @@ class VirtualLineage:
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error processing node in cell %d: %s", i, e)
             raise
+
+        if is_magic_statement(node):
+            self._simulate_magic(sim, node, stmt_code)
+            return
 
         occ = cell_stmt_occurrence_counts.get(stmt_code, 0)
         cell_stmt_occurrence_counts[stmt_code] = occ + 1
@@ -544,7 +587,7 @@ class VirtualLineage:
         trace_start = len(simulation_trace)
         cell_file_deps: dict = {}
 
-        # Model the ``%reset`` magics BEFORE the strip_magics empty-cell
+        # Model the ``%reset`` and ``%xdel`` magics BEFORE the strip_magics empty-cell
         # short-circuit below (a reset cell strips to empty). Like ``del`` they
         # clear ``user_ns`` but not ``variable_lineage``; position-scoping (the
         # simulator only replays cells 0..current) means a reset ABOVE the
@@ -563,9 +606,13 @@ class VirtualLineage:
                 del virtual_lineage[name]
             virtual_modules.difference_update({m for m in virtual_modules if dropped.search(m)})
 
+        # A cell holding magics is read as the runtime runs it, magic lines
+        # included (``simulation_cell``): what they bind is theirs.
+        ipython = simulation_cell(cell_code)
+        magic_generation = self.tracking_state.magic_generation if ipython is not None else None
         try:
             clean_cell_code = clean_cell_source(cell_code)
-            if not clean_cell_code.strip():
+            if ipython is None and not clean_cell_code.strip():
                 new_cache_entries.append(
                     SimulationCacheEntry(
                         cell_code_hash=cell_hash,
@@ -579,7 +626,10 @@ class VirtualLineage:
                 )
                 return
 
-            tree = parse_cell_source(cell_code)
+            if ipython is not None:
+                clean_cell_code, tree = ipython
+            else:
+                tree = parse_cell_source(cell_code)
             if tree is None:
                 ast.parse(clean_cell_code)  # will raise SyntaxError
 
@@ -644,6 +694,7 @@ class VirtualLineage:
                 cell_file_deps=dict(cell_file_deps),
                 cell_environment=self._cell_environment(cell_code),
                 stopped_at=stopped_at,
+                magic_generation=magic_generation,
             )
         )
 

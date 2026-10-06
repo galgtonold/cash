@@ -25,11 +25,14 @@ from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import resolve_callee
 from ...analysis.mutation_effects import CellEffects
+from ...diagnostics import log_diagnostic, warn_diagnostic
+from ...exceptions import CashWarning
 from ...tracking.function_tracker import FunctionTracker, is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
 from ..consumables import is_write_stream
+from ..magic_effects import magic_cell_of
 from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
@@ -81,6 +84,8 @@ class NotebookSimulator:
         self.tracking_state = tracking_state
         #: Set by ``reset_caches`` (``%cash_on``): adopt untracked names once.
         self._adopt_untracked_pending = False
+        #: ``(name, live lineage, in memory)`` already warned about (``_warn_stale_magic``).
+        self._warned_stale_magic: set[tuple[str, str | None, bool]] = set()
         #: The previous simulation's per-cell snapshots, where the next one starts.
         self.cache = SimulationCache()
 
@@ -411,6 +416,15 @@ class NotebookSimulator:
             )
         )
 
+        # A name a magic last changed is never rebuilt from the Python above
+        # it: that would drop what the magic did (``magic_effects``).
+        magic_bound = {v for v in broken_vars if self.classifier._magic_bound(v, sim)}
+        if magic_bound:
+            broken_vars -= magic_bound
+            result.stale_magic_vars |= {
+                v for v in magic_bound if self.tracking_state.variable_lineage.get(v) != sim.virtual_lineage[v]
+            }
+
         if broken_vars:
             # A current-cell statement that is a cache hit restores what it
             # reads as well as what it writes: a broken ``df`` that the cell's
@@ -426,6 +440,7 @@ class NotebookSimulator:
                 logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
 
         if not broken_vars and not has_stale_file_writers:
+            self._warn_stale_magic(result.stale_magic_vars, check)
             return ReexecutionPlan([], [], 0.0)
 
         plan = self.planner.plan(
@@ -435,7 +450,37 @@ class NotebookSimulator:
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
         )
+        self._warn_stale_magic(result.stale_magic_vars, check)
         return plan
+
+    def _warn_stale_magic(self, names: set[str], check: CellCheck) -> None:
+        """Warn that each of *names*, last bound or changed by a magic above,
+        is kept as it is although that magic has not run since what it reads
+        changed, or is gone (``NOTEBOOK-MAGIC-STALE``). Once per name and state."""
+        for name in sorted(names):
+            state = (name, self.tracking_state.variable_lineage.get(name), name in self.shell.user_ns)
+            if state in self._warned_stale_magic:
+                continue
+            self._warned_stale_magic.add(state)
+            where = magic_cell_of(name, check.notebook_cells[: check.current_cell_idx])
+            cell = f"cell {where[0] + 1} ({where[1]!r})" if where else "a cell above"
+            again = f"cell {where[0] + 1}" if where else "the cell that runs it"
+            if name in self.shell.user_ns:
+                what = (
+                    f"'{name}' is bound or changed by a magic or shell command in {cell}, which has "
+                    "not run since what it reads last changed. cash does not run a magic for you, "
+                    f"so '{name}' keeps the value it has, not the one that magic would give it now."
+                )
+            else:
+                what = (
+                    f"'{name}' is bound or changed by a magic or shell command in {cell}, and it "
+                    "is not in memory. cash does not run a magic for you, so it cannot rebuild it."
+                )
+            fix = f"re-run {again}, then this cell."
+            log_diagnostic(logger, "NOTEBOOK-MAGIC-STALE", what, fix)
+            warn_diagnostic(
+                CashWarning, "NOTEBOOK-MAGIC-STALE", what, fix, location=("<cash>", check.current_cell_idx + 1)
+            )
 
     # --- After the repair ran ---
 

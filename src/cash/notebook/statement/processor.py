@@ -71,7 +71,7 @@ from ...analysis.cacheability_decision import (
     decide_cacheability,
     identity_coupled_reason,
 )
-from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython
+from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -84,8 +84,9 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..callee_reach import module_state_writes
+from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
+from ..magic_effects import is_magic_statement, magic_base, magic_effects, magic_output_lineage, simulation_cell
 from ..module_state import ModuleStateWriter, rebound_attributes
-from ..lineage_formula import held_lineage, key_hidden_reads
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
@@ -507,6 +508,10 @@ class StatementProcessor:
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
             run.ipython_bindings = self.bindings()
+            # One the user wrote at cell level: the simulation reads a loop or
+            # a branch as one unit, so one in a body keeps no lineage, as before.
+            if len(run.tree.body) == 1 and is_magic_statement(run.tree.body[0]) and not is_control_body(run.code):
+                run.magic_reads = self.magic_reads(run.tree.body[0])
 
         done = self._check_redundant_import(run)
         if done is not None:
@@ -898,6 +903,8 @@ class StatementProcessor:
 
         self._post_execute(run, execution)
         self._forget_ipython_bindings(run)
+        if run.magic_reads is not None:
+            self.record_magic(run.code, run.tree.body[0], run.magic_reads)
         return metrics
 
     def _forget_ipython_bindings(self, run: StatementRun) -> None:
@@ -908,6 +915,56 @@ class StatementProcessor:
         self.forget_rebound(run.ipython_bindings)
         for name in run.outputs:
             self.forget_variable(name)
+
+    def _is_module(self, name: str) -> bool:
+        return isinstance(self.shell.user_ns.get(name), types.ModuleType)
+
+    def magic_reads(self, node: ast.stmt) -> dict[str, str | None]:
+        """The lineage of each name the magic statement *node* reads, now
+        (``magic_effects``): taken before it runs, for :meth:`record_magic`."""
+        _, read = magic_effects(node, self._is_module)
+        lineage = self.tracking_state.variable_lineage
+        return {name: lineage.get(name) for name in read}
+
+    def record_magic_cell(self, raw_cell: str, lineage_before: Mapping[str, str]) -> None:
+        """:meth:`record_magic` for every statement of *raw_cell*, a cell of
+        magics only that IPython ran on its own, in order, from the lineages
+        before it ran (*lineage_before*)."""
+        cell = simulation_cell(raw_cell)
+        if cell is None:
+            return
+        source, tree = cell
+        if not all(is_magic_statement(node) for node in tree.body):
+            return
+        running: dict[str, str | None] = dict(lineage_before)
+        for node in tree.body:
+            _, read = magic_effects(node, self._is_module)
+            running.update(self.record_magic(statement_code(node, source), node, {n: running.get(n) for n in read}))
+
+    def record_magic(self, code: str, node: ast.stmt, reads: Mapping[str, str | None]) -> dict[str, str]:
+        """Give each name the magic statement *node* (*code*) bound or changed
+        the lineage of a magic's output (``magic_output_lineage``), from the
+        lineages it read (*reads*, :meth:`magic_reads`) and its value now;
+        returns them.
+
+        After :meth:`forget_rebound`: the names the magic is not known to bind
+        (``%run``) stay without one.
+        """
+        ns = self.shell.user_ns
+        changed, _ = magic_effects(node, self._is_module)
+        base = magic_base(code, reads)
+        digests: dict[str, str] = {}
+        for name in sorted(changed):
+            if name not in ns:
+                continue
+            digests[name] = no_cache_value_digest(ns[name])
+            lineage = magic_output_lineage(base, digests[name])
+            self.tracking_state.magic_lineages.add(lineage)
+            self.tracking_state.lineage.record(name, lineage, value=ns[name])
+        if digests:
+            self.tracking_state.magic_values[base] = digests
+            self.tracking_state.magic_generation += 1
+        return {name: magic_output_lineage(base, digest) for name, digest in digests.items()}
 
     def bindings(self) -> dict[str, int]:
         """The identity of every binding in the namespace, for :meth:`forget_rebound`."""

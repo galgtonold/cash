@@ -19,6 +19,7 @@ from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cel
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashUpstreamSyntaxWarning, ForwardReferenceError
 from .._protocols import ShellProtocol
+from ..magic_effects import is_magic_statement, magic_effects, simulation_cell
 from ..tracking_state import TrackingState
 
 __all__ = ["NotebookVetter"]
@@ -38,7 +39,13 @@ def _cell_writes(cell_code: str) -> frozenset[str]:
     if tree is None:
         # ``await`` at the top of a cell parses here and not in the simulation.
         return frozenset(CodeAnalyzer.analyze_code_block(cell_code)[1])
-    return frozenset(CodeAnalyzer.analyze_code_block(cell_code, tree=tree)[1])
+    writes = set(CodeAnalyzer.analyze_code_block(cell_code, tree=tree)[1])
+    # And what its magics bind (``%time m = f()``, ``files = !ls``).
+    ipython = simulation_cell(cell_code.replace("\r\n", "\n"))
+    for node in ipython[1].body if ipython is not None else ():
+        if is_magic_statement(node):
+            writes |= magic_effects(node, lambda _name: False)[0]
+    return frozenset(writes)
 
 
 @functools.lru_cache(maxsize=1024)

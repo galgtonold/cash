@@ -107,6 +107,9 @@ class SimulationCacheEntry(NamedTuple):
     stopped_at: int | None = None
     """The statement the simulation stopped before, because the cell's last
     run raised there (``TrackingState.failed_cells``); None when it ran whole."""
+    magic_generation: int | None = None
+    """``TrackingState.magic_generation`` when a cell holding magics was
+    simulated, whose lineages come from what they last left; None for others."""
 
 
 @dataclass
@@ -259,6 +262,10 @@ class ClassificationResult:
 
     consumable_broken_vars: set[str] = field(default_factory=set)
     """Broken names that are drained iterators or queues."""
+    stale_magic_vars: set[str] = field(default_factory=set)
+    """Names a magic last bound or changed that do not hold what it would
+    leave now, or are gone: kept as they are, since cash does not re-run a
+    magic, and warned about (``NOTEBOOK-MAGIC-STALE``)."""
 
 
 class ReexecutionPlan(NamedTuple):
