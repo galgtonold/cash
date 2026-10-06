@@ -88,6 +88,35 @@ def compared_by_identity(value) -> bool:
     return type(value).__eq__ is object.__eq__
 
 
+def sentinel_ref(func, result) -> list | None:
+    """``["global" | "closure", name]`` when *func* returns that variable's own object.
+
+    Only for a *result* compared by identity (`compared_by_identity`) that the
+    body names itself: ``return d.get(k, MISSING)``. A global the result merely
+    happens to be -- ``max(candidates)`` picking a module-level object passed in
+    as an argument -- is not the function's sentinel: a hit handing back that
+    variable would hand back whatever it holds then, an object the call never saw.
+    """
+    if not compared_by_identity(result):
+        return None
+    try:
+        code = func.__code__
+        for name, cell in zip(code.co_freevars, func.__closure__ or ()):
+            if cell.cell_contents is result:
+                return ["closure", name]
+        named = {name for scope in iter_code_scopes(code) for name in scope.co_names}
+        globals_ = func.__globals__
+        for name in named:
+            if globals_.get(name, _MISSING_GLOBAL) is result:
+                return ["global", name]
+    except (AttributeError, ValueError, RuntimeError):
+        return None
+    return None
+
+
+_MISSING_GLOBAL = object()
+
+
 def shares_memory(result, value) -> bool:
     """Whether *result* and *value* may sit on the same buffer, cheaply.
 
@@ -358,9 +387,11 @@ class PurityChecks:
                 return "shares memory with the argument", name
         globals_ = getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
+            # A sentinel the body returns is handed back as itself on a hit.
+            if sentinel_ref(func, result) is not None:
+                return None
             for name, value in list(globals_.items()):
-                # One compared by identity is handed back as itself on a hit.
-                if value is result and is_mutable(value) and not compared_by_identity(value):
+                if value is result and is_mutable(value):
                     return "is the module global", name
         return None
 
