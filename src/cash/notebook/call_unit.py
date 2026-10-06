@@ -632,7 +632,7 @@ class CallUnit:
                 # refused (arg-digest count mismatch, by design). Either way
                 # this call is not safely keyable right now -- run it
                 # uncached rather than risk a collapsed, wrong key.
-                return fn(*args, **kwargs)
+                return self._run_unkeyed(fn, args, kwargs, key_started)
 
             # Only a result this entry holds may be referred to: set once the
             # key is usable, and never for a refused key below.
@@ -644,7 +644,7 @@ class CallUnit:
                 # A previous miss on this exact site proved its effects
                 # cannot be replayed (argument mutation or an RNG draw). Run
                 # it plain -- never look it up, never store over it.
-                return fn(*args, **kwargs)
+                return self._run_unkeyed(fn, args, kwargs, key_started)
 
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
@@ -655,6 +655,17 @@ class CallUnit:
             return self._run_miss(call)
 
         return self._entry_for(fn, site, _invoke)
+
+    def _run_unkeyed(self, fn, args: tuple, kwargs: dict, key_started: float):
+        """Run a call plain that the cache will not serve, and say what it and
+        its key cost, so a site whose calls are all like this is judged by the
+        guard (``_decide_site``) instead of paying for a key on every call."""
+        __tracebackhide__ = True
+        self._last_key_s = _perf_counter() - key_started
+        started = _perf_counter()
+        result = fn(*args, **kwargs)
+        self._outcome(_perf_counter() - started, hit=False)
+        return result
 
     def _serve_hit(self, call: _Call, value, recorded_cost: float, metadata: Mapping[str, Any], hit_started: float):
         """Hand back a found entry's value, with the call's effects put back."""
