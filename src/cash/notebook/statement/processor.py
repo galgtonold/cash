@@ -975,12 +975,18 @@ class StatementProcessor:
         The value a statement echoes is held by its entry too: `sns.heatmap(df)`
         echoes an Axes, and copying that into the RAM tier revives a second
         figure in pyplot's registry, which becomes the current one.
+
+        The statement's own echo, in *echo* and in its metrics row, is cash's
+        reference, not another holder: `clf.fit(X, y)` echoes `clf` itself.
+        A ``# @cash:cache-fit`` receiver (``run.est_fit``) is restored in place,
+        onto the object every holder already holds, so its holders are no
+        reason to refuse.
         """
         reason = unrestorable_output_reason(
-            run.outputs,
+            run.outputs - run.est_fit,
             captured_vars,
             self.shell.user_ns,
-            cash_held=self._calls.held_call_results(),
+            cash_held=[*self._calls.held_call_results(), echo, run.metrics],
             shell=self.shell,
         )
         if reason is None and echo:
