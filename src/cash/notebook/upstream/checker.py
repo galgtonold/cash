@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import ast
 import logging
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
+from ...control_markers import strip_markers
 from ...exceptions import AmbiguousCellError, UpstreamStateError
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
@@ -15,7 +19,7 @@ from ..server_discovery import (
     invalidate_notebook_path_cache,
     warn_notebook_not_found_once,
 )
-from ..staleness import StalenessTracker
+from ..staleness import StalenessTracker, normalise_source
 from ..statement.carrier_advances import reachable_generators
 from ..tracking_state import TrackingState
 from .notebook_vetting import NotebookVetter
@@ -39,6 +43,25 @@ class UpstreamResult(NamedTuple):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _statement_texts(cell_code: str) -> frozenset[str]:
+    """Every statement of *cell_code*, at any depth, as cash records the code
+    that produced a name (``TrackingState.executed_cell_codes``)."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        return frozenset()
+    return frozenset(ast.unparse(node).strip() for node in ast.walk(tree) if isinstance(node, ast.stmt))
+
+
+def _mtime(path: str | None) -> float | None:
+    """When the notebook file was last written; None when unknown."""
+    if not path:
+        return None
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 class UpstreamChecker:
@@ -71,6 +94,15 @@ class UpstreamChecker:
         # code and the file's copy of that cell are already in hand.
         self.staleness = StalenessTracker()
         self._notebook_path_for_staleness: str | None = None
+        #: Cell id -> (the file's source, the source that ran) for a cell cash
+        #: ran with an edit the saved notebook does not have yet. The kernel
+        #: holds what ran, so the cells above a later cell are read as run
+        #: until the file changes (``_as_run``).
+        self._ran_unsaved: dict[str, tuple[str, str]] = {}
+        #: The statements of each cell cash ran that the saved notebook does
+        #: not hold and no cell id places, with the file's mtime then
+        #: (``_unsaved_bindings``).
+        self._unplaced_runs: list[tuple[frozenset[str], float | None]] = []
 
         #: Shared with the statement processor and the simulator: every
         #: tracking dict is read and written through it.
@@ -119,6 +151,8 @@ class UpstreamChecker:
         # Re-arm the broken-upstream-cell warning for the new notebook:
         # its cell indices/hashes are meaningless across a notebook switch.
         self.vetter.forget_warnings()
+        self._ran_unsaved.clear()
+        self._unplaced_runs.clear()
         # A staleness verdict is proof about notebook A's file; carrying it
         # into notebook B (or a fresh %cash_on on the same one) would show a
         # warning about a file this session no longer even reads from, until
@@ -395,6 +429,8 @@ class UpstreamChecker:
             for i, c in enumerate(notebook_cells[:5]):
                 logger.debug("[UPSTREAM_DEBUG]   Cell %d: %s...", i, c.strip()[:60])
 
+        self._unplaced_runs.append((_statement_texts(cell_code), _mtime(self._notebook_path_for_staleness)))
+
         # UNSAVED CELL UPSTREAM RESOLUTION
         missing_inputs: set[str] = set()
         if required_inputs:
@@ -453,12 +489,101 @@ class UpstreamChecker:
         current_cell_idx = self._resolve_current_cell_idx(
             cell_code, notebook_cells, cell_id, cells_with_ids, required_inputs, current_cell_outputs
         )
+        self._note_how_it_ran(cell_code, cell_id, cells_with_ids, current_cell_idx)
+        notebook_cells = self._as_run(notebook_cells, cells_with_ids)
         if current_cell_idx is not None:
             self.last_cell_index = current_cell_idx
             if cell_id:
                 self.simulator.cache.last_index_by_cell_id[cell_id] = current_cell_idx
 
         return notebook_cells, current_cell_idx
+
+    def _note_how_it_ran(
+        self, cell_code: str, cell_id: str | None, cells_with_ids: list | None, current_cell_idx: int | None
+    ) -> None:
+        """Remember the cell, found by its id, as it runs when the file says otherwise."""
+        if not cell_id or not cells_with_ids or current_cell_idx is None or current_cell_idx >= len(cells_with_ids):
+            return
+        found_id, file_code = cells_with_ids[current_cell_idx]
+        if found_id != cell_id:
+            return
+        if normalise_source(cell_code) == normalise_source(file_code):
+            self._ran_unsaved.pop(cell_id, None)
+        else:
+            self._ran_unsaved[cell_id] = (file_code, cell_code)
+
+    def _as_run(self, notebook_cells: list[str], cells_with_ids: list | None) -> list[str]:
+        """*notebook_cells* with each cell cash ran unsaved read as it ran.
+
+        Its saved source is what the kernel no longer holds: simulating it
+        made the next cell re-run the old code over what the user had just
+        run, silently undoing the edit. A cell whose file source has changed
+        since (saved, or edited again and saved) is read from the file.
+        """
+        if not self._ran_unsaved or not cells_with_ids or len(cells_with_ids) != len(notebook_cells):
+            return notebook_cells
+        cells = list(notebook_cells)
+        for i, (cell_id, file_code) in enumerate(cells_with_ids):
+            ran = self._ran_unsaved.get(cell_id) if cell_id else None
+            if ran is not None and ran[0] == file_code:
+                cells[i] = ran[1]
+        return cells
+
+    def _unsaved_bindings(self, notebook_cells: list[str], notebook_path: str | None) -> dict[str, str]:
+        """Names holding what a cell cash ran unsaved bound, with that code.
+
+        A cell run with an edit not yet saved, which no cell id ties to its
+        saved cell, binds names the notebook does not explain. Its record
+        lasts until the file is written again.
+        """
+        stamp = _mtime(notebook_path)
+        self._unplaced_runs = [run for run in self._unplaced_runs if run[1] == stamp]
+        if not self._unplaced_runs:
+            return {}
+        unplaced = frozenset().union(*(run[0] for run in self._unplaced_runs))
+        saved: frozenset[str] | None = None
+        user_ns = self.shell.user_ns
+        bindings: dict[str, str] = {}
+        for name, code in self.tracking_state.executed_cell_codes.items():
+            code = strip_markers(code).strip()
+            if name not in user_ns or code not in unplaced:
+                continue
+            if saved is None:
+                saved = frozenset().union(*(_statement_texts(cell) for cell in notebook_cells))
+            if code not in saved:
+                bindings[name] = code
+        return bindings
+
+    @staticmethod
+    def _refuse_to_undo(bindings: dict[str, str], names: set[str]) -> None:
+        """Stop before *names* are rebuilt over what an unsaved run bound.
+
+        The check would rebuild them from the saved code above and silently
+        undo the run (``x = 2`` run, ``x = 1`` saved: the next cell re-ran
+        ``x = 1``). cash cannot tell where that code sits, so it says so
+        instead of guessing, until the notebook is saved. An unsaved edit the
+        simulation keeps (an extension of the saved code) is never rebuilt,
+        so it is not refused.
+        """
+        for name in sorted(names & bindings.keys()):
+            raise UpstreamStateError(
+                f"'{name}' holds the result of `{bindings[name].splitlines()[0][:80]}`, which ran in this "
+                "kernel but is not in the saved notebook, so cash cannot tell which cell it belongs to and "
+                "re-running the saved code would undo it. Save the notebook (Ctrl+S), then run this "
+                "cell again."
+            )
+
+    def _rebuilt_names(self, statements: list[str], restored_info: list[ProcessResult]) -> set[str]:
+        """What the planned re-runs bind, and what the simulation restored."""
+        names: set[str] = set()
+        for stmt in statements:
+            try:
+                names |= CodeAnalyzer.analyze_code_block(stmt)[1]
+            except SyntaxError:
+                continue
+        for metrics in restored_info:
+            names.update(metrics.get("restored_vars") or ())
+        return names
 
     def _resolve_current_cell_idx(
         self,
@@ -510,6 +635,8 @@ class UpstreamChecker:
                 return UpstreamResult([], 0.0, 0.0)
             self.vetter.vet(notebook_cells, cell_code, current_cell_idx, required_inputs)
 
+            unsaved = self._unsaved_bindings(notebook_cells, notebook_path)
+            self.simulator.restorer.guard = (lambda names: self._refuse_to_undo(unsaved, names)) if unsaved else None
             records_before = self.simulator.lineage_records()
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
@@ -528,6 +655,7 @@ class UpstreamChecker:
             statements_to_reexecute, rng_rerun = self.rng.with_rng_chain(
                 cell_code, notebook_cells, current_cell_idx, statements_to_reexecute
             )
+            self._refuse_to_undo(unsaved, self._rebuilt_names(statements_to_reexecute, restored_info))
 
             executed_metrics = []
             if statements_to_reexecute:

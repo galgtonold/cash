@@ -380,6 +380,13 @@ JupyterLab's autosave runs on a timer, so a quick edit-then-run can miss it. Whe
 the cell you run is itself unsaved, cash can tell and adds a "Notebook file is
 stale" warning row.
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._as_run @73be869e, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_to_undo @bc9c4f06 -->
+A cell you ran with an unsaved edit is not undone by the cells below it. When
+the frontend sends cell ids, cash reads that cell as it ran until the file
+changes. Without them it cannot tell which cell the edit belongs to: a later
+cell whose check would rebuild a name from the saved code stops with an
+`UpstreamStateError` that asks you to save, and runs once you have.
+
 With the same notebook open in two tabs, cash can read the other tab's unsaved
 cells. Save before switching tabs.
 

@@ -43,7 +43,7 @@ class StalenessTracker:
 
         if file_code is None or notebook_path is None or mtime is None:
             return  # no proof available; not the same as "fresh"
-        if _normalise(running_code) == _normalise(file_code):
+        if normalise_source(running_code) == normalise_source(file_code):
             return
         if self._stale:
             return  # already known; keep the first verdict
@@ -68,7 +68,7 @@ class StalenessTracker:
         self._hint = None
 
 
-def _normalise(code: str) -> str:
+def normalise_source(code: str) -> str:
     """Ignore differences no human made.
 
     nbformat and editors disagree about trailing newlines and line endings

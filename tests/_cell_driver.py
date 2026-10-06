@@ -25,25 +25,37 @@ from cash.notebook.ipython._types import PipelineSyntaxError, RunInstead
 __all__ = ["run_cash_cell"]
 
 
-def run_cash_cell(magics: Any, code: str, *, ttl: int | None = None, cells: list[str] | None = None) -> None:
+def run_cash_cell(
+    magics: Any,
+    code: str,
+    *,
+    ttl: int | None = None,
+    cells: list[str] | None = None,
+    cell_ids: list[str] | None = None,
+    cell_id: str | None = None,
+) -> None:
     """Run *code* as one cell under ``%cash_on`` (``%cash_on ttl=N`` with *ttl*).
 
     *ttl* applies to this cell only; the magics' own TTL is not changed.
     *cells*, when given, are the notebook's code cells in order, as the upstream
     check would read them from the .ipynb (*code* is normally one of them).
+    *cell_ids* are their ids, as JupyterLab saves them, and *cell_id* the id
+    of the cell being run, as JupyterLab sends it; without them the cell is
+    found by its content, as in a frontend that sends none.
     """
     if cells is None:
-        _run(magics, code, ttl)
+        _run(magics, code, ttl, cell_id)
         return
+    with_ids = list(zip(cell_ids, cells)) if cell_ids is not None else None
     with (
         patch("cash.notebook.upstream.checker.get_notebook_cells", side_effect=lambda _path=None: list(cells)),
-        patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=None),
+        patch("cash.notebook.upstream.checker.get_notebook_cells_with_ids", return_value=with_ids),
     ):
-        _run(magics, code, ttl)
+        _run(magics, code, ttl, cell_id)
 
 
-def _run(magics: Any, code: str, ttl: int | None) -> None:
-    result = magics._cell_executor.execute_cell(code, ttl=ttl, cell_id=magics.resolve_cell_id())
+def _run(magics: Any, code: str, ttl: int | None, cell_id: str | None = None) -> None:
+    result = magics._cell_executor.execute_cell(code, ttl=ttl, cell_id=cell_id or magics.resolve_cell_id())
     # No IPython run_cell here to run the stand-in through: raise what the
     # upstream check raised, so the test sees it.
     if isinstance(result, RunInstead) and not isinstance(result.error, SyntaxError):
