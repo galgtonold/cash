@@ -29,6 +29,7 @@ from ...tracking.function_tracker import FunctionTracker, is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
+from ..consumables import is_write_stream
 from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
@@ -375,6 +376,17 @@ class NotebookSimulator:
             if removed:
                 broken_vars -= removed
                 trace_event("broken_drop_nocache", dropped=removed, broken=broken_vars)
+
+        # A file open for writing is never reset by re-running the statement
+        # that opened it and the writes after it: that writes the earlier
+        # lines a second time (append mode) or opens a second writer over the
+        # live one (a corrupt gzip). The cell writes to the handle as it
+        # stands, as in plain Jupyter.
+        writers = {v for v in broken_vars if is_write_stream(self.shell.user_ns.get(v))}
+        if writers:
+            broken_vars -= writers
+            result.consumable_broken_vars -= writers
+            trace_event("broken_drop_write_stream", dropped=writers, broken=broken_vars)
 
         # Scope the writer-scheduling to files THIS cell's reconstruction reads
         #: a writer whose output no relevant consumer reads is

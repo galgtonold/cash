@@ -331,3 +331,45 @@ def test_cells_drawing_from_one_generator_through_a_slow_call_get_successive_ite
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert nb_runner.peek("(a, b, c)") == repr((0, 1, 2))
+
+
+# ---------------------------------------------------------------------------
+# (viii) a handle open for writing: its producer never re-runs
+# ---------------------------------------------------------------------------
+#
+# Re-opening an append-mode log and replaying the writes above repeats side
+# effects Run All performs once. Re-running a writer cell alone writes again,
+# as in plain Jupyter, and nothing more.
+
+
+@pytest.mark.parametrize(
+    "cells, expected",
+    [
+        (
+            [
+                "log = open('run.log', 'a')",
+                "print('start', file=log)",
+                "print('end', file=log)",
+                "log.close()\ntxt = open('run.log').read()",
+            ],
+            "start\nend\nend\n",
+        ),
+        (
+            [
+                "import gzip\nz = gzip.open('out.txt.gz', 'wt')",
+                "z.write('a\\n')",
+                "z.write('b\\n')",
+                "z.close()\ntxt = gzip.open('out.txt.gz', 'rt').read()",
+            ],
+            "a\nb\nb\n",
+        ),
+    ],
+    ids=["append-mode log", "gzip writer"],
+)
+def test_re_running_a_writer_cell_does_not_reopen_its_file(nb_runner, cells, expected):
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_cells([1, 2, 3])
+    nb_runner.run_cell(3)
+    nb_runner.run_cell(4)
+    assert nb_runner.peek("txt") == repr(expected)

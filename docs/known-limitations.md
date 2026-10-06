@@ -214,6 +214,24 @@ w = Widget()           # cell 2: each re-run pushes count higher
 This needs the counter to be changed from both cells; one cell is fine.
 **Fix:** keep the counter in a variable, not on the class.
 
+### Writing to a file opened in an earlier cell
+
+<!-- claim: cash/notebook/consumables.py:is_write_stream @90c4d2aa -->
+A re-run of a cell that writes through a file opened in an earlier cell writes
+again, as in plain Jupyter. cash never opens the file a second time to rebuild
+the handle: that would write the earlier lines again too, and a second gzip
+writer over the same file corrupts it.
+
+<!-- test:skip reason="illustrative: needs an isolated re-run of a writer cell" -->
+```python { .nb-cell }
+log = open("run.log", "a")   # cell 1
+print("start", file=log)     # cell 2
+print("end", file=log)       # cell 3: re-run alone, "end" twice
+```
+
+**Fix:** open, write and close the file in one cell
+(`with open("run.log", "a") as log: ...`).
+
 ### A function that calls one defined in a later cell
 
 <!-- test:skip reason="illustrative: shows staleness across an edit of a later cell" -->

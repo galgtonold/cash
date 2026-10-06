@@ -38,6 +38,7 @@ a self-iterator *and* it hits the by-ref fallback.
 from __future__ import annotations
 
 import inspect
+import io
 import itertools
 import logging
 import queue
@@ -50,6 +51,7 @@ __all__ = [
     "is_consumable_unrestorable",
     "consumable_state",
     "has_diverged",
+    "is_write_stream",
 ]
 
 # ``itertools`` iterators that hold advanceable state and are not deep-copyable.
@@ -239,3 +241,29 @@ def has_diverged(obj: Any, baseline: Any, *, had_baseline: bool) -> bool:
         # against, so there is no evidence of staleness. Self-disables.
         return False
     return token != baseline
+
+
+def is_write_stream(obj: Any) -> bool:
+    """True for a file open for writing (``'w'``, ``'a'``, ``'r+'``, a gzip
+    writer), whether or not it has been closed since.
+
+    Its producer must never be re-run to reset it: re-opening the path and
+    replaying the writes before a cell repeats side effects that a top-to-bottom
+    run performs once. An append-mode log gets its earlier lines again, and a
+    gzip writer opened a second time over a live one leaves a corrupt file.
+    An in-memory buffer (``io.StringIO``, ``io.BytesIO``) writes nowhere else,
+    so rebuilding it is safe and it does not count.
+    """
+    if isinstance(obj, (io.StringIO, io.BytesIO)):
+        return False
+    writable = getattr(obj, "writable", None)
+    if not callable(writable) or not hasattr(obj, "write"):
+        return False
+    try:
+        return writable() is True
+    except ValueError:
+        # Closed: ``writable()`` refuses, the mode it was opened in remains.
+        mode = getattr(obj, "mode", None)
+        return isinstance(mode, str) and any(c in mode for c in "wax+")
+    except (OSError, AttributeError):
+        return False
