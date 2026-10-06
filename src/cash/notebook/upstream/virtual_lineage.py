@@ -69,6 +69,12 @@ def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[Tr
 RESET_ALL = re.compile("")
 
 
+#: ``get_ipython().run_line_magic("name", "arg")`` on a line of its own.
+_RUN_LINE_MAGIC = re.compile(
+    r"""\s*get_ipython\(\)\.run_line_magic\(\s*(['"])(?P<magic>\w+)\1\s*,\s*(['"])(?P<arg>[^'"]*)\3\s*\)\s*$"""
+)
+
+
 def reset_magic_deletes(line: str) -> re.Pattern[str] | None:
     """Which user variables the IPython magic on *line* deletes.
 
@@ -82,8 +88,18 @@ def reset_magic_deletes(line: str) -> re.Pattern[str] | None:
       make every other name fall back to its live lineage and hide an edit
       above, so it deletes nothing here.
     - ``%reset_selective regex`` deletes the names ``re.search`` matches.
+    - ``%xdel name`` deletes *name*.
+
+    A hand-written ``get_ipython().run_line_magic("xdel", "name")`` counts as
+    the magic it runs.
     """
+    call = _RUN_LINE_MAGIC.match(line)
+    if call is not None:
+        line = f"%{call['magic']} {call['arg']}"
     parts = line.split()
+    if parts and parts[0] == "%xdel":
+        names = [p for p in parts[1:] if not p.startswith("-")]
+        return re.compile(rf"\A{re.escape(names[0])}\Z") if len(names) == 1 else None
     if not parts or parts[0] not in ("%reset", "%reset_selective"):
         return None
     flags = [p for p in parts[1:] if p.startswith("-")]
@@ -540,7 +556,7 @@ class VirtualLineage:
         trace_start = len(simulation_trace)
         cell_file_deps: dict = {}
 
-        # Model the ``%reset`` magics BEFORE the strip_magics empty-cell
+        # Model the ``%reset`` and ``%xdel`` magics BEFORE the strip_magics empty-cell
         # short-circuit below (a reset cell strips to empty). Like ``del`` they
         # clear ``user_ns`` but not ``variable_lineage``; position-scoping (the
         # simulator only replays cells 0..current) means a reset ABOVE the
