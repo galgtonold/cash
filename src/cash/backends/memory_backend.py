@@ -294,7 +294,7 @@ class InMemoryBackend(CacheBackend):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
                 else:
-                    memo[key] = copy.deepcopy(obj)  # polars: a clone, sharing its immutable buffers
+                    memo[key] = _copy_polars(obj)
                 return key
             return None
 
@@ -843,6 +843,28 @@ def _copy_array(array: Any) -> Any:
     if not array.flags.writeable:
         copied.flags.writeable = False
     return copied
+
+
+def _copy_polars(frame: Any) -> Any:
+    """A copy of a polars frame or series: a clone, which shares its immutable
+    buffers, with the Python objects of an ``Object`` column copied too.
+
+    A clone shares those objects with the entry and every hit, and pickle
+    refuses an ``Object`` column, so no disk tier holds one: the RAM entry
+    is the only copy there is.
+    """
+    import polars as pl
+
+    copied = copy.deepcopy(frame)
+    columns = [copied] if isinstance(copied, pl.Series) else copied.get_columns()
+    fresh = [
+        pl.Series(column.name, InMemoryBackend._deep_copy(column.to_list(), {}, None, None), dtype=pl.Object)
+        for column in columns
+        if column.dtype == pl.Object
+    ]
+    if not fresh:
+        return copied
+    return fresh[0] if isinstance(copied, pl.Series) else copied.with_columns(fresh)
 
 
 def _frame_types() -> tuple[type, ...]:

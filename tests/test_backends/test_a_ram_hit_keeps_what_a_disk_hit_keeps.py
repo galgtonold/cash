@@ -193,3 +193,18 @@ def test_a_long_chain_of_objects_is_copied():
         n, node = n + 1, node.next
     assert n == 2000 and first.v == 1999
 
+
+@pytest.mark.parametrize("as_frame", [False, True])
+def test_the_objects_in_a_polars_object_column_are_copied(as_frame):
+    """No disk tier can hold an Object column, so the RAM entry is the only
+    copy: a clone shared its objects with every hit."""
+    pl = pytest.importorskip("polars")
+    s = pl.Series("o", [[1], [2]], dtype=pl.Object)
+    value = pl.DataFrame({"o": s, "n": [1, 2]}) if as_frame else s
+    first, second = _hits(value)
+    column = (lambda v: v["o"]) if as_frame else (lambda v: v)
+    column(first)[0].append(9)
+    assert column(second)[0] == [1]
+    assert s[0] == [1]
+    if as_frame:
+        assert first.columns == ["o", "n"] and first["n"].to_list() == [1, 2]
