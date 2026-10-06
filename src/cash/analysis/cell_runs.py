@@ -11,7 +11,7 @@ from __future__ import annotations
 import ast
 
 from .annotations import get_statement_annotations
-from .code_analyzer import CodeAnalyzer
+from .code_analyzer import CodeAnalyzer, calls_ipython
 
 __all__ = ["jumpable_runs", "written_later_in_cell"]
 
@@ -59,6 +59,8 @@ def jumpable_runs(body: list[ast.stmt], raw_cell: str, touches_rng) -> dict[int,
         if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             return False
         if any(isinstance(n, (ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr)) for n in ast.walk(node)):
+            return False
+        if calls_ipython(node):  # ``files = !ls``: runs every time
             return False
         if "@cash:" in raw_cell and get_statement_annotations(raw_cell, node).has_directives():
             return False

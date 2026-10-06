@@ -33,6 +33,7 @@ from .namespace_effects import capturable_globals, notebook_global_rebinds
 
 __all__ = [
     "CodeAnalyzer",
+    "calls_ipython",
     "clean_cell_source",
     "expr_has_trailing_semicolon",
     "parse_cell_source",
@@ -714,10 +715,11 @@ class CodeAnalyzer:
     def strip_magics(code: str) -> str:
         """Remove Jupyter magics from code.
 
-        A cell magic keeps its body only when the body runs as Python in the
-        user's namespace (``%%time``, ``%%capture``); any other cell magic
-        (``%%writefile``, ``%%script``, ``%%timeit``, ``%%bash``) runs no code
-        there, so the cell strips to nothing (:func:`_cell_magic_body`).
+        A cell magic keeps its body only when cash runs the body as Python in
+        the user's namespace (``%%time``, ``%%capture``); IPython runs any
+        other cell magic's body (``%%writefile``, ``%%script``, ``%%timeit``,
+        ``%%debug``) in a way cash cannot see, so the cell strips to nothing
+        (:func:`_cell_magic_body`).
 
         Only lines that *begin a logical line* and start with ``%`` or ``!``,
         or assign one (``files = !ls``, ``t = %time f()``), are treated as
@@ -946,10 +948,39 @@ class CodeAnalyzer:
         return list(set(visitor.found_reasons))
 
 
-#: Cell magics whose body IPython runs as Python in the user's namespace. Any
-#: other cell magic writes its body to a file, hands it to another program or
-#: runs it in a scope of its own (``%%timeit``), so none of it binds a name.
-_PYTHON_BODY_CELL_MAGICS = frozenset({"time", "capture", "prun", "debug"})
+#: Cell magics whose body runs as Python in the user's namespace through cash:
+#: ``%%capture`` hands its body to ``run_cell``, and cash runs a ``%%time`` or
+#: ``%%prun`` body itself, under the magic. Any other cell magic writes its body
+#: to a file, hands it to another program, runs it in a scope of its own
+#: (``%%timeit``) or under a debugger (``%%debug``): IPython runs it, and cash
+#: reads none of it as Python.
+_PYTHON_BODY_CELL_MAGICS = frozenset({"time", "capture", "prun"})
+
+#: What IPython's input transform turns a magic or a shell command into: a
+#: call of one of these on ``get_ipython()``.
+_IPYTHON_RUNNERS = frozenset({"run_line_magic", "run_cell_magic", "getoutput", "system"})
+
+
+def calls_ipython(tree: ast.AST) -> bool:
+    """Whether *tree* runs a magic or a shell command, written as IPython's
+    transform writes one (``get_ipython().run_line_magic('time', 'x = f()')``).
+
+    What such a call reads and binds is IPython's business, not code cash
+    can analyse.
+    """
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        shell = node.func.value
+        if (
+            node.func.attr in _IPYTHON_RUNNERS
+            and isinstance(shell, ast.Call)
+            and isinstance(shell.func, ast.Name)
+            and shell.func.id == "get_ipython"
+        ):
+            return True
+    return False
+
 
 #: A line that assigns the result of a magic or a shell command, as IPython's
 #: ``MagicAssign`` and ``SystemAssign`` transforms read it.
