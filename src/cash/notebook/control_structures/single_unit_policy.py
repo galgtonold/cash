@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import ast
 import builtins as _builtins
+import io
 import logging
+import os
 from typing import Any
 
 from ...analysis.cacheability import statement_writes_files
@@ -128,6 +130,70 @@ _FILE_IO_CALLS = frozenset(
 _FILE_WRITE_CALLS = frozenset({"write", "to_csv", "to_excel", "save", "savez", "savetxt", "to_parquet"})
 
 
+def _is_the_builtin_open(func: Any) -> bool:
+    """The builtin ``open``, or IPython's copy of it.
+
+    IPython puts its own wrapper (``_modified_open``, which only refuses file
+    descriptors 0 to 2) under the name ``open`` in every notebook namespace,
+    and the file tracker swaps ``builtins.open`` while a statement runs, so
+    identity with ``builtins.open`` is never true there. A notebook's own
+    ``def open`` lives in ``__main__``; the wrapper carries the builtin's
+    module and name.
+    """
+    return func is _builtins.open or (
+        getattr(func, "__name__", None) == "open" and getattr(func, "__module__", None) in ("_io", "io", "builtins")
+    )
+
+
+def _opens_for_reading(call: ast.Call, user_ns: dict[str, Any]) -> bool:
+    """Is *call* the builtin ``open`` in a read-only mode?
+
+    Each such call opens a NEW handle at the start of the file, so evaluating
+    it twice reads the file twice and drains nothing. The mode must be a
+    literal: ``open(p, mode)`` could be a write.
+    """
+    func = call.func
+    if not (isinstance(func, ast.Name) and func.id == "open"):
+        return False
+    if "open" in user_ns and not _is_the_builtin_open(user_ns["open"]):
+        return False
+    mode: ast.expr | None = call.args[1] if len(call.args) > 1 else None
+    for keyword in call.keywords:
+        if keyword.arg == "mode":
+            mode = keyword.value
+    if mode is None:
+        return True
+    return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and set(mode.value) <= set("rtb")
+
+
+#: How much of a file `_lines_in_file` reads to learn how long its lines are.
+_LINE_SAMPLE_BYTES = 64 * 1024
+
+
+def _lines_in_file(handle: Any) -> int | None:
+    """How many lines iterating *handle* will yield, estimated; None if unknown.
+
+    The file's size over the length of the lines at its start: exact for a
+    file that fits the sample, a good guess for a log or a csv, and only ever
+    used to decide how the loop is run, never what it computes.
+    """
+    name = getattr(handle, "name", None)
+    if not isinstance(name, (str, bytes, os.PathLike)):
+        return None
+    try:
+        size = os.path.getsize(name)
+        with open(name, "rb") as head:
+            sample = head.read(_LINE_SAMPLE_BYTES)
+    except OSError:
+        return None
+    if not sample:
+        return 0
+    lines = sample.count(b"\n")
+    if size <= len(sample):
+        return lines + (0 if sample.endswith(b"\n") else 1)
+    return max(1, size * lines // len(sample))
+
+
 def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> bool:
     """Run this ``for`` loop as one cacheable unit rather than per iteration?
 
@@ -223,6 +289,7 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
     fresh = isinstance(iter_node, ast.Call) and (
         (isinstance(iter_node.func, ast.Name) and iter_node.func.id in PURE_ITER_PRODUCERS)
         or (isinstance(iter_node.func, ast.Attribute) and iter_node.func.attr in FRESH_ITERATOR_METHODS)
+        or _opens_for_reading(iter_node, user_ns)
     )
     try:
         if not fresh and iter(iterable) is iterable:
@@ -254,6 +321,8 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
         # builtin may consume/mutate state on re-evaluation.
         if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
             name = sub.func.id
+            if _opens_for_reading(sub, user_ns):
+                continue  # a new handle each time (`_opens_for_reading`)
             if name not in PURE_ITER_PRODUCERS:
                 return False
             # ...and only while the name still IS that builtin. A notebook
@@ -279,6 +348,8 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
         return len(iterable)
     except TypeError:
         pass
+    if isinstance(iterable, io.IOBase):
+        return _lines_in_file(iterable)
 
     def length_of(node: ast.AST) -> int | None:
         if isinstance(node, ast.Name):

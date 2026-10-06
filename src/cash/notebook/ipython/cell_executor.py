@@ -46,6 +46,8 @@ from collections.abc import Awaitable, Callable, Generator, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from IPython.core.inputtransformer2 import leading_indent
+
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
@@ -310,6 +312,12 @@ class CellExecutor:
         is what it resolved, and *ttl* the TTL the cell's entries are stored
         with.
         """
+        # IPython runs a cell that starts with a space or a tab with that
+        # indentation taken off every line; a parser given the raw text
+        # refuses it, and the cell would run outside the pipeline, changing
+        # variables nothing tracks.
+        raw_cell = "".join(leading_indent(raw_cell.splitlines(keepends=True)))
+
         # 2. Badge & timing init
         badge_display_id = str(uuid.uuid4())
         timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)

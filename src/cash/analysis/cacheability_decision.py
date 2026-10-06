@@ -38,10 +38,12 @@ from __future__ import annotations
 import ast
 import collections
 import logging
+import sys
 import types
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash import _plain_data
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
@@ -117,6 +119,16 @@ def is_lineage_exempt(var_name: str, val: Any) -> bool:
     return bool(callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")))
 
 
+#: The modules that define the classes above: a value cannot be an instance of
+#: one before its module is imported.
+_COUPLED_MODULES: tuple[str, ...] = tuple(base.rpartition(".")[0] for base in _IDENTITY_COUPLED_BASES)
+
+
+def _coupled_classes_loaded() -> bool:
+    """Whether any module defining an identity-coupled class is imported."""
+    return any(name in sys.modules for name in _COUPLED_MODULES)
+
+
 def _coupled_kind(value: Any) -> str | None:
     """Return the friendly name if *value* is itself identity-coupled, else None."""
     return mro_kind(value, _IDENTITY_COUPLED_BASES, ("matplotlib",))
@@ -148,6 +160,13 @@ def _coupled_kind_in_container(value: Any) -> str | None:
     """
     root_items = _container_items(value)
     if root_items is None:
+        return None
+    # Nothing to find when no module that defines a coupled class is loaded:
+    # an instance needs its class. And plain data holds no object at all,
+    # which a level-at-a-time look at the types answers without visiting each
+    # item in Python: a parsed log of two million pairs took 19 s to walk, once
+    # for every statement that named it.
+    if not _coupled_classes_loaded() or _plain_data.is_tree(value):
         return None
     seen = {id(value)}
     stack = [iter(root_items)]
