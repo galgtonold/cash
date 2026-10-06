@@ -744,12 +744,19 @@ _IMMUTABLE_CELLS = frozenset(
 
 
 def _is_pandas_frame(value_type: type) -> bool:
-    """A pandas DataFrame or Series (or a subclass defined in pandas).
+    """A pandas DataFrame or Series, or any subclass of one.
 
-    By module as well as name: polars, cudf and others call their frames
-    ``DataFrame`` too, and have no ``copy(deep=...)``.
+    By class, not by name: polars, cudf and others call their frames
+    ``DataFrame`` too, and have no ``copy(deep=...)``. A subclass defined
+    outside pandas (a user's own, geopandas') is a frame too: its deep copy
+    shares the lists in its cells just the same. Never imports pandas: a
+    value cannot hold a frame before pandas is imported.
     """
-    return value_type.__name__ in ("DataFrame", "Series") and value_type.__module__.startswith("pandas")
+    pd = sys.modules.get("pandas")
+    try:
+        return issubclass(value_type, (pd.DataFrame, pd.Series))  # type: ignore[union-attr]
+    except (AttributeError, TypeError):  # no pandas, or one still importing
+        return False
 
 
 def _holds_mutable_cells(frame: Any) -> bool:

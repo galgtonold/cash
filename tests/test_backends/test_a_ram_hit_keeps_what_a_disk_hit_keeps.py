@@ -31,3 +31,17 @@ def test_a_series_of_lists_keeps_its_attrs_and_flags():
         assert got.flags.allows_duplicate_labels is False
         assert got.name == "tags"
         assert got.tolist() == [["a"], ["b", "c"]]
+
+
+def test_a_user_frame_subclass_gets_its_cells_copied():
+    pd = pytest.importorskip("pandas")
+
+    class Orders(pd.DataFrame):
+        @property
+        def _constructor(self):
+            return Orders
+
+    first, second = _hits(Orders({"id": [1, 2], "items": [["apple"], ["pear"]]}))
+    assert type(first) is Orders
+    first["items"].iloc[0].append("plum")
+    assert second["items"].iloc[0] == ["apple"]
