@@ -1401,8 +1401,11 @@ bottom once. It is shown once per session.
 **What happened.** You edited one of your modules, so cash reloaded it. A
 reload runs the module's top level again, which drops what cells set on it
 (`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash runs those
-statements again right after the reload, and one of them raised. The message
-names the statement and the error.
+statements again right after the reload, and one of them raised, or could not
+run again: something it reads changed since it ran (`mylib.set_k(k)` with `k`
+rebound by a later cell), so running it again would set a value the notebook
+never set. A statement that only binds attributes (`mylib.K = k`) has the
+values it set put back instead. The message names the statement and why.
 
 **Why it matters.** The module holds the file's value for what that statement
 set, not the one the notebook set, until the statement runs.

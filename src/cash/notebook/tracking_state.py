@@ -7,6 +7,7 @@ from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
 from cash.notebook.lineage_store import LineageStore
+from cash.notebook.module_state import ModuleStateWriter
 from cash.notebook.recorded_reads import ReadRecord
 
 __all__ = ["TrackingState"]
@@ -174,9 +175,9 @@ class TrackingState:
     # Local module name -> the statements that set state on it
     # (``callee_reach.module_state_writes``), in the order they last ran. A
     # reload runs the module's top level again and drops that state; these
-    # run again right after it, as the notebook ran them.
+    # put it back right after it, as the notebook left it (``module_state``).
     # W: StatementProcessor. R: CellExecutor.
-    module_state_writers: dict[str, list[str]] = field(default_factory=dict)
+    module_state_writers: dict[str, list[ModuleStateWriter]] = field(default_factory=dict)
 
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind

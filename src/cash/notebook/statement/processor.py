@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import logging
 import secrets
+import sys
+import types
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
@@ -82,6 +84,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..callee_reach import module_state_writes
+from ..module_state import ModuleStateWriter, rebound_attributes
 from ..lineage_formula import held_lineage, key_hidden_reads
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
@@ -870,6 +873,8 @@ class StatementProcessor:
             self._handle_execution_error(result, run.silent)
             return metrics
 
+        if not is_control_body(run.code):
+            self._note_module_state_left(run.code)
         self._randomness.flag_inline_unseeded_fit(
             metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False, skip_cache=run.skip_cache
         )
@@ -1437,25 +1442,55 @@ class StatementProcessor:
 
         self._randomness.record_seeds(code, cache_key)
         if not is_control_body(code):
-            self._record_module_state_writes(code)
+            self._record_module_state_writes(code, key_inputs)
 
         hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
 
-    def _record_module_state_writes(self, code: str) -> None:
-        """Note *code* as a statement that sets state on a local module, so a
-        reload of the module can run it again (``CellExecutor``). Run again,
-        it moves to the end: the order is the one the kernel last ran them in."""
+    def _record_module_state_writes(self, code: str, inputs: set[str]) -> None:
+        """Note *code* as a statement that sets state on a local module, with
+        the lineage of what it reads, so a reload of the module can put that
+        state back (``CellExecutor``). Run again, it moves to the end: the
+        order is the one the kernel last ran them in."""
+        user_ns = self.shell.user_ns
         try:
-            modules = module_state_writes(code, self.shell.user_ns)
+            modules = module_state_writes(code, user_ns)
         except Exception:
             logger.debug("%s could not tell which modules %r sets state on", _LOG_PROCESSOR, code[:80], exc_info=True)
             return
+        if not modules:
+            return
+        lineage = self.tracking_state.variable_lineage
+        lineages = {
+            name: lineage.get(name) for name in inputs if not isinstance(user_ns.get(name), types.ModuleType)
+        }
         for module in modules:
             writers = self.tracking_state.module_state_writers.setdefault(module, [])
-            if code in writers:
-                writers.remove(code)
-            writers.append(code)
+            writers[:] = [writer for writer in writers if writer.code != code]
+            writers.append(ModuleStateWriter(code, lineages))
+
+    def _note_module_state_left(self, code: str) -> None:
+        """What *code*, a statement that only binds attributes of local
+        modules, left on them: a reload sets these back when running it
+        again would read something else (``module_state``)."""
+        user_ns = self.shell.user_ns
+        try:
+            bound = rebound_attributes(code, user_ns)
+        except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+            logger.debug("%s could not tell what %r binds", _LOG_PROCESSOR, code[:80], exc_info=True)
+            return
+        if not bound:
+            return
+        left = {}
+        for module, attr in bound:
+            namespace = vars(sys.modules[module]) if module in sys.modules else {}
+            if attr not in namespace:
+                return
+            left[(module, attr)] = namespace[attr]
+        for module, _ in bound:
+            for writer in self.tracking_state.module_state_writers.get(module, ()):
+                if writer.code == code:
+                    writer.left = left
 
     def _log_cache_lookup(
         self,

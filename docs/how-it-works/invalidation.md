@@ -42,7 +42,10 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       it. Editing one function in a module re-runs only what uses that
       function. The statements that set state on the module (`mylib.K = 7`,
       `mylib.set_k(7)`) run again right after the reload, which would
-      otherwise put the file's values back.
+      otherwise put the file's values back. One whose inputs changed since it
+      ran (`mylib.K = k` with `k` rebound, a draw from a generator) is not
+      run again: the values it set are put back, or, when it did more than
+      set attributes, cash warns.
     - **A global that a called function reads**, even one bound below the
       statement.
     - **The data of a local module it reads**, directly or through the

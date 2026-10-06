@@ -82,3 +82,49 @@ def test_a_setting_that_no_longer_runs_is_reported(cash_magics, mock_shell, help
 
     codes = [getattr(w.message, "code", None) for w in caught if isinstance(w.message, CashWarning)]
     assert "NOTEBOOK-RELOAD-STATE" in codes
+
+
+@pytest.mark.parametrize(
+    "cells",
+    [
+        ["import {m}", "k = 5", "{m}.SCALE = k", "k = 9"],
+        ["import {m}, random\nrng = random.Random(0)", "{m}.SCALE = rng.randrange(100)", "a = 1"],
+    ],
+    ids=["an_input_rebound_since", "a_draw_in_the_setting"],
+)
+def test_a_setting_whose_inputs_moved_on_keeps_the_value_it_set(cash_magics, mock_shell, helper_module, cells):
+    """Run again, ``helper.SCALE = k`` would read the ``k`` a later cell bound,
+    and a draw would draw anew: neither is the value the notebook set."""
+    name, path = helper_module
+    cells = [cell.format(m=name) for cell in cells] + [f"z = {name}.compute(3)"]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    module = sys.modules[name]
+    scale = module.SCALE
+    rng_state = mock_shell.user_ns["rng"].getstate() if "rng" in mock_shell.user_ns else None
+
+    _edit(path, HELPER.format(n=2))
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert sys.modules[name].SCALE == scale
+    assert mock_shell.user_ns["z"] == (3 * scale, {})
+    if rng_state is not None:
+        assert mock_shell.user_ns["rng"].getstate() == rng_state
+
+
+def test_a_setting_that_reads_a_rebound_input_and_binds_no_attribute_is_reported(
+    cash_magics, mock_shell, helper_module
+):
+    name, path = helper_module
+    cells = [f"import {name}", "k = 5", f"{name}.set_scale(k)", "k = 9", f"z = {name}.compute(3)"]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+
+    _edit(path, HELPER.format(n=2))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    codes = [getattr(w.message, "code", None) for w in caught if isinstance(w.message, CashWarning)]
+    assert "NOTEBOOK-RELOAD-STATE" in codes
+    assert sys.modules[name].SCALE != 9
