@@ -25,7 +25,7 @@ from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
-from .key_values import SYNC_TYPES, is_immutable_capture
+from .key_values import SYNC_TYPES, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
 from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
@@ -193,6 +193,18 @@ def defaults_of(func: Callable) -> tuple[tuple, dict]:
         fn = getattr(fn, "__wrapped__", None)
         depth += 1
     return tuple(pos), kwd
+
+
+def capture_digest(args: ArgHasher, value: Any) -> str:
+    """The digest a captured data value is keyed by, and checked against
+    after the call. What a dict, list or tuple holds that pickles by name --
+    a class in a registry ``{"d": Double}``, a function -- is keyed by its
+    code, as in a data global (`stabilize_for_global_hash`). Any other object
+    is hashed as it is, by its ``__cash_key__`` or registered hasher if it
+    has one. Raises what hashing raises."""
+    if type(value) in (dict, list, tuple) and plain_data_kind(value) is None:
+        value = stabilize_for_global_hash(value, hash_callable_source)
+    return args.hash_payload((value,), {})
 
 
 def fingerprint_default(v: Any) -> Any:
@@ -464,7 +476,7 @@ class HelperIdentity:
                     if name in provisional:
                         continue
             try:
-                captures.append((name, self._args.hash_payload((value,), {})))
+                captures.append((name, capture_digest(self._args, value)))
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(fn, name, value, e) from e
         if not captures:
@@ -725,7 +737,7 @@ class ClosureFold:
             # cannot be hashed runs the call uncached rather than being
             # left out of the key.
             try:
-                h = self._args.hash_payload((v,), {})
+                h = capture_digest(self._args, v)
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(func, name, v, e) from e
             pending = CAPTURE_WATCH.get()
