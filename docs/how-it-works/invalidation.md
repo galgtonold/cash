@@ -147,13 +147,15 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @2893c33a, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @4899fdae -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @2893c33a, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @ed519579 -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
 produce, and compares it with the lineage from the last real run. Statements
 whose lineage differs run again; a value that matches is used as it is, and one
-missing from memory is restored from the cache.
+missing from memory is restored from the cache. A name a magic or a shell
+command binds is the exception: cash never runs a magic, so it keeps the value
+the name has and warns ([A name a magic binds](../known-limitations.md#a-name-a-magic-binds)).
 
 Only what the cell you run depends on is considered. A stale chart or export
 above it that it does not read stays as it is. A statement that writes a file

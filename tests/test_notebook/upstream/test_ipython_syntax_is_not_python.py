@@ -5,7 +5,8 @@ namespace: ``%%script false`` skips its body, ``%%writefile`` writes it to a
 file. The upstream check read the body as Python, recorded it as the producer
 of the names it assigns and re-ran it in the kernel, so a Run All bound
 ``threshold = 0.9`` from a disabled cell. ``files = !ls`` and a ``%%bash``
-cell were reported as syntax errors (NOTEBOOK-CELL-SYNTAX).
+cell were reported as syntax errors (NOTEBOOK-CELL-SYNTAX), and so were help
+syntax (``obj?``), a magic continued with a backslash and ``res['k'] = !cmd``.
 """
 
 from __future__ import annotations
@@ -38,9 +39,29 @@ def test_a_cell_magic_running_its_body_in_the_namespace_keeps_it(magic):
     assert CodeAnalyzer.strip_magics(f"{magic}\nx = 1\ny = x + 1") == "x = 1\ny = x + 1"
 
 
-@pytest.mark.parametrize("line", ["files = !echo hi", "t = %time f()", "a, b = !ls"])
+@pytest.mark.parametrize(
+    "line",
+    ["files = !echo hi", "t = %time f()", "a, b = !ls", "res['ls'] = !ls", "cfg.out[0] = %time f()"],
+)
 def test_a_magic_assignment_is_a_magic_line(line):
     assert CodeAnalyzer.strip_magics(f"{line}\nz = 1") == "z = 1"
+
+
+@pytest.mark.parametrize("line", ["json.dumps?", "?json.dumps", "json.dumps??", "np.*load*?", "%time?"])
+def test_help_syntax_is_a_magic_line(line):
+    assert CodeAnalyzer.strip_magics(f"x = 1\n{line}\nz = 1") == "x = 1\nz = 1"
+
+
+@pytest.mark.parametrize(
+    "magic",
+    ["!pip install numpy \\\n    pandas", "%time w = \\\n   x * 2", "!echo a \\\n  b \\\n  'c"],
+)
+def test_a_magic_continued_with_a_backslash_is_dropped_whole(magic):
+    assert CodeAnalyzer.strip_magics(f"x = 1\n{magic}\nz = (1,\n     2)") == "x = 1\nz = (1,\n     2)"
+
+
+def test_a_call_with_a_format_string_is_not_a_magic_assignment():
+    assert CodeAnalyzer.strip_magics('print("a=%d" % 3)\n!ls') == 'print("a=%d" % 3)'
 
 
 def test_a_comparison_is_not_mistaken_for_a_magic_assignment():
@@ -64,11 +85,19 @@ def test_a_disabled_cell_does_not_rebind_what_it_assigns(cash_magics, mock_shell
 
 
 def test_valid_ipython_cells_above_are_not_syntax_errors(cash_magics, mock_shell):
-    cells = ["files = !echo hi", "%%bash\necho hi", "t = %time sum([1])", "n = 1"]
+    cells = [
+        "files = !echo hi",
+        "%%bash\necho hi",
+        "t = %time sum([1])",
+        "import json\njson.dumps?",
+        "res = {}\nres['k'] = !echo hi",
+        "!echo numpy \\\n    pandas",
+        "n = 1",
+    ]
     mock_shell.user_ns.update(files=["hi"], t=1)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        run_cash_cell(cash_magics, cells[3], cells=cells)
+        run_cash_cell(cash_magics, cells[-1], cells=cells)
 
     assert not [w for w in caught if issubclass(w.category, CashUpstreamSyntaxWarning)]
     assert mock_shell.user_ns["n"] == 1

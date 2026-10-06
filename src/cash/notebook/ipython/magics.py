@@ -755,15 +755,16 @@ class CashMagics(Magics):
                 ttl=self.global_ttl,
                 cell_id=self.resolve_cell_id(),
             )
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:  # noqa: BLE001 - intentionally broad: surfaces user code exceptions to IPython
+        except (Exception, KeyboardInterrupt, SystemExit) as e:  # noqa: BLE001 - surfaces the cell's error to IPython
+            # An interrupt or a ``sys.exit()`` too: IPython's own run_cell ends
+            # the cell on them with an error reply. Raised past it, ipykernel
+            # never replies (an interrupt hangs the cell) or exits (SystemExit).
             return self._synthesize_run_cell_raise(e, args, kwargs)
 
         if isinstance(result, RunInstead):
             return self._original_run_cell(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
-            with self._forgetting_what_ipython_binds(), self._statement_processor.watching_reads(raw_cell):
+            with self._forgetting_what_ipython_binds(raw_cell), self._statement_processor.watching_reads(raw_cell):
                 return self._original_run_cell(raw_cell, *args, **kwargs)
 
         return self._finalize_cell_execution(raw_cell, result, args, kwargs)
@@ -820,9 +821,7 @@ class CashMagics(Magics):
                 ttl=self.global_ttl,
                 cell_id=self.resolve_cell_id(),
             )
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:  # noqa: BLE001 - surfaces user code exceptions to IPython
+        except (Exception, KeyboardInterrupt, SystemExit) as e:  # noqa: BLE001 - see _execute_cell_inner
             return await self._synthesize_run_cell_raise_async(e, args, kwargs)
 
         if isinstance(result, RunInstead):
@@ -834,17 +833,19 @@ class CashMagics(Magics):
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.
-            with self._forgetting_what_ipython_binds(), self._statement_processor.watching_reads(raw_cell):
+            with self._forgetting_what_ipython_binds(raw_cell), self._statement_processor.watching_reads(raw_cell):
                 return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
         return await self._finalize_cell_execution_async(raw_cell, result, args, kwargs)
 
     @contextlib.contextmanager
-    def _forgetting_what_ipython_binds(self) -> Iterator[None]:
+    def _forgetting_what_ipython_binds(self, raw_cell: str) -> Iterator[None]:
         """Around a cell IPython runs on its own (a ``%%bash --out o`` or
         ``%%debug`` cell, ``files = !ls``): forget how each name it binds was
         computed (``StatementProcessor.forget_rebound``), but for the names
-        cash recorded as it ran a ``%%capture`` body through ``run_cell``."""
+        cash recorded as it ran a ``%%capture`` body through ``run_cell``.
+        A cell of line magics gives the names they are known to bind the
+        lineage of a magic's output (``StatementProcessor.record_magic_cell``)."""
         processor = self._statement_processor
         before = processor.bindings()
         lineage_before = dict(self.tracking_state.variable_lineage)
@@ -852,6 +853,10 @@ class CashMagics(Magics):
             yield
         finally:
             processor.forget_rebound(before, lineage_before)
+            try:
+                processor.record_magic_cell(raw_cell, lineage_before)
+            except Exception:  # noqa: BLE001 - the names then keep no lineage, as before
+                logger.debug("Recording what the magics bound failed", exc_info=True)
 
     def _substitute_cell_kwargs(self, source: str, kwargs: dict) -> dict:
         """Kwargs for delegating the stand-in cell *source* to ``run_cell_async``.
@@ -906,8 +911,15 @@ class CashMagics(Magics):
     @contextlib.contextmanager
     def _raising_quietly(self, e: BaseException) -> Iterator[None]:
         """Bind *e* as ``__cash_exception__`` for a ``raise __cash_exception__``
-        cell, with IPython's traceback display switched off for its duration."""
+        cell, with IPython's traceback display switched off for its duration.
+
+        An interrupt or ``SystemExit`` that came before any statement ran (in
+        the upstream check) has not been shown yet: IPython shows that one."""
         self.shell.user_ns["__cash_exception__"] = e
+        if isinstance(e, (KeyboardInterrupt, SystemExit)) and not getattr(e, "_cash_shown", False):
+            e.with_traceback(None)  # cash's own frames, not the user's
+            yield
+            return
         orig_showtb = getattr(self.shell, "showtraceback", None)
         try:
             self.shell.showtraceback = lambda *a, **kw: None

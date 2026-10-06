@@ -294,16 +294,23 @@ functions that call it. A module-level read of a name bound only below raises
 
 ### A name a magic binds
 
-<!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @5404cd79, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
+<!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
 cash reads a cell's Python, not what IPython makes of its magics. A magic or a
-shell command runs every time, uncached, and a name it binds (`files = !ls`,
-`t = %time f()`, `%time x = f()`, `%%capture out`, `%%bash --out o`) has no
-producer cash knows of: a statement that reads it runs uncached, and editing a
-cell the command reads and re-running a cell below does not run the command
-again. The body of a cell magic other than `%%time`, `%%capture` and `%%prun`
-is not Python in the notebook's namespace (`%%writefile`, `%%script`,
-`%%timeit`, `%%bash`) or runs under a debugger (`%%debug`), and cash never
-runs it. **Fix:** re-run the magic's cell after such an edit.
+shell command runs every time, uncached, and cash never runs one for you.
+<!-- claim: cash/notebook/magic_effects.py:magic_effects @a318f420, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665 -->
+The names it binds or changes (`files = !ls`, `t = %time f()`,
+`%time x = f()`, the receiver of `%time model.fit()`) keep the value it left,
+and a statement below that reads them is keyed on that value. They are never
+rebuilt from the Python above the magic, which would drop what it did: after
+an edit to a cell the magic reads, or a restart, cash keeps the value it has
+(or leaves the name undefined) and warns
+([NOTEBOOK-MAGIC-STALE](warnings.md#notebook-magic-stale)). A name another
+magic binds (`%run`, `%store -r`, `%%capture out`, `%%bash --out o`) has no
+producer cash knows of: a statement that reads it runs uncached. The body of a
+cell magic other than `%%time`, `%%capture` and `%%prun` is not Python in the
+notebook's namespace (`%%writefile`, `%%script`, `%%timeit`, `%%bash`) or runs
+under a debugger (`%%debug`), and cash never runs it. **Fix:** re-run the
+magic's cell after such an edit.
 
 <!-- claim: cash/analysis/code_analyzer.py:_exec_literal @ba4cb7eb -->
 The same holds for `exec(code)` when `code` is not a string literal: cash reads

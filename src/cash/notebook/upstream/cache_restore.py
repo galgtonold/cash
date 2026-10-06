@@ -24,6 +24,7 @@ from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
+from ..holder_patches import HolderPatch, apply_patch
 from ..lineage_store import tag_value
 from ..lineage_formula import (
     held_lineage,
@@ -199,8 +200,20 @@ class CacheRestorer:
             # The outputs and the variables stored with them hold one another's
             # objects: restored in part, they would not.
             return restored_vars
+        try:
+            # A holder stored by where it holds the outputs' objects
+            # (`holder_patches`): the live one, given the restored objects.
+            patched = {
+                var: apply_patch(self.shell.user_ns[var], val, variables_to_restore)
+                for var, val in variables_to_restore.items()
+                if isinstance(val, HolderPatch)
+            }
+        except KeyError as e:
+            logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs lost its place (%s)", e)
+            return restored_vars
         for var, val in variables_to_restore.items():
             if var in holders:
+                val = patched.get(var, val)
                 self.shell.user_ns[var] = val
                 lineage = holders[var]
                 if metadata.get("holders_moved"):

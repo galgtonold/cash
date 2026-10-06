@@ -3,7 +3,9 @@
 A name the simulation drops falls back to its live lineage, so an edit above
 the reset cell is not seen as a change and a cell below runs on the old
 value. ``%reset out`` flushes only the output history, and
-``%reset_selective`` deletes only the names its pattern matches.
+``%reset_selective`` deletes only the names its pattern matches. ``%xdel x``
+(or ``get_ipython().run_line_magic("xdel", "x")``) deletes ``x``, which came
+back from the cache instead of raising NameError.
 """
 
 from __future__ import annotations
@@ -37,3 +39,18 @@ def test_reset_selective_drops_the_names_its_pattern_matches(mock_shell, cash_in
     names = _after(mock_shell, cash_instance, "%reset_selective -f ^tmp_")
     assert "x" in names
     assert "tmp_a" not in names
+
+
+@pytest.mark.parametrize(
+    "mid",
+    ["%xdel tmp_a", "x = 3\n%xdel tmp_a", "get_ipython().run_line_magic('xdel', 'tmp_a')"],
+    ids=["magic", "magic-after-python", "hand-written"],
+)
+def test_xdel_drops_the_name_it_deletes(mock_shell, cash_instance, mid):
+    names = _after(mock_shell, cash_instance, mid)
+    assert "x" in names
+    assert "tmp_a" not in names
+
+
+def test_xdel_drops_only_that_name(mock_shell, cash_instance):
+    assert {"x", "tmp_a"} <= _after(mock_shell, cash_instance, "%xdel tmp")

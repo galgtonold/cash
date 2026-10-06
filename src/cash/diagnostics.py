@@ -254,6 +254,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # the statement ran uncached
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
+        "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
+        # though what the magic read changed since it ran, or is gone
         "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded and a
         # statement that set state on it raised when run again

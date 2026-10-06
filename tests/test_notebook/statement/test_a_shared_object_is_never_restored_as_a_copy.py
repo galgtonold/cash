@@ -173,3 +173,47 @@ def test_the_shells_copies_of_the_output_history_are_not_holders(cash_magics, st
     metrics = statement_processor.process_statement("rows += slow([2.0])")
 
     assert _stored(metrics), metrics.get("uncacheable_reasons")
+
+
+@pytest.mark.parametrize("shown", ["frames = [d1, d2]", "reg = {'cfg': d1}"])
+def test_a_container_that_was_shown_still_holds_the_object(cash_magics, statement_processor, shown):
+    """A cell ending in ``frames`` puts the list in ``Out`` too. ``Out`` is
+    not a holder, but ``frames`` is a variable all the same: its reference
+    to ``d1`` is a holder's. Counted as the history's, the update of ``d1``
+    was restored on the next Run All as a copy, and ``frames[0]`` kept the
+    old object without ``z``."""
+    name = shown.split()[0]
+    cells = [SETUP, "d1 = {'a': 1}\nd2 = {'a': 3}", shown, "d1['z'] = slow(d1['a'] * 2)"]
+    user_ns = statement_processor.shell.user_ns
+    for run in ("first", "second"):
+        for i, cell in enumerate(cells):
+            run_cash_cell(cash_magics, cell, cells=cells)
+            if i == 2:
+                _show(user_ns, 3, user_ns[name])
+        held = user_ns[name][0 if name == "frames" else "cfg"]
+        assert held is user_ns["d1"], f"{run} Run All"
+        assert held.get("z") == 2, f"{run} Run All"
+
+
+TRACKER = f"{SETUP}\nclass Tracker:\n    def __init__(self):\n        self.items = []\n    def log(self, v):\n        self.items.append(v)"
+HOOKS = {
+    "a bound method": (["tracker = Tracker()", "hooks = {'log': tracker.log, 'n': slow(1)}", "hooks['log'](5)"], "tracker.items"),
+    "a builtin bound method": (["results = []", "hooks = {'add': results.append, 'n': slow(1)}", "hooks['add'](5)"], "results"),
+    "a closure": (
+        ["store = []\ndef make(lst):\n    return lambda v: lst.append(v)", "hooks = {'f': make(store), 'n': slow(1)}", "hooks['f'](5)"],
+        "store",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(HOOKS))
+def test_a_hook_writes_into_the_notebooks_object(cash_magics, name):
+    """A bound method pickles its object by value, and a deep copy keeps a
+    closure, or a builtin method like ``results.append``, bound to the
+    object of the run that stored it. Restored, the hook wrote into a copy
+    or into the last run's object, and ``tracker.items`` stayed empty."""
+    cells, probe = HOOKS[name]
+    cells = [TRACKER, *cells, f"r = list({probe})"]
+    for run in ("first", "second"):
+        _run_all_cells(cash_magics, cells)
+        assert eval(probe, cash_magics.shell.user_ns) == [5], f"{run} Run All"

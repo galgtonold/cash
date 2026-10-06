@@ -93,6 +93,9 @@ class StatementRun:
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
+    #: For a magic statement (``is_magic_statement``): the lineage of each
+    #: name it reads, before it ran (``magic_effects``).
+    magic_reads: dict[str, str | None] | None = None
     #: The variables that hold an output's object too, stored and restored
     #: with the outputs as one graph, each with its lineage before the
     #: statement (``StatementCacheMetadata.holders``).

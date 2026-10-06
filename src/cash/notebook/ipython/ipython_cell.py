@@ -11,7 +11,7 @@ where a magic line is a ``get_ipython().run_line_magic(...)`` call
 A ``%%time`` or ``%%prun`` cell runs its body through the pipeline from inside
 the magic (:class:`CellMagic`), so the magic times or profiles the run cash
 made. ``%%capture`` needs no help: it hands its body to ``run_cell``, which is
-cash's.
+cash's (the badge is published past the capture, see ``BadgePresenter``).
 """
 
 from __future__ import annotations

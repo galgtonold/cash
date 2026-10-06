@@ -146,6 +146,10 @@ clf.fit(X, y)
     at an unfitted estimator. Use `cache-fit` only when nothing else refers to the
     estimator, and check that the badge reads `CACHED` on a re-run.
 
+A hit sets the fitted state on the estimator the name is bound to, and on the
+estimators it holds: a `Pipeline([('s', scaler), ('m', clf)])` comes out with
+`scaler` and `clf` themselves fitted, as `Pipeline.fit` leaves them.
+
 You rarely need it: an assignment that binds the fitted estimator,
 `clf = RandomForestClassifier(random_state=42).fit(X, y)`, caches with no
 directive and has no such caveat.
