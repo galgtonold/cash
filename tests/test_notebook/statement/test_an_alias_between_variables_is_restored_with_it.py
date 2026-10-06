@@ -129,3 +129,23 @@ def test_run_all_keeps_the_aliases_the_upstream_check_sees(cash_magics, statemen
             statuses.append([m.get("status") for m in cash_magics.cash_status("dict")["last_cell"]["statements"]])
         assert _ns(statement_processor)["same"] == (True, 2, True, 6)
     assert statuses[2] == statuses[4] == [CacheStatus.RESTORED]
+
+
+def test_a_new_object_around_a_variable_leaves_its_lineage(cash_magics, statement_processor):
+    """``report = {'totals': totals, ...}`` changes nothing ``totals`` holds:
+    its lineage stays, so the statement reading it hits when run again alone
+    (moving it on would change the statement's own key on every run, and the
+    upstream check would see ``totals`` changed with nothing changed)."""
+    run_cash_cell(cash_magics, SETUP)
+    report = f"report = {{'totals': totals, 'n': {_slow('1')}}}"
+    statement_processor.process_statement("totals = {'a': 1}")
+    lineage = statement_processor.tracking_state.variable_lineage["totals"]
+    first = statement_processor.process_statement(report)
+    assert first["status"] == CacheStatus.COMPUTED and not first["uncacheable_reasons"], first["uncacheable_reasons"]
+
+    for _ in range(2):
+        again = statement_processor.process_statement(report)
+        assert again["status"] == CacheStatus.RESTORED
+        ns = _ns(statement_processor)
+        assert ns["report"]["totals"] is ns["totals"]
+        assert statement_processor.tracking_state.variable_lineage["totals"] == lineage

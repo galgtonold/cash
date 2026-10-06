@@ -578,7 +578,10 @@ class StatementLineage:
                 output_lineages = metadata.get("output_lineages", {})
                 files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
                 holders = metadata.get("holders") or {}
-                moved = holders if session_held is None else session_held
+                if session_held is not None:
+                    moved = session_held
+                else:
+                    moved = holders if metadata.get("holders_moved") else {}
 
                 if files_valid and output_lineages and self._holders_current(holders, virtual_lineage):
                     bumped = self._take_cached_lineages(

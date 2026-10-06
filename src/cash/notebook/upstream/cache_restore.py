@@ -172,7 +172,7 @@ class CacheRestorer:
                     lineage_confirmed_vars(metadata, file_deps, expected_lineages),
                 )
                 if holders and restored_vars:
-                    self.tracking_state.held_with[cache_key] = dict(holders)
+                    self.tracking_state.held_with[cache_key] = dict(holders) if metadata.get("holders_moved") else {}
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 return restored_vars, _perf_counter() - start_time, saved_time
 
@@ -202,7 +202,10 @@ class CacheRestorer:
         for var, val in variables_to_restore.items():
             if var in holders:
                 self.shell.user_ns[var] = val
-                apply_held_var(self.tracking_state, var, val, held_lineage(holders[var], metadata.get("key") or ""))
+                lineage = holders[var]
+                if metadata.get("holders_moved"):
+                    lineage = held_lineage(lineage, metadata.get("key") or "")
+                apply_held_var(self.tracking_state, var, val, lineage)
                 continue
             if var in self.shell.user_ns and var not in lineage_confirmed:
                 # Refuse to let an empty cached value clobber live data UNLESS

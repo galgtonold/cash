@@ -422,6 +422,7 @@ class StatementStore:
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
             carriers_advanced=_carriers_advanced(run),
             holders=run.holders or None,
+            holders_moved=True if run.holders and run.moves_holders else None,
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             **cost_fields,

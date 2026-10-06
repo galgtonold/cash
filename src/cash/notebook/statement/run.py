@@ -97,6 +97,14 @@ class StatementRun:
     #: with the outputs as one graph, each with its lineage before the
     #: statement (``StatementCacheMetadata.holders``).
     holders: dict[str, str] = field(default_factory=dict)
+    #: Whether the run changed an object that existed before it in place, so
+    #: the variables in ``holders`` hold a changed object and their lineages
+    #: move on (``StatementCacheMetadata.holders_moved``).
+    moves_holders: bool = False
+    #: ``id()`` of the object each output and observed receiver was bound to
+    #: before the run: an id, not the object, so it adds no reference the
+    #: shared-object check would count.
+    bound_before: dict[str, int] = field(default_factory=dict)
     #: Whether the entry the lookup found under ``cache_key`` stores holders.
     entry_holders: bool = False
 
