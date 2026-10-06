@@ -71,11 +71,11 @@ class TestModuleCachingConsistency:
         module_path = nb_runner.work_dir / "metrics.py"
         module_path.write_text(
             textwrap.dedent("""\
-            _counter = 0
+            _base = 0
             def increment(n):
-                global _counter
-                _counter += n
-                return _counter
+                # Reads the module's data, never changes it: a call that
+                # bumped a counter here would run every time, as it must.
+                return _base + n
         """),
             encoding="utf-8",
         )
@@ -131,11 +131,11 @@ class TestModuleCachingConsistency:
         module_path = nb_runner.work_dir / "metrics.py"
         module_path.write_text(
             textwrap.dedent("""\
-            _counter = 0
+            _base = 0
             def increment(n):
-                global _counter
-                _counter += n
-                return _counter
+                # Reads the module's data, never changes it: a call that
+                # bumped a counter here would run every time, as it must.
+                return _base + n
         """),
             encoding="utf-8",
         )

@@ -121,11 +121,41 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
             elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
                 rooted(func.value)
             callee = _called(func, namespace)
-            if isinstance(callee, types.FunctionType) and callee.__globals__ is not namespace:
-                home = _loaded(callee.__globals__.get("__name__"))
-                if home is not None and _is_local(home) and _changed_globals(callee.__code__):
-                    found.add(home.__name__)
+            if isinstance(callee, types.FunctionType):
+                found |= _modules_changed_by(callee, namespace)
     return frozenset(found)
+
+
+def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) -> set[str]:
+    """The local modules whose globals calling *fn* changes: its own, or
+    those of the helpers it calls, at any depth. ``mylib.add(5)`` calling
+    ``_bump(5)``, which does ``global COUNT; COUNT += n``, changes ``mylib``
+    as surely as a body that does it itself. A notebook function is followed
+    to the module functions it calls; its own writes are the notebook's."""
+    found: set[str] = set()
+    seen: set[int] = set()
+    pending = [fn]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        home_ns = current.__globals__
+        if home_ns is not namespace:
+            home = _loaded(home_ns.get("__name__"))
+            if home is None or not _is_local(home):
+                continue
+            if _changed_globals(current.__code__):
+                found.add(home.__name__)
+        for co in _code_objects(current.__code__):
+            for name in _loaded_globals(co):
+                value = home_ns.get(name)
+                if isinstance(value, types.FunctionType):
+                    pending.append(value)
+                elif isinstance(value, types.ModuleType) and _is_local(value):
+                    attrs = vars(value)
+                    pending.extend(attrs[a] for a in co.co_names if isinstance(attrs.get(a), types.FunctionType))
+    return found
 
 
 def _called(func: ast.expr, namespace: Mapping[str, Any]) -> Any:

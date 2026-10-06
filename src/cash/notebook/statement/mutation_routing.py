@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from ...analysis.ast_util import called_names
 from ..call_key import changes_its_closure
+from ..callee_reach import module_state_writes
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
@@ -82,6 +83,17 @@ class MutationRouting:
                 run,
                 f"Callee changes its closure: {', '.join(sorted(closure_writers))} "
                 "(statement re-executes, call still cached)",
+            )
+        # The same for one that sets state on a local module: `mylib.add(5)`
+        # bumping the module's counter, `mylib.K = slow()`. The module is no
+        # variable of the notebook either, and a hit restores the statement's
+        # outputs, not the module: after a restart the counter stayed at 0.
+        # In a loop or branch body too, for the same reason as above.
+        modules = module_state_writes(run.code, self.shell.user_ns)
+        if modules:
+            _skip(
+                run,
+                f"Sets state on module: {', '.join(sorted(modules))} (statement re-executes, so the module has it)",
             )
         # A draw inside a loop/branch body. Skip the CACHE without touching
         # ``outputs`` -- the statement must re-execute so the artists actually
