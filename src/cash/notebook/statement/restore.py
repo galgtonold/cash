@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from cash._clock import perf_counter as _perf_counter
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
+from ..holder_patches import HolderPatch, apply_patch
 from ..lineage_formula import held_lineage
 from ..restored_var import apply_held_var, apply_restored_var
 from .capture import replay_outputs
@@ -135,8 +136,18 @@ class StatementRestorer:
             moved = holders if metadata is not None and metadata.holders_moved else {}
             if metadata is not None and metadata.key:
                 tracking_state.held_with[metadata.key] = dict(moved)
+            # A holder stored by where it holds the outputs' objects: the
+            # live one, given the restored objects there. Found before anything
+            # is written, so a holder without those places any more fails the
+            # restore before it starts.
+            patched = {
+                name: apply_patch(self.shell.user_ns[name], value, restored_vars)
+                for name, value in restored_vars.items()
+                if isinstance(value, HolderPatch)
+            }
             for var_name, value in restored_vars.items():
                 if var_name in holders:
+                    value = patched.get(var_name, value)
                     self.shell.user_ns[var_name] = value
                     before = holders[var_name]
                     apply_held_var(
