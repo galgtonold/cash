@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from ..._clock import perf_counter as _perf_counter
 from ...control_markers import strip_markers
 from ...analysis.ast_util import parse_cached
-from ...analysis.code_analyzer import parse_cell_source
+from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import (
     StatementEffects,
     captured_call_receiver_names,
@@ -143,6 +143,10 @@ class StatementLineage:
         #: The notebook's cells, joined (see ``set_notebook_functions``): a
         #: statement found in them is the notebook's (``in_notebook``).
         self._notebook_text = ""
+        #: The cells as the runtime writes their statements, joined: unparsed,
+        #: magics as IPython runs them. Built when first needed.
+        self._notebook_cells: list[str] = []
+        self._notebook_statements: str | None = None
         #: Lineages the simulation gave a variable that holds a random
         #: generator: one bound by a call that makes one, and each lineage a
         #: draw moved it on to. After a restart the namespace has no
@@ -162,6 +166,8 @@ class StatementLineage:
         magics are stripped first, as the simulation reads every cell.
         """
         self._notebook_text = "\n".join(notebook_cells)
+        self._notebook_cells = list(notebook_cells)
+        self._notebook_statements = None
         sources: dict[str, str] = {}
         for code in notebook_cells:
             tree = parse_cell_source(code)
@@ -294,7 +300,27 @@ class StatementLineage:
         cells: a change it made to the environment or a module is the
         notebook's own, not one made from outside it."""
         statement = strip_markers(code).strip()
-        return bool(statement) and statement in self._notebook_text
+        if not statement:
+            return False
+        if statement in self._notebook_text:
+            return True
+        # The runtime keys the unparsed statement: ``os.environ['MODE'] =
+        # 'b'`` for a cell holding ``os.environ["MODE"] = "b"``, and
+        # ``get_ipython().run_line_magic('env', 'MODE=b')`` for ``%env``.
+        if self._notebook_statements is None:
+            self._notebook_statements = "\n".join(self._as_run(cell) for cell in self._notebook_cells)
+        return statement in self._notebook_statements
+
+    def _as_run(self, cell: str) -> str:
+        """*cell*'s statements as the runtime writes them, or "" when it does
+        not parse."""
+        transform = getattr(self.shell, "transform_cell", None)
+        try:
+            text = transform(cell) if callable(transform) else clean_cell_source(cell)
+            return ast.unparse(ast.parse(text))
+        except Exception:  # noqa: BLE001 - IPython's transform of arbitrary text
+            tree = parse_cell_source(cell)
+            return ast.unparse(tree) if tree is not None else ""
 
     def _input_lineages(
         self, stmt_code: str, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str]

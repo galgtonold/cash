@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import logging
 import secrets
+import sys
+import types
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
@@ -82,6 +84,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..callee_reach import module_state_writes
+from ..module_state import ModuleStateWriter, rebound_attributes
 from ..lineage_formula import held_lineage, key_hidden_reads
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
@@ -779,17 +782,11 @@ class StatementProcessor:
             if is_control_body(run.code)
             else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
         )
-        # The environment and module data statements were keyed on, as they
-        # stand before this one: a change it makes is the notebook's own
-        # (`recorded_reads`).
-        reads = self.tracking_state.reads
         try:
-            watched_before = snapshot(run.code, self.shell.user_ns, reads.watched)
-        except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
-            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, run.code[:80], exc_info=True)
-            watched_before = {}
-        try:
-            with make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured:
+            with (
+                self.watching_reads(run.code),
+                make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured,
+            ):
                 execution.captured = captured
                 with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
                     start_time = _perf_counter()
@@ -809,12 +806,30 @@ class StatementProcessor:
             execution.result = error_result(e)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
-        if watched_before:
-            note_writes(watched_before, run.code, reads)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+
+    @contextmanager
+    def watching_reads(self, code: str) -> Generator[None, None, None]:
+        """Around running *code*: what it changes of the environment and the
+        module data statements were keyed on, itself or in a function it
+        calls, is the notebook's own (`recorded_reads`)."""
+        reads = self.tracking_state.reads
+        try:
+            before = snapshot(reads.watched)
+        except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
+            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, code[:80], exc_info=True)
+            before = {}
+        try:
+            yield
+        finally:
+            if before:
+                try:
+                    note_writes(before, code, reads)
+                except Exception:  # noqa: BLE001 - a change not noted counts as made outside
+                    logger.debug("%s could not note what %r changed", _LOG_PROCESSOR, code[:80], exc_info=True)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
         """Record what the executed statement did, and store it."""
@@ -858,6 +873,8 @@ class StatementProcessor:
             self._handle_execution_error(result, run.silent)
             return metrics
 
+        if not is_control_body(run.code):
+            self._note_module_state_left(run.code)
         self._randomness.flag_inline_unseeded_fit(
             metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False, skip_cache=run.skip_cache
         )
@@ -1425,25 +1442,55 @@ class StatementProcessor:
 
         self._randomness.record_seeds(code, cache_key)
         if not is_control_body(code):
-            self._record_module_state_writes(code)
+            self._record_module_state_writes(code, key_inputs)
 
         hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
 
-    def _record_module_state_writes(self, code: str) -> None:
-        """Note *code* as a statement that sets state on a local module, so a
-        reload of the module can run it again (``CellExecutor``). Run again,
-        it moves to the end: the order is the one the kernel last ran them in."""
+    def _record_module_state_writes(self, code: str, inputs: set[str]) -> None:
+        """Note *code* as a statement that sets state on a local module, with
+        the lineage of what it reads, so a reload of the module can put that
+        state back (``CellExecutor``). Run again, it moves to the end: the
+        order is the one the kernel last ran them in."""
+        user_ns = self.shell.user_ns
         try:
-            modules = module_state_writes(code, self.shell.user_ns)
+            modules = module_state_writes(code, user_ns)
         except Exception:
             logger.debug("%s could not tell which modules %r sets state on", _LOG_PROCESSOR, code[:80], exc_info=True)
             return
+        if not modules:
+            return
+        lineage = self.tracking_state.variable_lineage
+        lineages = {
+            name: lineage.get(name) for name in inputs if not isinstance(user_ns.get(name), types.ModuleType)
+        }
         for module in modules:
             writers = self.tracking_state.module_state_writers.setdefault(module, [])
-            if code in writers:
-                writers.remove(code)
-            writers.append(code)
+            writers[:] = [writer for writer in writers if writer.code != code]
+            writers.append(ModuleStateWriter(code, lineages))
+
+    def _note_module_state_left(self, code: str) -> None:
+        """What *code*, a statement that only binds attributes of local
+        modules, left on them: a reload sets these back when running it
+        again would read something else (``module_state``)."""
+        user_ns = self.shell.user_ns
+        try:
+            bound = rebound_attributes(code, user_ns)
+        except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+            logger.debug("%s could not tell what %r binds", _LOG_PROCESSOR, code[:80], exc_info=True)
+            return
+        if not bound:
+            return
+        left = {}
+        for module, attr in bound:
+            namespace = vars(sys.modules[module]) if module in sys.modules else {}
+            if attr not in namespace:
+                return
+            left[(module, attr)] = namespace[attr]
+        for module, _ in bound:
+            for writer in self.tracking_state.module_state_writers.get(module, ()):
+                if writer.code == code:
+                    writer.left = left
 
     def _log_cache_lookup(
         self,

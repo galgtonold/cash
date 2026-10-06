@@ -35,6 +35,7 @@ from cash.tracking.randomness import capture_object_rng_states, capture_rng_stat
 
 from ..call_key import holds_a_closure_with_state
 from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, CallRef
+from ..closed_stream import stored_form
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -362,9 +363,10 @@ class StatementStore:
 
     @staticmethod
     def _filter_safe_vars(captured_vars: dict[str, Any]) -> dict[str, Any]:
-        """Every captured variable but a module. Whether a value pickles is the
-        backend's to find out when it stores it."""
-        return {k: v for k, v in captured_vars.items() if not isinstance(v, types.ModuleType)}
+        """Every captured variable but a module, a closed file as its name and
+        mode (`closed_stream`). Whether a value pickles is the backend's to
+        find out when it stores it."""
+        return {k: stored_form(v) for k, v in captured_vars.items() if not isinstance(v, types.ModuleType)}
 
     def _store(
         self,

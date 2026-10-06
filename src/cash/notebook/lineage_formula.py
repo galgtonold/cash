@@ -307,10 +307,6 @@ def callee_environment_reads(
         reach = reached_user_code(code, user_ns)
     found: set[tuple[str, str]] = set()
     for fn in reach.functions:
-        if fn.__globals__ is user_ns:
-            # Defined in a cell: its reads are the notebook's own business
-            # (the reach still follows it to the module functions it calls).
-            continue
         try:
             found |= get_analyzer().analyze(fn).environment_reads
         except Exception:  # noqa: BLE001 - the analysis of arbitrary user code
