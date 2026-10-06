@@ -241,11 +241,27 @@ def _in_cash(filename: str) -> bool:
         return False
 
 
+_filters_checked: tuple = ()
+_filters_error = False
+
+
 def _errors_on_every_warning() -> bool:
-    return any(
+    """Whether a filter turns every warning into an error.
+
+    Asked on every intercepted call, so the answer is kept for as long as the
+    filter list holds the same entries (a tuple comparison that stops at the
+    first entry that is a different object, instead of a scan of the list).
+    """
+    global _filters_checked, _filters_error
+    current = tuple(warnings.filters)
+    if current == _filters_checked:
+        return _filters_error
+    _filters_error = any(
         action == "error" and category is Warning and message is None and module is None
-        for action, message, category, module, _lineno in warnings.filters
+        for action, message, category, module, _lineno in current
     )
+    _filters_checked = current
+    return _filters_error
 
 
 class _warnings_at_the_caller:

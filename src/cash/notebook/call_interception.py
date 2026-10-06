@@ -172,6 +172,17 @@ class CallSite:
     #: only when keyed on what it receives, and otherwise runs plain.
     in_loop_unit: bool = False
 
+    def __hash__(self) -> int:
+        """Worked out once: a site is the key of two lookups on every
+        intercepted call, and the generated hash walks every field each time.
+        Sites that are equal agree on these three."""
+        try:
+            return self.__dict__["_hash"]
+        except KeyError:
+            value = hash((self.source, self.occurrence_index, self.stmt_identity))
+            object.__setattr__(self, "_hash", value)
+            return value
+
 
 def interceptable(fn) -> bool:
     """Whether a callee is one :meth:`CallCache.resolve` wraps.
