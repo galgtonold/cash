@@ -174,6 +174,16 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
+### An edited setting on your module that has not run
+
+<!-- claim: cash/notebook/cache_key.py:_module_data_component @93fc12c8 -->
+A cell that sets data on one of your modules (`mylib.K = 7`,
+`mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`) reaches the statements that read
+that data, in the module's functions too, once it has run: run it, or run
+the notebook. Edit it and run only a cell below it, and cash answers with
+what the module holds, as a plain kernel would, not as a top-to-bottom run
+would. **Fix:** run the edited cell first.
+
 ### Re-running a cell above an in-place change
 
 <!-- test:skip reason="illustrative: needs an isolated re-run of a cell above the mutation" -->

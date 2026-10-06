@@ -41,6 +41,7 @@ from ..lineage_formula import (
     no_cache_value_component,
     no_cache_value_digest,
     output_lineage,
+    module_data_lineage_component,
     statement_environment_component,
 )
 from ..restored_var import hashed_by_lineage
@@ -168,7 +169,10 @@ class StatementLineageBuilder:
         lineage_inputs = inputs | lineage_hidden_reads(code)
         # The environment it read, as its key folds it: a new value is a new
         # lineage, so what is built on an output misses too.
-        environment = statement_environment_component(code, user_ns)
+        # And the data of the user's modules it read, as its key folded it.
+        environment = statement_environment_component(code, user_ns) + module_data_lineage_component(
+            tracking_state, cache_key
+        )
         value_digests: dict[str, str] = {}
 
         _clear_rebound_edges(tracking_state, outputs, inputs, user_ns)

@@ -123,12 +123,13 @@ cache, checking first that the code that produced them is unchanged. For a
 chain of steps (`df = load()`, then `df = clean(df)`), it restores the final
 value directly instead of replaying each step.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @7692fb7f -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @20f64924 -->
 A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop
 did nothing else: no file written, no draw from the global random generators,
-no clock, `uuid` or environment read, no global changed in place. Otherwise
+no clock, `uuid` or environment read, no data of your modules read, no global
+changed in place. Otherwise
 the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.

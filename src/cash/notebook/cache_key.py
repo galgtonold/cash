@@ -27,6 +27,7 @@ from .lineage_formula import (
     is_module_like,
     module_read_lineage,
     statement_environment_component,
+    statement_module_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,15 @@ class CacheKeyContext:
     #: named as an input that is not live in ``user_ns``. The runtime never
     #: sets it, so its keys are unchanged.
     virtual_callables: Mapping[str, VirtualCallable] | None = None
+    #: ``TrackingState.module_data_seen`` / ``module_data_by_key``: what the
+    #: data of the user's modules a statement reads held when the runtime
+    #: keyed it (:func:`_module_data_component`). None: read it now.
+    module_data_seen: dict[str, str] | None = None
+    module_data_by_key: dict[str, str] | None = None
+    #: The runtime's own key for a statement it is about to run: the data is
+    #: read now and recorded. Every other key (the simulation's, a restore's)
+    #: reads back what the runtime recorded.
+    record_module_data: bool = False
 
 
 class CacheKeyResult(NamedTuple):
@@ -612,6 +622,29 @@ def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
     return f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
 
+def _module_data_component(code: str, ctx: CacheKeyContext, statement: str) -> str:
+    """The data of the user's modules *code* reads
+    (``lineage_formula.module_data_component``), for its key.
+
+    Read now for the runtime's own key, and recorded under *statement* (the
+    rest of the key). Any other key -- the simulation's above all -- reads
+    back what the runtime recorded: it runs where the module holds what the
+    whole notebook left in it, so a ``mylib.K = 7`` in a cell below a reader
+    would re-key the reader and send it to run again. Read now when the
+    runtime has not keyed the statement yet.
+    """
+    seen = ctx.module_data_seen
+    if seen is None:
+        return statement_module_data(code, ctx.user_ns)
+    digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    if not ctx.record_module_data and digest in seen:
+        return seen[digest]
+    component = statement_module_data(code, ctx.user_ns)
+    if ctx.record_module_data:
+        seen[digest] = component
+    return component
+
+
 def compute_cache_key(
     code: str,
     inputs: set[str],
@@ -695,8 +728,13 @@ def compute_cache_key(
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
         f"{occurrence_component}{callee_component}{environment}"
     )
+    # Last, and only when there is some, so every other key is unchanged.
+    module_data = _module_data_component(code, ctx, f"{namespace}:{combined_hash_str}")
+    combined_hash_str += module_data
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
+    if module_data and ctx.module_data_by_key is not None:
+        ctx.module_data_by_key[cache_key] = module_data
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(

@@ -43,6 +43,7 @@ from ...source_norm import exact_source_digest
 from ...tracking.randomness import capture_rng_state, carrier_positions, rng_carrier_kind, rng_modules_changed
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
+from ..callee_reach import reached_user_code
 from ..lineage_formula import statement_environment_reads
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.file_deps import compute_file_hash_component
@@ -310,9 +311,9 @@ class ControlStructureProcessor:
           the loop would skip the write;
         * no clock or uuid read, in it or in a function it calls: its
           outcome is not a function of its inputs;
-        * no environment read, in it or in a function it calls: a statement
-          folds the value into its key and lineage, which a trusted record
-          would skip;
+        * no environment read and no data of the user's modules read, in it
+          or in a function it calls: a statement folds the value into its key
+          and lineage, which a trusted record would skip;
         * no global mutated in place by a function it calls, and no RNG
           object read: effects the entry lineages do not show.
 
@@ -342,7 +343,11 @@ class ControlStructureProcessor:
                 or statement_environment_reads(source, user_ns)
             ):
                 return None
-        if CodeAnalyzer.scan_for_forbidden_functions(code, user_ns) or statement_environment_reads(code, user_ns):
+        if (
+            CodeAnalyzer.scan_for_forbidden_functions(code, user_ns)
+            or statement_environment_reads(code, user_ns)
+            or reached_user_code(code, user_ns).data
+        ):
             return None
         if callee_global_mutations(ast.parse(code), resolve):
             return None

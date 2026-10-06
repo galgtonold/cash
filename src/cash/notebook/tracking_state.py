@@ -152,6 +152,17 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineageBuilder, VirtualLineage.
     no_cache_values: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # What the data of the user's modules a statement reads held when the
+    # runtime last keyed it (``lineage_formula.module_data_component``): by
+    # the statement's key without that data, and by its full key. The values
+    # are read when the statement runs; the simulation, which cannot know
+    # what a module held at that point of the notebook, reads them back, so
+    # ``mylib.K = 7`` in a cell BELOW a reader does not re-key the reader.
+    # W: compute_cache_key (runtime keys). R: compute_cache_key (other keys),
+    # StatementLineageBuilder, StatementLineage.
+    module_data_seen: dict[str, str] = field(default_factory=dict)
+    module_data_by_key: dict[str, str] = field(default_factory=dict)
+
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
     # those, their file-hash component). The runtime derives a control

@@ -29,7 +29,7 @@ from ..effects import environment_component, environment_input
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import compute_hash, is_identity_fallback_hash
-from .callee_reach import reached_user_code
+from .callee_reach import Reach, reached_user_code
 
 logger = logging.getLogger(__name__)
 
@@ -275,20 +275,25 @@ def _written_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> 
     return found
 
 
-def callee_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> set[tuple[str, str]]:
+def callee_environment_reads(
+    code: str, user_ns: Mapping[str, Any] | None, reach: Reach | None = None
+) -> set[tuple[str, str]]:
     """The environment reads inside the user's functions *code* calls.
 
     ``m = mylib.mode()`` with ``mode`` reading ``os.environ["MODE"]``: the
     statement's text reads no environment, and the cell setting ``MODE`` was
     edited and the notebook run again, the old mode was served. The functions
-    are found by :func:`~cash.notebook.callee_reach.reached_user_code` and read
-    by the decorator's own analysis (`PurityReport.environment_reads`), which
-    follows the helpers they call, in their module and in others of the user's.
+    are found by :func:`~cash.notebook.callee_reach.reached_user_code` (or
+    given as *reach*) and read by the decorator's own analysis
+    (`PurityReport.environment_reads`), which follows the helpers they call,
+    in their module and in others of the user's.
     """
     if not user_ns:
         return set()
+    if reach is None:
+        reach = reached_user_code(code, user_ns)
     found: set[tuple[str, str]] = set()
-    for fn in reached_user_code(code, user_ns).functions:
+    for fn in reach.functions:
         if fn.__globals__ is user_ns:
             # Defined in a cell: its reads are the notebook's own business
             # (the reach still follows it to the module functions it calls).
@@ -298,6 +303,30 @@ def callee_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> se
         except Exception:  # noqa: BLE001 - the analysis of arbitrary user code
             logger.debug("Could not analyse %r for the environment it reads", fn, exc_info=True)
     return found
+
+
+def module_data_component(reach: Reach) -> str:
+    """What the data of the user's modules that *reach* reads holds now,
+    digested: empty when it reads none.
+
+    ``b = mylib.from_k(10)`` with ``from_k`` reading the module's ``K``: a
+    cell setting ``mylib.K = 7`` (or ``mylib.CONFIG["k"] = 7``,
+    ``mylib.set_k(7)``, ``setattr(mylib, "K", 7)``) changes the answer and
+    leaves the module's file as it was, so a key built from the file served
+    the old answer. The values are folded, as the decorator folds the module
+    globals a cached function reads, however they were set.
+    """
+    if not reach.data:
+        return ""
+    parts = []
+    for label, value in reach.data:
+        try:
+            digest = compute_hash(value)
+        except Exception:  # noqa: BLE001 - hashing arbitrary user data
+            logger.debug("Could not hash module data %s", label, exc_info=True)
+            digest = "unhashable:" + secrets.token_hex(16)
+        parts.append(f"{label}={digest}")
+    return ":moddata:" + ":".join(parts)
 
 
 def statement_environment_component(code: str, user_ns: Mapping[str, Any] | None = None) -> str:
@@ -312,6 +341,25 @@ def statement_environment_component(code: str, user_ns: Mapping[str, Any] | None
     first tenant's answer.
     """
     return environment_component(statement_environment_reads(code, user_ns))
+
+
+def statement_module_data(code: str, user_ns: Mapping[str, Any] | None) -> str:
+    """:func:`module_data_component` of what *code* reaches now."""
+    if not code or not user_ns:
+        return ""
+    return module_data_component(reached_user_code(code, user_ns))
+
+
+def module_data_lineage_component(tracking_state: Any, cache_key: str | None) -> str:
+    """The module data the statement keyed *cache_key* read, for its outputs'
+    lineage: what its key folded (``TrackingState.module_data_by_key``), so a
+    reader below misses when the data changed. ONE lookup for the runtime
+    (``statement/lineage.py``) and the simulation (``upstream/statement_lineage.py``).
+    """
+    by_key = getattr(tracking_state, "module_data_by_key", None)
+    if not by_key or not cache_key:
+        return ""
+    return by_key.get(cache_key, "")
 
 
 def callable_source_component(function_tracker: Any, inputs: set[str], user_ns: dict) -> str:

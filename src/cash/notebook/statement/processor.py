@@ -352,6 +352,8 @@ class StatementProcessor:
                 user_ns=self.shell.user_ns,
                 function_tracker=self.function_tracker,
                 compute_hash_fn=self.compute_hash,
+                module_data_seen=self.tracking_state.module_data_seen,
+                module_data_by_key=self.tracking_state.module_data_by_key,
             ),
             outputs=set(effects.outputs),
         )
@@ -1229,6 +1231,9 @@ class StatementProcessor:
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     compute_hash_fn=self.compute_hash,
+                    module_data_seen=self.tracking_state.module_data_seen,
+                    module_data_by_key=self.tracking_state.module_data_by_key,
+                    record_module_data=True,
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
