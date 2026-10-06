@@ -37,17 +37,22 @@ a self-iterator *and* it hits the by-ref fallback.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import io
 import itertools
 import logging
 import queue
 import types
+from collections.abc import Iterable, Mapping
 from typing import Any
+
+from ..analysis.mutations import consumed_input_names
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "drawn_stream_inputs",
     "is_consumable_unrestorable",
     "consumable_state",
     "has_diverged",
@@ -267,3 +272,37 @@ def is_write_stream(obj: Any) -> bool:
         return isinstance(mode, str) and any(c in mode for c in "wax+")
     except (OSError, AttributeError):
         return False
+
+
+def drawn_stream_inputs(
+    tree: ast.Module | None,
+    inputs: Iterable[str],
+    outputs: Iterable[str],
+    user_ns: Mapping[str, Any],
+) -> list[str]:
+    """The inputs a statement draws from that a cache hit could not advance.
+
+    An iterator or stream held in a variable (``iter(rows)``, a
+    ``csv.reader``, an open file, ``io.StringIO``, an ``islice``, a
+    generator, a queue) moves when the statement reads from it:
+    ``header = parse(next(rows))``. A stored entry holds the statement's
+    outputs only, so a hit would leave the iterator where it was and the
+    next reader would get the header again. Such a statement runs every
+    time. A name the statement also rebinds is restored with the other
+    outputs and does not count.
+    """
+    names = set(inputs) - set(outputs)
+    if not names:
+        return []
+    drawn = consumed_input_names(tree) & names
+    found = []
+    for name in sorted(drawn):
+        value = user_ns.get(name)
+        if value is None:
+            continue
+        try:
+            if _is_self_iterator(value) or is_consumable_unrestorable(value):
+                found.append(name)
+        except (TypeError, ValueError, AttributeError, RecursionError):
+            continue
+    return found

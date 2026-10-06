@@ -23,6 +23,7 @@ from cash.notebook.cache_key import (
     statement_source_hash,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
+from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -617,6 +618,14 @@ class StatementProcessor:
         )
         if not cacheable:
             run.metrics["uncacheable_reasons"].extend(reasons)
+            run.skip_cache = True
+            return
+        drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+        if drawn:
+            run.metrics["uncacheable_reasons"].append(
+                f"Reads from {', '.join(repr(n) for n in drawn)}, an iterator or stream: "
+                f"a cache hit would not advance it, so the statement runs every time"
+            )
             run.skip_cache = True
 
     def _lookup(

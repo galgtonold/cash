@@ -76,7 +76,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3 -->
+<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @410f15d5 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
@@ -87,6 +87,7 @@ they talk to the outside world.
 | draws on the current pyplot figure (`plt.plot`, `plt.show`) | runs every time |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
+| reads from an iterator or open file held in a variable (`next(rows)`, `fh.readline()`, `islice(src, 3)`) | runs every time: a hit would not move the iterator on; a slow call inside it is still cached |
 | takes under 10 ms | runs every time: too cheap to store |
 | reads over the network (`requests.get`, `session.get`) | cached |
 | reads a database (`SELECT`, `pd.read_sql`) | cached |
