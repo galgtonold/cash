@@ -18,6 +18,7 @@ from .._clock import perf_counter as _perf_counter
 from .._memo import RESULT_TYPES, LruMemo
 from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import PickleSerializer
+from ..backends.tiered_backend import TieredBackend
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..lineage_tag import set_tags
@@ -27,6 +28,7 @@ from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH, BodyRun, Call
+from .dynamic_sources import DynamicSources, recorded_sources, remember_sources
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
@@ -132,6 +134,9 @@ class StoreRequest:
     #: Why one of a manifest's chunks stayed in RAM, which leaves the entry
     #: RAM-only whatever happens to the manifest itself.
     chunks_not_persisted: str | None = None
+    #: The non-file ``dynamic_depends_on=`` sources of the cached functions
+    #: the call ran (`recorded_sources`).
+    dynamic_sources: DynamicSources | None = None
 
 
 @dataclass
@@ -224,9 +229,8 @@ class ResultStore:
                 f"a memoised helper handed it data read from an earlier version of "
                 f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now"
             )
-        untracked = getattr(tracker, "untracked_sources", None)
-        if refusal is None and untracked:
-            refusal = self._untracked_source_refusal(func_name, sorted(untracked))
+        if refusal is None:
+            refusal = self._unpicklable_source_refusal(func_name, recorded_sources(tracker))
         if refusal is None and self._files.code_moved_since_keyed(func, func_name):
             refusal = "its code changed on disk after this process keyed it"
         if refusal is None and observer is not None and observer.mock_called:
@@ -249,25 +253,44 @@ class ResultStore:
             )
         return refusal
 
-    def _untracked_source_refusal(self, func_name: str, sources: list[str]) -> str:
-        """Warn (once) that a cached function this call ran depends on a
-        ``dynamic_depends_on=`` source this entry could not check, and say
-        why the result is not stored."""
-        shown = ", ".join(sources[:3]) + (f" and {len(sources) - 3} more" if len(sources) > 3 else "")
+    def _unpicklable_source_refusal(self, func_name: str, sources: DynamicSources | None) -> str | None:
+        """Why the result is not stored when a cached function this call ran
+        depends, through ``dynamic_depends_on=``, on a source that cannot be
+        pickled with the entry, or None to store it.
+
+        Only this process can ask such a source for its token, so the entry
+        stays in RAM (`PersistencePolicy.decide`, ``process_local``). A
+        backend with no RAM tier would write it where only this process can
+        use it: not stored. Warned once either way, unless the backend keeps
+        nothing past the process anyway."""
+        if sources is None or sources.picklable:
+            return None
+        backend = self._backend_slot.backend
+        if isinstance(backend, InMemoryBackend):
+            return None
+        kept = isinstance(backend, TieredBackend) and isinstance(backend.backends[0], InMemoryBackend)
+        ids = sources.unpicklable_ids
+        shown = ", ".join(ids[:3]) + (f" and {len(ids) - 3} more" if len(ids) > 3 else "")
+        what = (
+            "The result is kept in memory for this process only and not written to disk."
+            if kept
+            else "The result was returned but not cached."
+        )
         self._notices.warn_once(
             CashCacheStoreFailedWarning,
             func_name,
             "untracked_source",
             f"@cash.cache on {func_name}: a cached function it calls depends on {shown} "
-            f"through dynamic_depends_on=, which only a call of that function can check. "
-            f"The result was returned but not cached, so it is never served after the "
-            f"source changes.",
+            f"through dynamic_depends_on=, and that source cannot be pickled, so a later "
+            f"process could not ask it whether it changed. {what}",
             code="STORE-UNTRACKED-SOURCE",
-            fix="call that function outside this one and pass its result in as an argument, "
-            "or make the source a FileDataSource or RemoteFileDataSource, which a caller's "
-            "entry checks itself.",
+            fix="make the source picklable (no open connection or lock held as an attribute: "
+            "open it in state_token()), or call that function outside this one and pass its "
+            "result in as an argument.",
         )
-        return f"a cached function it calls depends on {sources[0]}, which this entry cannot check"
+        if kept:
+            return None
+        return f"a cached function it calls depends on {ids[0]}, which cannot be pickled with the entry"
 
     def _result_ref(self, func_name: str, result: Any) -> list | None:
         """``["global" | "closure", name]`` when *result* is that variable's own
@@ -419,6 +442,7 @@ class ResultStore:
         call, func_name = request.call, request.func_name
         cache_key, ttl = call.cache_key, call.ttl
         execution_time, body_seconds = request.execution_time, request.body_seconds
+        dynamic = request.dynamic_sources
         try:
             serializer = PickleSerializer()
 
@@ -490,6 +514,10 @@ class ResultStore:
                 copy_required=not self._registry.is_frozen(func_name),
                 read_only=_read_only_array(result) or None,
                 result_ref=self._result_ref(func_name, result),
+                # The non-file sources its cached callees resolved, with their
+                # tokens: a lookup asks them again (`dynamic_sources_fresh`).
+                dynamic_sources=dynamic.records if dynamic is not None else None,
+                process_local=True if dynamic is not None and not dynamic.picklable else None,
                 **(request.manifest or {}),
             )
 
@@ -497,6 +525,8 @@ class ResultStore:
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
             self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            if dynamic is not None:
+                remember_sources(cache_key, dynamic)
             # A tiered backend catches each tier's failure so one bad tier
             # cannot break a call; it reports them here instead, and a result
             # nothing could store is a STORE-FAILED like any other.
@@ -715,6 +745,7 @@ class ResultStore:
                 execution_time=chunks.produced_seconds,
                 auto_file_deps=auto_file_deps,
                 chunks_not_persisted=chunks.not_persisted,
+                dynamic_sources=recorded_sources(tracker),
             ),
             {"n_chunks": n_chunks, "total_items": chunks.total_items, **_returned(returned)},
             chunks.stream,

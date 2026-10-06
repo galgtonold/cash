@@ -52,6 +52,7 @@ from .call_state import (
 )
 from .class_data import CLASSES_FOLDED
 from .closure_fold import EVERY_PARAMETER, defaults_of
+from .dynamic_sources import dynamic_sources_fresh, held_sources, recorded_sources
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import (
     note_unentered_body,
@@ -659,6 +660,14 @@ class CallRunner:
             # consumer's first run hides its file deps behind a cache hit
             # and the consumer never invalidates when that file changes.
             propagate_file_deps_to_active_tracker(metadata, func_name)
+            # And the sources its callees resolved, which the verdict just
+            # found unchanged: the enclosing call depends on them too.
+            if metadata.dynamic_sources:
+                held = held_sources(cache_key, metadata.dynamic_sources)
+                if held is not None:
+                    pass_dynamic_sources_up(
+                        [(source, record["token"]) for source, record in zip(held, metadata.dynamic_sources)]
+                    )
             # Re-attach the lineage hash to the restored value. It's a plain
             # attribute that doesn't survive pickling, so a value restored
             # from disk would otherwise lose it - and a downstream cached
@@ -705,6 +714,11 @@ class CallRunner:
             return MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
         if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
             return MissReason(MissKind.FILE, describe_stale_files(metadata))
+        if metadata.dynamic_sources and not dynamic_sources_fresh(cache_key, metadata.dynamic_sources):
+            return MissReason(
+                MissKind.DYNAMIC,
+                "a dynamic_depends_on= source of a cached function it calls changed, or could not be asked",
+            )
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         return None
@@ -1022,6 +1036,7 @@ class CallRunner:
                         run.carriers_moved,
                         run.arg_carriers_moved,
                     ),
+                    dynamic_sources=recorded_sources(run.tracker),
                 ),
                 res,
             )

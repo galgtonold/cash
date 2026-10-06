@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/store.py:ResultStore.store @60e2897e, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @fce69c82, cash/decorator/store.py:ResultStore.store @e0b309b3, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -68,12 +68,15 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @2270c6c5, cash/backends/tiered_backend.py:TieredBackend.set @66b71f6c -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @9833f8dc, cash/backends/tiered_backend.py:TieredBackend.set @66b71f6c -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
-The one exception is a value too big for every disk tier's size cap: it stays in
-RAM for this process, and
-[`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big) says so.
+There are two exceptions, and each stays in RAM for this process with a
+warning: a value too big for every disk tier's size cap
+([`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big)), and the result of
+a function that calls a cached function whose `dynamic_depends_on=` source
+cannot be pickled
+([`STORE-UNTRACKED-SOURCE`](warnings.md#store-untracked-source)).
 
 ### Cache folder
 
@@ -383,11 +386,10 @@ def leaderboard():
 example one file per tenant. If the resolver raises or returns something that is
 not a `DataSource`, the call runs uncached with
 [`KEY-DYNAMIC-DEP-FAILED`](warnings.md#key-dynamic-dep-failed). A cached
-function that calls this one depends on the same sources: a file source
-becomes a file its entry checks, and any other source leaves its result
-unstored, with
-[`STORE-UNTRACKED-SOURCE`](warnings.md#store-untracked-source). See
-[Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
+function that calls this one depends on the same sources: its entry keeps
+each source with its token and asks it again on every lookup
+([Cached functions that call it](tutorials/feature-guides/dynamic-dependencies.md#cached-functions-that-call-it)).
+See [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md).
 
 ### `cache_if=`
 
@@ -397,7 +399,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @fce69c82 -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.
@@ -552,7 +554,7 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @6d9b4781 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @ee297178 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed

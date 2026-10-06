@@ -133,6 +133,8 @@ class EntryMetadata(TypedDict, total=False):
     decorator_entry: bool
     #: A value the same batch replaces later; judged at its end instead.
     defer_persist: bool
+    #: Only this process can check the entry: never past RAM.
+    process_local: bool
     #: The value's type, for `cost_model`'s restore prediction.
     cost_model_family: str
     cost_model_type_name: str
@@ -148,7 +150,7 @@ class EntryMetadata(TypedDict, total=False):
     # Written back by the tiered backend.
     #: What rebuilding the value would cost, when it was persisted for that.
     rebuild_time: float
-    #: Why the value stayed in RAM: compute, bytes, size or replaced_in_cell.
+    #: Why the value stayed in RAM: compute, bytes, size, replaced_in_cell or process_local.
     persist_skipped: str
     #: The tiers whose write raised, and what they raised.
     store_errors: list[str]

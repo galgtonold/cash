@@ -280,7 +280,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # returned, so the result was not stored
         "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked
         "STORE-UNTRACKED-SOURCE",  # a cached callee depends on a dynamic source
-        # the caller's entry cannot check, so the result was not stored
+        # that cannot be pickled, so the caller's result stays in RAM (or,
+        # with no RAM tier, is not stored)
         "STORE-METADATA-INVALID",  # a stored entry's metadata did not validate
     }
 )

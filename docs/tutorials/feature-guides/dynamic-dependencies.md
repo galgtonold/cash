@@ -50,7 +50,7 @@ load("labels")     # cache miss: different arguments
 load("features")   # cache miss: the version moved
 ```
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @ef84a455, cash/data_source.py:DataSource.state_token @89498b3e -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @25ce0fda, cash/data_source.py:DataSource.state_token @89498b3e -->
 A resolver may return one `DataSource`, a list of them, or `None` (no dynamic
 dependency for this call). You can also pass a list of resolvers; their sources
 are pooled. The order of the sources does not matter.
@@ -77,6 +77,33 @@ even when it leaves the timestamp where it was.
 
 The digest is remembered per
 file stat, so an unchanged file costs one `stat` per lookup.
+
+## Cached functions that call it
+
+<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @1b90c527, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @17334556, cash/decorator/dynamic_sources.py:held_sources @59e995f7 -->
+A cached function that calls `load` depends on the same sources, though its
+own key never sees them. cash keeps them in its entry instead:
+
+- a `FileDataSource` or `RemoteFileDataSource` becomes a file the caller's
+  entry checks, as for a file the caller read itself;
+- any other source is stored in the caller's entry, pickled, with the token it
+  gave when `load` was called. Every lookup of the caller asks the source for
+  its token again: the same token serves the entry, another one recomputes
+  it, and so does a `state_token()` that raises.
+
+In the process that wrote the entry, the source object itself is asked. A
+later process asks the copy pickled with the entry, so **`state_token()` must
+read the version from where it lives** (the catalog, the database, the
+server), not from an attribute the object set when it was made, as
+`DatasetVersion` above does.
+
+<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/backends/persistence_policy.py:PersistencePolicy.decide @9833f8dc -->
+A source that cannot be pickled (one holding an open connection or a lock)
+can only be asked by the process that has it. The caller's entry then stays
+in RAM for this process, and is not written to disk; with a backend that has
+no RAM tier it is not stored at all. Either way cash warns once with
+[`STORE-UNTRACKED-SOURCE`](../../warnings.md#store-untracked-source). Open
+the connection inside `state_token()` and the source pickles.
 
 ## When the resolver fails
 

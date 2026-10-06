@@ -203,9 +203,9 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @60e2897e -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e0b309b3 -->
 A result is written to the RAM tier and to disk, however cheap it was, unless
-a tier's size cap refuses it; see
+a tier's size cap refuses it or a source it depends on cannot be pickled; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the
 stored bytes, not the object the first call returned, and it does not replay
 the body's `print` output.

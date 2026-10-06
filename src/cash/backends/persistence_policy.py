@@ -78,7 +78,8 @@ class Decision(NamedTuple):
     """Whether one entry goes past RAM, and why not when it does not."""
 
     persist: bool
-    #: Why it stayed in RAM: ``"compute"``, ``"bytes"`` or ``"replaced_in_cell"``;
+    #: Why it stayed in RAM: ``"compute"``, ``"bytes"``, ``"replaced_in_cell"``
+    #: or ``"process_local"``;
     #: None when it is persisted, or when nothing was decided.
     skipped: str | None = None
     #: The bytes the entry was judged by, its referenced results included.
@@ -164,6 +165,9 @@ class PersistencePolicy:
         """
         size = metadata.get("size", 0) or 0
         cap_size = size or metadata.get("cost_model_size_bytes", 0)
+        if metadata.get("process_local"):
+            # Only this process can check it (`ResultStore._unpicklable_source_refusal`).
+            return Decision(False, "process_local", cap_size)
         if metadata.get("force_persist"):
             return Decision(True, weight=cap_size)
         if deferred:

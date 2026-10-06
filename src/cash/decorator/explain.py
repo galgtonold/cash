@@ -329,6 +329,8 @@ def not_persisted_reason(stored_meta: dict[str, Any]) -> str | None:
         return None
     if skipped == "size":
         return "too big for the persistent tier's size cap"
+    if skipped == "process_local":
+        return "a dynamic_depends_on= source of a cached function it calls cannot be pickled"
     # The notebook's other reasons (the persistence floor, the cost model,
     # the rate ceiling) cannot apply to a decorated result: `@cash.cache`
     # persists what it is given, and only a size cap stops it (see

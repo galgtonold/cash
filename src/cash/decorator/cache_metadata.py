@@ -98,6 +98,15 @@ class CacheMetadata:
     #: name holds instead (`ResultStore.restore_identity`).
     result_ref: list | None = None
 
+    #: The non-file ``dynamic_depends_on=`` sources of the cached functions
+    #: the call ran: per source its ``id``, its ``token`` when the call ran
+    #: and, when it pickles, the ``pickle`` (base64). A lookup asks each for
+    #: its token again (`dynamic_sources_fresh`).
+    dynamic_sources: list[dict[str, str]] | None = None
+    #: One of those sources does not pickle, so only this process can check
+    #: the entry: it stays in RAM (`PersistencePolicy.decide`).
+    process_local: bool | None = None
+
     force_persist: bool | None = None
     metadata_only: bool | None = None
 

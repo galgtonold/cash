@@ -226,24 +226,25 @@ def _track_declared(tracker: Any, path: str) -> None:
             tracker.add_tracked_absent(normalize_path(os.path.normpath(path)))
 
 
-def pass_dynamic_sources_up(sources: list) -> None:
+def pass_dynamic_sources_up(sources: list[tuple[Any, str]]) -> None:
     """Make the cached calls around this one depend on the sources its
-    ``dynamic_depends_on=`` resolved to.
+    ``dynamic_depends_on=`` resolved to, each with the token the key took.
 
     They are folded into this call's own key, which an enclosing cached
     caller never sees: ``report()`` calling ``load("data.txt")`` kept serving
     its old result after ``data.txt`` changed, while ``load`` recomputed. A
     file -- local or remote -- is recorded on the enclosing tracker as a read,
     so the caller's entry checks it on every lookup, as for a file
-    ``file_depends_on=`` names. Any other source is one only a call of this
-    function can check: the caller's entry is not stored
-    (`ResultStore.refusal`). Called while the key is built, on a hit as on a
-    miss, when the active tracker is the caller's.
+    ``file_depends_on=`` names. Any other source is recorded with its token:
+    the caller's entry keeps both and asks the source again on every lookup
+    (`dynamic_sources_fresh`). Called while the key is built, on a hit as on
+    a miss, when the active tracker is the caller's, and when a caller's own
+    entry is served inside another cached call (`CallRunner._try_get_cached`).
     """
     tracker = active_tracker.get()
     if tracker is None:
         return
-    for source in sources:
+    for source, token in sources:
         if isinstance(source, FileDataSource):
             _track_declared(tracker, source.filepath)
         elif isinstance(source, RemoteFileDataSource):
@@ -251,9 +252,9 @@ def pass_dynamic_sources_up(sources: list) -> None:
                 remember_read_options(source.url, source.storage_options)
             tracker.add_tracked_remote(source.url)
         else:
-            add = getattr(tracker, "add_untracked_source", None)
+            add = getattr(tracker, "add_dynamic_source", None)
             if add is not None:
-                add(source.get_id())
+                add(source.get_id(), source, token)
 
 
 def _glob_base(pattern: str) -> str:

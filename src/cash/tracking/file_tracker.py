@@ -163,10 +163,11 @@ class FileAccessTracker:
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
         # Sources a cached call in this block depends on through
-        # ``dynamic_depends_on=`` that are not files cash can check: an entry
-        # of this block's own could not tell when they change
-        # (`pass_dynamic_sources_up`).
-        self.untracked_sources: set[str] = set()
+        # ``dynamic_depends_on=`` that are not files: id -> (source, its
+        # token when that call keyed on it). An entry of this block's own
+        # records them and asks them again on lookup
+        # (`pass_dynamic_sources_up`, `dynamic_sources_fresh`).
+        self.dynamic_sources: dict[str, tuple[Any, str]] = {}
         # Files and directories this block CREATED (opened with "w"/"x",
         # made with mkdir/mkdtemp), resolved. What the block reads back from
         # them is its own output, not an input: unzipping into a temporary
@@ -591,11 +592,12 @@ class FileAccessTracker:
         for tracker in self._self_and_parents():
             tracker.accessed_remote.add(url)
 
-    def add_untracked_source(self, source_id: str) -> None:
-        """Record a data source this block depends on that no entry can
-        check, here and on the parents."""
+    def add_dynamic_source(self, source_id: str, source: Any, token: str) -> None:
+        """Record a data source this block depends on, with its token now,
+        here and on the parents. The first token seen is kept: one that
+        moved within the block makes the entry miss on its next lookup."""
         for tracker in self._self_and_parents():
-            tracker.untracked_sources.add(source_id)
+            tracker.dynamic_sources.setdefault(source_id, (source, token))
 
 
 #: Seconds spent recording reads; `tracking_seconds`.

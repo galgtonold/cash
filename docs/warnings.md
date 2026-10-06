@@ -602,7 +602,7 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @112b2842 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @fce69c82, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @112b2842 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @098b9d7f, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, except those
@@ -880,7 +880,7 @@ such as `depends_on=[math.sqrt]`, will not change between runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @ef84a455 -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @25ce0fda -->
 **What happened.** A `dynamic_depends_on=` resolver raised, or returned
 something that is not a `DataSource`, a list of them, or `None`. The call ran
 uncached.
@@ -1627,7 +1627,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
-| [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source it cannot check; not stored |
+| [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
 ### STORE-CHUNK-FAILED {#store-chunk-failed}
 
@@ -1668,7 +1668,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @60e2897e -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e0b309b3 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.
@@ -1754,22 +1754,26 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @84f8eb79, cash/decorator/store.py:ResultStore._untracked_source_refusal @1ea7f346 -->
+<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/decorator/dynamic_sources.py:recorded_sources @221fe723 -->
 **What happened.** The function calls a cached function whose
-`dynamic_depends_on=` returned a `DataSource` other than a file. Only a call
-of that function can check whether the source changed, and a hit of this
-function does not call it. The result was returned but not cached.
+`dynamic_depends_on=` returned a `DataSource` that cannot be pickled. This
+function's entry keeps such sources so a lookup can ask them whether they
+changed, and a later process could not. So the result is kept in memory for
+this process only, and not written to disk. With a backend that has no RAM
+tier, it was returned but not cached.
 
-**Why it matters.** Every call of this function recomputes; the cached
-function it calls is still served from its own entries. Nothing stale is
-served. A `FileDataSource` or `RemoteFileDataSource` does not warn: the
-caller's entry checks the file itself, as for one it read.
+**Why it matters.** The next process recomputes this function (with no RAM
+tier, every call does); the cached function it calls is still served from its
+own entries. Nothing stale is served. A source that pickles does not warn: its
+copy is stored with the entry
+([Cached functions that call it](tutorials/feature-guides/dynamic-dependencies.md#cached-functions-that-call-it)).
 
-**What to do.** Call that function outside this one and pass its result in as
-an argument, or make the source a `FileDataSource` or `RemoteFileDataSource`.
+**What to do.** Make the source picklable: keep no open connection, lock or
+client on it, and open what `state_token()` needs inside it. Or call that
+function outside this one and pass its result in as an argument.
 
 **When it is safe to ignore.** When this function is cheap next to the one it
-calls.
+calls, or the script runs once.
 
 ## Related
 
