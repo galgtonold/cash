@@ -88,3 +88,27 @@ def test_a_new_glob_match_recomputes(disk_cash, data):
     assert count() == 2
     (data / "new.txt").write_text("x", encoding="utf-8")
     assert count() == 3
+
+
+@pytest.mark.parametrize(
+    "declared, inside",
+    [("data.txt", "data.txt"), ("in", "in/data.txt"), ("in/*.txt", "in/data.txt")],
+    ids=["file", "directory", "glob"],
+)
+def test_a_relative_declaration_follows_the_working_directory(disk_cash, tmp_path, monkeypatch, declared, inside):
+    """A relative ``file_depends_on=`` is a file of the directory each call
+    runs in, as ``open`` of it is. It was made absolute when the function
+    was decorated, so a run from another directory checked the first
+    directory's file and was served its result."""
+    for name, text in (("A", "alpha"), ("B", "beta")):
+        _write(tmp_path / name / inside, text)
+    monkeypatch.chdir(tmp_path / "A")
+
+    @disk_cash.cache(file_depends_on=declared)
+    def load():
+        return _read(inside)
+
+    assert load() == "alpha"
+    monkeypatch.chdir(tmp_path / "B")
+    assert load() == "beta", "a run from B was served A's result"
+    assert load() == "beta" and load.cache_info()["hits"] == 1, "B's result is not served again"

@@ -137,8 +137,8 @@ class CachedFunction:
     purity: PurityMode = "warn"
     frozen: bool = False
     allow_random: bool = False
-    #: ``file_depends_on=`` as ``(as written, absolute)`` pairs.
-    declared_files: tuple[tuple[str, str], ...] = ()
+    #: ``file_depends_on=`` as written.
+    declared_files: tuple[str, ...] = ()
     #: ``key=`` or the ignored parameters (`arg_key.ArgKey`); None keys every argument.
     arg_key: Any = None
 

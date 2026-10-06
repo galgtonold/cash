@@ -166,6 +166,16 @@ def argument_paths(args: tuple, kwargs: dict) -> set[str]:
     return found
 
 
+def _track_one(tracker: Any, path: str) -> None:
+    """Record the existing *path* by its real path and, when it is relative,
+    also as written, as a body's ``open`` of it is: that spelling is resolved
+    against the working directory of each lookup, so a lookup from another
+    directory checks the file there, not the one this call found."""
+    tracker.add_tracked(normalize_path(os.path.realpath(path)))
+    if not os.path.isabs(path):
+        tracker.add_tracked(normalize_path(os.path.normpath(path)))
+
+
 def _track_directory(tracker: Any, path: str) -> None:
     """A declared directory: every file under it by content, and every
     directory in it by its listing, so an edit, a new file and a removed one
@@ -173,9 +183,9 @@ def _track_directory(tracker: Any, path: str) -> None:
     it is edited, so it alone would not do."""
     for root, dirs, files in os.walk(path):
         dirs.sort()
-        tracker.add_tracked(normalize_path(os.path.realpath(root)))
+        _track_one(tracker, root)
         for name in sorted(files):
-            tracker.add_tracked(normalize_path(os.path.realpath(os.path.join(root, name))))
+            _track_one(tracker, os.path.join(root, name))
 
 
 def _track_pattern(tracker: Any, pattern: str) -> None:
@@ -189,10 +199,10 @@ def _track_pattern(tracker: Any, pattern: str) -> None:
             _track_directory(tracker, match)
             continue
         listed.add(os.path.dirname(match) or ".")
-        tracker.add_tracked(normalize_path(os.path.realpath(match)))
+        _track_one(tracker, match)
     for directory in sorted(listed):
         if os.path.isdir(directory):
-            tracker.add_tracked(normalize_path(os.path.realpath(directory)))
+            _track_one(tracker, directory)
 
 
 def _glob_base(pattern: str) -> str:
@@ -228,7 +238,7 @@ class FileDeps:
         declared = cf.declared_files if cf is not None else ()
         if not declared:
             return state_hash
-        names = json.dumps(sorted(raw for raw, _ in declared))
+        names = json.dumps(sorted(declared))
         return hashlib.sha256(f"{state_hash}:files:{names}".encode()).hexdigest()
 
     def track_declared_files(self, tracker: Any, func_name: str) -> None:
@@ -239,18 +249,25 @@ class FileDeps:
         ``touch`` does not recompute, and an edit that keeps the mtime does.
         Called inside the timed body, so the content hash is taken off the body
         time with the tracker's other read hashes.
+
+        A relative path is resolved against the working directory of this
+        call, as the body's own ``open`` of it would be, and is recorded as
+        written too (`_track_one`): resolved once at decoration, a run from
+        another directory checked, and was served, the first directory's file.
         """
 
         cf = self._registry.cached.get(func_name)
-        for _, path in cf.declared_files if cf is not None else ():
+        for path in cf.declared_files if cf is not None else ():
             if glob.has_magic(path):
                 _track_pattern(tracker, path)
             elif os.path.isdir(path):
                 _track_directory(tracker, path)
             elif os.path.exists(path):
-                tracker.add_tracked(normalize_path(os.path.realpath(path)))
+                _track_one(tracker, path)
             else:
-                tracker.add_tracked_absent(normalize_path(path))
+                tracker.add_tracked_absent(normalize_path(os.path.abspath(path)))
+                if not os.path.isabs(path):
+                    tracker.add_tracked_absent(normalize_path(os.path.normpath(path)))
 
     def auto_file_deps_fresh(self, metadata: CacheMetadata, *, quiet: bool = False) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
