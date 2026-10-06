@@ -11,6 +11,7 @@ the objects the notebook holds, which the pure-AST modules
 from __future__ import annotations
 
 import ast
+import builtins
 import functools
 import inspect
 import os
@@ -1006,6 +1007,34 @@ def bare_call_argument_names(tree: ast.Module | None) -> frozenset[str]:
     return frozenset(names)
 
 
+#: Builtins that read what they are given and change none of it.
+_READING_BUILTINS = frozenset({"len", "print", "repr", "str", "type", "id", "isinstance"})
+
+#: Libraries whose objects are read by those builtins without side effects.
+#: A class of a notebook's own can do anything in ``__len__`` or ``__repr__``.
+_READ_SAFE_LIBRARIES = frozenset({"builtins", "pandas", "numpy"})
+
+
+def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
+    """``len(df)``, ``print(arr)``: the unshadowed builtin, on pandas, numpy or
+    builtin values only.
+
+    Such a statement is no candidate for a change in place, so its arguments
+    are not fingerprinted before and after: for a frame that is a hash of
+    every value, twice, 14 s for ``len(df)`` over 1.7 million rows.
+    """
+    func = call.func
+    if not (isinstance(func, ast.Name) and func.id in _READING_BUILTINS):
+        return False
+    if func.id in user_ns and user_ns[func.id] is not getattr(builtins, func.id):
+        return False
+    return all(
+        type(user_ns[name]).__module__.partition(".")[0] in _READ_SAFE_LIBRARIES
+        for name in arg_names
+        if name in user_ns
+    )
+
+
 def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
     """Names a bare expression statement hands straight to its call, which the
     call could change in place: ``im.add_qc(df)``, ``sc.tl.leiden(hv)``.
@@ -1022,9 +1051,10 @@ def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str
         if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
             continue
         call = node.value
-        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
-            if isinstance(arg, ast.Name):
-                names.add(arg.id)
+        arg_names = [arg.id for arg in [*call.args, *(kw.value for kw in call.keywords)] if isinstance(arg, ast.Name)]
+        if _only_reads(call, arg_names, user_ns):
+            continue
+        names.update(arg_names)
     out: set[str] = set()
     for name in names:
         if name not in user_ns:
