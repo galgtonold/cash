@@ -691,6 +691,7 @@ class CellExecutor:
         # rendering the DONE badge below so a late fire can't overwrite it.
         self._badges.cancel_progress()
         self._badges.show_error(e, cell.raw_cell, node)
+        e._cash_shown = True  # type: ignore[attr-defined] - read by CashMagics._raising_quietly
         self._badges.finish(
             cell.all_metrics,
             cell.badge_display_id,
@@ -894,14 +895,16 @@ class CellExecutor:
                 )
                 return buffered, _perf_counter() - t_badge
 
-            except Exception as e:  # intentionally broad: catches user code exceptions
+            except (Exception, KeyboardInterrupt, SystemExit) as e:  # intentionally broad: the cell's own error
+                # An interrupt and a ``sys.exit()`` end the cell as an error
+                # does in IPython: shown, and the cell's reply says error.
                 self._finalize_error_badge(e, cell, node)
                 raise
         finally:
             # Cancel on EVERY exit from this statement, not just the two
-            # paths above. A BaseException that isn't an Exception --
-            # KeyboardInterrupt, or asyncio.CancelledError from an interrupted
-            # await -- skips the `except` above entirely. Left armed, that
+            # paths above. A BaseException the `except` does not take --
+            # asyncio.CancelledError from an interrupted await, a
+            # GeneratorExit -- skips it entirely. Left armed, that
             # timer fires later, on whatever cell is running by then.
             # Safe to call unconditionally: a no-op once already cancelled.
             self._badges.cancel_progress()

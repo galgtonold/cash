@@ -351,7 +351,7 @@ class BadgePresenter:
 
     def show_error(
         self,
-        exc: Exception,
+        exc: BaseException,
         raw_cell: str,
         node: ast.AST,
     ) -> None:
