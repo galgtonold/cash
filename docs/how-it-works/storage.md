@@ -208,6 +208,13 @@ that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
 
+<!-- claim: cash/backends/cache_dir.py:remove_orphan_temp_files @d0b7f1ea, cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f -->
+A write that replaces an entry goes to a hidden `.tmp-*.part` file first,
+renamed into place once complete. A process killed in between (a kernel
+restart, an out-of-memory kill) leaves that file behind. The first write of a
+later process on the same machine removes it; one left by another machine
+goes once nobody has written to it for a day.
+
 <!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @3267884e -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has

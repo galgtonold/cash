@@ -26,7 +26,16 @@ from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
-from .cache_dir import CacheDirStamp, create_temp_file, is_cash_file, warn_if_unwritable, warn_unusable, write_all
+from .cache_dir import (
+    CacheDirStamp,
+    create_temp_file,
+    is_cash_file,
+    owned_temp_prefix,
+    remove_orphan_temp_files,
+    warn_if_unwritable,
+    warn_unusable,
+    write_all,
+)
 from .entry_format import (
     ENTRY_SUFFIX,
     CorruptEntry,
@@ -185,6 +194,7 @@ class FileBackend(CacheBackend):
         #: A key this process has read is in use and never pruned.
         self._versions = VersionIndex(self.cache_dir, _untracked)
         self._read_keys: set[str] = set()
+        self._orphans_swept = False
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
 
@@ -520,8 +530,9 @@ class FileBackend(CacheBackend):
         """
         directory = os.path.dirname(path) or "."
         # A temp file in the target directory; the leading dot keeps the
-        # partial out of the ``*.entry`` glob the backend scans.
-        fd, tmp_path = create_temp_file(directory)
+        # partial out of the ``*.entry`` glob the backend scans. Its name
+        # says which process writes it.
+        fd, tmp_path = create_temp_file(directory, prefix=owned_temp_prefix())
         try:
             # Through the descriptor it was created with: reopening the name
             # would raise an ``open`` audit event for the file tracker to
@@ -755,6 +766,11 @@ class FileBackend(CacheBackend):
         previous entry, untouched because the rename never happened, or absent.
         The exception surfaces on the next ``get(key)`` (or ``shutdown()``).
         """
+        if not self._orphans_swept:
+            # Once per process, on the write worker: the partial files of
+            # writes whose process was killed are in no count and no eviction.
+            self._orphans_swept = True
+            remove_orphan_temp_files(self.cache_dir)
         try:
             self._write_cache_files(key, path, metadata, serialized_value)
             if self.evictor.capped:
