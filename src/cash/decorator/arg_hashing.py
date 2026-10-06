@@ -26,7 +26,7 @@ from ..canonical_form import (
     canonical_marker_bytes,
     stable_key_repr,
 )
-from ..content_hashers import BUILTIN_CONTENT, builtin_family_of, builtin_hash, is_native_panic
+from ..content_hashers import BUILTIN_CONTENT, builtin_family_of, builtin_hash, immutable_labels, is_native_panic
 from ..exceptions import CashCacheIneffectiveWarning
 from ..lineage_tag import own_tag
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
@@ -456,6 +456,8 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
             continue
         elif isinstance(holder, pd.Index):
             values = holder._data
+            if type(values) is np.ndarray and values.dtype == object and not immutable_labels(values):
+                return None  # labels that are Python objects change in place too
             if not reference(values):
                 return None
             engine = holder._cache.get("_engine")

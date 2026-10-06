@@ -190,6 +190,46 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     else:
         h.update(b"|index|")
         _fold_pandas_array(h, index, pd)
+    if type(value).__name__ == "DataFrame":
+        # The schema keys the column labels by ``repr``, which for an object
+        # of the user's own is its address: fold the objects themselves.
+        columns = value.columns
+        levels = columns.levels if isinstance(columns, pd.MultiIndex) else [columns]
+        if any(level.dtype == object and not immutable_labels(level._values) for level in levels):
+            h.update(b"|columns|")
+            _fold_pandas_array(h, columns, pd)
+
+
+# What `pandas.api.types.infer_dtype` calls an array of labels no one can
+# change in place: str, bytes, numbers, dates and times.
+_IMMUTABLE_LABEL_KINDS = frozenset(
+    {
+        "empty",
+        "string",
+        "bytes",
+        "integer",
+        "floating",
+        "mixed-integer-float",
+        "decimal",
+        "complex",
+        "boolean",
+        "datetime",
+        "datetime64",
+        "date",
+        "time",
+        "timedelta",
+        "timedelta64",
+    }
+)
+
+
+def immutable_labels(values: Any) -> bool:
+    """Whether an object-dtype pandas axis holds only immutable scalars, read
+    by pandas in C. An index of ``Site`` objects changes with
+    ``a.capacity = 100`` without any array or label ``repr`` changing."""
+    from pandas.api.types import infer_dtype
+
+    return infer_dtype(values, skipna=False) in _IMMUTABLE_LABEL_KINDS
 
 
 def _pandas_value_route(dtype: Any, pd: Any) -> str | None:
