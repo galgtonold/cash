@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import pytest
 
+from cash.analysis.code_analyzer import CodeAnalyzer
 from tests._cell_driver import run_cash_cell
 
 BINDERS = {
     "walrus in an if header": "if (w := base * 2) > 0:\n    pass",
     "walrus in an elif header": "if base < 0:\n    pass\nelif (w := base * 2) > 0:\n    pass",
     "walrus in a for iterable": "for _ in (w := [base * 2]):\n    pass",
+    "exec of a literal": "exec('w = base * 2')",
 }
 
 
@@ -34,3 +36,9 @@ def test_the_binding_reruns_with_its_neighbours(cash_magics, mock_shell, binder)
 
     w, v = mock_shell.user_ns["y"]
     assert (_w(w), v) == (20, 11)
+
+
+def test_exec_of_a_literal_reads_and_binds_what_its_text_does():
+    assert CodeAnalyzer.analyze_code_block("exec('w = base * 2')") == ({"exec", "base"}, {"w"})
+    # Its own namespaces: nothing of the cell's is bound.
+    assert CodeAnalyzer.analyze_code_block("exec('w = 1', {})")[1] == set()

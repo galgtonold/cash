@@ -241,6 +241,12 @@ cell below does not run the command again. The body of a cell magic other than
 namespace (`%%writefile`, `%%script`, `%%timeit`, `%%bash`), and cash never runs
 it. **Fix:** re-run the magic's cell after such an edit.
 
+<!-- claim: cash/analysis/code_analyzer.py:_exec_literal @ba4cb7eb -->
+The same holds for `exec(code)` when `code` is not a string literal: cash reads
+`exec("w = base * 2")` as the assignment it runs, but not text built at run
+time. **Fix:** write the assignment out, or re-run that cell after an edit above
+it.
+
 ### Background threads
 
 A thread that changes data after its cell has finished is outside cash's view.
