@@ -479,10 +479,17 @@ class KeyBuilder:
         if built.call_args_hash is not None or spec.arg_key is None:
             return built.call_args_hash
         try:
-            return self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
+            digest = self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
         except Exception:  # a hash for the record only, never the key
             logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
             return None
+        # An argument the key leaves out is still hashed, here and after the
+        # body: when that is what a miss costs, CACHE-NET-LOSS says so.
+        left_out = _unkeyed_parameters(spec)
+        self._args.note_arg_cost(
+            spec.name, unkeyed=lambda label: left_out is EVERY_PARAMETER or label.partition(":")[0] in left_out
+        )
+        return digest
 
 
 class CallRunner:

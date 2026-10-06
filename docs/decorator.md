@@ -511,7 +511,11 @@ A hit whose arguments differ from those of the call that stored the entry
 is not reported, since that is the point. To see it,
 `f.explain(*args).details["matched_by"]` says when a hit was matched by
 `key=` or the ignored parameters. The check that the body did not change an
-argument in place still looks at every argument, ignored ones included.
+argument in place still looks at every argument, ignored ones included, so
+every miss hashes a large ignored argument in full, before and after the
+body: leaving it out of the key makes hits cheap, not misses.
+[`CACHE-NET-LOSS`](warnings.md#cache-net-loss) says so when that is what a
+miss costs.
 
 ### `allow_random=`
 
