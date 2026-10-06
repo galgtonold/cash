@@ -1,4 +1,4 @@
-"""The ``_cash_lineage_hash`` tag: only ever an INSTANCE's own attribute.
+"""The ``_cash_lineage_hash`` tag: held beside an instance, never on it.
 
 The notebook's lineage store tags a value it records, and the decorator and
 the loop handler trust that tag as the value's identity. A tag set on a CLASS
@@ -7,8 +7,10 @@ instance of the class the same value: ``from pathlib import Path`` in a cached
 cell tagged ``Path``, and every path argument to a ``@cash.cache`` function
 then keyed alike -- a call on one file was served another file's result
 (it first showed up as a "flaky" test in the unit suite). Classes, modules and
-functions are therefore never tagged, and a tag is only ever read from the
-object's own ``__dict__``.
+functions are therefore never tagged. Both paths keep their tags in the side
+table below, so the user's object is never changed; `own_tag` still reads an
+instance's own ``__dict__`` after it, for a value that carries such an
+attribute itself.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from typing import Any
 
 __all__ = ["clear_tags", "own_tag", "set_tags", "taggable"]
 
-#: The decorator's tags, held BESIDE the value rather than on it:
+#: Every tag, held BESIDE the value rather than on it:
 #: ``id(value) -> (weakref to value, {name: tag})``. Written onto the object,
 #: ``_cash_lineage_*`` showed up in the user's own data -- ``vars(ns)``,
 #: ``SimpleNamespace.__eq__``, a ``__dict__``-based ``__eq__`` or ``repr``,
@@ -83,9 +85,7 @@ def clear_tags(value: Any) -> None:
 def own_tag(value: Any, name: str = "_cash_lineage_hash") -> Any:
     """*value*'s own *name* tag, never one inherited from its class.
 
-    The side table (`set_tags`) first, then the instance's own attribute: the
-    notebook's lineage store still writes the attribute, and clears the side
-    table when it does (`clear_tags`), so the last writer wins either way.
+    The side table (`set_tags`) first, then the instance's own attribute.
     """
     if isinstance(value, type):
         return None

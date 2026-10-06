@@ -23,7 +23,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..tracking.randomness.state import rng_carrier_kind
 from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .annotations import extract_annotations_for_statements
@@ -43,6 +45,7 @@ from .callee_effects import (
 from .code_analyzer import CodeAnalyzer, parse_cell_source
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
+    assigned_method_call_receivers,
     TopLevelCalls,
     chain_is_pure,
     crossref_reassigned_vars,
@@ -62,6 +65,8 @@ __all__ = [
     "ReceiverClasses",
     "StatementEffects",
     "cell_effects",
+    "captured_call_receiver_names",
+    "captured_call_receivers",
     "classify_receivers",
     "control_structure_mutations",
     "drawn_on_arguments",
@@ -798,6 +803,58 @@ class ReceiverClasses:
     #: the simulation leaves them alone, since treating every ``print(df)``
     #: as a change would bump ``df`` for every reader.
     unknown_args: frozenset[str] = frozenset()
+
+
+#: Receivers whose methods are known: the builtin containers and scalars,
+#: whose in-place methods (``pop``, ``setdefault``) the mutation analysis
+#: names, and the data-library values (frames, arrays), whose methods return
+#: new objects.
+_KNOWN_METHOD_TYPES = (list, dict, set, frozenset, tuple, str, bytes, bytearray, int, float, complex, bool, range)
+
+
+def captured_call_receiver_names(tree: ast.Module | None) -> frozenset[str]:
+    """The receivers of a method call whose result is bound, live or not:
+    `captured_call_receivers` without the namespace filter."""
+    return frozenset(
+        base
+        for base, method in assigned_method_call_receivers(tree)
+        if method not in RECEIVER_READONLY_WRITE_METHODS and not chain_is_pure(method, frozenset())
+    )
+
+
+def captured_call_receivers(tree: ast.Module | None, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """Receivers of a method call whose result is bound, which the call could
+    change in place: ``history = net.fit(X, epochs=3)``, ``out = trainer.train()``.
+
+    A training or stepping call that returns something (a history, a loss,
+    ``self``) changes its receiver as much as a bare ``net.fit(X)`` does, and
+    a hit that restores only the result leaves the receiver untrained. These
+    are watched like the arguments of a bare call: the runtime fingerprints
+    them around the statement's first run and records which changed, and the
+    simulation replays that verdict. One definition for both engines.
+
+    Not candidates: modules, classes, functions and plain values; the builtin
+    containers and data-library values (frames, arrays), whose methods are
+    known; random generators, whose draws are followed as carriers; a known
+    pure method (``m = df.mean()``) or one that writes a file; and a
+    Figure/Axes or an estimator being fitted, which `classify_receivers`
+    already counts as changed.
+    """
+    out: set[str] = set()
+    for base, method in assigned_method_call_receivers(tree):
+        if base not in namespace or method in RECEIVER_READONLY_WRITE_METHODS:
+            continue
+        value = namespace[base]
+        if isinstance(value, (types.ModuleType, type, _KNOWN_METHOD_TYPES)) or inspect.isroutine(value):
+            continue
+        if builtin_hash_family(type(value)) is not None or rng_carrier_kind(value) is not None:
+            continue
+        if chain_is_pure(method, frozenset()) or is_pandas_plot_call(method, value):
+            continue
+        if receiver_is_identity_coupled(value) or fits_its_receiver(method, value):
+            continue
+        out.add(base)
+    return frozenset(out)
 
 
 def drawn_on_arguments(tree: ast.Module | None, namespace: Mapping[str, Any]) -> frozenset[str]:

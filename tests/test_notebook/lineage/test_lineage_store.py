@@ -6,6 +6,7 @@ import hashlib
 
 import pytest
 
+from cash.lineage_tag import own_tag
 from cash.notebook.lineage_store import LineageStore
 
 
@@ -37,7 +38,7 @@ class TestGet:
 
 
 class TestRecordCoordinatesAttribute:
-    """``record(var, hash, value=val)`` must set both the dict entry and ``_cash_lineage_hash``.
+    """``record(var, hash, value=val)`` must set both the dict entry and the value's tag.
 
     This is the core invariant: today the dict and the attribute are written separately
     in 6 places inside notebook/ and they drift if one is forgotten.
@@ -48,12 +49,15 @@ class TestRecordCoordinatesAttribute:
         store.record("x", "abc")
         assert store.get("x") == "abc"
 
-    def test_record_with_value_sets_attribute(self):
+    def test_record_with_value_tags_it_beside_the_object(self):
         store = LineageStore()
         box = _Box()
         store.record("x", "deadbeef", value=box)
-        assert box._cash_lineage_hash == "deadbeef"
+        assert own_tag(box) == "deadbeef"
         assert store.get("x") == "deadbeef"
+        # Never written into the user's object: vars(), ==, json and pickle
+        # of it must look as they do without cash.
+        assert vars(box) == {}
 
     def test_record_with_value_that_cannot_take_attributes_does_not_raise(self):
         """Builtins like int / str can't hold attributes — must not crash."""

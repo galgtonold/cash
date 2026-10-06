@@ -18,19 +18,12 @@ lie:
    statement, so a partly-cached probe replays stale text. Each probe asserts
    ``RESTORED`` is absent so an invalid probe fails loudly instead of passing.
 
-Each form gets its OWN notebook so attribution stays clean, because a SECOND and
-distinct divergence shows up alongside this one: on the COLD run the mutation
-cell's upstream simulation re-derives ``obj = Box()`` (badge: ``Upstream:
-COMPUTED: obj = Box()``), swapping the live ``obj`` for a fresh instance while
-the containers still hold the original. Measured on the subscript form:
-
-    rep 0 (cold, bind EXECUTED): same False / same_holder True  / holder_is_obj False
-    rep 1 (warm, bind RESTORED): same False / same_holder False / holder_is_obj True
-
-Rep 0 is the upstream-simulation desync (``b`` still IS ``holder['k']``; it is
-``obj`` that got replaced). Rep 1 is the computed-alias bug proper (the containers agree again,
-but ``b`` is now a deserialised copy of neither). The failure messages below tag
-each rep with the bind cell's state so the two never get conflated.
+Each form gets its OWN notebook so attribution stays clean. The end-to-end
+identity also needs the mutation cell's upstream check to leave the live
+``obj`` alone: it once re-derived ``obj = Box()`` on the cold run, swapping in a
+fresh instance while the containers kept the original, because cash wrote its
+lineage tag into ``obj.__dict__``. Tags are kept beside the object now, and
+every form below asserts the identity.
 """
 
 import pytest
@@ -56,44 +49,15 @@ BUILD = (
 MUTATE = "obj.inner.append(42)\nobj.tag = 'mutated'"
 
 # (id, bind statement, identity expression, value expression, expected value)
-# Upstream re-derivation blocks the container-mediated forms, and it is a DIFFERENT defect from
-# this one (see the module docstring). The computed-alias half — "the bind must not be
-# restored from cache" — is asserted separately and unconditionally below, and
-# passes for every form; these xfails cover only the end-to-end identity, which
-# additionally needs the re-derivation fix. Strict, so the run fails the moment that fix
-# lands and the marker has to come off.
-_REDERIVE_SWAPS_OBJ = pytest.mark.xfail(
-    reason="upstream re-derivation swaps live `obj` while the container "
-    "keeps the original, so identity breaks on the COLD run too "
-    "(bind cell reports 'executed', not 'RESTORED' — the computed-alias half is fixed)",
-)
-# `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not lst`).
-# Refusing to cache the binding would not fix that, and `list(...)` is a call that
-# can do real work, so it is deliberately outside the computed-alias fix.
-_ELEMENT_ALIAS = pytest.mark.xfail(
-    reason="element-level aliasing through a freshly-built container; the binding "
-    "itself is not the alias, so the computed-alias refusal does not apply",
-)
-
 FORMS = [
     ("attr", "b = obj.inner", "b is obj.inner", "b", "[42]"),
-    pytest.param(
-        "subscript", "b = holder['k']", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_REDERIVE_SWAPS_OBJ
-    ),
-    pytest.param(
-        "index", "b = lst[0]", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated", marks=_REDERIVE_SWAPS_OBJ
-    ),
-    pytest.param(
-        "call", "b = list(lst)", "b[0] is obj", "getattr(b[0], 'tag', 'MISSING')", "mutated", marks=_ELEMENT_ALIAS
-    ),
-    pytest.param(
-        "ternary",
-        "b = obj if True else None",
-        "b is obj",
-        "getattr(b, 'tag', 'MISSING')",
-        "mutated",
-        marks=_REDERIVE_SWAPS_OBJ,
-    ),
+    ("subscript", "b = holder['k']", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated"),
+    ("index", "b = lst[0]", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated"),
+    # `b = list(lst)` aliases one level DOWN (`b[0] is lst[0]` while `b is not
+    # lst`): the new list holds an object `lst` holds too, so it is never
+    # restored as a copy either.
+    ("call", "b = list(lst)", "b[0] is obj", "getattr(b[0], 'tag', 'MISSING')", "mutated"),
+    ("ternary", "b = obj if True else None", "b is obj", "getattr(b, 'tag', 'MISSING')", "mutated"),
 ]
 
 # Every form, unmarked: this is the computed-alias property proper.
@@ -113,7 +77,7 @@ def test_reference_bind_is_never_restored_from_cache(nb_runner, name, bind):
     guarantees silently stops holding. A deref is free to re-run, so refusing to
     cache it is also strictly cheaper — both halves of the bare-alias argument.
 
-    This is asserted for every form and does NOT depend on the re-derivation fix: it is a
+    This is asserted for every form apart from the end-to-end identity: it is a
     property of the bind statement alone.
     """
     nb_runner.create_notebook(_cells(bind, "b is obj", "getattr(b, 'tag', 'MISSING')"))

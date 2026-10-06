@@ -554,6 +554,10 @@ class UpstreamChecker:
 
             self.simulator.resync_after_replay(records_before)
             self.simulator.record_consumable_bases(required_inputs, current_cell_idx, cell_code)
+            # The same cell-entry baseline for a frame, an array or a large
+            # collection the cell may change in place: the very object it
+            # starts from, which its next run compares with.
+            self.simulator.stale_values.note_cell_start(current_cell_idx, required_inputs)
 
             all_metrics = self.replay.in_notebook_order(restored_info + executed_metrics, notebook_cells)
             return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
