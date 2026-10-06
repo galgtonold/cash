@@ -120,3 +120,13 @@ def test_a_plain_run_all_keeps_the_earlier_value(cash_magics, mock_shell, lib, t
     expected = EXPECTED[case] if EXPECTED[case] is not None else tmp_path.name
     assert mock_shell.user_ns["y"] == expected
     assert mock_shell.user_ns["x"] == expected
+
+
+def test_a_change_from_a_statement_outside_the_cells_is_still_seen(cash_magics, mock_shell, lib):
+    """Watched as it runs, a statement no cell holds (a console, a debugger)
+    still changes the value from outside: the reader runs again with it."""
+    cells = [cell.format(lib=lib) for cell in CASES["module_data_through_vars"]]
+    _run_all(cash_magics, cells)
+    run_cash_cell(cash_magics, f"setattr(__import__('{lib}'), 'K', 9)", cells=cells)
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    assert mock_shell.user_ns["y"] == 18

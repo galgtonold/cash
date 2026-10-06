@@ -88,9 +88,10 @@ class ReadRecord:
     watched: set[tuple[str, str]] = field(default_factory=set)
     #: ``kind:label`` -> the last change the runtime saw a statement make to it.
     writes: dict[str, Write] = field(default_factory=dict)
-    #: ``(kind, label)`` -> its digest when the runtime last read it, keying a
-    #: statement or around one that changed it: a different digest now was
-    #: made outside the notebook's cells (:func:`outside_changes`).
+    #: ``(kind, label)`` -> its digest when the runtime or the upstream check
+    #: last read it: a different digest now, not the one a statement of the
+    #: notebook left, was made outside the notebook's cells
+    #: (:func:`outside_changes`).
     known: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def clear(self) -> None:
@@ -120,14 +121,17 @@ def watch(parts: ReadParts, record: ReadRecord) -> None:
             record.known[(kind, label)] = digest
 
 
-def outside_changes(record: ReadRecord) -> bool:
-    """Whether a watched value changed since the runtime last read it, so
-    outside the notebook's cells; and take the new values as known."""
+def outside_changes(record: ReadRecord, in_notebook: Callable[[str], bool] | None = None) -> bool:
+    """Whether a watched value changed since the runtime last read it,
+    other than as a statement of the notebook left it, so outside the
+    notebook's cells; and take the new values as known."""
     changed = False
     for key in record.watched:
         digest = _current(*key)
         if record.known.get(key) != digest and not digest.startswith(UNHASHABLE):
-            changed = True
+            write = record.writes.get(f"{key[0]}:{key[1]}")
+            ours = write is not None and write.digest == digest and in_notebook is not None and in_notebook(write.code)
+            changed = changed or not ours
         record.known[key] = digest
     return changed
 
@@ -143,7 +147,6 @@ def note_writes(before: Mapping[tuple[str, str], str], code: str, record: ReadRe
         after = _current(kind, label)
         if after != digest and not (after.startswith(UNHASHABLE) and digest.startswith(UNHASHABLE)):
             record.writes[f"{kind}:{label}"] = Write(after, code)
-            record.known[(kind, label)] = after
 
 
 def choose(
