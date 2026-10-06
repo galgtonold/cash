@@ -218,6 +218,18 @@ class CallEntries:
             return False, None, 0.0, {}
         if not isinstance(metadata, Mapping):
             metadata = {}
+        if metadata.get("by_reference"):
+            # The RAM tier could not copy the result (it holds a lock or a
+            # connection, or is too deep for deepcopy) and kept the object
+            # itself: a hit would hand back the first run's object, with every
+            # change made to it since, where the call builds a fresh one. The
+            # call runs plain from now on.
+            self.refuse(key)
+            try:
+                self._cash.backend.delete(key)
+            except Exception:  # noqa: BLE001 - reclaiming is best effort; the refusal holds
+                pass
+            return False, None, 0.0, {}
         if not self._auto_file_deps_fresh(metadata):
             return False, None, 0.0, {}
         if not self._ttl_fresh(metadata):

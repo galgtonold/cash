@@ -127,6 +127,7 @@ class InMemoryBackend(CacheBackend):
         required: bool = False,
         known_cells: dict[int, bool] | None = None,
         record_cells: dict[int, bool] | None = None,
+        by_reference: list[bool] | None = None,
     ) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
@@ -194,6 +195,8 @@ class InMemoryBackend(CacheBackend):
                     f"so caching it would hand every caller the same object"
                 ) from exc
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
+            if by_reference is not None:
+                by_reference.append(True)
             return value
 
     @staticmethod
@@ -439,9 +442,19 @@ class InMemoryBackend(CacheBackend):
             # variables a cell left behind, and one unisolatable variable among
             # them (an open handle in scope) must not stop the statement being
             # cached -- the notebook re-executes what it cannot restore.
+            fell_back: list[bool] = []
             stored = self._safe_deep_copy(
-                value, key, required=bool((metadata or {}).get("copy_required")), record_cells=frame_cells
+                value,
+                key,
+                required=bool((metadata or {}).get("copy_required")),
+                record_cells=frame_cells,
+                by_reference=fell_back,
             )
+            if fell_back:
+                # Said on the entry, so a reader that must not hand out the
+                # stored object itself (a notebook call or statement hit) can
+                # refuse it: every hit returns this very object.
+                metadata["by_reference"] = True
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]

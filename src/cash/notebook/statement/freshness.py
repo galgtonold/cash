@@ -23,6 +23,8 @@ notebook package.
 
 from __future__ import annotations
 
+import copy
+import io
 import logging
 import time
 from collections.abc import Callable
@@ -137,6 +139,8 @@ class CacheFreshnessChecker:
             # check and made the entry immortal — the inverse of the ask.
             if ttl is not None:
                 cached_data = self._invalidate_if_ttl_expired(metadata, cached_data, ttl)
+            if cached_data and raw_metadata.get("by_reference"):
+                cached_data = self._invalidate_if_held_by_reference(cached_data)
             if cached_data:
                 cached_data = self._invalidate_if_direct_file_changed(metadata, cached_data)
             if cached_data and metadata.holders:
@@ -170,6 +174,27 @@ class CacheFreshnessChecker:
     def _remember_fresh(self, deps: dict) -> None:
         if len(deps) >= _SET_MEMO_MIN and len(self._fresh_sets) < 16:
             self._fresh_sets.append(deps)
+
+    def _invalidate_if_held_by_reference(self, cached_data: Any) -> Any:
+        """Return None if the entry holds a variable's object itself.
+
+        The RAM tier keeps a payload it cannot copy by reference. A hit
+        would bind the very object the first run made, with every change made
+        to it since (``st = Store()`` holding a lock, then ``st.rows.append``),
+        where running the statement builds a fresh one. A closed file a
+        ``with open(...) as f`` left behind is the exception: nothing about it
+        can change.
+        """
+        variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+        for name, value in (variables or {}).items():
+            if isinstance(value, io.IOBase) and value.closed:
+                continue
+            try:
+                copy.deepcopy(value)
+            except Exception:  # noqa: BLE001 - whatever stops the copy stops the hit
+                self.last_miss_reason = f"'{name}' cannot be copied, so a hit would hand back the same object"
+                return None
+        return cached_data
 
     def _invalidate_if_ttl_expired(
         self,
