@@ -31,7 +31,7 @@ HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, Recu
 _BULKY_TYPE_NAMES = frozenset({"DataFrame", "Series", "ndarray"})
 
 
-def _is_bulky(value: Any) -> bool:
+def is_bulky(value: Any) -> bool:
     """A frame, array or table: hashed on its own rather than pickled with
     the collection that holds it."""
     t = type(value)
@@ -50,7 +50,7 @@ def _hash_collection(obj: Any) -> str:
     """
     items = list(obj.items()) if isinstance(obj, dict) else None
     values = [v for _, v in items] if items is not None else (list(obj) if isinstance(obj, (list, tuple)) else [])
-    if any(_is_bulky(v) for v in values):
+    if any(is_bulky(v) for v in values):
         parts = [f"{type(obj).__name__}:{len(obj)}"]
         if items is not None:
             parts.extend(f"{compute_hash(k)}={compute_hash(v)}" for k, v in items)

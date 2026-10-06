@@ -90,9 +90,15 @@ own key never sees them. cash keeps them in its entry instead:
   gave when `load` was called. Every lookup of the caller asks the source for
   its token again: the same token serves the entry, another one recomputes
   it, and so does a `state_token()` that raises.
+  A source that pickles to more than 4 kB (one that carries data) is
+  stored once, beside the entries, and each caller's entry names it.
 
-In the process that wrote the entry, the source object itself is asked. A
-later process asks the copy pickled with the entry, so **`state_token()` must
+In the process that wrote the entry, the source object itself is asked, and
+so is the resolver, with the arguments `load` was called with: a resolver
+that hands out a new source object after a catalog refresh, or names another
+file, recomputes the caller even when the old object still gives its old
+token. That process holds those arguments for as long as it holds the entry.
+A later process asks the copy pickled with the entry, so **`state_token()` must
 read the version from where it lives** (the catalog, the database, the
 server), not from an attribute the object set when it was made, as
 `DatasetVersion` above does.
@@ -110,7 +116,8 @@ the connection inside `state_token()` and the source pickles.
 If the resolver raises, or returns something that is not a `DataSource` (a
 string, a number), cash cannot key the call. The call runs **uncached**, and
 cash warns once per function
-([`KEY-DYNAMIC-DEP-FAILED`](../../warnings.md#key-dynamic-dep-failed)). A raw
+([`KEY-DYNAMIC-DEP-FAILED`](../../warnings.md#key-dynamic-dep-failed)). A cached function
+that called it is not stored either: nothing recorded what it depends on. A raw
 value is never folded in as if there were no dependency. Wrap the value in a
 `DataSource`, as above.
 

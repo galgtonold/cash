@@ -226,7 +226,7 @@ def _track_declared(tracker: Any, path: str) -> None:
             tracker.add_tracked_absent(normalize_path(os.path.normpath(path)))
 
 
-def pass_dynamic_sources_up(sources: list[tuple[Any, str]]) -> None:
+def pass_dynamic_sources_up(sources: list[tuple[Any, str]], resolutions: dict[tuple, Any] | None = None) -> None:
     """Make the cached calls around this one depend on the sources its
     ``dynamic_depends_on=`` resolved to, each with the token the key took.
 
@@ -240,10 +240,17 @@ def pass_dynamic_sources_up(sources: list[tuple[Any, str]]) -> None:
     (`dynamic_sources_fresh`). Called while the key is built, on a hit as on
     a miss, when the active tracker is the caller's, and when a caller's own
     entry is served inside another cached call (`CallRunner._try_get_cached`).
+    *resolutions* are the resolver calls behind them, by key, which this
+    process asks again on a lookup of the caller (`dynamic_sources.Resolution`).
     """
     tracker = active_tracker.get()
     if tracker is None:
         return
+    if resolutions:
+        add_resolution = getattr(tracker, "add_dynamic_resolution", None)
+        if add_resolution is not None:
+            for key, resolution in resolutions.items():
+                add_resolution(key, resolution)
     for source, token in sources:
         if isinstance(source, FileDataSource):
             _track_declared(tracker, source.filepath)
@@ -255,6 +262,18 @@ def pass_dynamic_sources_up(sources: list[tuple[Any, str]]) -> None:
             add = getattr(tracker, "add_dynamic_source", None)
             if add is not None:
                 add(source.get_id(), source, token)
+
+
+def note_unresolved_dynamic(func_name: str) -> None:
+    """Tell the cached calls around this one that *func_name*'s
+    ``dynamic_depends_on=`` resolver failed: what it depends on is unknown,
+    so they are not stored (`ResultStore.refusal`). Recorded only when it
+    failed, it left the caller's entry with no record of the dependency,
+    served for good once the resolver worked again."""
+    tracker = active_tracker.get()
+    add = getattr(tracker, "add_unresolved_dynamic", None)
+    if add is not None:
+        add(func_name)
 
 
 def _glob_base(pattern: str) -> str:
