@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @365ab73a, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -120,7 +120,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @365ab73a, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
@@ -129,9 +129,11 @@ argument. The code those arguments carry (a class or function passed in) is
 keyed from what is left, too. A call that does not bind to the signature
 keeps every argument.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._fold_key_function @bf3a14e9 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._fold_key_function @125f0613 -->
 The key function itself goes into `state`, as a function passed as an
-argument does: its code, the code it calls and the globals that code reads.
+argument does: its code, the code it calls and the globals that code reads,
+and what it holds: the values it captured, its defaults, or a callable
+object's state.
 The argument-mutation check after a miss still hashes every argument, and
 the entry records that hash, so `explain()` can say when a hit was matched by
 `key=` or ignored parameters. The contract is in the
@@ -139,7 +141,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -150,12 +152,15 @@ It never caches under a partial key. The usual causes:
   ([`KEY-UNHASHABLE-DEFAULT`](../warnings.md#key-unhashable-default));
 - a `key=` function that raised
   ([`KEY-FUNCTION-RAISED`](../warnings.md#key-function-raised));
+- a `key=` function or a registered hasher that read an iterator argument,
+  leaving the body an emptied one
+  ([`KEY-ITERATOR-CONSUMED`](../warnings.md#key-iterator-consumed));
 - any other failure while building the key
   ([`KEY-BUILD-FAILED`](../warnings.md#key-build-failed)).
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @5d8d7594, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one

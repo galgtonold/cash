@@ -206,7 +206,7 @@ is computing while you clear its function still finishes and stores its
 result; stop the job first if you are clearing because the code or data
 changed.
 
-<!-- claim: cash/__main__.py:_rmtree_cache @fec6529c, cash/__main__.py:_remove_markers_last @e10b3bc7 -->
+<!-- claim: cash/__main__.py:_rmtree_cache @c04da37c, cash/__main__.py:_remove_markers_last @06c583d3 -->
 **A cache a notebook has open.** On Windows a file that a running kernel holds
 open cannot be deleted. `cash clear` then stops, names the file, and exits 1;
 close the notebook or stop its kernel, then run the same command again. What

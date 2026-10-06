@@ -355,7 +355,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @b84e70fb -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @20c371ee -->
 Use `file_depends_on=` for a file the body reads in a way cash cannot see (a C
 library, a subprocess). It is checked by content, like a tracked read. A URL is
 treated as a missing local file, so for `s3://` or `https://` data pass
@@ -406,7 +406,7 @@ Every argument is part of the key, so a `verbose=` flag, a logger or an
 `n_jobs=` setting splits the cache: `fit(data, verbose=True)` misses after
 `fit(data)` ran. Three ways to say which arguments decide the result:
 
-<!-- claim: cash/decorator/arg_key.py:arg_key_spec @e4696751, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/arg_key.py:arg_key_spec @648484e3, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 **`ignore=`** names the parameters to leave out. It works on any function,
 including one you do not own, and the names are checked against the
 signature when the function is decorated:
@@ -453,7 +453,7 @@ load("a.csv")               # first call: runs the body
 load("a.csv", debug=True)   # cache hit: nothing is logged
 ```
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @316e84b5, cash/decorator/runtime.py:KeyBuilder._fold_key_function @bf3a14e9 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @316e84b5, cash/decorator/runtime.py:KeyBuilder._fold_key_function @125f0613 -->
 **`key=`** takes a function that gets each call's arguments, bound to the
 signature with the defaults filled in, so `f(2, "3")`, `f(2, unit="3")` and
 `f(x=2, unit="3")` reach it alike. What it returns (a tuple, a string, a
@@ -480,7 +480,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @5f3c8ec5 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @365ab73a -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key
@@ -506,7 +506,7 @@ raises runs the call uncached with
 that reads an iterator argument, which leaves the body an emptied iterator
 ([`KEY-ITERATOR-CONSUMED`](warnings.md#key-iterator-consumed)).
 
-<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138, cash/decorator/runtime.py:KeyBuilder.call_args_hash @4b0cf9f0 -->
+<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138, cash/decorator/runtime.py:KeyBuilder.call_args_hash @197956e9 -->
 A hit whose arguments differ from those of the call that stored the entry
 is not reported, since that is the point. To see it,
 `f.explain(*args).details["matched_by"]` says when a hit was matched by
@@ -597,7 +597,7 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @ce726b59 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @9415c95c broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 

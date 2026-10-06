@@ -93,7 +93,7 @@ def load_events():
         return pq.read_table(f).to_pandas()
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @b84e70fb -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @20c371ee -->
 Pass one path or a list. Each file is recorded as if the body had read it, and
 is checked by content like an automatic read. A path that does not exist yet is
 recorded as absent, so creating the file later recomputes the call. Nothing

@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @375aaed8 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @9cdcacdd -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -602,11 +602,13 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @23ec80cc -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @89f14bf4 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @7507ae49, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, and one that cannot
-be hashed again after the call counts as changed. Past about 50 ms of hashing,
+be hashed again after the call counts as changed. So does a draw from a random
+generator held by an argument that `__cash_key__` or a registered hasher keys,
+which that key does not see move. Past about 50 ms of hashing,
 the message may say "an argument" instead of naming which one.
 
 **What to do.** If the effect is part of the job, split the function: cache the
@@ -819,7 +821,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1048,7 +1050,7 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._check_iterators_unread @e9fc8e1b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._check_iterators_unread @dd5b4fdd -->
 **What happened.** An argument is an iterator (a generator, `map(...)`,
 `iter(rows)`), and building the key read it: a `key=` function such as
 `key=lambda rows: tuple(rows)`, or a hasher registered for its type. An
@@ -1207,7 +1209,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -1266,7 +1268,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @ea302891, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @ea302891, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The message names the type.
