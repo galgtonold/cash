@@ -52,6 +52,11 @@ def is_exec_built(obj: Any) -> bool:
     code, keyed by their bytecode. Code IPython compiled is not this either:
     it registers each cell's text in `linecache`.
     """
+    if isinstance(obj, type):
+        # A class built so (``exec(rule_text, ns); Rule = ns["Rule"]``): its
+        # methods are such functions, and the class, named after no module
+        # (``__module__`` falls back to "builtins"), read as library code.
+        return any(is_exec_built(_unwrapped_member(m)) for m in vars(obj).values())
     fn = getattr(obj, "__func__", obj)
     if not isinstance(fn, types.FunctionType) or "__name__" in fn.__globals__:
         return False
@@ -59,6 +64,16 @@ def is_exec_built(obj: Any) -> bool:
     if not (filename.startswith("<") and filename.endswith(">")) or linecache.getlines(filename):
         return False
     return _defining_module(fn) is None
+
+
+def _unwrapped_member(member: Any) -> Any:
+    """The function behind a class attribute: a staticmethod's or
+    classmethod's, a property's getter, or the attribute itself."""
+    if isinstance(member, (staticmethod, classmethod)):
+        return member.__func__
+    if isinstance(member, property):
+        return member.fget
+    return member
 
 
 def own_code_is_user(obj: Any, root_module: str | None) -> bool:

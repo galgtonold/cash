@@ -193,7 +193,7 @@ side effects and still caches:
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
 `CashImpureFunctionError`, because cash cannot tell when that code changes. So
-does a call to a helper that `exec` or `eval` built from a string into a
+does a call to a helper -- or a class -- that `exec` or `eval` built from a string into a
 namespace of no module (`ns = {}; exec(open("rules.txt").read(), ns)`): its
 text is data the program read, not a source file. One the cached function
 captures in a closure is keyed by its compiled code instead.
