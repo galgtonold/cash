@@ -779,17 +779,11 @@ class StatementProcessor:
             if is_control_body(run.code)
             else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
         )
-        # The environment and module data statements were keyed on, as they
-        # stand before this one, whatever it is: a change it makes, itself
-        # or in a function it calls, is the notebook's own (`recorded_reads`).
-        reads = self.tracking_state.reads
         try:
-            watched_before = snapshot(reads.watched)
-        except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
-            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, run.code[:80], exc_info=True)
-            watched_before = {}
-        try:
-            with make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured:
+            with (
+                self.watching_reads(run.code),
+                make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured,
+            ):
                 execution.captured = captured
                 with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
                     start_time = _perf_counter()
@@ -809,12 +803,30 @@ class StatementProcessor:
             execution.result = error_result(e)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
-        if watched_before:
-            note_writes(watched_before, run.code, reads)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+
+    @contextmanager
+    def watching_reads(self, code: str) -> Generator[None, None, None]:
+        """Around running *code*: what it changes of the environment and the
+        module data statements were keyed on, itself or in a function it
+        calls, is the notebook's own (`recorded_reads`)."""
+        reads = self.tracking_state.reads
+        try:
+            before = snapshot(reads.watched)
+        except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
+            logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, code[:80], exc_info=True)
+            before = {}
+        try:
+            yield
+        finally:
+            if before:
+                try:
+                    note_writes(before, code, reads)
+                except Exception:  # noqa: BLE001 - a change not noted counts as made outside
+                    logger.debug("%s could not note what %r changed", _LOG_PROCESSOR, code[:80], exc_info=True)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
         """Record what the executed statement did, and store it."""

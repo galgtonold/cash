@@ -10,6 +10,12 @@ own text spelled a change (``environ``, ``chdir``), so the change
 check of the last cell then ran ``x`` again with ``"b"``: ``"bb"`` where a
 plain kernel prints ``"aa"``. The same for ``importlib.reload(mylib)`` and
 ``vars(mylib)["K"] = 7``. Every statement is now watched.
+
+A change a cell spells itself was taken as the notebook's only when the
+statement's text was found in the cells, and the runtime keys the unparsed
+statement: ``os.environ["MODE"] = "b"`` (as black writes it) is
+``os.environ['MODE'] = 'b'`` to it. The cells are now read as the runtime
+writes them (magics: ``test_a_magic_setting_below_a_reader_does_not_reach_it``).
 """
 
 import os
@@ -80,9 +86,24 @@ CASES = {
         "vars({lib})['K'] = 7",
         "y = x",
     ],
+    "env_in_double_quotes": [
+        "import os",
+        'os.environ["CASH_UT_LATER"] = "a"',
+        'x = os.environ["CASH_UT_LATER"] * 2',
+        'os.environ["CASH_UT_LATER"] = "b"',
+        "y = x",
+    ],
+    "cwd_in_double_quotes": [
+        'import os\nos.makedirs("sub", exist_ok=True)',
+        "x = os.path.basename(os.getcwd())",
+        'os.chdir("sub")',
+        "y = x",
+    ],
 }
 
 EXPECTED = {
+    "env_in_double_quotes": "aa",
+    "cwd_in_double_quotes": None,
     "env_by_a_notebook_function": "aa",
     "env_by_a_module_function": "aa",
     "cwd_by_a_notebook_function": None,  # the folder the notebook started in
