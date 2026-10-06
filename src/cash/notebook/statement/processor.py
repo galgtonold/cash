@@ -67,6 +67,7 @@ from ...analysis.ast_util import resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     decide_cacheability,
+    identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import (
@@ -928,7 +929,7 @@ class StatementProcessor:
             no_cache=run.annotation is not None and run.annotation.no_cache,
         )
         if not run.skip_cache:
-            self._refuse_unrestorable_outputs(run, captured_vars)
+            self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
         self._record_file_effects(run, execution)
 
         # Detect in-place mutations (detection-only; do not modify lineage).
@@ -965,9 +966,16 @@ class StatementProcessor:
             code_hash=run.cache_key,
         )
 
-    def _refuse_unrestorable_outputs(self, run: StatementRun, captured_vars: dict[str, Any]) -> None:
+    def _refuse_unrestorable_outputs(
+        self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = ()
+    ) -> None:
         """Skip-cache *run* when one of its output values cannot be stored and
-        restored faithfully (:func:`unrestorable_output_reason`)."""
+        restored faithfully (:func:`unrestorable_output_reason`).
+
+        The value a statement echoes is held by its entry too: `sns.heatmap(df)`
+        echoes an Axes, and copying that into the RAM tier revives a second
+        figure in pyplot's registry, which becomes the current one.
+        """
         reason = unrestorable_output_reason(
             run.outputs,
             captured_vars,
@@ -975,6 +983,8 @@ class StatementProcessor:
             cash_held=self._calls.held_call_results(),
             shell=self.shell,
         )
+        if reason is None and echo:
+            reason = identity_coupled_reason("the value it echoes", echo[0])
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -1270,7 +1280,7 @@ class StatementProcessor:
         it moves to the end: the order is the one the kernel last ran them in."""
         try:
             modules = module_state_writes(code, self.shell.user_ns)
-        except Exception:  # noqa: BLE001 - analysis of arbitrary user code
+        except Exception:
             logger.debug("%s could not tell which modules %r sets state on", _LOG_PROCESSOR, code[:80], exc_info=True)
             return
         for module in modules:
