@@ -486,7 +486,7 @@ class StatementRandomness:
             visible = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        hidden = set(drew) - set(visible)
+        hidden = set(drew) - set(visible) - _bare_seeds(code)
         if not hidden:
             return
         digest = exact_source_digest(code)
@@ -594,3 +594,31 @@ class StatementRandomness:
             )
         except (ValueError, AttributeError, RecursionError):
             logger.debug("%s Stale estimator-fit warning failed", _LOG_PROCESSOR)
+
+
+def _bare_seeds(code: str) -> set[str]:
+    """The modules *code* seeds when it is nothing but the seed call, its
+    arguments calling nothing: ``np.random.seed(42)``, ``random.seed(s)``.
+
+    Such a statement moves its module's stream, but to where the seed puts
+    it, whatever the stream held before: that is no draw. Recorded as one,
+    the seed read the stream it inherits, so its key, and the stream every
+    draw below it reads, changed with each Run All -- the last draw of the
+    previous one -- and no seeded draw was ever served again in the same
+    kernel. A call among the arguments (``seed(make_seed())``) may draw
+    before the seed, so it is left as observed.
+    """
+    try:
+        tree = ast.parse(strip_markers(code))
+    except (SyntaxError, ValueError, RecursionError):
+        return set()
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr) or not isinstance(tree.body[0].value, ast.Call):
+        return set()
+    call = tree.body[0].value
+    arguments = [*call.args, *(kw.value for kw in call.keywords)]
+    if any(isinstance(node, ast.Call) for arg in arguments for node in ast.walk(arg)):
+        return set()
+    try:
+        return get_seeding_rng_modules(code)
+    except (SyntaxError, ValueError, AttributeError, RecursionError):
+        return set()
