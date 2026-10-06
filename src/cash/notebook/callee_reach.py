@@ -218,8 +218,12 @@ class _Found:
             # A wrapper that is not the user's code (``@cash.cache``'s): what
             # calling it runs is the function it wraps.
             self._wrapped(value)
-        elif label is not None and _is_data(value):
-            self.data.setdefault(label, value)
+        else:
+            if label is not None and _is_data(value):
+                self.data.setdefault(label, value)
+            if value is not None and not inspect.isroutine(value):
+                # An instance: its methods run when the statement calls them.
+                self._class(type(value))
 
     def _wrapped(self, value: Any) -> None:
         """The function *value* wraps (``functools.wraps``' ``__wrapped__``)."""
@@ -231,19 +235,41 @@ class _Found:
             self.value(wrapped)
 
     def _class(self, cls: type) -> None:
-        """A class: its ``__init__``, and when it is the user's, the data it
-        holds (``Settings.scale``), which its methods read through ``self``."""
+        """A class: its ``__init__``; when it is the user's, its methods and
+        those it inherits from the user's classes (``model.predict(2)`` runs
+        ``Model.predict``, and what that reads), and when it is a local
+        module's, the data it holds (``Settings.scale``), which its methods
+        read through ``self``."""
+        if not self._users_class(cls):
+            self.value(vars(cls).get("__init__"))
+            return
+        if id(cls) in self._function_ids:
+            return
+        self._function_ids.add(id(cls))
         home = _loaded(getattr(cls, "__module__", None))
-        local = home is not None and _is_local(home)
-        if local:
-            if id(cls) in self._function_ids:
-                return
-            self._function_ids.add(id(cls))
+        if home is not None and _is_local(home):
             self.modules.add(home.__name__)
             for attr, attr_value in list(vars(cls).items()):
                 if not attr.startswith("__") and _is_data(attr_value):
                     self.data.setdefault(f"{home.__name__}.{cls.__qualname__}.{attr}", attr_value)
-        self.value(vars(cls).get("__init__"))
+        for klass in cls.__mro__:
+            if not self._users_class(klass):
+                continue
+            for attr_value in list(vars(klass).values()):
+                for fn in _class_member_functions(attr_value):
+                    self.value(fn)
+
+    def _users_class(self, cls: type) -> bool:
+        """Defined in a local module, or in a cell: its methods' globals are the namespace."""
+        home = _loaded(getattr(cls, "__module__", None))
+        if home is not None and _is_local(home):
+            return True
+        return any(
+            fn.__globals__ is self.namespace
+            for member in list(vars(cls).values())
+            for fn in _class_member_functions(member)
+            if isinstance(fn, types.FunctionType)
+        )
 
     def chain(self, node: ast.Attribute) -> None:
         """``mod.sub.attr``: each local module on the way, and what it ends at."""
@@ -322,6 +348,17 @@ class _Found:
         # No root package: a library function is never the user's because
         # of the package it is in, only because it lives in their files.
         return fn.__globals__ is self.namespace or own_code_is_user(fn, None)
+
+
+def _class_member_functions(member: Any) -> Iterable[Any]:
+    """The functions a class attribute runs: a method, a static or class
+    method, a property's accessors."""
+    if isinstance(member, (staticmethod, classmethod)):
+        yield member.__func__
+    elif isinstance(member, property):
+        yield from (f for f in (member.fget, member.fset, member.fdel) if f is not None)
+    elif isinstance(member, types.FunctionType):
+        yield member
 
 
 def _is_data(value: Any) -> bool:

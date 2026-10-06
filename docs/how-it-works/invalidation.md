@@ -46,13 +46,14 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A global that a called function reads**, even one bound below the
       statement.
     - **The data of a local module it reads**, directly or through the
-      module's functions and their helpers: `mylib.K = 7`,
+      module's functions and their helpers, a decorated function's body
+      and the methods of your classes (`model.predict(2)`): `mylib.K = 7`,
       `mylib.CONFIG["k"] = 7` or `mylib.set_k(7)` in a cell above re-runs
       `mylib.from_k(10)`. A global that a function the statement calls
       changes itself (a counter) is left out, so the statement still caches.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
-      function of yours it calls.
+      function or method of yours it calls, defined in a cell or a module.
     - **Its age**, when a `ttl` applies. A statement that calls a
       `@cash.cache` function with a shorter `ttl` takes that shorter one.
     - **An in-place change** to a variable it reads
