@@ -45,3 +45,41 @@ def test_a_user_frame_subclass_gets_its_cells_copied():
     assert type(first) is Orders
     first["items"].iloc[0].append("plum")
     assert second["items"].iloc[0] == ["apple"]
+
+
+class _Sensor:
+    """Hashable by name, with mutable calibration."""
+
+    def __init__(self, name):
+        self.name = name
+        self.offsets = [0.0]
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        return isinstance(other, _Sensor) and other.name == self.name
+
+
+@pytest.mark.parametrize(
+    "make, first_label",
+    [
+        (lambda pd, a, b: pd.Series(pd.Categorical([a, b, a])), lambda got: got.cat.categories[0]),
+        (lambda pd, a, b: pd.Series([1.0, 2.0], index=pd.Index([a, b], dtype=object)), lambda got: got.index[0]),
+        (lambda pd, a, b: pd.DataFrame([[1, 2]], columns=pd.Index([a, b], dtype=object)), lambda got: got.columns[0]),
+        (
+            lambda pd, a, b: pd.Series([1, 2], index=pd.MultiIndex.from_tuples([(a, 1), (b, 2)])),
+            lambda got: got.index[0][0],
+        ),
+        (
+            lambda pd, a, b: pd.DataFrame({"s": pd.Categorical([a, b])}, index=pd.CategoricalIndex([b, a])),
+            lambda got: got.index[0],
+        ),
+    ],
+    ids=["categories", "index", "columns", "multiindex", "categorical-index"],
+)
+def test_objects_in_labels_and_categories_are_copied(make, first_label):
+    pd = pytest.importorskip("pandas")
+    first, second = _hits(make(pd, _Sensor("a"), _Sensor("b")))
+    first_label(first).offsets.append(0.5)
+    assert first_label(second).offsets == [0.0]

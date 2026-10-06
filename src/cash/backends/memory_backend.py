@@ -289,6 +289,8 @@ class InMemoryBackend(CacheBackend):
         copies it, with the sharing kept.
         """
         try:
+            if _mutable_labels(frame):
+                return None  # only the pickle round trip copies those
             is_series = getattr(frame, "ndim", 2) == 1
             positions = [0] if is_series else [i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
             columns = [frame] if is_series else [frame.iloc[:, i] for i in positions]
@@ -762,8 +764,9 @@ def _is_pandas_frame(value_type: type) -> bool:
 def _holds_mutable_cells(frame: Any) -> bool:
     """Does a DataFrame or Series hold a Python object that can be changed in place?
 
-    Only object columns can; each is classified by pandas' C-level
-    ``infer_dtype``, not a Python loop over its cells.
+    Object columns can, and so can the labels (`_mutable_labels`); each is
+    classified by pandas' C-level ``infer_dtype``, not a Python loop over
+    its cells.
     """
     try:
         from pandas.api.types import infer_dtype
@@ -772,6 +775,30 @@ def _holds_mutable_cells(frame: Any) -> bool:
             columns = [frame] if str(frame.dtype) == "object" else []
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
+        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns) or (
+            _mutable_labels(frame)
+        )
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
         return False
+
+
+def _mutable_labels(frame: Any) -> bool:
+    """Does a frame's index, column index or a categorical's categories hold
+    a Python object that can be changed in place?
+
+    A deep pandas copy copies these arrays but not the objects in them: a
+    hashable object with mutable state (a sensor keyed by name that carries
+    its calibration) stayed one object shared by the entry and every hit.
+    """
+    from pandas.api.types import infer_dtype
+
+    indexes = [frame.index] if getattr(frame, "ndim", 2) == 1 else [frame.index, frame.columns]
+    dtypes = [frame.dtype] if getattr(frame, "ndim", 2) == 1 else list(frame.dtypes)
+    arrays = []
+    for index in indexes:
+        arrays.extend(getattr(index, "levels", None) or [index])
+    dtypes += [array.dtype for array in arrays]
+    arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
+    return any(
+        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in _IMMUTABLE_CELLS for array in arrays
+    )
