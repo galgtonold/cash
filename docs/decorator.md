@@ -424,7 +424,10 @@ fit([1, 2, 3], verbose=True)   # cache hit: verbose is not in the key
 
 For a library function: `fill = cash.cache(ignore=["width"])(textwrap.fill)`.
 A misspelt name raises at once:
-`ignore= names no parameter 'verbsoe' in fit(data, verbose)`.
+`ignore= names no parameter 'verbsoe' in fit(data, verbose)`. Under a
+decorator that fills a parameter itself (`f(LOG, *args, **kwargs)`, click's
+`pass_obj`), the call binds to the parameters the caller passes, and the
+filled one is never in the key, ignored or not.
 
 <!-- claim: cash/decorator/arg_key.py:annotated_ignores @3c698cef -->
 **`cash.Ignore`** says the same on the parameter itself. A type checker sees

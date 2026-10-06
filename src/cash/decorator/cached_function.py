@@ -3,13 +3,19 @@ has learned about its calls."""
 
 from __future__ import annotations
 
+import ast
 import datetime
 import inspect
 import math
+import textwrap
+import types
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_reading import own_source
 
 __all__ = [
     "CHUNK_MAX_BYTES",
@@ -39,18 +45,100 @@ _UNREAD: Any = object()
 _PASS_THROUGH = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 
 
-def call_signature(func: Callable[..., Any]) -> inspect.Signature:
-    """The signature a call to *func* binds to, for canonicalising its arguments.
+def _def_node(func: types.FunctionType) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The ``def`` of *func* itself (not of what it wraps), or None."""
+    try:
+        tree = ast.parse(textwrap.dedent(own_source(func)))
+    except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func.__code__.co_name:
+            return node
+    return None
 
-    ``inspect.signature`` follows ``__wrapped__`` to the innermost function,
-    which is right for a ``functools.wraps`` wrapper that passes
-    ``*args, **kwargs`` straight through, and wrong for one with parameters
-    of its own: ``def wrapper(x, factor=1)`` over ``def price(x,
-    currency=3)`` bound ``price(10, 3)`` as ``currency=3`` -- the default --
-    so it shared ``price(10)``'s entry. Follow a wrapper only while it
-    takes nothing but ``*args``/``**kwargs``; a ``__signature__`` set on
-    the way is honoured, as ``inspect.signature`` does.
+
+def _own_calls(node: ast.AST) -> list[ast.Call]:
+    """The calls in *node*'s own body, not in a def, lambda or class inside it."""
+    calls = []
+    stack = list(node.body)
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(current, ast.Call):
+            calls.append(current)
+        stack.extend(ast.iter_child_nodes(current))
+    return calls
+
+
+def _is_name(node: ast.AST, name: str | None) -> bool:
+    return name is not None and isinstance(node, ast.Name) and node.id == name
+
+
+def _names_object(func: types.FunctionType, name: str, target: Any) -> bool:
+    """Does *name*, read in *func*'s body, hold *target*?"""
+    code = func.__code__
+    if name in code.co_freevars and func.__closure__:
+        try:
+            return func.__closure__[code.co_freevars.index(name)].cell_contents is target
+        except ValueError:
+            return False
+    return func.__globals__.get(name) is target
+
+
+def passthrough_shape(func: Any, wrapped: Any) -> tuple[int, frozenset[str]] | None:
+    """What the ``*args, **kwargs`` wrapper *func* adds when it calls *wrapped*:
+    the number of positional arguments it puts before ``*args``, and the
+    keywords it passes besides ``**kwargs`` -- ``(0, frozenset())`` for a
+    wrapper that passes the call straight on. None when its source does not
+    show one consistent way it passes them on.
+
+    A wrapper that injects an argument (``f(LOG, *args, **kwargs)``, a
+    session, click's ``pass_obj``) shifts the binding: the caller's first
+    argument is the wrapped function's SECOND parameter.
     """
+    if not isinstance(func, types.FunctionType):
+        return None
+    params = inspect.signature(func, follow_wrapped=False).parameters.values()
+    star = next((p.name for p in params if p.kind is inspect.Parameter.VAR_POSITIONAL), None)
+    starstar = next((p.name for p in params if p.kind is inspect.Parameter.VAR_KEYWORD), None)
+    node = _def_node(func)
+    if node is None:
+        return None
+    forwarding = [
+        call
+        for call in _own_calls(node)
+        if any(isinstance(a, ast.Starred) and _is_name(a.value, star) for a in call.args)
+        or any(k.arg is None and _is_name(k.value, starstar) for k in call.keywords)
+    ]
+    to_wrapped = [c for c in forwarding if isinstance(c.func, ast.Name) and _names_object(func, c.func.id, wrapped)]
+    shapes = set()
+    for call in to_wrapped or forwarding:
+        leading = list(call.args)
+        if star is not None:
+            if not leading or not (isinstance(leading[-1], ast.Starred) and _is_name(leading[-1].value, star)):
+                return None
+            leading.pop()
+        if any(isinstance(a, ast.Starred) for a in leading):
+            return None
+        spread = [k for k in call.keywords if k.arg is None]
+        if [_is_name(k.value, starstar) for k in spread] != ([True] if starstar is not None else []):
+            return None
+        shapes.add((len(leading), frozenset(k.arg for k in call.keywords if k.arg is not None)))
+    return shapes.pop() if len(shapes) == 1 else None
+
+
+def follow_passthrough(func: Callable[..., Any]) -> tuple[Any, inspect.Signature, int, frozenset[str]]:
+    """``(owner, its signature, injected positionals, injected keywords)``:
+    the function whose parameters a call to *func* binds to, through every
+    ``*args, **kwargs`` wrapper on the way, and what those wrappers add.
+
+    A wrapper is followed only while it takes nothing but
+    ``*args``/``**kwargs`` and its source shows how it passes them on
+    (`passthrough_shape`); a ``__signature__`` set on the way is honoured,
+    as ``inspect.signature`` does.
+    """
+    leading, keywords = 0, frozenset()
     for _ in range(32):
         own = inspect.signature(func, follow_wrapped=False)
         wrapped = getattr(func, "__wrapped__", None)
@@ -61,9 +149,41 @@ def call_signature(func: Callable[..., Any]) -> inspect.Signature:
             or not kinds
             or not kinds <= _PASS_THROUGH
         ):
-            return own
+            return func, own, leading, keywords
+        shape = passthrough_shape(func, wrapped)
+        if shape is None:
+            return func, own, leading, keywords
+        leading, keywords = leading + shape[0], keywords | shape[1]
         func = wrapped
-    return inspect.signature(func)
+    return func, inspect.signature(func), leading, keywords
+
+
+def call_signature(func: Callable[..., Any]) -> inspect.Signature:
+    """The signature a call to *func* binds to, for canonicalising its arguments.
+
+    ``inspect.signature`` follows ``__wrapped__`` to the innermost function,
+    which is right for a ``functools.wraps`` wrapper that passes
+    ``*args, **kwargs`` straight through, and wrong for one with parameters
+    of its own: ``def wrapper(x, factor=1)`` over ``def price(x,
+    currency=3)`` bound ``price(10, 3)`` as ``currency=3`` -- the default --
+    so it shared ``price(10)``'s entry. Wrong too for one that injects an
+    argument: under ``f(LOG, *args, **kwargs)`` the caller's first argument
+    is the wrapped function's second, so the parameters the wrappers fill
+    are dropped (`follow_passthrough`). Without that, ignoring the injected
+    ``log`` left the caller's real first argument out of the key.
+    """
+    _owner, sig, leading, keywords = follow_passthrough(func)
+    if not leading and not keywords:
+        return sig
+    kept = []
+    for param in sig.parameters.values():
+        if leading and param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            leading -= 1
+            continue
+        if param.name in keywords and param.kind is not inspect.Parameter.VAR_KEYWORD:
+            continue
+        kept.append(param)
+    return sig.replace(parameters=kept)
 
 
 def checked_ttl(ttl: Any) -> float | None:

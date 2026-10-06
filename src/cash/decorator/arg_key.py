@@ -16,6 +16,7 @@ from typing import Annotated, Any, TypeVar
 
 from ..effects import EffectKind, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from .cached_function import follow_passthrough
 from .call_state import KeyBuildFailed
 
 __all__ = [
@@ -66,20 +67,13 @@ class ArgKey:
 
 
 def _signature_owner(func: Any) -> Any:
-    """The object whose own signature `call_signature` reads: *func*, or what a
-    ``*args, **kwargs`` wrapper wraps. Its annotations are the parameters'."""
-    passthrough = {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
-    for _ in range(32):
-        try:
-            own = inspect.signature(func, follow_wrapped=False)
-        except (TypeError, ValueError):
-            return func
-        wrapped = getattr(func, "__wrapped__", None)
-        kinds = {p.kind for p in own.parameters.values()}
-        if wrapped is None or "__signature__" in getattr(func, "__dict__", {}) or not kinds or not kinds <= passthrough:
-            return func
-        func = wrapped
-    return inspect.unwrap(func)
+    """The object whose own signature `call_signature` reads: *func*, or what
+    the ``*args, **kwargs`` wrappers on it wrap (`follow_passthrough`). Its
+    annotations are the parameters'."""
+    try:
+        return follow_passthrough(func)[0]
+    except (TypeError, ValueError):
+        return func
 
 
 def _globals_of(obj: Any) -> dict[str, Any]:
@@ -202,7 +196,13 @@ def arg_key_spec(func: Any, sig: inspect.Signature | None, key: Any, ignore: Any
                 f"signature to bind a call to, and this callable has none cash can read."
             )
         return None
-    missing = [name for name in listed if name not in sig.parameters]
+    # A parameter a wrapper fills (`f(LOG, *args, **kwargs)`) is never the
+    # caller's argument, so it is out of the key already: naming it is fine.
+    try:
+        injected = set(follow_passthrough(func)[1].parameters) - set(sig.parameters)
+    except (TypeError, ValueError):
+        injected = set()
+    missing = [name for name in listed if name not in sig.parameters and name not in injected]
     if missing:
         raise ValueError(f"@cash.cache: ignore= names no parameter {missing[0]!r} in {_describe(func, sig)}")
     ignored = frozenset(listed) | annotated_ignores(func, sig)
