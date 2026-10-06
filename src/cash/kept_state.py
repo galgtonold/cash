@@ -19,11 +19,12 @@ import functools
 import io
 import operator
 import pickle
+import sys
 import types
 import weakref
 from typing import Any
 
-__all__ = ["dumps", "restore_with_dict"]
+__all__ = ["chooses_its_state", "dumps", "left_out_attrs", "restore_with_dict"]
 
 
 def dumps(
@@ -33,14 +34,17 @@ def dumps(
     fast: bool = False,
     buffer_callback: Any = None,
     extra: dict | None = None,
+    keyed: bool = False,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
-    are reducers by type that come first (a clock test double's)."""
+    are reducers by type that come first (a clock test double's). *keyed*
+    bytes are for hashing, never loaded: an instance of the user's own class
+    also keeps the attributes its own reduce leaves out (`_reduce_for_key`)."""
     buf = io.BytesIO()
     pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
     pickler.fast = fast
-    pickler.dispatch_table = _KeepDict(protocol, extra)
+    pickler.dispatch_table = _KeepDict(protocol, extra, keyed)
     pickler.dump(value)
     return buf.getvalue()
 
@@ -51,16 +55,19 @@ class _KeepDict(dict):
     is the one ``pickle.dumps`` writes; `_reduce_with_dict` for a type whose
     reduce drops its instances' ``__dict__`` (`_drops_dict`)."""
 
-    def __init__(self, protocol: int, extra: dict | None) -> None:
+    def __init__(self, protocol: int, extra: dict | None, keyed: bool = False) -> None:
         super().__init__(extra or ())
         self._protocol = protocol
+        self._keyed = keyed
 
     def __missing__(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         reducer = copyreg.dispatch_table.get(t)
         if reducer is None:
-            if _drops_dict(t):
+            if self._keyed and chooses_its_state(t):
+                reducer = functools.partial(_reduce_for_key, protocol=self._protocol)
+            elif _drops_dict(t):
                 reducer = functools.partial(_reduce_with_dict, protocol=self._protocol)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
@@ -114,6 +121,82 @@ def _reduce_with_dict(obj: Any, protocol: int) -> Any:
     rest += [None] * (4 - len(rest))
     state, listitems, dictitems, setter = rest[:4]
     return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems, restore_with_dict
+
+
+def chooses_its_state(t: type) -> bool:
+    """Is *t* a class of the user's whose own Python ``__getstate__``,
+    ``__reduce__`` or ``__reduce_ex__`` decides what pickle stores?
+
+    Such a class may leave a setting out of its saved state (a precision, a
+    device, a threshold) that its methods still read, so a key of what it
+    pickles alone served one setting the other's result. A library's class
+    is left to say what its state is. Remembered per type.
+    """
+    try:
+        return _CHOOSES_STATE[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_chooses_state(t)
+    found = _CHOOSES_STATE[t] = _decide_chooses_state(t)
+    return found
+
+
+def _decide_chooses_state(t: type) -> bool:
+    for klass in t.__mro__:
+        if klass is object:
+            return False
+        own = klass.__dict__
+        if any(isinstance(own.get(name), _PYTHON_METHODS) for name in _STATE_METHODS):
+            from .install_paths import is_user_code_module
+
+            return is_user_code_module(sys.modules.get(klass.__module__))
+    return False
+
+
+_STATE_METHODS = ("__getstate__", "__reduce__", "__reduce_ex__")
+
+_CHOOSES_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _reduce_for_key(obj: Any, protocol: int) -> Any:
+    """*obj*'s own reduce, with the instance attributes its state leaves out
+    beside it (`chooses_its_state`). Only hashed, never loaded."""
+    reduced = obj.__reduce_ex__(protocol)
+    if isinstance(reduced, str):
+        return reduced
+    rebuild, args, *rest = reduced
+    rest += [None] * (4 - len(rest))
+    left_out = left_out_attrs(obj, rest[0])
+    if not left_out:
+        return reduced
+    return rebuild, args, ("__cash_left_out__", rest[0], left_out), *rest[1:4]
+
+
+def left_out_attrs(obj: Any, state: Any) -> dict:
+    """The attributes in *obj*'s ``__dict__`` that *state*, what its reduce
+    saves, does not hold by name.
+
+    One that cannot be pickled (a lock or a connection the class leaves out
+    for that reason) is given as its type: its content is nothing pickle can
+    read.
+    """
+    attrs = getattr(obj, "__dict__", None)
+    if not attrs:
+        return {}
+    if isinstance(state, tuple) and len(state) == 2 and isinstance(state[1], dict):
+        state = state[0]  # (dict, slots)
+    saved = state if isinstance(state, dict) else {}
+    left_out = {}
+    for name, value in attrs.items():
+        if name in saved:
+            continue
+        try:
+            dumps(value, keyed=True)
+        except Exception:  # noqa: BLE001 - whatever pickle refuses
+            value = ("__cash_unpicklable__", f"{type(value).__module__}.{type(value).__qualname__}")
+        left_out[name] = value
+    return left_out
 
 
 def restore_with_dict(obj: Any, packed: tuple) -> None:
