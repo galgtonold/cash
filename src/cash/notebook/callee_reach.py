@@ -62,18 +62,47 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
     """
     if not code or not namespace:
         return _EMPTY
-    tree = parse_cached(code)
-    if tree is None:
+    steps = _names_read(code)
+    if not steps:
         return _EMPTY
     found = _Found(namespace)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            found.value(namespace.get(node.id))
-        elif isinstance(node, ast.Attribute):
-            found.chain(node)
+    for root, attrs in steps:
+        if attrs:
+            found.chain(root, attrs)
+        else:
+            found.value(namespace.get(root))
     found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
     return Reach(tuple(found.functions), frozenset(found.modules), data)
+
+
+@functools.lru_cache(maxsize=4096)
+def _names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """What :func:`reached_user_code` looks up for *code*, in the order its
+    walk meets it: ``(name, ())`` for a name read, ``(root, attrs)`` for
+    each ``root.a.b`` chain (``attrs`` innermost first); empty when *code*
+    does not parse.
+
+    The text alone decides it, so it is found once per text. The upstream
+    scan asks for every cell above on every cell: walking each cell's tree
+    again was 0.14 s of a cell at the end of a 400-cell notebook.
+    """
+    tree = parse_cached(code)
+    if tree is None:
+        return ()
+    steps: list[tuple[str, tuple[str, ...]]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            steps.append((node.id, ()))
+        elif isinstance(node, ast.Attribute):
+            attrs: list[str] = []
+            root: ast.expr = node
+            while isinstance(root, ast.Attribute):
+                attrs.append(root.attr)
+                root = root.value
+            if isinstance(root, ast.Name):
+                steps.append((root.id, tuple(attrs)))
+    return tuple(steps)
 
 
 def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
@@ -224,16 +253,10 @@ class _Found:
                     self.data.setdefault(f"{home.__name__}.{cls.__qualname__}.{attr}", attr_value)
         self.value(vars(cls).get("__init__"))
 
-    def chain(self, node: ast.Attribute) -> None:
-        """``mod.sub.attr``: each local module on the way, and what it ends at."""
-        attrs: list[str] = []
-        root: ast.expr = node
-        while isinstance(root, ast.Attribute):
-            attrs.append(root.attr)
-            root = root.value
-        if not isinstance(root, ast.Name):
-            return
-        obj = self.namespace.get(root.id)
+    def chain(self, root: str, attrs: tuple[str, ...]) -> None:
+        """``mod.sub.attr`` (*root* ``mod``, *attrs* innermost first): each
+        local module on the way, and what it ends at."""
+        obj = self.namespace.get(root)
         for attr in reversed(attrs):
             if not isinstance(obj, types.ModuleType):
                 return
