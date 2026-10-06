@@ -232,8 +232,8 @@ class ResultStore:
         unresolved = getattr(tracker, "unresolved_dynamic", None)
         if refusal is None and unresolved:
             refusal = (
-                f"a cached function it calls, {sorted(unresolved)[0]}, could not resolve its "
-                f"dynamic_depends_on= sources, so nothing could tell when they change"
+                f"a cached function it calls depends, through dynamic_depends_on=, on sources "
+                f"nothing could record ({sorted(unresolved)[0]}), so nothing could tell when they change"
             )
         if refusal is None:
             refusal = self._unpicklable_source_refusal(func_name, recorded_sources(tracker))

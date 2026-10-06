@@ -117,7 +117,10 @@ if __name__ == "__main__":
 <!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @a7a12595 -->
 A file a worker reads for a cached call in the parent is a dependency of that
 call, as if the parent had read it: editing it recomputes the call. This holds
-for `ProcessPoolExecutor`, `multiprocessing.Pool` and joblib's workers.
+for `ProcessPoolExecutor`, `multiprocessing.Pool` and joblib's workers. So
+does a `dynamic_depends_on=` source of a cached function the worker calls; one
+that cannot be pickled back to the parent keeps the parent's call from being
+stored.
 
 Each process keeps some things to itself:
 
