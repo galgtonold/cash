@@ -229,6 +229,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # function on every read, or finding it raised); the function runs uncached
         "KEY-INSTANCE-STATE",  # a bound method's instance could not be hashed;
         # falling back to its process-local identity
+        "KEY-ITERATOR-CONSUMED",  # building the key read an iterator argument
+        # (a key= function, a registered hasher); the call ran uncached
         "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
         # in the key, so it is served until a ttl= expires it
         "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a

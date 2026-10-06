@@ -502,7 +502,9 @@ reads a file, the clock, a random number, the network or the environment
 gets [`KEY-FUNCTION-IMPURE`](warnings.md#key-function-impure)
 (`strict=True` raises instead, `assume_safe=True` silences it). One that
 raises runs the call uncached with
-[`KEY-FUNCTION-RAISED`](warnings.md#key-function-raised).
+[`KEY-FUNCTION-RAISED`](warnings.md#key-function-raised), and so does one
+that reads an iterator argument, which leaves the body an emptied iterator
+([`KEY-ITERATOR-CONSUMED`](warnings.md#key-iterator-consumed)).
 
 <!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138, cash/decorator/runtime.py:KeyBuilder.call_args_hash @4b0cf9f0 -->
 A hit whose arguments differ from those of the call that stored the entry

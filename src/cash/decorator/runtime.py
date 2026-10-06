@@ -7,7 +7,9 @@ import concurrent.futures
 import contextlib
 import contextvars
 import hashlib
+import inspect
 import logging
+import operator
 import os
 import pickle
 import threading
@@ -94,6 +96,42 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
+
+
+def _iterator_position(value: Any) -> Any:
+    """Where the one-shot iterator *value* stands, comparable before and
+    after something read it; None when that cannot be told."""
+    if inspect.isgenerator(value):
+        frame = value.gi_frame
+        return (inspect.getgeneratorstate(value), frame.f_lasti if frame is not None else None)
+    try:
+        hint = operator.length_hint(value, -1)
+    except Exception:  # noqa: BLE001 - a user's __length_hint__ can raise anything
+        return None
+    return ("left", hint) if hint >= 0 else None
+
+
+def iterator_arguments(signature: Any, args: tuple, kwargs: dict) -> list[tuple[str, Any, Any]]:
+    """``(parameter, iterator, position)`` for each one-shot iterator argument."""
+    if not any(is_one_shot_iterator(v) for v in (*args, *kwargs.values())):
+        return []
+    named: list[tuple[str, Any]] = [(f"argument {i}", v) for i, v in enumerate(args)] + list(kwargs.items())
+    if signature is not None:
+        try:
+            bound = signature.bind(*args, **kwargs).arguments
+        except TypeError:
+            bound = None
+        if bound is not None:
+            named = []
+            for name, value in bound.items():
+                kind = signature.parameters[name].kind
+                if kind is inspect.Parameter.VAR_POSITIONAL:
+                    named.extend((f"*{name}[{i}]", v) for i, v in enumerate(value))
+                elif kind is inspect.Parameter.VAR_KEYWORD:
+                    named.extend(value.items())
+                else:
+                    named.append((name, value))
+    return [(label, v, _iterator_position(v)) for label, v in named if is_one_shot_iterator(v)]
 
 
 def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
@@ -297,6 +335,7 @@ class KeyBuilder:
         `_EXPLAINING` is set.
         """
         func, func_name = spec.func, spec.name
+        iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
         # One plain-data census per argument, shared across the key
         # (`plain_census`).
         previous = getattr(PLAIN_CENSUS, "memo", None)
@@ -345,11 +384,40 @@ class KeyBuilder:
             PLAIN_CENSUS.memo = previous
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
+        if iterators:
+            self._check_iterators_unread(spec, iterators)
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         call_args_hash = args_hash if spec.arg_key is None else None
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash)
+
+    def _check_iterators_unread(self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]]) -> None:
+        """Raise `KeyBuildFailed` when building the key read an iterator
+        argument, or may have and cash cannot tell.
+
+        A ``key=`` function (``key=lambda rows: tuple(rows)``) or a hasher
+        registered for the iterator's type consumes it before the body runs:
+        the body then sees it emptied, and its wrong result was stored and
+        served, even for a list of the same rows.
+        """
+        readers = spec.arg_key is not None and spec.arg_key.key_fn is not None
+        readers = readers or bool(self._args.type_hashers or self._args.override_hashers)
+        for label, value, before in iterators:
+            after = _iterator_position(value)
+            if before is not None and after == before:
+                continue
+            if before is None and not readers:
+                continue
+            what = "consumed" if before is not None else "may have consumed"
+            raise KeyBuildFailed(
+                "KEY-ITERATOR-CONSUMED",
+                f"@cash.cache on {spec.name}: building the key {what} the iterator passed as "
+                f"{label!r} ({type(value).__name__}), so the body sees what is left of it and the "
+                f"call ran uncached.",
+                "pass a list or a tuple instead of an iterator, or key the call by something "
+                "that does not read the iterator.",
+            )
 
     def key_arguments(self, spec: CachedFunction, args: tuple, kwargs: dict, normalized: tuple[tuple, dict]) -> tuple:
         """`keyed_arguments` for *spec*'s ``key=`` or ignored parameters.
