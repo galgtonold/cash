@@ -650,8 +650,8 @@ class NotebookSimulator:
         0..2's trace segments, so cell 2's cache entry is NOT synced for
         ``df``.
         """
-        if not len(self.cache):
-            return
+        if not len(self.cache) or not rerecorded:
+            return  # nothing to sync, so nothing moves either
 
         updated = False
         # For each cache entry at index idx, collect ALL statement codes that
@@ -681,9 +681,10 @@ class NotebookSimulator:
                             input_hashes[var_name] = new
 
             cached_vl = entry.virtual_lineage
-            for var_name in list(cached_vl.keys()):
-                if var_name not in rerecorded:
-                    continue
+            # The re-recorded names each snapshot holds: looked up, not found
+            # by walking every name of every snapshot (quadratic in a long
+            # notebook, whose snapshots each hold every name above).
+            for var_name in [name for name in rerecorded if name in cached_vl]:
                 if not self._should_sync_cache_var(var_name, cumulative_stmt_codes, cached_vl, idx):
                     continue
                 # Safe to sync: the runtime lineage was produced by code within
