@@ -361,3 +361,57 @@ def test_a_caller_of_a_failed_resolver_is_not_stored(cash_instance):
     source.n = 2
     report()
     assert len(runs) == 3
+
+
+BIG_JOB = """
+    import os, sys
+    import cash
+    from cash import DataSource
+
+    class Frame(DataSource):
+        # Carries its data, as an in-memory table handle does.
+        def __init__(self, name):
+            self.name = name
+            self.payload = os.urandom(200_000)
+
+        def get_id(self):
+            return "frame:" + self.name
+
+        def state_token(self):
+            return os.environ["FRAME_VERSION"]
+
+    SOURCES = {"x": Frame("x")}
+
+    @cash.cache(dynamic_depends_on=lambda name: SOURCES[name], assume_safe=True)
+    def load(name):
+        return 1
+
+    @cash.cache(assume_safe=True)
+    def r1():
+        print("[R1]", file=sys.stderr)
+        return load("x") + 1
+
+    @cash.cache(assume_safe=True)
+    def r2():
+        return load("x") + 2
+
+    @cash.cache(assume_safe=True)
+    def r3():
+        return load("x") + 3
+
+    print(r1(), r2(), r3())
+"""
+
+
+def test_a_large_source_is_stored_once_for_all_its_callers(tmp_path):
+    (tmp_path / "job.py").write_text(textwrap.dedent(BIG_JOB), encoding="utf-8")
+    first = run_python("job.py", cwd=tmp_path, env={"FRAME_VERSION": "1"})
+    assert first.stdout.strip() == "2 3 4"
+    size = sum(p.stat().st_size for p in (tmp_path / ".cash").rglob("*") if p.is_file())
+    # One copy of the 200 kB source, not one per caller.
+    assert 200_000 < size < 400_000, size
+    again = run_python("job.py", cwd=tmp_path, env={"FRAME_VERSION": "1"})
+    assert again.stdout.strip() == "2 3 4"
+    assert "[R1]" not in again.stderr  # served, its source read back from the shared copy
+    moved = run_python("job.py", cwd=tmp_path, env={"FRAME_VERSION": "2"})
+    assert "[R1]" in moved.stderr

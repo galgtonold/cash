@@ -90,6 +90,8 @@ own key never sees them. cash keeps them in its entry instead:
   gave when `load` was called. Every lookup of the caller asks the source for
   its token again: the same token serves the entry, another one recomputes
   it, and so does a `state_token()` that raises.
+  A source that pickles to more than 4 kB (one that carries data) is
+  stored once, beside the entries, and each caller's entry names it.
 
 In the process that wrote the entry, the source object itself is asked, and
 so is the resolver, with the arguments `load` was called with: a resolver

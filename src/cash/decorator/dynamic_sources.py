@@ -19,11 +19,18 @@ new handles), which the recorded object never answers for (`Resolution`).
 A source that cannot be pickled is kept by this process only: its entry
 stays in RAM, and a backend with no RAM tier does not store it
 (`ResultStore.refusal`).
+
+A small pickle goes in the entry itself. A larger one -- a source that holds
+data, such as an in-memory table handle -- is stored once, as an entry of
+its own under `source_key`, and every caller's entry names it by digest: a
+copy in each caller multiplied it, and a hit in a new process read and
+unpickled it again for each caller.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import pickle
 import threading
@@ -44,7 +51,17 @@ __all__ = [
     "held_sources",
     "recorded_sources",
     "remember_sources",
+    "source_key",
 ]
+
+#: A pickled source up to this many bytes is kept in the caller's entry;
+#: a larger one is stored once under `source_key`.
+INLINE_PICKLE_BYTES = 4096
+
+
+def source_key(digest: str) -> str:
+    """The backend key a pickled source of *digest* is stored under."""
+    return f"cash-dynamic-source:{digest}"
 
 
 class Resolution:
@@ -79,7 +96,8 @@ class DynamicSources:
     """The non-file sources a call's cached callees resolved, ready to record.
 
     ``records`` is what the entry's metadata keeps: per source its id, its
-    token at call time and, when it pickles, the pickle. ``live`` are the
+    token at call time and, when it pickles, the pickle (``pickle``) or,
+    for a large one, its digest (``blob``). ``live`` are the
     objects themselves, in the same order. ``picklable`` is False when one
     of them did not pickle: the entry can then only be checked by this
     process.
@@ -89,10 +107,13 @@ class DynamicSources:
     live: list[DataSource]
     picklable: bool
     resolutions: dict[tuple, Resolution]
+    #: digest -> pickle of each source too large to keep in the entry, to
+    #: be stored under `source_key` before the entry.
+    blobs: dict[str, bytes]
 
     @property
     def unpicklable_ids(self) -> list[str]:
-        return [r["id"] for r in self.records if "pickle" not in r]
+        return [r["id"] for r in self.records if "pickle" not in r and "blob" not in r]
 
 
 #: cache key -> the source objects its entry's records name, in their order:
@@ -122,24 +143,33 @@ def recorded_sources(tracker: Any) -> DynamicSources | None:
     records: list[dict[str, str]] = []
     live: list[DataSource] = []
     picklable = True
-    seen: set[tuple[str, str, str | None]] = set()
+    seen: set[tuple[str, str, str]] = set()
+    blobs: dict[str, bytes] = {}
     for key in sorted(collected, key=lambda k: k[:2]):
         source_id = key[0]
         source, token = collected[key]
         record = {"id": source_id, "token": token}
         try:
-            record["pickle"] = base64.b64encode(pickle.dumps(source, protocol=pickle.HIGHEST_PROTOCOL)).decode("ascii")
+            data = pickle.dumps(source, protocol=pickle.HIGHEST_PROTOCOL)
         except Exception:  # noqa: BLE001 - pickle raises whatever __reduce__ raises
             logger.debug("[CORE] dynamic source %s does not pickle", source_id, exc_info=True)
             picklable = False
-        # The same source met again, as a new object each call: once.
-        if "pickle" in record:
-            if (source_id, token, record["pickle"]) in seen:
+            data = None
+        if data is not None:
+            if len(data) > INLINE_PICKLE_BYTES:
+                digest = hashlib.sha256(data).hexdigest()
+                record["blob"] = digest
+                blobs[digest] = data
+                held = record["blob"]
+            else:
+                record["pickle"] = held = base64.b64encode(data).decode("ascii")
+            # The same source met again, as a new object each call: once.
+            if (source_id, token, held) in seen:
                 continue
-            seen.add((source_id, token, record["pickle"]))
+            seen.add((source_id, token, held))
         records.append(record)
         live.append(source)
-    result = DynamicSources(records, live, picklable, dict(resolutions))
+    result = DynamicSources(records, live, picklable, dict(resolutions), blobs)
     try:
         tracker._recorded_sources = ((len(collected), len(resolutions)), result)
     except AttributeError:  # a tracker that takes no attributes: pickle again
@@ -171,10 +201,20 @@ def asked_again_here(cache_key: str) -> bool:
     return cache_key in _RESOLUTIONS
 
 
-def held_sources(cache_key: str, records: list[dict[str, str]]) -> list[DataSource] | None:
+#: digest -> the source unpickled from the entry stored under
+#: `source_key`: read and unpickled once per process, whatever the number of
+#: callers naming it.
+_FROM_BLOB: dict[str, DataSource] = {}
+
+
+def held_sources(
+    cache_key: str, records: list[dict[str, str]], fetch: Callable[[str], Any] | None = None
+) -> list[DataSource] | None:
     """The source objects *records* name: the ones this process holds for
-    *cache_key*, else unpickled from the records. None when one cannot be
-    had -- not pickled and not held here, or the pickle does not load."""
+    *cache_key*, else unpickled from the records -- or, for one stored on
+    its own, from what *fetch* returns for its `source_key`. None when one
+    cannot be had: not pickled and not held here, its own entry gone, or the
+    pickle does not load."""
     ids = [r.get("id") for r in records]
     with _LIVE_LOCK:
         held = _LIVE.get(cache_key)
@@ -182,15 +222,8 @@ def held_sources(cache_key: str, records: list[dict[str, str]]) -> list[DataSour
         return held[1]
     loaded: list[DataSource] = []
     for record in records:
-        blob = record.get("pickle")
-        if blob is None:
-            return None
-        try:
-            source = pickle.loads(base64.b64decode(blob))
-        except Exception:  # noqa: BLE001 - a class gone or renamed since: unusable
-            logger.debug("[CORE] dynamic source %s does not unpickle", record.get("id"), exc_info=True)
-            return None
-        if not isinstance(source, DataSource):
+        source = _unpickled(record, fetch)
+        if source is None:
             return None
         loaded.append(source)
     with _LIVE_LOCK:
@@ -198,7 +231,42 @@ def held_sources(cache_key: str, records: list[dict[str, str]]) -> list[DataSour
     return loaded
 
 
-def dynamic_sources_fresh(cache_key: str, records: list[dict[str, str]]) -> bool:
+def _unpickled(record: dict[str, str], fetch: Callable[[str], Any] | None) -> DataSource | None:
+    """The source *record* keeps, unpickled; None when it cannot be had."""
+    digest = record.get("blob")
+    if digest is not None:
+        with _LIVE_LOCK:
+            known = _FROM_BLOB.get(digest)
+        if known is not None:
+            return known
+        try:
+            data = fetch(source_key(digest)) if fetch is not None else None
+        except Exception:  # noqa: BLE001 - a backend read that failed: not had
+            logger.debug("[CORE] dynamic source %s could not be read", record.get("id"), exc_info=True)
+            data = None
+        if not isinstance(data, bytes) or hashlib.sha256(data).hexdigest() != digest:
+            return None
+    else:
+        blob = record.get("pickle")
+        if blob is None:
+            return None
+        data = base64.b64decode(blob)
+    try:
+        source = pickle.loads(data)
+    except Exception:  # noqa: BLE001 - a class gone or renamed since: unusable
+        logger.debug("[CORE] dynamic source %s does not unpickle", record.get("id"), exc_info=True)
+        return None
+    if not isinstance(source, DataSource):
+        return None
+    if digest is not None:
+        with _LIVE_LOCK:
+            _FROM_BLOB[digest] = source
+    return source
+
+
+def dynamic_sources_fresh(
+    cache_key: str, records: list[dict[str, str]], fetch: Callable[[str], Any] | None = None
+) -> bool:
     """True when every source *records* names gives the token it gave when
     the entry was written. A source that cannot be had, or whose
     ``state_token()`` raises, is not shown unchanged: False. The resolver
@@ -209,7 +277,7 @@ def dynamic_sources_fresh(cache_key: str, records: list[dict[str, str]]) -> bool
         return False
     if not records:
         return True
-    sources = held_sources(cache_key, records)
+    sources = held_sources(cache_key, records, fetch)
     if sources is None:
         return False
     for source, record in zip(sources, records):

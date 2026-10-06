@@ -28,7 +28,7 @@ from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH, BodyRun, Call
-from .dynamic_sources import DynamicSources, recorded_sources, remember_sources
+from .dynamic_sources import DynamicSources, recorded_sources, remember_sources, source_key
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
@@ -530,6 +530,8 @@ class ResultStore:
             # Kept, not a temporary: TieredBackend writes back where the value
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
+            if dynamic is not None:
+                self._store_sources(dynamic)
             self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
             if dynamic is not None:
                 remember_sources(cache_key, dynamic)
@@ -756,6 +758,28 @@ class ResultStore:
             {"n_chunks": n_chunks, "total_items": chunks.total_items, **_returned(returned)},
             chunks.stream,
         )
+
+    def _store_sources(self, dynamic: DynamicSources) -> None:
+        """Store each source too large for a caller's entry once, under its
+        `source_key`, unless an earlier caller stored it already. Written
+        before the entry: an entry is never there without what it names.
+        One that goes later (evicted, or not written) makes its callers miss.
+        No ttl of its own: entries with different ttls may name it."""
+        backend = self._backend_slot.backend
+        for digest, data in dynamic.blobs.items():
+            key = source_key(digest)
+            if backend.peek_metadata(key) is not None:
+                continue
+            serializer = PickleSerializer()
+            metadata = CacheMetadata(
+                key=key,
+                timestamp=time.time(),
+                serializer_cls=type(serializer),
+                # Goes where the entries naming it go (`_write_one_chunk`).
+                decorator_entry=True,
+                copy_required=False,
+            ).to_dict()
+            backend.set(key, data, metadata, serializer=serializer)
 
     def _write_one_chunk(
         self,

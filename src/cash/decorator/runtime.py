@@ -702,7 +702,11 @@ class CallRunner:
             # And the sources its callees resolved, which the verdict just
             # found unchanged: the enclosing call depends on them too.
             if metadata.dynamic_sources or asked_again_here(cache_key):
-                held = held_sources(cache_key, metadata.dynamic_sources) if metadata.dynamic_sources else []
+                held = (
+                    held_sources(cache_key, metadata.dynamic_sources, self._stored_source)
+                    if metadata.dynamic_sources
+                    else []
+                )
                 if held is not None:
                     pass_dynamic_sources_up(
                         [(source, record["token"]) for source, record in zip(held, metadata.dynamic_sources or [])],
@@ -755,7 +759,7 @@ class CallRunner:
         if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
             return MissReason(MissKind.FILE, describe_stale_files(metadata))
         if (metadata.dynamic_sources or asked_again_here(cache_key)) and not dynamic_sources_fresh(
-            cache_key, metadata.dynamic_sources or []
+            cache_key, metadata.dynamic_sources or [], self._stored_source
         ):
             return MissReason(
                 MissKind.DYNAMIC,
@@ -764,6 +768,11 @@ class CallRunner:
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         return None
+
+    def _stored_source(self, key: str) -> Any:
+        """What the backend holds under *key*: a pickled source a caller's
+        entry names (`dynamic_sources.source_key`), or None."""
+        return self._backend_slot.backend.get(key)[1]
 
     def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
         """True unless this is a chunked manifest missing some of its chunks.
