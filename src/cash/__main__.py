@@ -661,6 +661,10 @@ def _looks_like_a_cache(cache_dir: str) -> bool:
     """
     if os.path.exists(os.path.join(cache_dir, VERSION_FILENAME)):
         return True
+    # The sqlite backend keeps its whole cache in one database and writes no
+    # stamp: its database, when it is cash's, marks the directory as well.
+    if _sqlite_cache(cache_dir) is not None:
+        return True
     try:
         entries = os.listdir(cache_dir)
     except OSError:
@@ -699,7 +703,7 @@ def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
     if not force and not _looks_like_a_cache(resolved):
         print(
             f"Refusing to clear {resolved}: it does not look like a cash "
-            f"cache (no {VERSION_FILENAME} and no {ENTRY_SUFFIX} files)."
+            f"cache (no {VERSION_FILENAME}, no {ENTRY_SUFFIX} files and no {DB_FILENAME})."
         )
         print(
             "Check the path, CASH_CACHE_DIR and [tool.cash] cache_dir. If it "
@@ -744,7 +748,8 @@ def _remove_markers_last(cache_dir: str) -> None:
     cannot be deleted. Whatever is left must still pass `_looks_like_a_cache`,
     so the same ``cash clear`` works again once the notebook is closed,
     without ``--force``. So the top-level ``.entry`` files go after everything
-    else, and the ``CACHE_VERSION`` stamp after them.
+    else, and the ``CACHE_VERSION`` stamp after them. A sqlite cache's
+    database marks it by itself, so it is not held back.
     """
     names = os.listdir(cache_dir)
     markers = sorted(
@@ -1079,8 +1084,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub_clear.add_argument(
         "--force",
         action="store_true",
-        help="Clear a directory even though it holds no CACHE_VERSION "
-        "and no .entry files. Never clears the current directory "
+        help="Clear a directory even though it holds no CACHE_VERSION, "
+        "no .entry files and no cash cache.db. Never clears the current directory "
         "or one that contains it.",
     )
     sub_clear.set_defaults(func=cmd_clear, clear_parser=sub_clear)
