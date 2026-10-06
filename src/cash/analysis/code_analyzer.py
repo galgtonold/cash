@@ -13,6 +13,7 @@ import functools
 import importlib
 import inspect
 import logging
+import re
 import sys
 import textwrap
 import types
@@ -619,7 +620,7 @@ class CodeAnalyzer:
             flags.append(is_start)
             # A dropped magic is a self-contained logical line; do not let its
             # characters perturb the scanner state for following lines.
-            if is_start and line.strip().startswith(("%", "!")):
+            if is_start and _is_magic_line(line):
                 prev_backslash = False
                 continue
             i, n = 0, len(line)
@@ -688,8 +689,16 @@ class CodeAnalyzer:
     def strip_magics(code: str) -> str:
         """Remove Jupyter magics from code.
 
-        Only lines that *begin a logical line* and start with ``%`` or ``!``
-        are treated as magics. A ``%`` (modulo / ``%``-format) or ``!`` that
+        A cell magic keeps its body only when the body runs as Python in the
+        user's namespace (``%%time``, ``%%capture``); any other cell magic
+        (``%%writefile``, ``%%script``, ``%%timeit``, ``%%bash``) runs no code
+        there, so the cell strips to nothing (:func:`_cell_magic_body`).
+
+        Only lines that *begin a logical line* and start with ``%`` or ``!``,
+        or assign one (``files = !ls``, ``t = %time f()``), are treated as
+        magics. The name such a line binds comes from IPython, not from code
+        cash can read, so it has no producer here, as a name bound by a
+        statement cash cannot see. A ``%`` (modulo / ``%``-format) or ``!`` that
         opens a continuation line of a multi-line statement is real Python and
         is preserved — otherwise a valid statement such as::
 
@@ -709,10 +718,11 @@ class CodeAnalyzer:
             return code
         except SyntaxError:
             pass
+        code = _cell_magic_body(code)
         starts = CodeAnalyzer._logical_line_start_flags(code)
         out: list[str] = []
         for line, is_start in zip(code.split("\n"), starts):
-            if is_start and line.strip().startswith(("%", "!")):
+            if is_start and _is_magic_line(line):
                 indent = line[: len(line) - len(line.lstrip())]
                 if indent:
                     # An indented magic is the leading (often sole) statement of
@@ -909,6 +919,35 @@ class CodeAnalyzer:
         visitor = _ForbiddenVisitor(user_ns)
         visitor.visit(tree)
         return list(set(visitor.found_reasons))
+
+
+#: Cell magics whose body IPython runs as Python in the user's namespace. Any
+#: other cell magic writes its body to a file, hands it to another program or
+#: runs it in a scope of its own (``%%timeit``), so none of it binds a name.
+_PYTHON_BODY_CELL_MAGICS = frozenset({"time", "capture", "prun", "debug"})
+
+#: A line that assigns the result of a magic or a shell command, as IPython's
+#: ``MagicAssign`` and ``SystemAssign`` transforms read it.
+_MAGIC_ASSIGN = re.compile(r"\s*[A-Za-z_][\w.]*(\s*,\s*[A-Za-z_][\w.]*)*\s*=\s*[%!]")
+
+
+def _is_magic_line(line: str) -> bool:
+    """Whether *line*, beginning a logical line, is IPython syntax rather than Python."""
+    return line.strip().startswith(("%", "!")) or _MAGIC_ASSIGN.match(line) is not None
+
+
+def _cell_magic_body(code: str) -> str:
+    """*code* without its cell magic: the body when IPython runs it as Python
+    in the user's namespace, else nothing. *code* unchanged when it is not a
+    cell magic (IPython reads ``%%`` as one only on the cell's first line)."""
+    lines = code.split("\n")
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if first is None or not lines[first].startswith("%%"):
+        return code
+    name = lines[first][2:].split(maxsplit=1)[0] if lines[first][2:].strip() else ""
+    if name not in _PYTHON_BODY_CELL_MAGICS:
+        return ""
+    return "\n".join(lines[first + 1 :])
 
 
 @functools.lru_cache(maxsize=1024)

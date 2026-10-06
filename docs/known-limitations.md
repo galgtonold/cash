@@ -230,6 +230,17 @@ even serve `r` after cell 2 is deleted. **Fix:** define a function above the
 functions that call it. A module-level read of a name bound only below raises
 [`ForwardReferenceError`](#forwardreferenceerror) instead.
 
+### A name a magic binds
+
+<!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @5404cd79 -->
+cash reads a cell's Python, not what IPython makes of its magics. A name bound
+by one (`files = !ls`, `t = %time f()`, `%%capture out`, `%%bash --out o`) has
+no producer cash knows of, so editing a cell the command reads and re-running a
+cell below does not run the command again. The body of a cell magic other than
+`%%time`, `%%capture`, `%%prun` and `%%debug` is not Python in the notebook's
+namespace (`%%writefile`, `%%script`, `%%timeit`, `%%bash`), and cash never runs
+it. **Fix:** re-run the magic's cell after such an edit.
+
 ### Background threads
 
 A thread that changes data after its cell has finished is outside cash's view.
