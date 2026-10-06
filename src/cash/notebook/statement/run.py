@@ -8,9 +8,12 @@ two methods they call.
 """
 
 from __future__ import annotations
+import __future__
 
 import ast
+import functools
 import inspect
+import operator
 import sys
 import traceback
 from dataclasses import dataclass, field
@@ -130,6 +133,42 @@ def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:
     )
 
 
+def _future_flags_of_the_cells() -> int:
+    """The ``from __future__ import ...`` features the notebook's cells asked for.
+
+    Compiling with ``dont_inherit`` keeps this module's own
+    ``from __future__ import annotations`` out of the user's code (which made
+    ``x: Undefined = 1`` run without a ``NameError``); the user's own are
+    what IPython's compiler remembers.
+    """
+    from IPython.core.interactiveshell import InteractiveShell
+
+    if not InteractiveShell.initialized():
+        return 0
+    return getattr(InteractiveShell.instance().compile, "flags", 0) & _FUTURE_MASK
+
+
+def _remember_future_imports(tree: ast.Module | None) -> None:
+    """Hand a ``from __future__ import x`` this statement ran to IPython's
+    compiler, which is what makes it apply to the cells after it."""
+    if tree is None:
+        return
+    flags = 0
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            flags |= sum(getattr(getattr(__future__, a.name, None), "compiler_flag", 0) for a in node.names)
+    if flags:
+        from IPython.core.interactiveshell import InteractiveShell
+
+        if InteractiveShell.initialized():
+            InteractiveShell.instance().compile.flags |= flags
+
+
+_FUTURE_MASK = functools.reduce(
+    operator.or_, (getattr(__future__, name).compiler_flag for name in __future__.all_feature_names), 0
+)
+
+
 class CodeRunner:
     """Compiles a statement and runs it in the user namespace.
 
@@ -149,23 +188,29 @@ class CodeRunner:
         self._echo = False
 
     def _units(self, flags: int) -> list[types.CodeType]:
+        flags |= _future_flags_of_the_cells()
         tree = self.tree
         if tree is None:
             try:
                 tree = ast.parse(self.source)
             except SyntaxError:
                 tree = None
+            self.tree = tree
         # One linecache-registered filename per statement, so a traceback
         # inside a function defined here shows its source.
         filename = register_cell_source(self.source)
         if not (tree and tree.body and isinstance(tree.body[-1], ast.Expr)):
-            return [compile(self.source, filename, "exec", flags=flags)]
+            return [compile(self.source, filename, "exec", flags=flags, dont_inherit=True)]
         units = []
         if tree.body[:-1]:
-            units.append(compile(ast.Module(body=tree.body[:-1], type_ignores=[]), filename, "exec", flags=flags))
+            units.append(
+                compile(
+                    ast.Module(body=tree.body[:-1], type_ignores=[]), filename, "exec", flags=flags, dont_inherit=True
+                )
+            )
         expression = ast.Expression(body=tree.body[-1].value)
         ast.fix_missing_locations(expression)
-        units.append(compile(expression, filename, "eval", flags=flags))
+        units.append(compile(expression, filename, "eval", flags=flags, dont_inherit=True))
         self._echo = echoes(self.code, tree, self.is_last)
         return units
 
@@ -174,6 +219,7 @@ class CodeRunner:
         value = None
         for unit in self._units(0):
             value = eval(unit, self.namespace, self.namespace)
+        _remember_future_imports(self.tree)
         self._show(value)
 
     async def run_async(self) -> None:
@@ -188,6 +234,7 @@ class CodeRunner:
             value = eval(unit, self.namespace, self.namespace)
             if unit.co_flags & inspect.CO_COROUTINE:
                 value = await value
+        _remember_future_imports(self.tree)
         self._show(value)
 
     def _show(self, value: Any) -> None:
