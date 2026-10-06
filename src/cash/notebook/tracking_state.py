@@ -203,12 +203,16 @@ class TrackingState:
     # after a restart). R: StatementLineage (simulation).
     carrier_advances: dict[str, frozenset[str]] = field(default_factory=dict)
 
-    # Variable -> the ``consumables.consumable_state`` token a consumable,
-    # unrestorable input (generator, queue, file handle) held when the reading
-    # cell last started. A consumable drains in place, so this is the only way
-    # to tell a fresh object from the reader's own leftovers (``consumables.py``).
-    # W: CellExecutor (cell entry). R: NotebookSimulator.
-    consumable_bases: dict[str, Any] = field(default_factory=dict)
+    # (cell index, variable) -> (cell source, ``consumables.consumable_state``
+    # token) a consumable, unrestorable input (generator, queue, file handle)
+    # held when THAT cell last started. A consumable drains in place, so this
+    # is the only way to tell a fresh object from the reader's own leftovers
+    # (``consumables.py``). Per cell, not per variable: several cells read one
+    # handle in turn, and each must be compared with its own previous entry,
+    # never with the position the cell before it started from.
+    # W: StaleValueGuard (after the upstream repair). R: StaleValueGuard (the
+    # next check of the same cell).
+    consumable_bases: dict[tuple[int, str], tuple[str, Any]] = field(default_factory=dict)
 
     # Source variable -> variables to bump when its lineage bumps through an
     # in-place mutation (a numpy view of it, a groupby holding it). The runtime

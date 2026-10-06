@@ -359,6 +359,7 @@ class NotebookSimulator:
             broken_vars,
             notebook_cells=notebook_cells,
             current_cell_idx=current_cell_idx,
+            cell_code=cell_code,
         )
         trace_event("broken_after_consumables", broken=broken_vars)
 
@@ -440,6 +441,11 @@ class NotebookSimulator:
         # The snapshots of the cells replayed here may not know the files
         # behind what the replay restored (see record_replayed_file_deps).
         self.record_replayed_file_deps(rerecorded)
+
+    def record_consumable_bases(self, inputs: set[str], current_cell_idx: int, cell_code: str) -> None:
+        """Record the cell-entry drain position of the cell's consumable inputs
+        (see :meth:`StaleValueGuard.record_consumable_bases`)."""
+        self.stale_values.record_consumable_bases(inputs, current_cell_idx, cell_code)
 
     def lineage_records(self) -> dict[str, tuple]:
         """Each variable's recorded lineage and input-lineage map, as held now.

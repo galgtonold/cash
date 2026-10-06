@@ -310,6 +310,7 @@ class StaleValueGuard:
         broken_vars: set[str],
         notebook_cells: list[str] | None = None,
         current_cell_idx: int | None = None,
+        cell_code: str | None = None,
     ) -> set[str]:
         """Flag consumed, unrestorable inputs whose live object is already drained.
 
@@ -341,9 +342,15 @@ class StaleValueGuard:
         above).
 
         Self-disabling by construction: the probe compares against a baseline
-        recorded at this cell's ENTRY on its previous run, so a ``run_all``
-        (producer re-ran, object fresh) compares equal and this is a no-op, and
-        a first run has no baseline at all.
+        recorded at this cell's ENTRY on its previous run
+        (:meth:`record_consumable_bases`), so a ``run_all`` (producer re-ran,
+        object fresh) compares equal and this is a no-op, and a first run of
+        the cell has no baseline at all. The baseline is this cell's own: a
+        handle read by cell B and then by cell C reaches C further along than
+        it reached B, which is a forward run, not a re-run.
+
+        *cell_code* is the source being run (the saved cell when None); an
+        edited cell has no baseline.
 
         The cross-cell-accumulator hazard does not apply: that reset
         re-derives an object that another cell also mutates in place, whereas
@@ -369,20 +376,20 @@ class StaleValueGuard:
         if not candidates:
             return flagged
         bases = self.tracking_state.consumable_bases
+        source = cell_code if cell_code is not None else cell_src
         for var_name in candidates:
             if var_name in BUILTIN_NAMES and var_name not in self.tracking_state.variable_lineage:
                 continue
             live_value = self.shell.user_ns.get(var_name)
             if live_value is None:
                 continue
+            recorded = bases.get((current_cell_idx, var_name))
+            had_baseline = recorded is not None and recorded[0] == source
+            baseline = recorded[1] if had_baseline else None
             try:
                 if not is_consumable_unrestorable(live_value):
                     continue
-                diverged = has_diverged(
-                    live_value,
-                    bases.get(var_name),
-                    had_baseline=(var_name in bases),
-                )
+                diverged = has_diverged(live_value, baseline, had_baseline=had_baseline)
             except (TypeError, ValueError, AttributeError, RecursionError):
                 continue
             if not diverged:
@@ -394,13 +401,46 @@ class StaleValueGuard:
                     "so its producer re-runs.",
                     var_name,
                     type(live_value).__name__,
-                    bases.get(var_name),
+                    baseline,
                     consumable_state(live_value),
                 )
             broken_vars.add(var_name)
             flagged.add(var_name)
             trace_event("consumable_broken", var=var_name)
         return flagged
+
+    def record_consumable_bases(self, inputs: set[str], current_cell_idx: int, cell_code: str) -> None:
+        """Record how far each consumable input of this cell has been drained.
+
+        Called once the upstream repair has settled the namespace and before
+        the cell body draws from it: the cell-ENTRY baseline that
+        :meth:`mark_consumed_unrestorable_inputs_broken` compares against on
+        the next run of this same cell. Equal means the producer handed the
+        cell the same state as last time (``run_all``), different means the
+        cell is looking at its own previous run's leftovers. Recording before
+        the repair would store the drained state and lose the signal.
+
+        Only consumable, unrestorable objects (generator / queue / file
+        handle) get an entry. A name that holds anything else loses its entry,
+        so a rebound variable is never compared against an unrelated
+        predecessor's token.
+        """
+        bases = self.tracking_state.consumable_bases
+        user_ns = self.shell.user_ns
+        for var_name in inputs:
+            key = (current_cell_idx, var_name)
+            value = user_ns.get(var_name)
+            token = None
+            if value is not None:
+                try:
+                    if is_consumable_unrestorable(value):
+                        token = consumable_state(value)
+                except (TypeError, ValueError, AttributeError, RecursionError):
+                    token = None
+            if token is None:
+                bases.pop(key, None)
+            else:
+                bases[key] = (cell_code, token)
 
     def _mark_nolineage_self_write_broken(
         self,

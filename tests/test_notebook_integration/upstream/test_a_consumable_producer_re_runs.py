@@ -20,6 +20,8 @@ import textwrap
 
 import pytest
 
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
 pytestmark = [pytest.mark.timeout(90)]
 
 
@@ -275,3 +277,57 @@ def test_deepcopyable_iterators_left_alone(nb_runner):
     assert "produced=0" in nb_runner.get_output(1), (
         f"over-invalidation: producer re-ran for deep-copyable iterators: {nb_runner.get_output(1)!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# (vii) several cells read one handle in turn: a forward run, not a re-run
+# ---------------------------------------------------------------------------
+#
+# Each reader cell is compared with its OWN previous entry. Comparing cell C
+# with the position cell B started from took C for a re-run of B on the very
+# first Run All: the file was re-opened and C read the header again.
+
+
+def test_cells_reading_one_file_in_turn_continue_where_the_last_stopped(nb_runner):
+    (nb_runner.work_dir / "data.csv").write_text("name,score\nann,1\nbob,2\n")
+    nb_runner.create_notebook(
+        [
+            "fh = open('data.csv')",
+            "header = fh.readline()",
+            "rows = [line.strip() for line in fh]",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("header") == repr("name,score\n")
+    assert nb_runner.peek("rows") == repr(["ann,1", "bob,2"])
+
+    nb_runner.run_all()
+    assert nb_runner.peek("rows") == repr(["ann,1", "bob,2"]), "second Run All"
+
+    # An isolated re-run of the last reader still re-opens the file and replays
+    # the header read, as Run All would.
+    nb_runner.run_cell(3)
+    assert nb_runner.peek("rows") == repr(["ann,1", "bob,2"]), "isolated re-run"
+
+
+def test_cells_drawing_from_one_generator_through_a_slow_call_get_successive_items(nb_runner):
+    nb_runner.create_notebook(
+        [
+            textwrap.dedent(f"""\
+            import time
+            def gen():
+                yield from range(10)
+            def work(x):
+                time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
+                return x
+            g = gen()
+        """),
+            "a = work(next(g))",
+            "b = work(next(g))",
+            "c = work(next(g))",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("(a, b, c)") == repr((0, 1, 2))
