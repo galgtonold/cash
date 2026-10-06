@@ -289,6 +289,13 @@ class HelperWalk:
             if entry.reported:
                 self._opaque.append(qualname)
             self._queue_class_refs(func, tree, entry.depth, entry.reported)
+            if isinstance(func, types.FunctionType) and func.__code__.co_name == "<lambda>":
+                # A lambda: its source is the statement it sits in, with no
+                # def to audit. What it calls still computes its result
+                # (`STEPS = [lambda x: price(x)]` runs `price`, which reads
+                # RATE): found by name in its bytecode, as for code with no
+                # source.
+                self._queue_bytecode_refs(entry)
             return
 
         body = self._audit(entry, qualname, func_def, src, tree)
@@ -315,8 +322,13 @@ class HelperWalk:
             self._opaque.append(qualname)
         self._helper_hashes[qualname] = compiled_identity(func)
         self._record_resolution_path(func, qualname)
-        if not isinstance(func, types.FunctionType):
-            return
+        if isinstance(func, types.FunctionType):
+            self._queue_bytecode_refs(entry)
+
+    def _queue_bytecode_refs(self, entry: _Entry) -> None:
+        """Queue the user functions *entry*'s bytecode calls by global name:
+        its helpers when there is no AST to find them in."""
+        func = entry.func
         for chain in bytecode_global_refs(func):
             callee = resolve_callee_chain(func.__globals__, chain)
             if not isinstance(callee, types.FunctionType) or callee is func:

@@ -31,6 +31,7 @@ from .user_code import is_cash_wrapper, is_user_code_object
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
     from .class_data import ClassDataFold
+    from .code_args import CodeArgs
     from .global_values import GlobalValues
     from .purity_checks import LearnedMutations
     from .reporting import Notices
@@ -620,6 +621,9 @@ class ClosureFold:
         # id-reuse). Mutable defaults are deliberately absent: they must be
         # re-hashed per call to stay correct.
         self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        # Set by `CodeArgs`: the walk of the code a value holds, for a captured
+        # container of functions.
+        self.code_args: CodeArgs | None = None
 
     def fold_closure(
         self, func: Callable, func_name: str, state_hash: str, _walked: frozenset[int] = frozenset()
@@ -708,7 +712,7 @@ class ClosureFold:
             if fingerprint is not v:
                 captures.append((name, self._captured_function_part(func, func_name, name, v, fingerprint, _walked)))
                 continue
-            part = self._captured_value_part(func, name, v, name not in unsafe, provisional)
+            part = self._captured_value_part(func, func_name, name, v, name not in unsafe, provisional)
             if part is not None:
                 captures.append(part)
         if not captures:
@@ -750,7 +754,7 @@ class ClosureFold:
         return fingerprint
 
     def _captured_value_part(
-        self, func: Callable, name: str, v: Any, read_only: bool, provisional: Any
+        self, func: Callable, func_name: str, name: str, v: Any, read_only: bool, provisional: Any
     ) -> tuple[str, Any] | None:
         """The key part of a captured value *v* that is not code or a module,
         or ``None`` when it is not part of the key. *read_only*: the body
@@ -772,6 +776,14 @@ class ClosureFold:
             pending = CAPTURE_WATCH.get()
             if pending is not None and (provisional is None or name in provisional):
                 pending[name] = (h, "closure", None, func)
+            # The code it holds (`steps = [lambda x: price(x)]`) and what
+            # that code reads: its digest has the code alone, and `price`
+            # reading RATE moved nothing. As for a module global holding it
+            # (`GlobalsFold._held_code_parts`).
+            if self.code_args is not None:
+                code_parts = self.code_args.carrier_parts(v, func_name, owner_code=getattr(func, "__code__", None))
+                if code_parts:
+                    h = f"{h}:" + hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
             return (name, h)
         return None
 

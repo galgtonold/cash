@@ -114,14 +114,20 @@ def test_the_served_entry_s_own_reads_are_still_dependencies(data, through):
     assert _runs(data)["scen"] == ["r2", "r2"], "an edit to the served entry's file did not recompute scen"
 
 
-# The two controls below build their functions separately: cash credits a
-# memo's reads to its CODE, which every closure a builder makes shares, so one
-# test's files would otherwise become the other's remembered reads.
+# The two controls below build their functions separately, a reader of their
+# own included: cash credits a memo's reads to its CODE, which every closure a
+# builder makes -- and every caller of `_read` -- shares, so one test's files
+# would otherwise become the other's remembered reads.
 
 
 def _direct(c, root):
     """``fit`` parses through a memo; ``scen`` reaches the same memo for another region."""
-    load = functools.lru_cache(maxsize=8)(lambda region: _read(root / f"cases_{region}.csv"))
+
+    def read(path):  # code of its own (see above)
+        with open(path, encoding="utf-8") as fh:
+            return sum(int(line) for line in list(fh)[1:] if line.strip())
+
+    load = functools.lru_cache(maxsize=8)(lambda region: read(root / f"cases_{region}.csv"))
 
     @c.cache(assume_safe=True)
     def fit(region):
@@ -139,7 +145,12 @@ def _direct(c, root):
 def _unkeyed(c, root):
     """``scen`` also calls ``fit`` with an argument that has no key, so that
     call runs ``fit``'s body here and gets ``r1`` from the memo."""
-    load = functools.lru_cache(maxsize=8)(lambda region: _read(root / f"cases_{region}.csv"))
+
+    def read(path):  # code of its own (see above)
+        with open(path, encoding="utf-8") as fh:
+            return sum(int(line) for line in list(fh)[1:] if line.strip())
+
+    load = functools.lru_cache(maxsize=8)(lambda region: read(root / f"cases_{region}.csv"))
 
     @c.cache(assume_safe=True)
     def fit(region, extra=None):
