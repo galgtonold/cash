@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from ..._clock import perf_counter as _perf_counter
 from ...control_markers import strip_markers
 from ...analysis.ast_util import parse_cached
-from ...analysis.code_analyzer import parse_cell_source
 from ...analysis.mutation_effects import (
     StatementEffects,
     captured_call_receiver_names,
+    cell_definitions,
     classify_receivers,
     live_function_source,
     statement_effects,
@@ -164,15 +164,7 @@ class StatementLineage:
         self._notebook_text = "\n".join(notebook_cells)
         sources: dict[str, str] = {}
         for code in notebook_cells:
-            tree = parse_cell_source(code)
-            if tree is None:
-                continue
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    try:
-                        sources[node.name] = ast.unparse(node)
-                    except (ValueError, AttributeError):
-                        continue
+            sources.update(cell_definitions(code, (ast.FunctionDef, ast.AsyncFunctionDef)))
         self._notebook_functions = sources
 
     def _function_source(self, name: str) -> str | None:

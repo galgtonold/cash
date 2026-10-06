@@ -11,6 +11,7 @@ import ast
 import collections
 import logging
 
+from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.namespace_effects import (
     LISTING_TEXT_MARKERS,
@@ -125,10 +126,8 @@ class ReadScope:
             code = simulation_trace[i].stmt_code
             if not code.lstrip().startswith(("def ", "async def ", "@")):
                 continue
-            try:
-                body = ast.parse(code).body
-            except SyntaxError:
-                continue
+            tree = parse_cached(code)
+            body = tree.body if tree is not None else []
             if len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
                 defs[i] = body[0].name
 
@@ -138,6 +137,13 @@ class ReadScope:
                 return True
             return self._persisted_reads(simulation_trace[i].stmt_code) is not None
 
+        # Each def's callers, found once: asked per def and per round, a
+        # scan of every relevant statement was quadratic in the notebook.
+        names = set(defs.values())
+        readers: dict[str, list[int]] = {}
+        for j in sorted(relevant):
+            for name in names.intersection(simulation_trace[j].inputs):
+                readers.setdefault(name, []).append(j)
         covered: set[int] = set()
         changed = True
         while changed:
@@ -145,7 +151,7 @@ class ReadScope:
             for i, name in defs.items():
                 if i in covered:
                     continue
-                callers = [j for j in relevant if j > i and name in simulation_trace[j].inputs]
+                callers = [j for j in readers.get(name, ()) if j > i]
                 if callers and all((j in covered) if j in defs else recorded(j) for j in callers):
                     covered.add(i)
                     changed = True

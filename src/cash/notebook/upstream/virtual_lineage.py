@@ -10,6 +10,7 @@ lineages come from ``statement_lineage.py``, a control structure's from
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import os
 import re
@@ -405,19 +406,7 @@ class VirtualLineage:
         """
         simulation_trace_codes: set[str] = set()
         for entry in simulation_trace:
-            normalized = strip_markers(entry.stmt_code).strip()
-            simulation_trace_codes.add(normalized)
-            try:
-                tree = parse_cached(normalized)
-                if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
-                    for body_node in self._iter_body_nodes(tree.body[0]):
-                        try:
-                            body_code = ast.unparse(body_node).strip()
-                            simulation_trace_codes.add(body_code)
-                        except (ValueError, TypeError):
-                            logger.debug("[UPSTREAM] Failed to unparse body node in simulation trace")
-            except (SyntaxError, ValueError):
-                logger.debug("[UPSTREAM] Failed to parse control structure for simulation trace codes")
+            simulation_trace_codes.update(_trace_codes(entry.stmt_code))
         return simulation_trace_codes
 
     def _update_stale_file_deps(
@@ -704,6 +693,27 @@ class VirtualLineage:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
+
+
+@functools.lru_cache(maxsize=8192)
+def _trace_codes(stmt_code: str) -> tuple[str, ...]:
+    """The normalised codes one trace statement stands for: itself, and the
+    body statements of a control structure. The text decides them, and every
+    cell asks for every statement above it: parsing and unparsing them again
+    was 0.25 s of the last 20 cells of a 400-cell notebook."""
+    normalized = strip_markers(stmt_code).strip()
+    codes = [normalized]
+    try:
+        tree = parse_cached(normalized)
+        if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
+            for body_node in VirtualLineage._iter_body_nodes(tree.body[0]):
+                try:
+                    codes.append(ast.unparse(body_node).strip())
+                except (ValueError, TypeError):
+                    logger.debug("[UPSTREAM] Failed to unparse body node in simulation trace")
+    except (SyntaxError, ValueError):
+        logger.debug("[UPSTREAM] Failed to parse control structure for simulation trace codes")
+    return tuple(codes)
 
 
 def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) -> int | None:

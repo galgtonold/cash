@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from ..._memo import STATEMENTS
 from ..._paths import resolve_file_dep_path
-from ...analysis.ast_util import called_names
+from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.file_effects import (
     REPEATABILITY_ACCUMULATING,
@@ -618,10 +618,10 @@ class FileWriterScheduler:
             code = entry.stmt_code.lstrip()
             if not code.startswith(("def ", "async def ", "@")):
                 continue
-            try:
-                node = ast.parse(entry.stmt_code).body[0]
-            except (SyntaxError, IndexError):
+            tree = parse_cached(entry.stmt_code)
+            if tree is None or not tree.body:
                 continue
+            node = tree.body[0]
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 defs[node.name] = entry
         return defs
