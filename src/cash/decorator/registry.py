@@ -81,7 +81,9 @@ def resolve_dynamic_dependencies(
                         fix,
                     )
                 token = state_token_of(ds)
-                dynamic_state_parts.append(token)
+                # With its id: two sources that traded tokens (x 3->5,
+                # y 5->3) left the sorted tokens, and so the key, unchanged.
+                dynamic_state_parts.append(f"{ds.get_id()}={token}")
                 if sources is not None:
                     sources.append((ds, token))
         except KeyBuildFailed:
@@ -96,8 +98,9 @@ def resolve_dynamic_dependencies(
             ) from e
 
     if dynamic_state_parts:
-        # Sort to ensure deterministic order if multiple sources
-        return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
+        # In the order resolved: two sources sharing an id still differ by
+        # position.
+        return hashlib.sha256("\x00".join(dynamic_state_parts).encode("utf-8")).hexdigest()
     return ""
 
 
