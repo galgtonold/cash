@@ -300,7 +300,7 @@ def _check_group(
     a variable."""
     value_types = _VALUE_TYPES + _library_value_types()
     nodes, inbound, checked, owner = _walk(group, bindings, value_types, keep_identity)
-    internal = _count_held(cash_held, nodes, inbound, value_types)
+    internal = _count_held(cash_held, nodes, inbound, value_types, named_held)
     named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
     for mapping, key in named_held:
         if id(mapping.get(key)) in nodes:
@@ -368,11 +368,56 @@ def _find_holders(
 
 
 def _count_held(
-    held: list[Any], nodes: dict[int, Any], inbound: dict[int, int], value_types: tuple[type, ...]
+    held: list[Any],
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    value_types: tuple[type, ...],
+    named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
 ) -> set[int]:
     """Add to *inbound* the references that the containers in *held*, which
     cash holds itself, and the containers inside them make to *nodes*; the
-    ids of those containers."""
+    ids of those containers.
+
+    A container inside one of *held* is cash's own only while nothing else
+    holds it -- the references *held*, *named_held* and other such
+    containers make to it are its whole count. One a notebook variable holds
+    too (a list a cell ended with, so ``Out`` holds it: ``frames = [df1,
+    df2]\nframes``) is the user's: its references to *nodes* are a holder's,
+    and so are those of everything inside it.
+    """
+    roots = {id(obj) for obj in held}
+    reach, refs, edges = _walk_held(held, nodes, value_types)
+    for mapping, key in named_held:
+        if id(mapping.get(key)) in reach:
+            refs[id(mapping.get(key))] += 1
+    users = _excess(reach, refs, list(reach))
+    del reach
+    while users:
+        key = users.pop()
+        if key in refs:
+            del refs[key]
+            users.extend(child for child in edges.get(key, ()) if child in refs)
+    own = roots | set(refs)
+    for key in own:
+        for child in edges.get(key, ()):
+            if child in nodes:
+                inbound[child] += 1
+    return own
+
+
+def _walk_held(
+    held: list[Any], nodes: dict[int, Any], value_types: tuple[type, ...]
+) -> tuple[dict[int, Any], dict[int, int], dict[int, list[int]]]:
+    """``(reach, refs, edges)`` for the containers in *held* and inside them:
+    *reach* the containers inside them by id (not *held* itself, nor
+    *nodes*), *refs* how many references the walked containers make to each
+    one, *edges* the ids each walked container refers to (*reach* and
+    *nodes* ones, once per reference). Returns before the counts are read,
+    so none of its local references are left to inflate them."""
+    roots = {id(obj) for obj in held}
+    reach: dict[int, Any] = {}
+    refs: dict[int, int] = {}
+    edges: dict[int, list[int]] = {}
     seen: set[int] = set()
     stack = list(held)
     exact = _EXACT_VALUE_TYPES
@@ -382,6 +427,7 @@ def _count_held(
         if id(obj) in seen:
             continue
         seen.add(id(obj))
+        out = edges.setdefault(id(obj), [])
         for child in _children(obj) or ():
             ctype = type(child)
             if ctype in exact or (ctype not in containers and isinstance(child, value_types)):
@@ -389,18 +435,24 @@ def _count_held(
             ckey = id(child)
             if ckey in nodes:
                 # A walked node: its own references are counted already.
-                inbound[ckey] += 1
-            else:
-                if ctype is tuple or ctype is frozenset:
-                    for item in child:
-                        itype = type(item)
-                        if itype not in exact and (itype in containers or not isinstance(item, value_types)):
-                            break
-                    else:
-                        # Nothing inside to count, and not a node (see `_walk`).
-                        continue
+                out.append(ckey)
+                continue
+            if ctype is tuple or ctype is frozenset:
+                for item in child:
+                    itype = type(item)
+                    if itype not in exact and (itype in containers or not isinstance(item, value_types)):
+                        break
+                else:
+                    # Nothing inside to count, and not a node (see `_walk`).
+                    continue
+            if ckey in roots:
+                continue
+            out.append(ckey)
+            refs[ckey] = refs.get(ckey, 0) + 1
+            if ckey not in reach:
+                reach[ckey] = child
                 stack.append(child)
-    return seen
+    return reach, refs, edges
 
 
 def _walk(

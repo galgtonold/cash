@@ -173,3 +173,23 @@ def test_the_shells_copies_of_the_output_history_are_not_holders(cash_magics, st
     metrics = statement_processor.process_statement("rows += slow([2.0])")
 
     assert _stored(metrics), metrics.get("uncacheable_reasons")
+
+
+@pytest.mark.parametrize("shown", ["frames = [d1, d2]", "reg = {'cfg': d1}"])
+def test_a_container_that_was_shown_still_holds_the_object(cash_magics, statement_processor, shown):
+    """A cell ending in ``frames`` puts the list in ``Out`` too. ``Out`` is
+    not a holder, but ``frames`` is a variable all the same: its reference
+    to ``d1`` is a holder's. Counted as the history's, the update of ``d1``
+    was restored on the next Run All as a copy, and ``frames[0]`` kept the
+    old object without ``z``."""
+    name = shown.split()[0]
+    cells = [SETUP, "d1 = {'a': 1}\nd2 = {'a': 3}", shown, "d1['z'] = slow(d1['a'] * 2)"]
+    user_ns = statement_processor.shell.user_ns
+    for run in ("first", "second"):
+        for i, cell in enumerate(cells):
+            run_cash_cell(cash_magics, cell, cells=cells)
+            if i == 2:
+                _show(user_ns, 3, user_ns[name])
+        held = user_ns[name][0 if name == "frames" else "cfg"]
+        assert held is user_ns["d1"], f"{run} Run All"
+        assert held.get("z") == 2, f"{run} Run All"
