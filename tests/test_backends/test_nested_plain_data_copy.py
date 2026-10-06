@@ -133,11 +133,69 @@ def test_a_bytearray_leaf_is_left_to_the_pickle_copy():
     assert b.get("k")[1] == [("a", [(1, bytearray(b"ab"))])]
 
 
-def test_anything_that_is_not_plain_data_is_refused():
-    assert _plain_data.spine_copy({"a": [1]}) is None
-    assert _plain_data.spine_copy([("a", {"b": 1})]) is None
+def test_anything_that_is_not_plain_or_json_like_data_is_refused():
     assert _plain_data.spine_copy([("a", [object()])]) is None
+    assert _plain_data.spine_copy({"a": {1, 2}}) is None
+    assert _plain_data.spine_copy({("a", 1): [1]}) is None, "a key that is not a leaf"
     assert _plain_data.spine_copy("text") is None
+
+
+def test_json_like_data_is_copied_a_container_at_a_time():
+    """An index, records and a dict of lists went through deepcopy, one call
+    per leaf, on every store and every RAM hit: 3-40x what building them cost."""
+    value = {"index": {"k1": 1, "k2": 2}, "runs": [{"id": 1, "m": {"acc": [0.5, 0.7]}}], "t": ((1, 2), "x")}
+    copied = _plain_data.spine_copy(value)
+    assert copied == value and list(copied) == list(value)
+    assert copied["runs"][0]["m"]["acc"] is not value["runs"][0]["m"]["acc"]
+    assert copied["index"] is not value["index"]
+    assert copied["t"] is value["t"], "a tuple of immutables is shared"
+    copied["runs"][0]["m"]["acc"].append(1.0)
+    copied["index"]["k3"] = 3
+    assert value == {"index": {"k1": 1, "k2": 2}, "runs": [{"id": 1, "m": {"acc": [0.5, 0.7]}}], "t": ((1, 2), "x")}
+
+
+def test_a_dict_held_twice_is_left_to_a_copy_that_keeps_it_one_dict():
+    shared = {"a": 1}
+    value = [{"x": shared}, [shared]]
+    assert _plain_data.spine_copy(value) is None
+    b = InMemoryBackend()
+    b.set("k", value)
+    got = b.get("k")[1]
+    assert got == value and got[0]["x"] is got[1][0] and got[1][0] is not shared
+
+
+def test_a_json_like_result_is_restored_without_a_per_leaf_copy(monkeypatch):
+    b = InMemoryBackend()
+    index = {f"k{i}": [i, {"n": i}] for i in range(200)}
+    original = copy.deepcopy(index)
+    calls = _no_per_leaf_copy(monkeypatch)
+    b.set("index", index)
+    got = b.get("index")[1]
+    assert got == original and not calls, f"deepcopy walked the index: {len(calls)} calls"
+    got["k3"][1]["n"] = "caller's"
+    assert b.get("index")[1] == original
+
+
+def test_records_inside_a_notebook_entry_are_copied_without_a_per_leaf_copy(monkeypatch):
+    b = InMemoryBackend()
+    recs = [{"id": i, "user": "u", "tags": ["a", i]} for i in range(200)]
+    original = copy.deepcopy(recs)
+    calls = _no_per_leaf_copy(monkeypatch)
+    b.set("cell", {"variables": {"recs": recs, "first": recs[0]}, "n": 3})
+    got = b.get("cell")[1]
+    assert got == {"variables": {"recs": original, "first": original[0]}, "n": 3}
+    assert len(calls) < 20, f"deepcopy walked the records: {len(calls)} calls"
+    assert got["variables"]["first"] is got["variables"]["recs"][0]
+
+
+def test_a_list_two_names_share_inside_their_values_stays_one_list():
+    """`a = [x]` and `b = [x]` in one entry: a restore gave each its own `x`,
+    so `a[0].append(...)` no longer showed in `b`."""
+    x = [1, 2]
+    b = InMemoryBackend()
+    b.set("cell", {"variables": {"a": [x, (1,)], "b": [x, (2,)]}})
+    got = b.get("cell")[1]["variables"]
+    assert got["a"][0] is got["b"][0] and got["a"][0] is not x
 
 
 def test_the_memo_holds_what_was_copied_and_nothing_that_was_shared():
@@ -170,7 +228,7 @@ def test_the_collector_is_left_as_it_was_found(was_on):
         gc.enable() if was_on else gc.disable()
         _plain_data.spine_copy(_log(5))
         assert gc.isenabled() is was_on
-        assert _plain_data.spine_copy([1, [2], {"x": 1}]) is None
+        assert _plain_data.spine_copy([1, [2], {3}]) is None
         assert gc.isenabled() is was_on
     finally:
         gc.enable() if before else gc.disable()

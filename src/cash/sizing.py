@@ -405,6 +405,11 @@ def memory_footprint(obj: Any, _seen: set[int] | None = None) -> int:
         plain = _plain_data.size_of(obj)
         if plain is not None:
             return plain
+    if type(obj) in _plain_data.TREE_NODES:
+        # JSON-like data: summed a level at a time too, keys and all.
+        tree = _plain_data.tree_size(obj)
+        if tree is not None:
+            return tree
     try:
         size = _data_size(obj)
         if size is not None:

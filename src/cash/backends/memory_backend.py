@@ -164,6 +164,12 @@ class InMemoryBackend(CacheBackend):
                 done, copied = _plain_data.copy_plain(value)
                 if done:
                     return copied
+            if value_type is dict or value_type is list or value_type is tuple:
+                # JSON-like data -- an index, records, a dict of lists: one
+                # step per container, where deepcopy took one per leaf.
+                copied = _plain_data.spine_copy(value)
+                if copied is not None:
+                    return copied
             if value_type is dict:
                 # A notebook entry is dicts around the values, and carries the
                 # RNG state: `random.getstate()` is a tuple of 625 ints, which
@@ -327,15 +333,18 @@ class InMemoryBackend(CacheBackend):
             if _is_pandas_frame(item_type) and id(item) not in memo:
                 memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells)
             elif item_type is dict:
-                if depth < 4:
+                # JSON-like data (a variable holding an index, a namespace of
+                # such variables) is copied whole; any other dict is looked into.
+                if id(item) not in memo and _plain_data.spine_copy(item, memo) is None and depth < 4:
                     InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1)
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
                 if _plain_data.immutable_below(item):
                     memo[id(item)] = item if item_type is tuple else list(item)
                 else:
-                    # Nested plain data (a parsed log: rows holding lists of
-                    # tuples). Every list it holds goes into the memo too, so
-                    # a name bound to one of them still shares it with the copy.
+                    # Nested plain or JSON-like data (a parsed log: rows
+                    # holding lists of tuples; records). Every list and dict
+                    # it holds goes into the memo too, so a name bound to one
+                    # of them still shares it with the copy.
                     _plain_data.spine_copy(item, memo)
 
     def peek_metadata(self, key: str) -> MetadataDict | None:

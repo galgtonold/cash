@@ -214,6 +214,8 @@ def is_tree(value: Any, leaves: tuple | None = None) -> bool:
 
 #: What a tree nests in (`tree_levels`): exact dicts, lists and tuples.
 TREE_NODES = (dict, list, tuple)
+_NODES = frozenset(TREE_NODES)
+_COPY_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 
 def tree_levels(value: Any, leaves: tuple | None = None):
@@ -600,82 +602,159 @@ def _gc_paused():
 
 
 def spine_copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
-    """A copy of nested plain data that rebuilds only what can be written into.
+    """A copy of nested plain data, or of JSON-like data (exact dicts, lists
+    and tuples over immutable leaves), that rebuilds only what can be written
+    into.
 
-    The lists are copied, and so is every tuple with a list somewhere below it.
-    A tuple of immutables all the way down is shared: nothing can reach into
-    it. Built a level at a time, so the work is one step per CONTAINER, never
-    one per leaf -- a parsed log of 87,000 sessions holding two million
-    ``(name, datetime)`` pairs is 175,000 containers. Both ``deepcopy`` and a
-    pickle round trip pay per leaf, and a ``datetime`` is slow to pickle:
-    14 to 25 s for that log, on every store and every RAM hit.
+    The lists and dicts are copied, and so is every tuple with one somewhere
+    below it. A tuple of immutables all the way down is shared: nothing can
+    reach into it. Built a level at a time, so the work is one step per
+    CONTAINER, never one per leaf -- a parsed log of 87,000 sessions holding
+    two million ``(name, datetime)`` pairs is 175,000 containers. Both
+    ``deepcopy`` and a pickle round trip pay per leaf, and a ``datetime`` is
+    slow to pickle: 14 to 25 s for that log, on every store and every RAM hit.
+    A dict is rebuilt from its keys and its copied values at C speed: a
+    300,000-key index went through ``deepcopy`` on every hit, 3x what
+    building it cost.
 
     Returns None for anything it does not answer exactly, and the caller
     copies another way: a leaf that can be written into (``bytearray``), a
-    list reachable twice (the copy would split it in two, and ``deepcopy``
-    and pickle keep it as one), or anything not plain.
+    dict key that is not an immutable leaf, a list or dict reachable twice
+    (the copy would split it in two, and ``deepcopy`` and pickle keep it as
+    one), or anything else.
 
-    *memo*, when given, receives ``id(original) -> copy`` for every container
-    this made, the table ``copy.deepcopy`` keeps: a value held by two names in
-    one stored entry still comes back as one object.
+    *memo*, when given, is the table ``copy.deepcopy`` keeps, ``id(original)
+    -> copy``: this adds every container it made, so a value held by two
+    names in one stored entry still comes back as one object; and gives up
+    when a list or dict in *value* is already there -- copied for another
+    name, which must keep sharing it.
     """
-    if type(value) not in PLAIN_SEQS:
+    if type(value) not in TREE_NODES:
         return None
     with _gc_paused():
         return _spine_copy(value, memo)
 
 
-def _spine_copy(value: list | tuple, memo: dict[int, Any] | None) -> Any:
+def _tree_walk(value: Any, leaves: frozenset):
+    """Yield ``(containers, flat, types)`` for each level of JSON-like
+    *value* (exact dicts, lists and tuples over *leaves*): the containers at
+    the level, what they hold in their order (a dict's values), and the
+    exact types of that. Stops after a level of leaves; raises `_NotPlain`
+    on anything else, a dict key that is not a leaf, or more than
+    `MAX_LEVELS` levels (or a cycle).
+
+    `tree_levels` without the order: its flat puts the lists' items before
+    the dicts' values, where a copy needs each container's items together.
+    """
+    level = [value]
+    for _ in range(MAX_LEVELS):
+        kinds = set(map(type, level))
+        if dict in kinds:
+            dicts = level if len(kinds) == 1 else [c for c in level if type(c) is dict]
+            if not set(map(type, chain.from_iterable(dicts))) <= leaves:
+                raise _NotPlain
+            held = map(dict.values, level) if len(kinds) == 1 else [c.values() if type(c) is dict else c for c in level]
+            flat = list(chain.from_iterable(held))
+        else:
+            flat = list(chain.from_iterable(level))
+        types = set(map(type, flat))
+        if not types <= leaves | _NODES:
+            raise _NotPlain
+        yield level, flat, types
+        if types.isdisjoint(_NODES):
+            return
+        level = flat if types <= _NODES else list(compress(flat, map(_NODES.__contains__, map(type, flat))))
+    raise _NotPlain
+
+
+def tree_size(value: Any) -> int | None:
+    """`profile`'s size for JSON-like data (`_tree_walk`): every container,
+    key and leaf ``sys.getsizeof``-summed a level at a time; None for
+    anything else."""
+    if type(value) not in TREE_NODES:
+        return None
+    total = sys.getsizeof(value)
+    leaves = frozenset(LEAF_TYPES + fake_clock()[0])
     try:
-        levels = list(_levels(value))
+        with _gc_paused():  # a dict's values view per dict, see `_gc_paused`
+            levels = list(_tree_walk(value, leaves))
+        for level, flat, _types in levels:
+            dicts = [c for c in level if type(c) is dict] if dict in set(map(type, level)) else ()
+            if dicts:
+                total += _level_size(list(chain.from_iterable(dicts)))
+            total += _level_size(flat)
     except (_NotPlain, TypeError):
         return None
-    if not all(t in IMMUTABLE_LEAF_TYPES or t in PLAIN_SEQS for _flat, types in levels for t in types):
+    return total
+
+
+def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None) -> Any:
+    # `nodes[k]`: the containers at level k; `flats[k]`: what they hold.
+    nodes: list[list] = []
+    flats: list[list] = []
+    frozen: list[bool] = []
+    try:
+        for level, flat, types in _tree_walk(value, _COPY_LEAVES):
+            nodes.append(level)
+            flats.append(flat)
+            # Tuples over tuples and immutables, and so the levels below
+            # (checked on the way back): shared as they are.
+            frozen.append(types <= _COPY_LEAVES | {tuple} and set(map(type, level)) == {tuple})
+    except (_NotPlain, TypeError):
         return None
-    # Which containers each level holds, and whether any list is met twice.
-    nodes: list[list] = [[value]]
-    seen_lists: list[int] = []
-    for flat, types in levels:
-        if list in types:
-            seen_lists.extend(map(id, flat if types == {list} else [x for x in flat if type(x) is list]))
-        if types <= set(PLAIN_SEQS):
-            nodes.append(flat)
-        elif not types.isdisjoint(PLAIN_SEQS):
-            nodes.append([x for x in flat if type(x) in PLAIN_SEQS])
-        else:
-            nodes.append([])
-    if len(set(seen_lists)) != len(seen_lists):
+    # A list or dict held twice -- here, or by a name copied before (*memo*).
+    # Only one something else references can be (`sharing`): a container its
+    # parent holds once is referenced by the parent and the level's list.
+    held_elsewhere = [value]
+    for k in range(1, len(nodes)):
+        base = _unshared_refs() + (nodes[k] is not flats[k - 1])
+        refs = list(map(sys.getrefcount, nodes[k]))
+        if refs and max(refs) > base:
+            held_elsewhere.extend(compress(nodes[k], map(base.__lt__, refs)))
+    shared = [id(c) for c in held_elsewhere if type(c) is not tuple]
+    if len(set(shared)) != len(shared) or (memo and not memo.keys().isdisjoint(shared)):
         return None
-    # `shareable[k]`: everything at and below level k is a tuple or immutable.
-    shareable = [True] * (len(levels) + 1)
-    for k in range(len(levels) - 1, -1, -1):
-        shareable[k] = shareable[k + 1] and all(t in IMMUTABLE_LEAF_TYPES or t is tuple for t in levels[k][1])
-    new_flat = levels[-1][0]
-    for k in range(len(levels) - 1, -1, -1):
-        parents = nodes[k]
-        if k > 0 and shareable[k] and levels[k - 1][1] == {tuple}:
-            rebuilt = list(parents)
+    for k in range(len(nodes) - 2, -1, -1):
+        frozen[k] = frozen[k] and frozen[k + 1]
+    new_flat = flats[-1]
+    for k in range(len(nodes) - 1, -1, -1):
+        if frozen[k]:
+            rebuilt = nodes[k]
+        elif k + 1 == len(nodes) or frozen[k + 1]:
+            # What the level holds is shared: each container is copied on its
+            # own, at C speed when the level is all lists or all dicts.
+            kinds = set(map(type, nodes[k]))
+            if len(kinds) == 1 and tuple not in kinds:
+                rebuilt = list(map(next(iter(kinds)), nodes[k]))
+                if memo is not None:
+                    memo.update(zip(map(id, nodes[k]), rebuilt))
+            else:
+                rebuilt = [node if type(node) is tuple else type(node)(node) for node in nodes[k]]
+                if memo is not None:
+                    memo.update((id(node), copied) for node, copied in zip(nodes[k], rebuilt) if copied is not node)
         else:
             rebuilt = []
             at = 0
-            for node in parents:
+            for node in nodes[k]:
                 end = at + len(node)
-                if type(node) is list:
+                kind = type(node)
+                if kind is list:
                     copied = new_flat[at:end]
-                elif shareable[k]:
-                    copied = node
+                elif kind is dict:
+                    copied = dict(zip(node, new_flat[at:end]))
                 else:
-                    copied = tuple(new_flat[at:end])
+                    part = new_flat[at:end]
+                    copied = node if all(map(operator.is_, part, node)) else tuple(part)
                 rebuilt.append(copied)
                 if memo is not None and copied is not node:
                     memo[id(node)] = copied
                 at = end
         if k == 0:
             return rebuilt[0]
-        flat, types = levels[k - 1]
-        if types <= set(PLAIN_SEQS):
+        flat = flats[k - 1]
+        if len(flat) == len(rebuilt):
             new_flat = rebuilt
         else:
             fresh = iter(rebuilt)
-            new_flat = [next(fresh) if type(x) in PLAIN_SEQS else x for x in flat]
+            new_flat = [next(fresh) if type(x) in _NODES else x for x in flat]
     return None  # unreachable: k reaches 0 above
