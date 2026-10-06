@@ -187,7 +187,11 @@ side effects and still caches:
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065 -->
 One case raises instead: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) raises
-`CashImpureFunctionError`, because cash cannot tell when that code changes.
+`CashImpureFunctionError`, because cash cannot tell when that code changes. So
+does a call to a helper that `exec` or `eval` built from a string into a
+namespace of no module (`ns = {}; exec(open("rules.txt").read(), ns)`): its
+text is data the program read, not a source file. One the cached function
+captures in a closure is keyed by its compiled code instead.
 The [decorator guide](../decorator.md#side-effects) covers
 `assume_safe`, the `# @cash:assume-safe` line marker and the
 `with cash.assume_safe():` block.

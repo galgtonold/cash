@@ -582,7 +582,7 @@ would skip or get wrong:
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, or the working directory | Puts the value in the key. No warning |
-| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
+| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
 
 Logging calls are not side effects for this purpose.
 

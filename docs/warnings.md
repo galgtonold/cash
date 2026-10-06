@@ -674,7 +674,7 @@ Each finding has a line number and a label:
 | `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
-| `untrackable_dep` | `eval` / `exec` / `compile`, `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | raises `CashImpureFunctionError` |
+| `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | raises `CashImpureFunctionError` |
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 module-level table such as `HANDLERS[kind]()` is hashed as a global and is not
