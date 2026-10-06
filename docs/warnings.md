@@ -883,7 +883,8 @@ such as `depends_on=[math.sqrt]`, will not change between runs.
 <!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @25ce0fda -->
 **What happened.** A `dynamic_depends_on=` resolver raised, or returned
 something that is not a `DataSource`, a list of them, or `None`. The call ran
-uncached.
+uncached, and so did any cached function that called it: its result depends
+on sources nothing recorded.
 
 **Why it matters.** Every such call recomputes. Nothing stale is served.
 

@@ -326,3 +326,38 @@ def test_a_resolver_that_names_another_file_is_asked_again(cash_instance, tmp_pa
     latest["path"] = str(tmp_path / "v2.txt")
     report()
     assert len(runs) == 2
+
+
+def test_a_caller_of_a_failed_resolver_is_not_stored(cash_instance):
+    """The callee runs uncached with KEY-DYNAMIC-DEP-FAILED; its caller was
+    stored with no record of the dependency and served for good after."""
+    up = [False]
+    source = Counter()
+    runs: list = []
+
+    def resolve(name):
+        if not up[0]:
+            raise ConnectionError("catalog timed out")
+        return source
+
+    @cash_instance.cache(dynamic_depends_on=resolve, assume_safe=True)
+    def load(name):
+        return name
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load("a")
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        report()
+    assert any("KEY-DYNAMIC-DEP-FAILED" in str(w.message) for w in rec)
+    up[0] = True
+    report()
+    assert len(runs) == 2  # nothing was stored for the failed call
+    report()
+    assert len(runs) == 2
+    source.n = 2
+    report()
+    assert len(runs) == 3

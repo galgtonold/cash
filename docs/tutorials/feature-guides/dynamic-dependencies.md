@@ -114,7 +114,8 @@ the connection inside `state_token()` and the source pickles.
 If the resolver raises, or returns something that is not a `DataSource` (a
 string, a number), cash cannot key the call. The call runs **uncached**, and
 cash warns once per function
-([`KEY-DYNAMIC-DEP-FAILED`](../../warnings.md#key-dynamic-dep-failed)). A raw
+([`KEY-DYNAMIC-DEP-FAILED`](../../warnings.md#key-dynamic-dep-failed)). A cached function
+that called it is not stored either: nothing recorded what it depends on. A raw
 value is never folded in as if there were no dependency. Wrap the value in a
 `DataSource`, as above.
 

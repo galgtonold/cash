@@ -63,6 +63,7 @@ from .dynamic_sources import (
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import (
     note_unentered_body,
+    note_unresolved_dynamic,
     pass_dynamic_sources_up,
     propagate_file_deps_to_active_tracker,
     snapshot_tracked_deps,
@@ -468,9 +469,16 @@ class KeyBuilder:
             )
             chain.append(state_hash)
             dynamic_sources: list = []
-            dynamic_state_hash = resolve_dynamic_dependencies(
-                func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources
-            )
+            try:
+                dynamic_state_hash = resolve_dynamic_dependencies(
+                    func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources
+                )
+            except KeyBuildFailed:
+                # The call runs uncached; a cached call around it must not
+                # be stored as if it had no such dependency.
+                if not _EXPLAINING.get():
+                    note_unresolved_dynamic(func_name)
+                raise
             if spec.dynamic_depends_on and not _EXPLAINING.get():
                 pass_dynamic_sources_up(
                     dynamic_sources, _resolution_of(func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources)

@@ -77,7 +77,7 @@ def resolve_dynamic_dependencies(
                         "KEY-DYNAMIC-DEP-FAILED",
                         f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
                         f"returned a {type(ds).__name__}, which is not a DataSource, "
-                        f"so cash cannot tell when it changes and the call ran uncached.",
+                        f"so cash cannot tell when it changes and the call -- and any cached call around it -- ran uncached.",
                         fix,
                     )
                 token = state_token_of(ds)
@@ -93,7 +93,7 @@ def resolve_dynamic_dependencies(
                 "KEY-DYNAMIC-DEP-FAILED",
                 f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
                 f"{type(e).__name__} ({e}), so cash cannot tell whether that "
-                f"dependency changed and the call ran uncached.",
+                f"dependency changed and the call -- and any cached call around it -- ran uncached.",
                 fix,
             ) from e
 

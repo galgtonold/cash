@@ -172,6 +172,10 @@ class FileAccessTracker:
         # process (`dynamic_sources.Resolution`): a resolver may hand out a
         # new source object, which the recorded one never answers for.
         self.dynamic_resolutions: dict[tuple, Any] = {}
+        # Cached functions called in this block whose resolver failed: what
+        # they depend on is unknown, so an entry of this block's own could
+        # never be checked against it and is not stored.
+        self.unresolved_dynamic: set[str] = set()
         # Files and directories this block CREATED (opened with "w"/"x",
         # made with mkdir/mkdtemp), resolved. What the block reads back from
         # them is its own output, not an input: unzipping into a temporary
@@ -604,6 +608,12 @@ class FileAccessTracker:
         moved within the block makes the entry miss on its next lookup."""
         for tracker in self._self_and_parents():
             tracker.dynamic_sources.setdefault((source_id, token, id(source)), (source, token))
+
+    def add_unresolved_dynamic(self, func_name: str) -> None:
+        """Record that *func_name*, called in this block, could not resolve
+        its ``dynamic_depends_on=`` sources, here and on the parents."""
+        for tracker in self._self_and_parents():
+            tracker.unresolved_dynamic.add(func_name)
 
     def add_dynamic_resolution(self, key: tuple, resolution: Any) -> None:
         """Record a ``dynamic_depends_on=`` resolver call this block depends

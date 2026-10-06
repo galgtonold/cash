@@ -264,6 +264,18 @@ def pass_dynamic_sources_up(sources: list[tuple[Any, str]], resolutions: dict[tu
                 add(source.get_id(), source, token)
 
 
+def note_unresolved_dynamic(func_name: str) -> None:
+    """Tell the cached calls around this one that *func_name*'s
+    ``dynamic_depends_on=`` resolver failed: what it depends on is unknown,
+    so they are not stored (`ResultStore.refusal`). Recorded only when it
+    failed, it left the caller's entry with no record of the dependency,
+    served for good once the resolver worked again."""
+    tracker = active_tracker.get()
+    add = getattr(tracker, "add_unresolved_dynamic", None)
+    if add is not None:
+        add(func_name)
+
+
 def _glob_base(pattern: str) -> str:
     """The deepest directory of *pattern* with no wildcard in it."""
     parts = pattern.replace("\\", "/").split("/")
