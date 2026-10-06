@@ -90,13 +90,32 @@ def test_a_statement_whose_call_entry_is_gone_recomputes(nb):
 
 
 def test_a_reference_to_an_entry_holding_something_else_is_a_miss():
-    from cash.notebook.call_refs import resolve_call_refs
+    from cash.notebook.call_refs import REFS_FIELD, resolve_call_refs
 
     backend = InMemoryBackend()
     backend.set("call:a", [1, 2], {"value_digest": "d1"})
-    payload = {"variables": {"models": {1: CallRef("call:a", "d1")}}, "stdout": ""}
+    payload = {"variables": {"models": {1: CallRef("call:a", "d1")}}, "stdout": "", REFS_FIELD: True}
     assert resolve_call_refs(payload, backend)["variables"] == {"models": {1: [1, 2]}}
     backend.set("call:a", ["other"], {"value_digest": "d2"})
     assert resolve_call_refs(payload, backend) is None
     backend.delete("call:a")
     assert resolve_call_refs(payload, backend) is None
+
+
+def test_an_entry_without_references_is_not_searched_for_them(monkeypatch):
+    """Restoring a list of records looked at every record for a reference,
+    in Python, on every hit: the entry says whether it holds one."""
+    from cash.notebook import call_refs
+
+    rows = [{"id": i} for i in range(1000)]
+    payload = {"variables": {"rows": rows}, "stdout": ""}
+    real_isinstance = isinstance
+    looked: list[object] = []
+
+    def counting(obj, kinds):
+        looked.append(obj)
+        return real_isinstance(obj, kinds)
+
+    monkeypatch.setattr(call_refs, "isinstance", counting, raising=False)
+    assert call_refs.resolve_call_refs(payload, InMemoryBackend()) is payload
+    assert len(looked) < 5, f"looked at {len(looked)} values for a reference"

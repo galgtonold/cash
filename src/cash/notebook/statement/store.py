@@ -648,6 +648,8 @@ class StatementStore:
             # rather than continue the stream.
             "rng_epochs": dict(seed_epochs),
         }
+        if referenced:
+            payload[REFS_FIELD] = True  # `has_call_refs`
         # The value the statement echoed as its cell's result, which a hit
         # hands to IPython's output history as a run does.
         if execution.echo:
