@@ -306,7 +306,10 @@ class InMemoryBackend(CacheBackend):
                 values = pd.Series(copied_flat[offset : offset + len(cells[n])], dtype=object).array
                 offset += len(cells[n])
                 if is_series:
-                    return pd.Series(values, index=copied.index, name=copied.name, dtype=object)
+                    # In place: a new Series would drop its attrs, its flags
+                    # and a subclass, which a disk hit keeps.
+                    copied.iloc[:] = values
+                    return copied
                 copied.isetitem(positions[n], values)
             return copied
         except Exception:
