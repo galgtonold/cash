@@ -15,6 +15,7 @@ import dataclasses
 import pytest
 
 from cash.notebook.lineage_store import LineageStore
+from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.tracking_state import TrackingState
 
 
@@ -25,6 +26,9 @@ def _mark(state: TrackingState) -> dict[str, object]:
         value = getattr(state, f.name)
         if isinstance(value, LineageStore):
             value.record("x", "h")
+        elif isinstance(value, ReadRecord):
+            value.watched.add(("env", "X"))
+            value.known[("env", "X")] = "d"
         elif isinstance(value, dict):
             value["x"] = {"y"}
         elif isinstance(value, set):

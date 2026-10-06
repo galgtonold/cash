@@ -23,7 +23,7 @@ from __future__ import annotations
 import sys
 import types
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, NamedTuple
 
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
@@ -95,6 +95,15 @@ class ReadRecord:
     #: statement or around one that changed it: a different digest now was
     #: made outside the notebook's cells (:func:`outside_changes`).
     known: dict[tuple[str, str], str] = field(default_factory=dict)
+
+    def clear(self) -> None:
+        """Forget every record, in place: the components hold this object
+        (``TrackingState.reset_session_state``)."""
+        for f in fields(self):
+            getattr(self, f.name).clear()
+
+    def __len__(self) -> int:
+        return sum(len(getattr(self, f.name)) for f in fields(self))
 
 
 def read_parts(code: str, user_ns: Mapping[str, Any] | None) -> ReadParts:
