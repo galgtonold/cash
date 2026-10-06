@@ -246,6 +246,15 @@ class TrackingState:
     # W: StatementLineageBuilder (derivation_edges). R: VirtualLineage.
     derivation_edges: dict[str, set[str]] = field(default_factory=dict)
 
+    # Cache key -> {variable: its lineage before} for each statement whose
+    # run or hit moved on the lineages of the variables stored with its
+    # outputs (``StatementCacheMetadata.holders``, ``held_lineage``) this
+    # session. The simulation reads the entry's own record first; this is for
+    # an entry it cannot see (evicted), so it still moves them as the runtime
+    # did.
+    # W: StatementProcessor. R: StatementLineage (simulation).
+    held_with: dict[str, dict[str, str]] = field(default_factory=dict)
+
     def reset_session_state(self) -> None:
         """Forget everything this session recorded, as a fresh kernel would.
 

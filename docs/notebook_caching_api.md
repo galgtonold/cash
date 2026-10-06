@@ -76,7 +76,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @d81f4ac3, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60 -->
+<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @b96cb143, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
@@ -89,7 +89,7 @@ they talk to the outside world.
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
 | sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps) | runs every time |
 | reads from an iterator or open file held in a variable (`next(rows)`, `fh.readline()`, `islice(src, 3)`) | runs every time: a hit would not move the iterator on; a slow call inside it is still cached |
-| keeps or changes an object another variable or container also holds (`models = {"m": m}`, `fitted = m.fit()`, `d["a"] = ...` after `d = dfs[0]` or in `for d in dfs:`) | runs every time: a restored copy would not be that object. IPython's output history (`Out`, `_`) holding a value you displayed does not count |
+| keeps or changes an object another variable also holds, directly or in a list, dict or attribute of one (`models = {"m": m}`, `a["x"] = ...` after `b = a`, `d["a"] = ...` after `d = dfs[0]`) | cached together with those variables: a hit restores them as one object graph, so `models["m"] is m` and `dfs[0] is d` again. When something else holds it (a closure, a library's module or registry), or in a loop body (`for d in dfs:`), it runs every time: a restored copy would not be that object. IPython's output history (`Out`, `_`) holding a value you displayed does not count |
 | keeps what a method returns and the call changed the object it was called on (`history = net.fit(X)`, `out = trainer.train()`) | runs every time; cash watches the object around the statement's first run, and one it cannot pickle counts as changed. An iterator, queue or open file is left to the iterator row, so `n = q.qsize()` is cached |
 | takes under 10 ms | runs every time: too cheap to store |
 | reads over the network (`requests.get`, `session.get`) | cached |

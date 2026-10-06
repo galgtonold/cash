@@ -29,7 +29,7 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @d4cb0139, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @6c9f282c, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0 -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -162,13 +162,16 @@ df = df.assign(score=expensive(df))
 ```
 
 A statement that changes an object made in an earlier cell runs every time. The
-same statement on an object made in the same cell caches normally, unless
-another variable or container holds that object too (`d = dfs[0]`, or
-`for d in dfs:`): a restored copy would not be the object `dfs` holds, so the
-statement runs every time. So does one whose result holds an object that
-already existed (`models = {"m": m}`). IPython's output history (`Out`,
-`_`) holding a value you displayed is not such a holder. **Fix:** rebind with
-`df = df.assign(...)`.
+same statement on an object made in the same cell caches normally. When
+another variable holds that object too (`d = dfs[0]`, `b = a`), directly or in
+a list, dict or attribute of one, or the result holds an object that already
+existed (`models = {"m": m}`), those variables are stored with the statement
+and a hit restores them as one object, as running it would leave them. When
+something else holds it -- a closure, a library's module or registry -- or the
+statement is in a loop body (`for d in dfs:`), a restored copy would not be
+that object, so the statement runs every time. IPython's output history
+(`Out`, `_`) holding a value you displayed is not such a holder. **Fix:**
+rebind with `df = df.assign(...)`.
 
 ### Mutating global state inside a function
 

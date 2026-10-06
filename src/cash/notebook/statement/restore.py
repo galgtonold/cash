@@ -25,7 +25,8 @@ from typing import TYPE_CHECKING, Any
 from cash._clock import perf_counter as _perf_counter
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
-from ..restored_var import apply_restored_var
+from ..lineage_formula import held_lineage
+from ..restored_var import apply_held_var, apply_restored_var
 from .capture import replay_outputs
 
 if TYPE_CHECKING:
@@ -130,7 +131,20 @@ class StatementRestorer:
 
             t_var = _perf_counter()
             inplace = inplace_restore or frozenset()
+            holders = (metadata.holders if metadata is not None else None) or {}
+            if metadata is not None and metadata.key:
+                tracking_state.held_with[metadata.key] = dict(holders)
             for var_name, value in restored_vars.items():
+                if var_name in holders:
+                    self.shell.user_ns[var_name] = value
+                    apply_held_var(
+                        tracking_state,
+                        var_name,
+                        value,
+                        held_lineage(holders[var_name], metadata.key or ""),
+                        compute_hash=self.compute_hash,
+                    )
+                    continue
                 self._restore_one_var(tracking_state, var_name, value, metadata, inplace)
 
             # advance object-held generators to the post-state the

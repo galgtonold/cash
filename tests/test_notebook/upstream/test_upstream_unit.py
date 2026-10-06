@@ -246,7 +246,7 @@ class TestForwardProbePopulatesState:
 
     def _make_checker(self):
         from cash.notebook.tracking_state import TrackingState
-        from cash.notebook.upstream.cache_restore import _FORWARD_PROBE_PLACEHOLDER
+        from cash.notebook.restored_var import FORWARD_PROBE_PLACEHOLDER
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
@@ -261,7 +261,7 @@ class TestForwardProbePopulatesState:
             cash_instance=mock_cash,
             tracking_state=TrackingState(),
         )
-        return checker, mock_shell, mock_backend, _FORWARD_PROBE_PLACEHOLDER
+        return checker, mock_shell, mock_backend, FORWARD_PROBE_PLACEHOLDER
 
     def test_placeholder_injected_into_user_ns(self):
         """When the forward probe resolves a broken var, a placeholder

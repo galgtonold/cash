@@ -60,6 +60,11 @@ class StatementCacheMetadata:
     #: (``advanced_carrier_lineage``); empty when it read one and did not
     #: draw, absent when it read none. Read by the simulation after a restart.
     carriers_advanced: list[str] | None = None
+    #: ``{variable: its lineage before this statement}`` for each variable
+    #: stored with the outputs because it holds one of their objects too
+    #: (``b = a`` before ``a['x'] = ...``). The entry restores only while each
+    #: still has that lineage, and gives it `held_lineage` of it.
+    holders: dict[str, str] | None = None
     storage: list[str] | None = None
     source: str | None = None
     skipped_reason: str | None = None

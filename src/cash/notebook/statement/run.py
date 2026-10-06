@@ -93,6 +93,12 @@ class StatementRun:
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
+    #: The variables that hold an output's object too, stored and restored
+    #: with the outputs as one graph, each with its lineage before the
+    #: statement (``StatementCacheMetadata.holders``).
+    holders: dict[str, str] = field(default_factory=dict)
+    #: Whether the entry the lookup found under ``cache_key`` stores holders.
+    entry_holders: bool = False
 
 
 @dataclass

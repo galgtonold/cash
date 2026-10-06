@@ -38,6 +38,7 @@ from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
+    held_lineage,
     input_lineage,
     key_hidden_reads,
     lineage_hidden_reads,
@@ -96,7 +97,8 @@ class _CacheLookup(NamedTuple):
     file_deps: dict[str, float]
     #: On a miss, the files the entry recorded, for the file component.
     files_to_check: set[str]
-    #: On a hit, the aliases the write bumped.
+    #: On a hit, the aliases the write bumped and the variables stored with
+    #: the outputs (``holders``); on a miss, those variables, moved on.
     bumped: set[str]
     #: The generators the entry says the statement drew from
     #: (``StatementCacheMetadata.carriers_advanced``); None when it does not say.
@@ -501,6 +503,27 @@ class StatementLineage:
                         )
         return bumped
 
+    def _holders_current(self, holders: Mapping[str, str], virtual_lineage: Mapping[str, str]) -> bool:
+        """Whether each variable an entry stores with its outputs has the
+        lineage it had when the entry was written, as the runtime checks
+        before it restores the entry (``CacheFreshnessChecker``)."""
+        recorded = self.tracking_state.variable_lineage
+        return all(virtual_lineage.get(name, recorded.get(name)) == before for name, before in holders.items())
+
+    def _move_holders(
+        self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str]
+    ) -> set[str]:
+        """Move on the lineage of each of *holders* from where it is now
+        (``held_lineage``), as the runtime does; the names moved."""
+        moved = set()
+        recorded = self.tracking_state.variable_lineage
+        for name in holders:
+            before = virtual_lineage.get(name, recorded.get(name))
+            if before is not None:
+                virtual_lineage[name] = held_lineage(before, cache_key)
+                moved.add(name)
+        return moved
+
     def _lookup_cached_lineages(
         self,
         stmt_code: str,
@@ -521,10 +544,15 @@ class StatementLineage:
         carriers = None
         stmt_file_deps: dict[str, float] = {}
         files_to_check: set[str] = set()
+        held: set[str] = set()
 
         if not self.probe.cash_instance:
             return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, set())
 
+        # What the runtime last did under this key this session decides which
+        # variables stored with the outputs it moved on (``held_with``);
+        # without that, the entry's record of them does.
+        session_held = self.tracking_state.held_with.get(cache_key)
         try:
             logger.debug("[UPSTREAM] Virtual lookup Key: %s", cache_key)
 
@@ -537,16 +565,26 @@ class StatementLineage:
                 hist_files = metadata.get("file_dependencies", {})
                 output_lineages = metadata.get("output_lineages", {})
                 files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
+                holders = metadata.get("holders") or {}
+                moved = holders if session_held is None else session_held
 
-                if files_valid and output_lineages:
+                if files_valid and output_lineages and self._holders_current(holders, virtual_lineage):
                     bumped = self._take_cached_lineages(
                         stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages
                     )
+                    # The variables stored with the outputs move on as the
+                    # runtime moves them (`apply_held_var`).
+                    bumped |= self._move_holders(moved, cache_key, virtual_lineage)
                     hit_file_deps = CacheProbe.stat_file_deps(hist_files)
                     return _CacheLookup(True, lookup_time, False, hit_file_deps, set(), bumped, carriers)
 
                 if not files_valid:
                     files_stale = True
+                elif moved:
+                    # A holder changed: the runtime runs the statement, which
+                    # finds the same holders and moves them on from where
+                    # they are now.
+                    held |= self._move_holders(moved, cache_key, virtual_lineage)
 
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
@@ -563,10 +601,14 @@ class StatementLineage:
                             "[UPSTREAM] Found historical file deps (validation failed/skipped): %s",
                             list(hist_files.keys()),
                         )
+            elif session_held:
+                # An entry it cannot see (evicted) whose run or hit moved the
+                # variables stored with its outputs on this session.
+                held |= self._move_holders(session_held, cache_key, virtual_lineage)
         except (KeyError, TypeError, OSError, ValueError) as e:
             logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
-        return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, set(), carriers)
+        return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, held, carriers)
 
     # -- One statement ---------------------------------------------------------
 
@@ -732,7 +774,7 @@ class StatementLineage:
 
         virtual_lineage.update(lineage_by_out)
         self._note_made_generators(stmt_code, outputs, virtual_lineage)
-        outputs = outputs | advanced
+        outputs = outputs | advanced | lookup.bumped
         self._register_callables(stmt_code, tree, virtual_lineage, is_import)
 
         # Mirror the runtime derivation-alias bump: when

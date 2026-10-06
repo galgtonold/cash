@@ -167,6 +167,19 @@ def output_lineage(
     return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
 
 
+def held_lineage(before: str, cache_key: str) -> str:
+    """The lineage of a variable stored with a statement's outputs because it
+    holds one of their objects too (``StatementCacheMetadata.holders``), from
+    its lineage *before* the statement and the statement's *cache_key*.
+
+    The statement may change what the variable reaches (``b = a`` before
+    ``a['x'] = ...``), so it moves on, as a derivation alias of a mutated base
+    does, and the next statement sharing the object cannot be served the
+    entry written before this change.
+    """
+    return hashlib.sha256(f"held:{before}:{cache_key}".encode("utf-8")).hexdigest()
+
+
 def no_cache_value_digest(value: Any) -> str:
     """The digest of what a ``# @cash:no-cache`` statement bound, for its
     output's lineage.

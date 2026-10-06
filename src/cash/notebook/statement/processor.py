@@ -50,7 +50,7 @@ from cash.notebook.statement.lineage import StatementLineageBuilder
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
 from cash.notebook.statement.mutations import MutationClassifier
-from cash.notebook.statement.output_refusals import unrestorable_output_reason
+from cash.notebook.statement.output_refusals import live_shared_reason, unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
@@ -82,7 +82,8 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..callee_reach import module_state_writes
-from ..lineage_formula import key_hidden_reads
+from ..lineage_formula import held_lineage, key_hidden_reads
+from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
 from ..write_observer import observe_writes
 
@@ -523,6 +524,9 @@ class StatementProcessor:
         self._randomness.stamp_random_effect(run.metrics, run.code, run.unseeded_calls, unseeded_fits)
 
         metadata, cached_data = self._lookup(run, analysis_time, hash_time)
+        run.entry_holders = bool(metadata is not None and metadata.holders)
+        if cached_data and self._live_objects_shared(run, metadata):
+            cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
             hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)
             if hit_result is not None:
@@ -684,6 +688,36 @@ class StatementProcessor:
             hit_result, run.code, run.tree, run.outputs, run.allow_random, is_hit=True
         )
         return hit_result
+
+    def _live_objects_shared(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> bool:
+        """Whether a hit of *run* must not restore over the objects its names
+        are bound to now (`live_shared_reason`), with the miss reason set.
+
+        Asked of the objects whose identity the run keeps: the outputs it
+        changes in place and the variables the entry stores with them. A
+        ``# @cash:cache-fit`` receiver is restored in place, onto the object
+        every holder holds. Nor is a name the upstream check's forward probe
+        holds the place of (``FORWARD_PROBE_PLACEHOLDER``): no object of the
+        notebook's, it is there for this very hit to replace.
+        """
+        held = set((metadata.holders or {}) if metadata is not None else ())
+        mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
+        user_ns = self.shell.user_ns
+        names = {name for name in (run.outputs | held) - run.est_fit if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
+        keep = (held | mutated) & names
+        if not keep:
+            return False
+        reason = live_shared_reason(
+            names,
+            keep,
+            user_ns,
+            cash_held=self._calls.held_call_results(),
+            shell=self.shell,
+        )
+        if reason is None:
+            return False
+        self._freshness.last_miss_reason = reason
+        return True
 
     def _route_calls(self, run: StatementRun) -> None:
         """Settle what executes: *run*'s code with eligible calls routed
@@ -990,6 +1024,7 @@ class StatementProcessor:
             )
         else:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+        self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
@@ -1023,18 +1058,72 @@ class StatementProcessor:
         onto the object every holder already holds, so its holders are no
         reason to refuse.
         """
+        holders: dict[str, Any] | None = None if is_control_body(run.code) else {}
         reason = unrestorable_output_reason(
             run.outputs - run.est_fit,
             captured_vars,
             self.shell.user_ns,
             cash_held=[*self._calls.held_call_results(), echo, run.metrics],
             shell=self.shell,
+            holders=holders,
         )
         if reason is None and echo:
             reason = identity_coupled_reason("the value it echoes", echo[0])
+        if reason is None and holders:
+            reason = self._take_holders(run, captured_vars, holders)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
+
+    def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> None:
+        """Move on the lineages of the variables *metadata*'s entry stores
+        with its outputs (`held_lineage`), as a hit of it does, once the entry
+        holds them; and record that for the simulation (``held_with``).
+
+        Only for an entry with its value: the simulation moves them on where
+        it sees the entry, and a metadata-only record carries none, nor is it
+        kept by every backend. A run that stores none leaves them where they
+        are, as it always did, and the record says so: the entry another run
+        left may still name some.
+        """
+        cache_key = run.cache_key
+        holders = None
+        if metadata is not None and metadata.storage and not metadata.metadata_only:
+            holders = metadata.holders
+        if holders or run.entry_holders or cache_key in self.tracking_state.held_with:
+            self.tracking_state.held_with[cache_key] = dict(holders or {})
+        if not holders:
+            return
+        for name, before in holders.items():
+            apply_held_var(
+                self.tracking_state,
+                name,
+                self.shell.user_ns.get(name),
+                held_lineage(before, cache_key),
+                compute_hash=self.compute_hash,
+            )
+
+    def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
+        """Store *holders*, the variables holding an output's object too, with
+        *run*'s outputs (`share_group`); why not, when one has no lineage to
+        check a later hit against.
+
+        Not for a loop or branch body (``holders`` is None there): the
+        simulation treats the structure as one statement, as it does for
+        in-place mutations (`MutationRouting._classify`), and could not move
+        a holder's lineage on per body statement.
+        """
+        lineage = self.tracking_state.variable_lineage
+        unknown = sorted(name for name in holders if name not in lineage)
+        if unknown:
+            names = ", ".join(f"'{n}'" for n in unknown)
+            return (
+                f"{names} also holds an object of this statement's outputs and has no lineage to check "
+                f"a restore against, so the statement re-runs every time"
+            )
+        run.holders = {name: lineage[name] for name in holders}
+        captured_vars.update(holders)
+        return None
 
     def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:
         """Record the files *run* wrote and read, for the upstream simulation
