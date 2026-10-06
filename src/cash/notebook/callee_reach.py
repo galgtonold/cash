@@ -21,11 +21,12 @@ from typing import Any, NamedTuple
 
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
+from ..analysis.mutations import MUTATING_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
 
-__all__ = ["Reach", "reached_user_code"]
+__all__ = ["Reach", "module_state_writes", "reached_user_code"]
 
 
 class Reach(NamedTuple):
@@ -73,6 +74,74 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
     found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
     return Reach(tuple(found.functions), frozenset(found.modules), data)
+
+
+def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
+    """The local modules whose state *code* sets, by name.
+
+    ``mylib.K = 7``, ``mylib.CONFIG["k"] = 7``, ``mylib.K += 1``,
+    ``del mylib.K``, ``setattr(mylib, "K", 7)``, ``mylib.REGISTRY.update(...)``
+    and a call of a module function that changes the module's globals
+    (``mylib.set_k(7)``, or ``set_k(7)`` imported from it). A reload runs the
+    module's top level again and drops all of these; the notebook's cells
+    that made them are what puts them back.
+    """
+    if not code or not namespace:
+        return frozenset()
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    found: set[str] = set()
+
+    def rooted(node: ast.expr) -> None:
+        """Add the local module the store target *node* sets something on."""
+        if not isinstance(node, (ast.Attribute, ast.Subscript)):
+            return
+        root = node.value
+        while isinstance(root, (ast.Attribute, ast.Subscript)):
+            root = root.value
+        if isinstance(root, ast.Name):
+            module = namespace.get(root.id)
+            if isinstance(module, types.ModuleType) and _is_local(module):
+                found.add(module.__name__)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
+            targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
+            for target in targets:
+                for part in ast.walk(target):
+                    if isinstance(part, ast.expr) and isinstance(getattr(part, "ctx", None), (ast.Store, ast.Del)):
+                        rooted(part)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
+                target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
+                if isinstance(target, types.ModuleType) and _is_local(target):
+                    found.add(target.__name__)
+            elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
+                rooted(func.value)
+            callee = _called(func, namespace)
+            if isinstance(callee, types.FunctionType) and callee.__globals__ is not namespace:
+                home = _loaded(callee.__globals__.get("__name__"))
+                if home is not None and _is_local(home) and _changed_globals(callee.__code__):
+                    found.add(home.__name__)
+    return frozenset(found)
+
+
+def _called(func: ast.expr, namespace: Mapping[str, Any]) -> Any:
+    """What the call target *func* (``f`` or ``mod.sub.f``) names, or None."""
+    attrs: list[str] = []
+    while isinstance(func, ast.Attribute):
+        attrs.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return None
+    obj = namespace.get(func.id)
+    for attr in reversed(attrs):
+        if not isinstance(obj, types.ModuleType):
+            return None
+        obj = vars(obj).get(attr)
+    return obj
 
 
 class _Found:

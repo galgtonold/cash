@@ -40,7 +40,9 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       (outside the standard library and `site-packages`) is tracked as soon
       as a cell imports it, and cash reloads it in the kernel when you edit
       it. Editing one function in a module re-runs only what uses that
-      function.
+      function. The statements that set state on the module (`mylib.K = 7`,
+      `mylib.set_k(7)`) run again right after the reload, which would
+      otherwise put the file's values back.
     - **A global that a called function reads**, even one bound below the
       statement.
     - **The data of a local module it reads**, directly or through the

@@ -79,6 +79,7 @@ from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
+from ..callee_reach import module_state_writes
 from ..lineage_formula import key_hidden_reads
 from ..run_memo import forget_file_state_this_run
 from ..write_observer import observe_writes
@@ -1242,9 +1243,26 @@ class StatementProcessor:
             raise CacheKeyComputationError(f"Failed to compute cache key for: {code[:80]!r}") from exc
 
         self._randomness.record_seeds(code, cache_key)
+        if not is_control_body(code):
+            self._record_module_state_writes(code)
 
         hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
+
+    def _record_module_state_writes(self, code: str) -> None:
+        """Note *code* as a statement that sets state on a local module, so a
+        reload of the module can run it again (``CellExecutor``). Run again,
+        it moves to the end: the order is the one the kernel last ran them in."""
+        try:
+            modules = module_state_writes(code, self.shell.user_ns)
+        except Exception:  # noqa: BLE001 - analysis of arbitrary user code
+            logger.debug("%s could not tell which modules %r sets state on", _LOG_PROCESSOR, code[:80], exc_info=True)
+            return
+        for module in modules:
+            writers = self.tracking_state.module_state_writers.setdefault(module, [])
+            if code in writers:
+                writers.remove(code)
+            writers.append(code)
 
     def _log_cache_lookup(
         self,

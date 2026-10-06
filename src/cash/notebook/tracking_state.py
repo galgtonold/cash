@@ -163,6 +163,13 @@ class TrackingState:
     module_data_seen: dict[str, str] = field(default_factory=dict)
     module_data_by_key: dict[str, str] = field(default_factory=dict)
 
+    # Local module name -> the statements that set state on it
+    # (``callee_reach.module_state_writes``), in the order they last ran. A
+    # reload runs the module's top level again and drops that state; these
+    # run again right after it, as the notebook ran them.
+    # W: StatementProcessor. R: CellExecutor.
+    module_state_writers: dict[str, list[str]] = field(default_factory=dict)
+
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
     # those, their file-hash component). The runtime derives a control
