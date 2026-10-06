@@ -806,6 +806,28 @@ class TestSingledispatch:
         nb_runner.run_all()
         assert "results=[10, 'abab', 3.14]" in nb_runner.get_output(2)
 
+    def test_editing_a_registered_implementation_recomputes_its_callers(self, nb_runner):
+        """The function was keyed by its base alone: editing the int
+        implementation and running the cells again printed the old result."""
+        dispatch = (
+            "from functools import singledispatch\n@singledispatch\ndef fmt(x):\n    return 'obj'\n"
+            "@fmt.register\ndef _(x: int):\n    return x + {n}"
+        )
+        nb_runner.create_notebook(
+            [
+                dispatch.format(n=1),
+                "import time\ndef compute(x):\n    time.sleep(0.3)\n    return fmt(x)",
+                "r = compute(3)\nprint('R', r)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "R 4" in nb_runner.get_output(3)
+
+        nb_runner.set_cell_source(1, dispatch.format(n=100))
+        nb_runner.run_all()
+        assert nb_runner.peek("r") == "103", nb_runner.get_raw_output(3)
+
 
 @pytest.mark.stress
 class TestFunctoolsChaining:

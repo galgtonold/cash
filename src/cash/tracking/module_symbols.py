@@ -50,7 +50,7 @@ from .._memo import MODULE_ANALYSES, MODULE_READ_DIGESTS, LruMemo
 from ..source_norm import unparse_without_docstrings
 from ..source_reading import read_code_text, stat_has_settled
 
-__all__ = ["closure_digest", "static_attribute_reads"]
+__all__ = ["closure_digest", "registered_on", "static_attribute_reads"]
 
 #: Names whose use means the code can reach the module namespace by string.
 _DYNAMIC_CALLS = frozenset(
@@ -224,6 +224,41 @@ def _called_at_import(statements: tuple[ast.stmt, ...]) -> set[str]:
     return reached
 
 
+def registered_on(stmt: ast.stmt) -> set[str]:
+    """Names a decorated definition registers itself on: ``fmt`` for
+    ``@fmt.register def _(x: int)``, ``app`` for ``@app.route("/")``.
+
+    Such a decorator hands the new function to an object the module already
+    holds -- a ``functools.singledispatch`` registry, a router -- so the
+    statement changes what that name does, not only binds its own name.
+    """
+    if not isinstance(stmt, (*_FUNCTIONS, ast.ClassDef)):
+        return set()
+    names = set()
+    for deco in stmt.decorator_list:
+        chain = _dotted(deco.func if isinstance(deco, ast.Call) else deco)
+        if len(chain) >= 2 and chain[0] != stmt.name:
+            names.add(chain[0])
+    return names
+
+
+def _registrations(statements: tuple[ast.stmt, ...], binders: dict[str, list[int]]) -> dict[str, list[int]]:
+    """For each name the module binds other than by an import, the decorated
+    definitions that register on it (`registered_on`).
+
+    They are part of that name's source: editing ``@fmt.register def _(x: int)``
+    changes what ``fmt(3)`` returns, and a statement reading ``fmt`` was keyed
+    without it. An imported name (``@pytest.fixture``) is left alone; the
+    module's edits cannot change it.
+    """
+    found: dict[str, list[int]] = {}
+    for i, stmt in enumerate(statements):
+        for name in registered_on(stmt):
+            if any(not isinstance(statements[j], (ast.Import, ast.ImportFrom)) for j in binders.get(name, ())):
+                found.setdefault(name, []).append(i)
+    return found
+
+
 def _analyse(source: str) -> _Analysis | None:
     try:
         tree = ast.parse(source)
@@ -243,6 +278,8 @@ def _analyse(source: str) -> _Analysis | None:
             binders.setdefault(name, []).append(i)
             if name in ("__getattr__", "__dir__"):
                 opaque = True
+    for name, indices in _registrations(statements, binders).items():
+        binders[name].extend(i for i in indices if i not in binders[name])
     bound = frozenset(binders)
     import_called = _called_at_import(statements)
     reads = tuple(

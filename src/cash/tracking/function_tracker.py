@@ -7,6 +7,7 @@ import contextlib
 import functools
 import hashlib
 import importlib
+import inspect
 import logging
 import os
 import shutil
@@ -21,7 +22,7 @@ from ..install_paths import is_user_module
 from ..loaded_code import loaded_module_matches_disk
 from ..source_norm import bytecode_identity
 from ..source_reading import read_code_text
-from .module_symbols import analysis_for
+from .module_symbols import analysis_for, registered_on
 
 __all__ = ["FunctionTracker", "is_local_module"]
 
@@ -127,6 +128,67 @@ def _reload_from_source(module) -> None:
         shutil.rmtree(empty, ignore_errors=True)
 
 
+def _with_wrapped_chain(func: Any) -> set[int]:
+    """The ids of *func* and the functions its ``__wrapped__`` chain reaches,
+    which `source_digest` already folds in."""
+    ids: set[int] = set()
+    current = func
+    while isinstance(current, types.FunctionType) and id(current) not in ids:
+        ids.add(id(current))
+        current = getattr(current, "__wrapped__", None)
+    return ids
+
+
+def _with_layers(func: Any, digest: str | None) -> str | None:
+    """*digest* with the code *func* runs besides its own folded in.
+
+    A ``functools.singledispatch`` function's own code and ``__wrapped__``
+    are its dispatcher and its base implementation; each ``register``-ed
+    implementation lives in its registry. Keyed by the base alone, an edit to
+    ``@fmt.register def _(x: int)`` served the result of the old body. The
+    decorator path keys every layer a callable runs (`callable_layers`), and
+    this folds in the same ones the wrapped chain does not already cover,
+    with the types a registry dispatches on. Read every time, not memoised:
+    registering an implementation changes the function without replacing it.
+
+    Unchanged for a function without such layers, so its key stays as it was.
+    """
+    if digest is None:
+        return None
+    # Imported here: `helper_code` imports this module.
+    from ..analysis.helper_code import UnwalkableLayers, callable_layers, own_code_is_user
+
+    try:
+        layers = callable_layers(func)
+    except UnwalkableLayers as exc:
+        # What it runs cannot all be found, so no digest can stand for it: one
+        # of its own every time, and the statement never reuses an entry.
+        logger.debug("Cannot key every layer of %r: %s", func, exc)
+        return hashlib.sha256(f"{digest}:unwalkable:{os.urandom(16).hex()}".encode()).hexdigest()
+    covered = _with_wrapped_chain(func)
+    # The user's own code: written where the function itself was (a cell's
+    # namespace has no module to judge), or in a module of theirs. Not the
+    # library machinery a wrapper carries (`singledispatch`'s `register`).
+    try:
+        base = inspect.unwrap(func)
+    except ValueError:  # a `__wrapped__` cycle
+        base = func
+    home = getattr(base, "__globals__", None)
+    parts = [
+        callable_identity(layer)
+        for layer in layers
+        if id(layer) not in covered and (layer.__globals__ is home or own_code_is_user(layer, None))
+    ]
+    registry = getattr(func, "registry", None)
+    if parts and isinstance(registry, (dict, types.MappingProxyType)):
+        # Which type each implementation is for: `register(int, f)` moved to
+        # `register(str, f)` runs the same code for other arguments.
+        parts.extend(f"{getattr(t, '__module__', '?')}.{getattr(t, '__qualname__', repr(t))}" for t in registry)
+    if not parts:
+        return digest
+    return hashlib.sha256(f"{digest}:layers:{'|'.join(parts)}".encode("utf-8")).hexdigest()
+
+
 class FunctionTracker:
     """Tracks function source code for cache key computation.
 
@@ -216,7 +278,7 @@ class FunctionTracker:
         if use_cache:
             cached = self._source_cache.get(cache_key, _UNCACHED)
             if cached is not _UNCACHED:
-                return cached
+                return _with_layers(func, cached)
 
         # Hashed in its NORMALIZED form (`callable_identity`): this hash lands
         # in the notebook statement cache key (see cache_key.py), so hashing
@@ -231,7 +293,7 @@ class FunctionTracker:
         if source_hash is None and bytecode_identity(func) is not None:
             source_hash = callable_identity(func)
         self._source_cache[cache_key] = source_hash
-        return source_hash
+        return _with_layers(func, source_hash)
 
     def get_callable_source_hashes(self, input_names: set[str], user_ns: dict[str, Any]) -> dict[str, str]:
         """Get source hashes for all callable inputs.
@@ -555,6 +617,10 @@ class FunctionTracker:
                 h = hashlib.sha256(hash_source.encode("utf-8")).hexdigest()
                 for name in names:
                     hashes[name] = h
+                # `@fmt.register def _(x: int)` changes what `fmt` does: an
+                # edit to it is an edit to `fmt`, whose readers must re-run.
+                for owner in registered_on(node) & hashes.keys():
+                    hashes[owner] = hashlib.sha256(f"{hashes[owner]}:{h}".encode("utf-8")).hexdigest()
 
         return hashes
 
