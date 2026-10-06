@@ -226,3 +226,42 @@ def test_a_caller_served_from_its_entry_passes_the_source_on(cash_instance):
     source.n = 2
     outer()
     assert len(outer_runs) == 2
+
+
+VERSIONS = {"a": 1, "b": 1}
+
+
+class Warehouse(DataSource):
+    """Its id names the catalog, not the table."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def get_id(self) -> str:
+        return "warehouse"
+
+    def state_token(self):
+        return VERSIONS[self.name]
+
+
+def test_two_sources_with_one_id_are_both_checked(cash_instance):
+    runs: list = []
+
+    @cash_instance.cache(dynamic_depends_on=lambda name: Warehouse(name), assume_safe=True)
+    def load(name):
+        return name
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load("a") + load("b")
+
+    report()
+    report()
+    assert len(runs) == 1
+    VERSIONS["b"] = 2
+    try:
+        report()
+    finally:
+        VERSIONS["b"] = 1
+    assert len(runs) == 2

@@ -77,14 +77,21 @@ def recorded_sources(tracker: Any) -> DynamicSources | None:
     records: list[dict[str, str]] = []
     live: list[DataSource] = []
     picklable = True
-    for source_id in sorted(collected):
-        source, token = collected[source_id]
+    seen: set[tuple[str, str, str | None]] = set()
+    for key in sorted(collected, key=lambda k: k[:2]):
+        source_id = key[0]
+        source, token = collected[key]
         record = {"id": source_id, "token": token}
         try:
             record["pickle"] = base64.b64encode(pickle.dumps(source, protocol=pickle.HIGHEST_PROTOCOL)).decode("ascii")
         except Exception:  # noqa: BLE001 - pickle raises whatever __reduce__ raises
             logger.debug("[CORE] dynamic source %s does not pickle", source_id, exc_info=True)
             picklable = False
+        # The same source met again, as a new object each call: once.
+        if "pickle" in record:
+            if (source_id, token, record["pickle"]) in seen:
+                continue
+            seen.add((source_id, token, record["pickle"]))
         records.append(record)
         live.append(source)
     result = DynamicSources(records, live, picklable)
