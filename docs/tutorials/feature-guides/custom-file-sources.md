@@ -93,13 +93,15 @@ def load_events():
         return pq.read_table(f).to_pandas()
 ```
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @b84e70fb -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_declared_files @eabb186b -->
 Pass one path or a list. Each file is recorded as if the body had read it, and
 is checked by content like an automatic read. A path that does not exist yet is
 recorded as absent, so creating the file later recomputes the call. Nothing
 warns you that the file is missing. A directory stands for every file under
 it, and a glob pattern (`"data/*.csv"`, `"data/**/*.csv"`) for the files it
-matches: an edit, a new file or a removed one recomputes the call.
+matches: an edit, a new file or a removed one recomputes the call. A
+relative path names the file in the working directory of each call, as
+`open()` of it would.
 
 A URL (`s3://…`, `https://…`) is **not** a file here. It is treated as a local
 path that does not exist, so the entry never notices the object changing. Use

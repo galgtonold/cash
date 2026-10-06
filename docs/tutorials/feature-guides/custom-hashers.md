@@ -46,7 +46,7 @@ sales.revenue()   # a hit: the frame is not read to build the key
 # test:inject: revenue = Dataset.revenue  # lets the harness read cache_info
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823, cash/decorator/cash_key.py:cash_key_method @affd7858 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823, cash/decorator/cash_key.py:cash_key_method @affd7858, cash/decorator/purity_checks.py:PurityChecks.held_generators @37182cf0 -->
 `__cash_key__` returns what identifies the object, and the key uses that
 instead of reading the frames. Building the key costs microseconds however
 much data the object holds, and a stored result is found again after a
@@ -65,6 +65,11 @@ restart.
 - **Subclasses inherit it.** Set `__cash_key__ = None` on a subclass to key
   its instances by content again.
 - **A hasher registered for the type wins** over `__cash_key__`.
+- **A random generator it holds is still watched.** A call that draws from
+  one (`self.rng`, while `__cash_key__` returns the seed) moves the object
+  where the key cannot see, so its result is not stored and cash warns
+  ([`IMPURE-OBSERVED-EFFECTS`](../../warnings.md#impure-observed-effects)).
+  The same holds for an object keyed by a registered hasher.
 
 The key must change whenever the data does. If it doesn't, cash serves
 results computed from the old data. Return a version you bump, a content id,

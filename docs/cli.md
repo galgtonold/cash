@@ -193,9 +193,9 @@ cash clear ./notebooks/analysis.ipynb
 <!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812, cash/backends/cache_dir.py:CacheDirStamp._entries_are_current @fe3a5c44 -->
 **Safety rules.**
 
-- cash deletes a directory only if it holds cash's `CACHE_VERSION` stamp or
-  `.entry` files, and nothing cash did not write. Otherwise it refuses and
-  names what it found. `--force` overrides this.
+- cash deletes a directory only if it holds cash's `CACHE_VERSION` stamp,
+  `.entry` files or a SQLite cache's `cache.db`, and nothing cash did not
+  write. Otherwise it refuses and names what it found. `--force` overrides this.
 - It never deletes the current directory or one that contains it, even with
   `--force`.
 
@@ -206,7 +206,7 @@ is computing while you clear its function still finishes and stores its
 result; stop the job first if you are clearing because the code or data
 changed.
 
-<!-- claim: cash/__main__.py:_rmtree_cache @fec6529c, cash/__main__.py:_remove_markers_last @e10b3bc7 -->
+<!-- claim: cash/__main__.py:_rmtree_cache @c04da37c, cash/__main__.py:_remove_markers_last @06c583d3 -->
 **A cache a notebook has open.** On Windows a file that a running kernel holds
 open cannot be deleted. `cash clear` then stops, names the file, and exits 1;
 close the notebook or stop its kernel, then run the same command again. What

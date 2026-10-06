@@ -238,3 +238,45 @@ def test_the_check_can_be_turned_off(tmp_path):
         return float(store.data.sum())
 
     assert "KEY-STALE-CASH-KEY" not in _run_checked(app, total, Store(1, [1, 2]), Store(1, [3, 4]))
+
+
+class Sim:
+    """A simulation identified by its seed, drawing from a generator it holds."""
+
+    def __init__(self, seed):
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
+
+    def __cash_key__(self):
+        return ("Sim", self.seed)
+
+
+def test_a_draw_from_a_generator_the_key_leaves_out_is_not_stored(c):
+    """``self.rng`` moves on each call while ``__cash_key__`` stays the seed:
+    the first draw was stored and returned forever, with no warning. It is
+    an in-place change of ``self`` the key cannot see, so it is not stored."""
+
+    @c.cache
+    def run(sim, n):
+        return float(sim.rng.normal(size=n).sum())
+
+    expected_rng = np.random.default_rng(0)
+    expected = [float(expected_rng.normal(size=3).sum()) for _ in range(3)]
+    sim = Sim(0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        got = [run(sim, 3) for _ in range(3)]
+    assert got == expected
+    assert any("sim.rng" in str(w.message) for w in caught), [str(w.message) for w in caught]
+
+
+def test_a_generator_the_call_does_not_draw_from_does_not_stop_caching(c):
+    """The control: holding a generator is not drawing from it."""
+
+    @c.cache
+    def seed_of(sim):
+        return sim.seed
+
+    sim = Sim(0)
+    assert seed_of(sim) == 0
+    assert seed_of(sim) == 0 and seed_of.cache_info()["hits"] == 1

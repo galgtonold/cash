@@ -745,6 +745,9 @@ def _raise_panic_as_unhashable(exc: BaseException) -> None:
         raise TypeError(f"hashing an argument panicked inside a native library: {exc}") from exc
 
 
+#: `ArgHasher.normalize_call_args` without a signature: the name's own.
+_BY_NAME: Any = object()
+
 class _CostliestArg:
     """The argument of one payload that took longest to hash: its label,
     seconds, type name, the cached function that produced it, and whether
@@ -980,6 +983,7 @@ class ArgHasher:
         func_name: str,
         args: tuple,
         kwargs: dict,
+        signature: Any = _BY_NAME,
     ) -> tuple[tuple, dict]:
         """Bind ``(args, kwargs)`` to the function signature and apply defaults.
 
@@ -994,8 +998,12 @@ class ArgHasher:
         """
         # Read once per decoration: a notebook cell re-run with an edited
         # default gets a new `CachedFunction`, and with it the new signature.
-        cf = self._cached.get(func_name)
-        sig = cf.signature if cf is not None else None
+        # The key build passes its own wrapper's *signature*: the name's slot
+        # holds the function decorated last under it.
+        if signature is _BY_NAME:
+            cf = self._cached.get(func_name)
+            signature = cf.signature if cf is not None else None
+        sig = signature
         if sig is None:
             return args, kwargs
         try:
@@ -1394,11 +1402,13 @@ class ArgHasher:
                 failure.append(e)
             return None
 
-    def note_arg_cost(self, func_name: str) -> None:
+    def note_arg_cost(self, func_name: str, unkeyed: Callable[[str], bool] | None = None) -> None:
         """Keep the costliest argument to hash seen for *func_name*.
 
         Only its description is kept -- parameter, type, seconds, the cached
-        function that produced it -- never the value, which may be large.
+        function that produced it, and whether *unkeyed* says the key leaves
+        it out (hashed only for the in-place-change check) -- never the
+        value, which may be large.
         """
         cost = getattr(ARG_COST, "last", None)
         ARG_COST.last = None
@@ -1408,4 +1418,4 @@ class ArgHasher:
         cf = self._cached.get(func_name)
         if cf is None or (cf.arg_cost is not None and cf.arg_cost[2] >= seconds):
             return
-        cf.arg_cost = (label, type_name, seconds, producer, old_pandas)
+        cf.arg_cost = (label, type_name, seconds, producer, old_pandas, bool(unkeyed and unkeyed(label)))

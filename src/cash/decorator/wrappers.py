@@ -261,7 +261,7 @@ class Wrappers:
         # function reached without an edge in the caller's own registry (on
         # another instance, passed in, held in a table, or still held after a
         # reload) reaches the caller's key.
-        stats_wrapper._cash_state = lambda: self._keys.callee_state(func, func_name)
+        stats_wrapper._cash_state = lambda: self._keys.callee_state(cf)
         stats_wrapper._cash_effective_ttl = lambda: self._registry.effective_ttl(func_name, cf.ttl)
         expose_script_function(func, stats_wrapper)
         cf.wrapper = stats_wrapper

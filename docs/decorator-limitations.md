@@ -207,7 +207,8 @@ content, and if it changed, the calls that read it recompute.
 ## Relative paths and working directories
 
 `open("data.csv")` from two working directories reads two different files under
-one key. Each switch recomputes and replaces the other directory's entry. Build
+one key, and so does a relative `file_depends_on="data.csv"`. Each switch
+recomputes and replaces the other directory's entry. Build
 paths from the project root or pass absolute paths.
 
 ## Results cash refuses to store

@@ -148,6 +148,60 @@ def test_an_unhashable_ignored_argument_does_not_stop_caching(cash_instance):
     assert "KEY-UNHASHABLE-ARG" not in [getattr(w.message, "code", None) for w in caught]
 
 
+class _Connection:
+    def __reduce__(self):
+        raise TypeError("a live connection")
+
+
+_CONN = _Connection()
+
+
+@pytest.mark.parametrize("how", ["ignore=", "cash.Ignore", "key="])
+def test_an_unhashable_default_of_a_parameter_left_out_does_not_stop_caching(cash_instance, how):
+    """A parameter left out of the key is left out with its default: a
+    connection default made the function never cache, with
+    KEY-UNHASHABLE-DEFAULT."""
+    if how == "ignore=":
+
+        @cash_instance.cache(ignore=["conn"])
+        def f(table, conn=_CONN):
+            return table.upper()
+
+    elif how == "cash.Ignore":
+
+        @cash_instance.cache
+        def f(table, conn: cash.Ignore[_Connection] = _CONN):
+            return table.upper()
+
+    else:
+
+        @cash_instance.cache(key=lambda table, conn: table)
+        def f(table, conn=_CONN):
+            return table.upper()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(3):
+            assert f("users") == "USERS"
+    assert f.cache_info()["hits"] == 2
+    assert "KEY-UNHASHABLE-DEFAULT" not in [getattr(w.message, "code", None) for w in caught]
+
+
+def test_the_default_of_a_keyed_parameter_still_stops_caching(cash_instance):
+    """The control: the same default on a parameter that is keyed."""
+
+    @cash_instance.cache(ignore=["verbose"])
+    def f(table, conn=_CONN, verbose=False):
+        return table.upper()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        f("users")
+        f("users")
+    assert f.cache_info()["hits"] == 0
+    assert "KEY-UNHASHABLE-DEFAULT" in [getattr(w.message, "code", None) for w in caught]
+
+
 def test_the_argument_mutation_check_still_sees_an_ignored_argument(cash_instance):
     @cash_instance.cache(ignore=["log"])
     def run(x, log):

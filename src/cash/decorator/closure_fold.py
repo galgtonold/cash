@@ -161,7 +161,16 @@ def waived_use_filter(func: Callable, tree: ast.AST) -> Callable[[ast.AST], bool
     return waived
 
 
-def defaults_of(func: Callable) -> tuple[tuple, dict]:
+#: `defaults_of`'s *leave_out* for a ``key=`` function: what it returns
+#: stands for every argument, defaults included.
+EVERY_PARAMETER: frozenset[str] = frozenset({"*"})
+
+
+def _left_out(name: str, leave_out: frozenset[str]) -> bool:
+    return leave_out is EVERY_PARAMETER or name in leave_out
+
+
+def defaults_of(func: Callable, leave_out: frozenset[str] = frozenset()) -> tuple[tuple, dict]:
     """The parameter defaults that decide what *func* computes.
 
     ``__defaults__`` (positional/keyword params) and ``__kwdefaults__``
@@ -176,6 +185,12 @@ def defaults_of(func: Callable) -> tuple[tuple, dict]:
     choice: folding a default that turns out not to bind costs at most a
     one-time miss, whereas missing one that does bind is a silent wrong
     answer.
+
+    The defaults of the parameters in *leave_out* are not collected: a
+    parameter left out of the key (``ignore=``, ``cash.Ignore``, or every
+    one under ``key=``, whose return value stands for them) is left out
+    with its default, which may be a connection or a lock that cannot be
+    hashed.
     """
     pos: list[Any] = []
     kwd: dict[str, Any] = {}
@@ -184,12 +199,18 @@ def defaults_of(func: Callable) -> tuple[tuple, dict]:
     depth = 0
     while fn is not None and id(fn) not in seen:  # every layer; a cycle ends
         seen.add(id(fn))
-        pos.extend(getattr(fn, "__defaults__", None) or ())
+        level_pos = getattr(fn, "__defaults__", None) or ()
+        code = getattr(fn, "__code__", None)
+        if leave_out and level_pos and code is not None:
+            named = code.co_varnames[: code.co_argcount][-len(level_pos) :]
+            level_pos = tuple(v for name, v in zip(named, level_pos) if not _left_out(name, leave_out))
+        pos.extend(level_pos)
         # Qualify by depth so a wrapper and its wrappee can't collide on a
         # shared kwonly name; sort so dict order never leaks into the key.
         level_kwd = getattr(fn, "__kwdefaults__", None) or {}
         for name in sorted(level_kwd):
-            kwd[f"{depth}:{name}"] = level_kwd[name]
+            if not _left_out(name, leave_out):
+                kwd[f"{depth}:{name}"] = level_kwd[name]
         fn = getattr(fn, "__wrapped__", None)
         depth += 1
     return tuple(pos), kwd
@@ -759,6 +780,7 @@ class ClosureFold:
         func: Callable,
         func_name: str,
         state_hash: str,
+        leave_out: frozenset[str] = frozenset(),
     ) -> str | None:
         """Mix the callee's parameter defaults into the state hash.
 
@@ -773,6 +795,10 @@ class ClosureFold:
         identically. Returns ``None`` when a default cannot be hashed; the caller
         must then refuse to cache, because silently ignoring it would resurrect
         exactly the silent staleness this fold exists to prevent.
+
+        The defaults of the parameters in *leave_out* -- left out of the key
+        with ``ignore=``, ``cash.Ignore`` or ``key=`` -- are not folded
+        (`defaults_of`).
         """
         # Memo first: this runs on EVERY decorated call, so the hot path must be
         # one lookup plus one hash, with no re-walk of the function.
@@ -792,12 +818,14 @@ class ClosureFold:
             # this fold exists to prevent. Only immutable defaults are pinned,
             # so comparing the containers by value is sound (and is a cheap
             # C-level compare of a tiny tuple/dict).
-            pin_pos, pin_kwd, digest = entry
-            if pin_pos == getattr(func, "__defaults__", None) and pin_kwd == (
-                getattr(func, "__kwdefaults__", None) or {}
+            pin_pos, pin_kwd, pin_leave_out, digest = entry
+            if (
+                pin_leave_out == leave_out
+                and pin_pos == getattr(func, "__defaults__", None)
+                and pin_kwd == (getattr(func, "__kwdefaults__", None) or {})
             ):
                 return hashlib.sha256(f"{state_hash}:defaults:{digest}".encode("utf-8")).hexdigest()
-        pos, kwd = defaults_of(func)
+        pos, kwd = defaults_of(func, leave_out)
         try:
             digest = self._args.hash_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
@@ -814,7 +842,7 @@ class ClosureFold:
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 return self._defaults_unhashable(func_name, pos, kwd, e)
-        return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable)
+        return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable, leave_out)
 
     def _defaults_unhashable(
         self,
@@ -837,10 +865,12 @@ class ClosureFold:
             fix="get the value out of the signature -- build it in the body "
             "or require it at the call site"
             + (
-                "."
+                ""
                 if isinstance(self._args.first_unhashable_arg(pos, kwd), CODE_VALUE_TYPES)
-                else f" -- or register a hasher with cash.register_hasher({bad_type}, ...)."
-            ),
+                else f" -- or register a hasher with cash.register_hasher({bad_type}, ...)"
+            )
+            + "; a parameter that does not change the result (a connection, a lock) can "
+            "instead be left out of the key, default and all, with ignore=[...] or cash.Ignore.",
         )
         return None
 
@@ -852,6 +882,7 @@ class ClosureFold:
         pos: tuple,
         kwd: dict,
         pinnable: bool,
+        leave_out: frozenset[str],
     ) -> str:
         """Memoize *digest* when it cannot drift, then mix it into *state_hash*."""
         # Two conditions gate the memo, and both are load-bearing:
@@ -874,6 +905,7 @@ class ClosureFold:
                 self._defaults_pins[func] = (
                     getattr(func, "__defaults__", None),
                     dict(getattr(func, "__kwdefaults__", None) or {}),
+                    leave_out,
                     digest,
                 )
             except TypeError:
@@ -907,6 +939,39 @@ class ClosureFold:
                 "register a hasher for its type with cash.register_hasher(...).",
             ) from e
         return hashlib.sha256(f"{state_hash}:partial:{bound}".encode("utf-8")).hexdigest()
+
+    def key_function_part(self, key_fn: Callable) -> str:
+        """What a ``key=`` function holds besides its code, for the key.
+
+        A function's captured values and defaults (`HelperIdentity.identity`):
+        ``key=by("id")`` and ``key=by("sku")`` share their code and differ
+        only in the cell. A callable object's state, hashed as an argument
+        is: ``key=Pick("id")``. A bound method's instance, the same. Keyed by
+        code alone, editing ``by("id")`` to ``by("sku")`` kept the entries
+        and served one record's result for another.
+
+        Raises `KeyBuildFailed` when that state cannot be hashed.
+        """
+        if isinstance(key_fn, types.FunctionType):
+            return self._helpers.identity(key_fn)
+        if is_user_callable_instance(key_fn):
+            owner = key_fn
+        elif inspect.ismethod(key_fn):
+            owner = key_fn.__self__
+        else:
+            return ""
+        try:
+            return "state:" + self._args.hash_payload((owner,), {})
+        except _UNHASHABLE_CAPTURE_ERRORS as e:
+            kind = type(owner).__qualname__
+            raise KeyBuildFailed(
+                "KEY-UNHASHABLE-CAPTURE",
+                f"@cash.cache: the key= function is a {kind} whose state could not be hashed "
+                f"({type(e).__name__}), so the call ran uncached rather than risk keying it with "
+                f"a key function that changed.",
+                f"make the key function a plain function of the arguments, or register a hasher "
+                f"with cash.register_hasher({kind}, ...).",
+            ) from e
 
     def fold_bound_self(
         self,

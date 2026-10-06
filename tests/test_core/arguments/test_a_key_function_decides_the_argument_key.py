@@ -353,3 +353,107 @@ def test_an_edit_to_a_helper_of_the_key_function_rekeys(tmp_path):
     assert "HITS 1" in run_python("job.py", "3", cwd=tmp_path).stdout
     write("int(unit) + 0")
     assert "HITS 0 MISSES 1" in run_python("job.py", "3", cwd=tmp_path).stdout
+
+
+def _by(field):
+    return lambda rec: rec[field]
+
+
+class _Pick:
+    def __init__(self, field):
+        self.field = field
+
+    def __call__(self, rec):
+        return rec[self.field]
+
+
+@pytest.mark.parametrize("make", [_by, _Pick], ids=["factory closure", "callable object"])
+def test_what_the_key_function_holds_is_part_of_the_key(cash_instance, make):
+    """``key=by("id")`` edited to ``key=by("sku")`` shares the key function's
+    code; only the captured field (or the object's state) differs. Keyed by
+    code alone, the record stored under id 1 was served for sku 1."""
+
+    def price(rec):
+        return rec["price"]
+
+    assert cash_instance.cache(key=make("id"))(price)({"id": 1, "sku": 5, "price": 10}) == 10
+    by_sku = cash_instance.cache(key=make("sku"))(price)
+    assert by_sku({"id": 7, "sku": 1, "price": 99}) == 99, "an entry keyed by id was served for a sku"
+
+
+def test_a_key_function_holding_what_cannot_be_hashed_runs_uncached(cash_instance):
+    class Conn:
+        offset = 0
+
+        def __reduce__(self):
+            raise TypeError("a live connection")
+
+    conn = Conn()
+
+    @cash_instance.cache(key=lambda x: x + conn.offset)
+    def f(x):
+        return x
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert f(1) == 1
+        assert f(1) == 1
+    assert "KEY-UNHASHABLE-CAPTURE" in _codes(caught)
+    assert f.cache_info()["hits"] == 0
+
+
+def test_a_key_function_that_consumes_an_iterator_does_not_store_the_result(cash_instance):
+    """``key=lambda rows: tuple(rows)`` empties a generator before the body
+    runs. The body's sum of nothing was stored under (1, 2, 3) and served
+    later even for a list of those rows."""
+
+    @cash_instance.cache(key=lambda rows: tuple(rows))
+    def total(rows):
+        return sum(rows)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        total(r for r in [1, 2, 3])
+    assert "KEY-ITERATOR-CONSUMED" in _codes(caught)
+    assert total([1, 2, 3]) == 6, "the result computed from the emptied generator was stored"
+
+
+def test_a_registered_hasher_that_consumes_an_iterator_does_not_store_the_result(cash_instance):
+    import types
+
+    cash_instance.register_hasher(types.GeneratorType, lambda g: repr(tuple(g)))
+
+    @cash_instance.cache
+    def total(rows):
+        return sum(rows)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        total(r for r in [1, 2, 3])
+        assert total(r for r in [1, 2, 3]) == 0  # the body saw the emptied generator, as before
+    assert "KEY-ITERATOR-CONSUMED" in _codes(caught)
+    assert total.cache_info()["hits"] == 0
+
+
+def test_an_iterator_the_key_function_does_not_read_is_cached(cash_instance):
+    """The control: the iterator is left as it was, and the call caches."""
+
+    @cash_instance.cache(key=lambda rows, n: n)
+    def twice(rows, n):
+        return 2 * n
+
+    gen = (r for r in [1, 2, 3])
+    assert twice(gen, 2) == 4
+    assert twice(iter([1]), 2) == 4 and twice.cache_info()["hits"] == 1
+    assert list(gen) == [1, 2, 3]
+
+
+def test_explain_leaves_an_iterator_argument_unread(cash_instance):
+    @cash_instance.cache(key=lambda rows: tuple(rows))
+    def total(rows):
+        return sum(rows)
+
+    rows = (r for r in [1, 2, 3])
+    answer = total.explain(rows)
+    assert answer.details.get("error") == "KEY-ITERATOR-CONSUMED", answer
+    assert list(rows) == [1, 2, 3], "explain() emptied the caller's generator"

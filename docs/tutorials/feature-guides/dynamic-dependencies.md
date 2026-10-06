@@ -50,7 +50,7 @@ load("labels")     # cache miss: different arguments
 load("features")   # cache miss: the version moved
 ```
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @44d428bd, cash/data_source.py:DataSource.state_token @89498b3e -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @ef84a455, cash/data_source.py:DataSource.state_token @89498b3e -->
 A resolver may return one `DataSource`, a list of them, or `None` (no dynamic
 dependency for this call). You can also pass a list of resolvers; their sources
 are pooled. The order of the sources does not matter.

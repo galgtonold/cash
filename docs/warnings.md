@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @cd3f6661 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @208acd72 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -52,10 +52,10 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 15 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 16 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 19 | Something the result depends on may not be in the cache key. |
+| [Cache keys](#key-codes) | `KEY-` | 22 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 6 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
@@ -602,11 +602,13 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @382badbd, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @23ec80cc -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @89f14bf4 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @7507ae49, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, and one that cannot
-be hashed again after the call counts as changed. Past about 50 ms of hashing,
+be hashed again after the call counts as changed. So does a draw from a random
+generator held by an argument that `__cash_key__` or a registered hasher keys,
+which that key does not see move. Past about 50 ms of hashing,
 the message may say "an argument" instead of naming which one.
 
 **What to do.** If the effect is part of the job, split the function: cache the
@@ -630,7 +632,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @10faf361 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @3b1c7351 -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -733,6 +735,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-FUNCTION-RAISED](#key-function-raised) | decorator | the `key=` function raised; the call ran uncached |
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
+| [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
@@ -818,7 +821,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -875,7 +878,7 @@ such as `depends_on=[math.sqrt]`, will not change between runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @44d428bd -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @ef84a455 -->
 **What happened.** A `dynamic_depends_on=` resolver raised, or returned
 something that is not a `DataSource`, a list of them, or `None`. The call ran
 uncached.
@@ -1043,6 +1046,29 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 
 **When it is safe to ignore.** In a long-running process with one instance.
 
+### KEY-ITERATOR-CONSUMED {#key-iterator-consumed}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._check_iterators_unread @dd5b4fdd -->
+**What happened.** An argument is an iterator (a generator, `map(...)`,
+`iter(rows)`), and building the key read it: a `key=` function such as
+`key=lambda rows: tuple(rows)`, or a hasher registered for its type. An
+iterator can be read once, so the body got what was left of it. The call
+ran uncached. When cash cannot tell how far an iterator was read and a
+`key=` function or a registered hasher could have read it, it says so too.
+
+**Why it matters.** The body's result was computed from an emptied
+iterator. Stored, it would be served to every later call with the same
+key, a list of the same rows included.
+
+**What to do.** Pass a list or a tuple instead of the iterator, or key the
+call by something that does not read it.
+
+**When it is safe to ignore.** When the message says the iterator *may* have
+been read and you know the key did not read it. When it says it was read,
+the result of that call came from an emptied iterator.
+
 ### KEY-NETWORK-READ {#key-network-read}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
@@ -1183,7 +1209,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @82a8402d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -1221,11 +1247,12 @@ and give the captured values as arguments
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:unhashable_capture @b432a5b6 -->
-**What happened.** The function, or a helper it calls, is a closure that reads
-a captured variable whose value could not be hashed -- an object holding a
-lock, a socket or a file handle. The call was not cached. The message names
-the variable and its type.
+<!-- claim: cash/decorator/closure_fold.py:unhashable_capture @b432a5b6, cash/decorator/closure_fold.py:ClosureFold.key_function_part @e027b066 -->
+**What happened.** The function, a helper it calls, or its `key=` function
+is a closure that reads a captured variable whose value could not be hashed
+-- an object holding a lock, a socket or a file handle -- or the `key=`
+function is a callable object whose state could not be hashed. The call was
+not cached. The message names the variable or the object's type.
 
 **Why it matters.** The function is not cached while it captures that value.
 Keyed without it, a change to what the value carries (a setting on a config
@@ -1241,7 +1268,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @26da6217, cash/decorator/closure_fold.py:HelperIdentity.identity @ea302891, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @cf9e45b6, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The message names the type.
@@ -1251,7 +1278,10 @@ those that pass the argument.
 
 **What to do.** Move the value out of the signature (build it in the body, or
 require it), or register a hasher for its type. `def load(session=Session())`
-is the classic case.
+is the classic case. When the parameter does not change the result (a
+connection, a lock, a logger), leave it out of the key with `ignore=` or
+`cash.Ignore`: its default is left out with it, as are all defaults under
+`key=`.
 
 **When it is safe to ignore.** When you do not need the function cached.
 
@@ -1619,7 +1649,7 @@ call.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @32bc3d1f, cash/decorator/registry.py:FunctionRegistry.code_functions @f4899cd2 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @b425daba, cash/decorator/registry.py:FunctionRegistry.code_functions @f4899cd2 -->
 **What happened.** A file holding the function, a helper, or a cached function
 it depends on changed on disk during the call, in code this call runs. The
 result was returned but not stored.

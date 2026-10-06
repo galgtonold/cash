@@ -148,6 +148,43 @@ def _is_cash_decorator(deco: ast.expr, module_globals: dict[str, Any]) -> bool:
 #: The opcodes that read a module global by name (``LOAD_NAME`` in a class
 #: body or at module level; ``LOAD_FROM_DICT_OR_GLOBALS`` in 3.12+ class bodies).
 _GLOBAL_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS"})
+
+#: Names through which code reads a module namespace by a string:
+#: ``globals()[name]``, ``vars(mod)[name]``, ``eval(name)``,
+#: ``sys.modules[__name__]``, ``mod.__dict__``, a frame's ``f_globals``.
+NAMESPACE_BY_NAME = frozenset(
+    {"globals", "vars", "eval", "exec", "__dict__", "modules", "f_globals", "import_module", "__import__"}
+)
+
+
+def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> bool:
+    """Can a string in *scopes* name a global of *module_globals*?
+
+    True when the code itself names a `NAMESPACE_BY_NAME` accessor, or a
+    function of the same module it loads does (followed transitively, its
+    own methods included for a class): ``get("K")`` with ``def get(name):
+    return globals()[name]``. Without one, a string is just text.
+    """
+    seen: set[int] = set()
+    stack = list(scopes)
+    while stack:
+        scope = stack.pop()
+        if id(scope) in seen:
+            continue
+        seen.add(id(scope))
+        if NAMESPACE_BY_NAME.intersection(scope.co_names or ()):
+            return True
+        for instr in dis.get_instructions(scope):
+            if instr.opname not in _GLOBAL_LOADS:
+                continue
+            value = module_globals.get(instr.argval)
+            members = vars(value).values() if isinstance(value, type) else (value,)
+            for member in members:
+                member = getattr(member, "__func__", member)
+                member = getattr(member, "__wrapped__", member)  # a cached helper
+                if isinstance(member, types.FunctionType) and member.__globals__ is module_globals:
+                    stack.extend(iter_code_scopes(member.__code__))
+    return False
 #: The opcodes that read an attribute (``LOAD_METHOD`` before 3.12).
 _ATTR_OPS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
 
@@ -239,14 +276,22 @@ class GlobalReads:
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
         # old answer -- 20 where an uncached run gives 500. The code channel already resolves string
         # constants this way (`CodeRefs.targets`); this is its data twin.
-        # A string that merely happens to match a global costs a fold, never a
-        # stale value.
-        candidates |= {
-            c
-            for scope in scopes
-            for c in (scope.co_consts or ())
-            if isinstance(c, str) and c.isidentifier() and c in g and c not in MACHINERY_DUNDERS and c not in written
-        }
+        # Only where a string CAN reach the namespace: code that reads it by
+        # name, its own or a same-module helper's. Otherwise a column label
+        # `frame["x"]` or an f-string piece `f"t{i}"` folded the unrelated
+        # global `x` or `t`, hashed in full on every hit and recomputing
+        # whenever a loop moved it.
+        if reaches_namespace_by_name(scopes, g):
+            candidates |= {
+                c
+                for scope in scopes
+                for c in (scope.co_consts or ())
+                if isinstance(c, str)
+                and c.isidentifier()
+                and c in g
+                and c not in MACHINERY_DUNDERS
+                and c not in written
+            }
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
         # otherwise drift every call and cause a permanent miss.

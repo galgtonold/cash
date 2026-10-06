@@ -22,6 +22,7 @@ from .arg_hashing import unhashable_arg_fix
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import PROCESS_STARTED, BuiltKey, KeyBuildFailed, UnhashableArgs, UnhashableDefault
+from .iterators import is_one_shot_iterator
 
 if TYPE_CHECKING:
     from ..config.schema import CashConfig
@@ -807,9 +808,23 @@ class Explainer:
         a step would give held back: explain() must stay silent. When no key
         can be built, the explanation of why."""
         func_name = cf.name
+        readers = cf.arg_key is not None and cf.arg_key.key_fn is not None
+        readers = readers or bool(self._args.type_hashers or self._args.override_hashers)
+        if readers and any(is_one_shot_iterator(v) for v in (*args, *kwargs.values())):
+            # The key= function or a registered hasher would read it, and an
+            # iterator is read once: explain() would empty the caller's.
+            return _uncomputable(
+                func_name,
+                {
+                    "error": "KEY-ITERATOR-CONSUMED",
+                    "hint": "An argument is an iterator, which building the key may read, and an iterator "
+                    "can be read only once: explain() does not build the key, so the iterator is left "
+                    "as it was. Pass a list or a tuple to see the key.",
+                },
+            )
         token = _EXPLAINING.set(True)
         try:
-            return self._keys.build(cf.func, func_name, cf.dynamic_depends_on, args, kwargs)
+            return self._keys.build(cf, args, kwargs)
         except UnhashableDefault:
             return _uncomputable(
                 func_name,

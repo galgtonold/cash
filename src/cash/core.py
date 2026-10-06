@@ -118,14 +118,15 @@ T = TypeVar("T")
 __all__ = ["Cash", "CacheExplanation"]
 
 
-def _declared_files(file_depends_on: str | list[str] | None) -> tuple[tuple[str, str], ...]:
-    """``file_depends_on=`` as ``(as written, absolute)`` pairs. Each miss records
-    the absolute paths as if the body had read them (`FileDeps.track_declared_files`);
-    the paths as written are in the key (`FileDeps.fold_declared_files`)."""
+def _declared_files(file_depends_on: str | list[str] | None) -> tuple[str, ...]:
+    """``file_depends_on=`` as written. They are in the key as written
+    (`FileDeps.fold_declared_files`), and each miss records them as if the
+    body had read them, a relative one against that call's working directory
+    (`FileDeps.track_declared_files`)."""
     if not file_depends_on:
         return ()
     paths = [file_depends_on] if isinstance(file_depends_on, (str, os.PathLike)) else file_depends_on
-    return tuple((str(p), os.path.abspath(p)) for p in paths)
+    return tuple(str(p) for p in paths)
 
 
 class _ExitWork:

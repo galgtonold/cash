@@ -7,7 +7,9 @@ import concurrent.futures
 import contextlib
 import contextvars
 import hashlib
+import inspect
 import logging
+import operator
 import os
 import pickle
 import threading
@@ -49,7 +51,7 @@ from .call_state import (
     run_to_completion,
 )
 from .class_data import CLASSES_FOLDED
-from .closure_fold import defaults_of
+from .closure_fold import EVERY_PARAMETER, defaults_of
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import (
     note_unentered_body,
@@ -113,6 +115,52 @@ def _unhashable_callee_default(func_name: str) -> KeyBuildFailed:
     )
 
 
+def _iterator_position(value: Any) -> Any:
+    """Where the one-shot iterator *value* stands, comparable before and
+    after something read it; None when that cannot be told."""
+    if inspect.isgenerator(value):
+        frame = value.gi_frame
+        return (inspect.getgeneratorstate(value), frame.f_lasti if frame is not None else None)
+    try:
+        hint = operator.length_hint(value, -1)
+    except Exception:  # noqa: BLE001 - a user's __length_hint__ can raise anything
+        return None
+    return ("left", hint) if hint >= 0 else None
+
+
+def iterator_arguments(signature: Any, args: tuple, kwargs: dict) -> list[tuple[str, Any, Any]]:
+    """``(parameter, iterator, position)`` for each one-shot iterator argument."""
+    if not any(is_one_shot_iterator(v) for v in (*args, *kwargs.values())):
+        return []
+    named: list[tuple[str, Any]] = [(f"argument {i}", v) for i, v in enumerate(args)] + list(kwargs.items())
+    if signature is not None:
+        try:
+            bound = signature.bind(*args, **kwargs).arguments
+        except TypeError:
+            bound = None
+        if bound is not None:
+            named = []
+            for name, value in bound.items():
+                kind = signature.parameters[name].kind
+                if kind is inspect.Parameter.VAR_POSITIONAL:
+                    named.extend((f"*{name}[{i}]", v) for i, v in enumerate(value))
+                elif kind is inspect.Parameter.VAR_KEYWORD:
+                    named.extend(value.items())
+                else:
+                    named.append((name, value))
+    return [(label, v, _iterator_position(v)) for label, v in named if is_one_shot_iterator(v)]
+
+
+def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
+    """The parameters *spec* leaves out of its key, defaults and all: the
+    ignored ones, or every one under ``key=``."""
+    if spec.arg_key is None:
+        return frozenset()
+    if spec.arg_key.key_fn is not None:
+        return EVERY_PARAMETER
+    return spec.arg_key.ignored
+
+
 def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
     return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
@@ -152,14 +200,7 @@ class KeyBuilder:
         self._misses = misses
         self._notices = notices
 
-    def resolve(
-        self,
-        func: Callable,
-        func_name: str,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        args: tuple,
-        kwargs: dict,
-    ) -> tuple[BuiltKey | Unkeyable, dict]:
+    def resolve(self, spec: CachedFunction, args: tuple, kwargs: dict) -> tuple[BuiltKey | Unkeyable, dict]:
         """The key for a real call, or why it has none; and its `CAPTURE_WATCH`.
 
         `KeyBuilder.build`, with a ledger of what the state segment is made of
@@ -167,6 +208,7 @@ class KeyBuilder:
         or default that cannot be hashed, a key build that raised -- has
         been warned about once; the caller runs it uncached.
         """
+        func, func_name = spec.func, spec.name
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
         if unkeyable is not None:
             return Unkeyable(unkeyable), {}
@@ -175,7 +217,7 @@ class KeyBuilder:
         watch: dict = {}
         watch_token = CAPTURE_WATCH.set(watch)
         try:
-            built = self.build(func, func_name, dynamic_depends_on, args, kwargs)
+            built = self.build(spec, args, kwargs)
         except UnhashableDefault:
             # `ClosureFold.fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
@@ -200,13 +242,22 @@ class KeyBuilder:
                 self._misses.keep_state_ledger(slot, ledger)
         return built, watch
 
-    def _code_state(self, func: Callable, func_name: str, chain: list[str], *, note: bool = False) -> str:
-        """The state segment before anything the arguments decide: *func*'s
-        code, helpers, cached callees, declared files, closure, defaults,
-        globals, RNG epoch and environment. Appends each stage to *chain*.
+    def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
+        """The state segment before anything the arguments decide: the
+        function's code, helpers, cached callees, declared files, closure,
+        defaults, globals, RNG epoch and environment. Appends each stage to
+        *chain*.
+
+        What the decoration itself says -- its declared files, ``key=`` and
+        ignored parameters -- is read from *spec*, the wrapper's own record,
+        never from the registry's slot for the name: two cached functions can
+        share a module and qualified name (one function wrapped twice, the
+        closures a factory makes, two lambdas), and the slot holds only the
+        one decorated last.
 
         Raises `UnhashableDefault` when a default cannot be hashed.
         """
+        func, func_name = spec.func, spec.name
         state_hash = self._state_hasher.compute(
             func_name,
             own_source_override=self._pins.pin_own_source(func),
@@ -214,11 +265,11 @@ class KeyBuilder:
             note=note,
         )
         state_hash = self._fold_callee_bindings(func_name, state_hash)
-        state_hash = self._files.fold_declared_files(func_name, state_hash)
+        state_hash = self._files.fold_declared_files(spec, state_hash)
         chain.append(state_hash)
         state_hash = self._closures.fold_closure(func, func_name, state_hash)
         chain.append(state_hash)
-        folded_defaults = self._closures.fold_defaults(func, func_name, state_hash)
+        folded_defaults = self._closures.fold_defaults(func, func_name, state_hash, _unkeyed_parameters(spec))
         if folded_defaults is None:
             raise UnhashableDefault
         state_hash = folded_defaults
@@ -234,8 +285,7 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._environment.fold_environment(func, func_name, state_hash)
         chain.append(state_hash)
-        spec = self._registry.cached.get(func_name)
-        if spec is not None and spec.arg_key is not None:
+        if spec.arg_key is not None:
             # What decides the argument part is code too: a caller that
             # reaches this function keys it as well (`callee_state`).
             state_hash = self._fold_key_function(spec, state_hash)
@@ -273,10 +323,12 @@ class KeyBuilder:
                 if dep_func is None or self._registry.reached_callee(node, dep) is not None:
                     continue
                 stack.extend((dep, d) for d in sorted(graph.get_dependencies(dep), reverse=True))
-                if not getattr(dep_func, "__closure__", None) and defaults_of(dep_func) == ((), {}):
+                dep_spec = self._registry.cached.get(dep)
+                leave_out = _unkeyed_parameters(dep_spec) if dep_spec is not None else frozenset()
+                if not getattr(dep_func, "__closure__", None) and defaults_of(dep_func, leave_out) == ((), {}):
                     continue
                 bound = self._closures.fold_closure(dep_func, dep, "")
-                bound = self._closures.fold_defaults(dep_func, dep, bound)
+                bound = self._closures.fold_defaults(dep_func, dep, bound, leave_out)
                 if bound is None:
                     raise _unhashable_callee_default(dep)
                 ledger_note(("captures and defaults of cached function", dep), bound)
@@ -287,7 +339,7 @@ class KeyBuilder:
             return state_hash
         return hashlib.sha256(f"{state_hash}:callee-bindings:{':'.join(parts)}".encode("utf-8")).hexdigest()
 
-    def callee_state(self, func: Callable, func_name: str) -> str:
+    def callee_state(self, spec: CachedFunction) -> str:
         """What a call of cached *func_name* depends on besides its arguments,
         as ONE digest: for a cached function another one reaches without a
         graph edge of its own registry.
@@ -307,11 +359,11 @@ class KeyBuilder:
 
         Raises `KeyBuildFailed` when the state cannot be built.
         """
+        func, func_name = spec.func, spec.name
         reached_ttls = REACHED_TTLS.get()
         if reached_ttls is not None:
             # What the caller computes from this function is as fresh as it.
-            spec = self._registry.cached.get(func_name)
-            reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl if spec is not None else None))
+            reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl))
         active = _CALLEE_STATES.get()
         if func_name in active:
             return f"cycle:{func_name}"
@@ -324,7 +376,7 @@ class KeyBuilder:
         try:
             if self._registry.functions.get(func_name) is func:
                 self._registry.ensure_closure_analyzed(func)
-            return self._code_state(func, func_name, [])
+            return self._code_state(spec, [])
         except UnhashableDefault:
             raise _unhashable_callee_default(func_name) from None
         finally:
@@ -334,15 +386,8 @@ class KeyBuilder:
             STATE_LEDGER.reset(ledger_token)
             _CALLEE_STATES.reset(token)
 
-    def build(
-        self,
-        func: Callable,
-        func_name: str,
-        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        args: tuple,
-        kwargs: dict,
-    ) -> BuiltKey:
-        """The cache key for calling *func* with these arguments.
+    def build(self, spec: CachedFunction, args: tuple, kwargs: dict) -> BuiltKey:
+        """The cache key for calling *spec*'s function with these arguments.
 
         The ONE key build: a real call (`KeyBuilder.resolve`) and ``explain()``
         (`Explainer.explain`) both use it, so the key explain() predicts is the key
@@ -353,6 +398,8 @@ class KeyBuilder:
         without a part that failed. Warnings from the steps are silent while
         `_EXPLAINING` is set.
         """
+        func, func_name = spec.func, spec.name
+        iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
         # One plain-data census per argument, shared across the key
         # (`plain_census`).
         previous = getattr(PLAIN_CENSUS, "memo", None)
@@ -369,7 +416,7 @@ class KeyBuilder:
             # that changed (`describe_state_change`).
             chain: list[str] = []
             ledger_note("@chain", chain)
-            state_hash = self._code_state(func, func_name, chain, note=True)
+            state_hash = self._code_state(spec, chain, note=True)
             state_hash = self._method_deps.fold_method_class_deps(func, args, state_hash)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
@@ -377,8 +424,7 @@ class KeyBuilder:
             # passed explicitly but not the identical class arriving as a
             # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
             # logical call -- produced two cache keys and two executions.
-            normalized_args = self._args.normalize_call_args(func_name, args, kwargs)
-            spec = self._registry.cached[func_name]
+            normalized_args = self._args.normalize_call_args(func_name, args, kwargs, signature=spec.signature)
             if spec.seed_params:
                 self._rng.warn_if_seed_is_none(func, func_name, args, kwargs)
             # What the argument part of the key is made of: every argument,
@@ -393,7 +439,7 @@ class KeyBuilder:
             chain.append(state_hash)
             dynamic_sources: list = []
             dynamic_state_hash = resolve_dynamic_dependencies(
-                func_name, dynamic_depends_on, args, kwargs, dynamic_sources
+                func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources
             )
             if dynamic_sources and not _EXPLAINING.get():
                 pass_dynamic_sources_up(dynamic_sources)
@@ -410,12 +456,41 @@ class KeyBuilder:
             REACHED_TTLS.reset(ttls_token)
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
+        if iterators:
+            self._check_iterators_unread(spec, iterators)
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         call_args_hash = args_hash if spec.arg_key is None else None
         ttls = [t for t in reached_ttls if t is not None]
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
+
+    def _check_iterators_unread(self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]]) -> None:
+        """Raise `KeyBuildFailed` when building the key read an iterator
+        argument, or may have and cash cannot tell.
+
+        A ``key=`` function (``key=lambda rows: tuple(rows)``) or a hasher
+        registered for the iterator's type consumes it before the body runs:
+        the body then sees it emptied, and its wrong result was stored and
+        served, even for a list of the same rows.
+        """
+        readers = spec.arg_key is not None and spec.arg_key.key_fn is not None
+        readers = readers or bool(self._args.type_hashers or self._args.override_hashers)
+        for label, value, before in iterators:
+            after = _iterator_position(value)
+            if before is not None and after == before:
+                continue
+            if before is None and not readers:
+                continue
+            what = "consumed" if before is not None else "may have consumed"
+            raise KeyBuildFailed(
+                "KEY-ITERATOR-CONSUMED",
+                f"@cash.cache on {spec.name}: building the key {what} the iterator passed as "
+                f"{label!r} ({type(value).__name__}), so the body sees what is left of it and the "
+                f"call ran uncached.",
+                "pass a list or a tuple instead of an iterator, or key the call by something "
+                "that does not read the iterator.",
+            )
 
     def key_arguments(self, spec: CachedFunction, args: tuple, kwargs: dict, normalized: tuple[tuple, dict]) -> tuple:
         """`keyed_arguments` for *spec*'s ``key=`` or ignored parameters.
@@ -440,13 +515,16 @@ class KeyBuilder:
     def _fold_key_function(self, spec: CachedFunction, state_hash: str) -> str:
         """Fold the ``key=`` function's code into the state, as a function
         passed as an argument is folded: its code, the user code it reaches
-        and the globals that code reads. An edit to it re-keys every call."""
+        and the globals that code reads, plus what it holds -- captured
+        values, defaults, a callable object's state
+        (`ClosureFold.key_function_part`). An edit to any of them re-keys
+        every call."""
         key_fn = spec.arg_key.key_fn
         if key_fn is None:
             part = f"ignore:{sorted(spec.arg_key.ignored)}"
             ledger_note(("ignored parameters", ", ".join(sorted(spec.arg_key.ignored))), part)
         else:
-            parts = [f"{func_key(key_fn)}:{hash_callable_source(key_fn)}"]
+            parts = [f"{func_key(key_fn)}:{hash_callable_source(key_fn)}", self._closures.key_function_part(key_fn)]
             parts.extend(
                 self._code_args.carrier_parts(key_fn, spec.name, "key", owner_code=getattr(spec.func, "__code__", None))
             )
@@ -474,10 +552,17 @@ class KeyBuilder:
         if built.call_args_hash is not None or spec.arg_key is None:
             return built.call_args_hash
         try:
-            return self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
+            digest = self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
         except Exception:  # a hash for the record only, never the key
             logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
             return None
+        # An argument the key leaves out is still hashed, here and after the
+        # body: when that is what a miss costs, CACHE-NET-LOSS says so.
+        left_out = _unkeyed_parameters(spec)
+        self._args.note_arg_cost(
+            spec.name, unkeyed=lambda label: left_out is EVERY_PARAMETER or label.partition(":")[0] in left_out
+        )
+        return digest
 
 
 class CallRunner:
@@ -742,7 +827,7 @@ class CallRunner:
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
-        built, call.capture_watch = self._keys.resolve(func, func_name, spec.dynamic_depends_on, args, kwargs)
+        built, call.capture_watch = self._keys.resolve(spec, args, kwargs)
         if isinstance(built, Unkeyable):
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
@@ -832,6 +917,7 @@ class CallRunner:
         run.observer = self._purity.make_effect_observer()
         run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs)
         run.observer.arg_identities = self._purity.argument_identities(func_name, args, kwargs)
+        run.observer.held_generators = self._purity.held_generators(func_name, args, kwargs)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
         run.rng_pre = capture_rng_pre_state()
@@ -850,7 +936,7 @@ class CallRunner:
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)
             try:
-                self._files.track_declared_files(run.tracker, func_name)
+                self._files.track_declared_files(run.tracker, spec)
                 yield run
             except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
