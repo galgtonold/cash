@@ -145,6 +145,18 @@ def _is_the_builtin_open(func: Any) -> bool:
     )
 
 
+def _is_progress_bar(name: str, user_ns: dict[str, Any]) -> bool:
+    """``tqdm(...)`` and its notebook and auto variants, wrapping the iterable.
+
+    A progress bar iterates what it wraps and draws; evaluating it twice
+    draws a second bar and reads the wrapped iterable twice, which is the
+    same as evaluating the wrapped iterable twice. Judged by where the name
+    comes from, so a notebook's own ``tqdm`` gets no benefit of the doubt.
+    """
+    func = user_ns.get(name)
+    return callable(func) and str(getattr(func, "__module__", "")).partition(".")[0] == "tqdm"
+
+
 def _opens_for_reading(call: ast.Call, user_ns: dict[str, Any]) -> bool:
     """Is *call* the builtin ``open`` in a read-only mode?
 
@@ -323,6 +335,8 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
             name = sub.func.id
             if _opens_for_reading(sub, user_ns):
                 continue  # a new handle each time (`_opens_for_reading`)
+            if _is_progress_bar(name, user_ns):
+                continue  # judged by what it wraps, which this walk reaches next
             if name not in PURE_ITER_PRODUCERS:
                 return False
             # ...and only while the name still IS that builtin. A notebook
@@ -382,7 +396,7 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
                 return len(owner.columns)
             return base
         if isinstance(func, ast.Name) and node.args:
-            if func.id in ("enumerate", "reversed", "sorted", "list", "tuple"):
+            if func.id in ("enumerate", "reversed", "sorted", "list", "tuple") or _is_progress_bar(func.id, user_ns):
                 return length_of(node.args[0])
             if func.id == "zip":
                 lengths = [length_of(a) for a in node.args]
