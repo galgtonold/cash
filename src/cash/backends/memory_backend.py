@@ -93,7 +93,7 @@ class InMemoryBackend(CacheBackend):
         #: value, by the frame's ``id``: whether its cells need a deep copy.
         #: Decided once when the value is stored; the stored frames are private
         #: and alive as long as the entry, so the ids stay theirs.
-        self._frame_cells: dict[str, dict[int, bool]] = {}
+        self._frame_cells: dict[str, dict[int, bool | None]] = {}
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -242,6 +242,9 @@ class InMemoryBackend(CacheBackend):
                     copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
                 except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                     logger.debug("could not copy the cells of a %s", type(frame).__name__)
+                    # Recorded as None: a store that must isolate its value
+                    # refuses it (`set`), as it does a bare uncopiable object.
+                    mutable = None
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
@@ -518,7 +521,7 @@ class InMemoryBackend(CacheBackend):
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
-        frame_cells: dict[int, bool] = {}
+        frame_cells: dict[int, bool | None] = {}
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
@@ -531,9 +534,15 @@ class InMemoryBackend(CacheBackend):
             # variables a cell left behind, and one unisolatable variable among
             # them (an open handle in scope) must not stop the statement being
             # cached -- the notebook re-executes what it cannot restore.
-            stored = self._safe_deep_copy(
-                value, key, required=bool((metadata or {}).get("copy_required")), record_cells=frame_cells
-            )
+            required = bool((metadata or {}).get("copy_required"))
+            stored = self._safe_deep_copy(value, key, required=required, record_cells=frame_cells)
+            if required and None in frame_cells.values():
+                # A frame whose object cells pickle cannot copy (a worker
+                # holding a lock) would share those cells with every hit.
+                raise CacheBackendError(
+                    "the result holds a pandas frame whose object cells could not be copied, "
+                    "so caching it would hand every caller the same objects"
+                )
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]

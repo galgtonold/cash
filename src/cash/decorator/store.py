@@ -32,7 +32,7 @@ from .dynamic_sources import DynamicSources, recorded_sources, remember_sources
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
-from .purity_checks import compared_by_identity
+from .purity_checks import sentinel_ref
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -293,25 +293,11 @@ class ResultStore:
         return f"a cached function it calls depends on {ids[0]}, which cannot be pickled with the entry"
 
     def _result_ref(self, func_name: str, result: Any) -> list | None:
-        """``["global" | "closure", name]`` when *result* is that variable's own
-        object and its type compares by identity (a sentinel), else None."""
-        # A type with its own ``__eq__`` compares by value, which a copy keeps.
-        if type(result) in IMMUTABLE_PRIMS or not compared_by_identity(result):
-            return None
+        """``["global" | "closure", name]`` when the body returns that sentinel (`sentinel_ref`)."""
         spec = self._registry.cached.get(func_name)
         if spec is None:
             return None
-        func = inspect.unwrap(spec.func)
-        try:
-            for name, cell in zip(func.__code__.co_freevars, func.__closure__ or ()):
-                if cell.cell_contents is result:
-                    return ["closure", name]
-            for name, value in getattr(func, "__globals__", {}).items():
-                if value is result:
-                    return ["global", name]
-        except (AttributeError, ValueError, RuntimeError):
-            return None
-        return None
+        return sentinel_ref(inspect.unwrap(spec.func), result)
 
     def restore_identity(self, func_name: str, metadata: CacheMetadata, value: Any) -> Any:
         """What a hit hands back for *value*: the identity and flags the result had.

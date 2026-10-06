@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import pickle
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 from .. import kept_state
 
-__all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "restore_value"]
+__all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "rebuild", "restore_value"]
 
 #: Buffers at least this large are handed out of band by `serialize_split`;
 #: smaller ones stay in the stream, where a separate part costs more than the
@@ -100,4 +101,21 @@ def restore_value(metadata: dict, payload: bytes) -> Any:
     Raises one of `RESTORE_ERRORS` when it cannot be rebuilt.
     """
     serializer_cls = metadata.get("serializer_cls", PickleSerializer)
-    return serializer_cls().deserialize(payload)
+    return rebuild(serializer_cls().deserialize, payload)
+
+
+def rebuild(load: Callable[..., Any], *args: Any) -> Any:
+    """``load(*args)``, raising one of `RESTORE_ERRORS` for anything it raises.
+
+    Unpickling runs the value's own code (``__setstate__``, a ``__reduce__``
+    callable), which raises what it likes: torch's ``RuntimeError`` for a
+    CUDA tensor read on a machine without a GPU, a library's own error class,
+    ``RecursionError``. Such an entry cannot be restored HERE, which is a miss
+    like a damaged one, not a crash of every call that reads it.
+    """
+    try:
+        return load(*args)
+    except RESTORE_ERRORS:
+        raise
+    except Exception as exc:
+        raise pickle.UnpicklingError(f"rebuilding the stored value raised {type(exc).__name__}: {exc}") from exc

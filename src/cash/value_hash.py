@@ -57,7 +57,7 @@ def _hash_collection(obj: Any) -> str:
         else:
             parts.extend(compute_hash(v) for v in values)
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-    return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
+    return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
 
 
 def identity_hash(obj: Any) -> str:
@@ -146,7 +146,7 @@ def compute_hash(obj: Any) -> str:
             # Exact types: a subclass is pickled whole, with the attributes
             # it holds beside its items.
             return _hash_collection(obj)
-        return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
+        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
     except BaseException as exc:
@@ -155,7 +155,7 @@ def compute_hash(obj: Any) -> str:
         return identity_hash(obj)
 
     try:
-        return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
+        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
     except HASH_ERRORS:
         # Python 3.13 raises AttributeError for an instance of a class
         # defined inside a function ("Can't get local object").

@@ -62,15 +62,16 @@ def fake_clock() -> tuple[tuple, dict]:
 _FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
 
 
-def _dump(value: Any, fast: bool) -> bytes:
-    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1])
+def _dump(value: Any, fast: bool, keyed: bool = False) -> bytes:
+    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1], keyed=keyed)
 
 
 def key_dumps(value: Any) -> bytes:
     """``pickle.dumps(value)`` for a cache key: a clock test double's date
     pickles as the date (`fake_clock`), and a C base's reduce keeps the
-    subclass's attributes (`kept_state`)."""
-    return _dump(value, fast=False)
+    subclass's attributes (`kept_state`), and so does one a class of the
+    user's leaves out of its own pickled state (`kept_state.chooses_its_state`)."""
+    return _dump(value, fast=False, keyed=True)
 
 
 def content_dumps(value: Any) -> bytes:
@@ -84,7 +85,7 @@ def content_dumps(value: Any) -> bytes:
     inside an object pickle stores as it asks to -- needs the memo.
     """
     try:
-        return _dump(value, fast=True)
+        return _dump(value, fast=True, keyed=True)
     except (ValueError, RecursionError):  # fast mode refuses a cycle
         return key_dumps(value)
 

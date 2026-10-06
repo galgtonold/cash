@@ -408,13 +408,14 @@ recompute time you can feel on every restart.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @0d53b612 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @edceb490 -->
 **What happened.** The result shares state with an object the caller still
 holds: it is an argument, holds one, is a view of an array argument, or is a
 module global. On the first run, a write through one shows in the other. A
 cache hit returns a separate copy, so from then on it does not. A module
-global whose type compares by identity (a plain class without `__eq__`, such
-as a sentinel) is not reported: a hit hands back that global itself.
+global the function names and whose type compares by identity (a plain class
+without `__eq__`, such as a sentinel) is not reported: a hit hands back that
+global itself.
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on

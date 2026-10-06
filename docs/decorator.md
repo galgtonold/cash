@@ -41,8 +41,9 @@ That is all the setup there is. A few rules hold for every cached function:
   writing into a result you got from a hit never changes what the next caller
   gets. The copy keeps what the result was: a read-only numpy array is
   read-only again, and a result that *is* a module global or closure variable
-  compared by identity (a sentinel such as `MISSING = object()`) comes back as
-  that very object, so `is MISSING` holds on a hit.
+  the function names, compared by identity (a sentinel such as
+  `MISSING = object()` in `return d.get(key, MISSING)`), comes back as that
+  very object, so `is MISSING` holds on a hit.
 
 To configure your own instance instead of the shared default, create a `Cash`
 and use its `cache` method:

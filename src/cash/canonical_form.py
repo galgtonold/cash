@@ -30,7 +30,7 @@ import weakref
 from collections.abc import Callable, Generator
 from typing import Any, NamedTuple
 
-from . import _plain_data
+from . import _plain_data, kept_state
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
 
@@ -707,6 +707,8 @@ def _pickled_state(value: Any) -> Any:
         parts.append(list(part) if i and part is not None else part)
     if rebuild not in _COPYREG_REBUILDERS:
         parts.append(object_state(value))
+    elif kept_state.chooses_its_state(t):
+        parts.append(kept_state.left_out_attrs(value, rest[0] if rest else None))
     return tuple(parts)
 
 

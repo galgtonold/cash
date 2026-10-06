@@ -66,8 +66,8 @@ def test_a_frozen_result_is_keyed_without_hashing_it(disk_cash, monkeypatch):
 
     real_dump = _plain_data._dump
 
-    def dump_spy(value, fast):
-        data = real_dump(value, fast)
+    def dump_spy(value, fast, **k):
+        data = real_dump(value, fast, **k)
         sizes.append(len(data))
         return data
 

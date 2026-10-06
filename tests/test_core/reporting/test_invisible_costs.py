@@ -55,7 +55,7 @@ def test_a_frozen_list_is_keyed_by_its_producer_not_its_contents(tmp_path, monke
     from cash import _plain_data
 
     real_dump = _plain_data._dump
-    monkeypatch.setattr(_plain_data, "_dump", lambda obj, fast: dumped.append(obj) or real_dump(obj, fast))
+    monkeypatch.setattr(_plain_data, "_dump", lambda obj, fast, **k: dumped.append(obj) or real_dump(obj, fast, **k))
     total(rows)
     # The canonical payload: ("__cash_type__", "tuple", (positional, keyword)).
     payloads = [x for x in dumped if isinstance(x, tuple) and x[:2] == ("__cash_type__", "tuple")]
