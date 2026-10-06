@@ -60,6 +60,7 @@ class BadgePresenter:
         # The shell's REAL display publisher, remembered while no capture is
         # installed -- see `_uncaptured_display_pub`.
         self._display_pub: Any = None
+        self._uncaptured_display_pub()
         #: ``(execution_count, context)`` of the last bug-report context read.
         self._bug_report_context_cache: tuple[Any, dict] | None = None
 
@@ -322,6 +323,18 @@ class BadgePresenter:
                         metadata={},
                         transient={"display_id": display_id},
                         update=True,
+                    )
+            elif self._is_capturing_display_pub(getattr(self.shell, "display_pub", None)):
+                # Inside the user's ``%%capture``, whose body runs through
+                # cash: the badge belongs to the cell, not to what it captures
+                # (``cap.outputs[0]`` must be the user's own first output).
+                real = self._uncaptured_display_pub()
+                if real is not None:
+                    real.publish(
+                        {"text/plain": repr(HTML(html)), "text/html": html},
+                        metadata={},
+                        transient={"display_id": display_id} if display_id else {},
+                        update=bool(display_id) and update_existing,
                     )
             elif display_id:
                 display(HTML(html), display_id=display_id, update=update_existing)
