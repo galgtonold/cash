@@ -14,6 +14,7 @@ import ast
 import dis
 import functools
 import inspect
+import sqlite3
 import sys
 import types
 from collections.abc import Iterable, Mapping
@@ -25,6 +26,7 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
+from ..value_types import is_runtime_machinery
 
 __all__ = ["Reach", "module_state_writes", "reached_user_code"]
 
@@ -363,11 +365,16 @@ def _class_member_functions(member: Any) -> Iterable[Any]:
 
 def _is_data(value: Any) -> bool:
     """Whether *value* is data a function reads, rather than code or a
-    module, which other channels key."""
+    module, which other channels key, or a handle no result is computed
+    from: a lock, a logger, a stream (`is_runtime_machinery`) or a database
+    connection, whose answers are read through it, not held in it. Hashed
+    by identity, such a handle gave the statement a new key in every
+    process."""
     return not (
         value is None
-        or isinstance(value, (types.ModuleType, type))
+        or isinstance(value, (types.ModuleType, type, sqlite3.Connection, sqlite3.Cursor))
         or inspect.isroutine(value)
+        or is_runtime_machinery(value)
         or getattr(value, "_is_file_tracker_patch", False) is True
     )
 
