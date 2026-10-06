@@ -226,10 +226,12 @@ class InMemoryBackend(CacheBackend):
             mutable = _holds_mutable_cells(frame)
         copied = None
         if mutable:
-            try:
-                copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
-            except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
-                logger.debug("could not copy the cells of a %s", type(frame).__name__)
+            copied = InMemoryBackend._copy_cells(frame)
+            if copied is None:
+                try:
+                    copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+                except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
+                    logger.debug("could not copy the cells of a %s", type(frame).__name__)
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
@@ -273,6 +275,43 @@ class InMemoryBackend(CacheBackend):
         for frame in frames:
             before[id(frame)] = InMemoryBackend._copy_frame(frame, cells, record_cells)
         return copy.deepcopy(value, before)
+
+    @staticmethod
+    def _copy_cells(frame: Any) -> Any:
+        """A copy of *frame* whose list cells are new lists, without pickling it.
+
+        A column of ``(action, datetime)`` lists is plain data, and a pickle
+        round trip of it pays per leaf: 2.5 s a store and again a hit at
+        800,000 rows. Its cells are copied one container at a time instead
+        (`_plain_data.spine_copy`); a column of immutables (tuples of
+        numbers, strings) is shared as it is. None when a cell is not plain
+        data, or one list sits in two cells: the pickle round trip then
+        copies it, with the sharing kept.
+        """
+        try:
+            is_series = getattr(frame, "ndim", 2) == 1
+            positions = [0] if is_series else [i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
+            columns = [frame] if is_series else [frame.iloc[:, i] for i in positions]
+            cells = [column.tolist() for column in columns]
+            writable = [n for n, column_cells in enumerate(cells) if not _plain_data.immutable_below(column_cells)]
+            flat = [cell for n in writable for cell in cells[n]]
+            copied_flat = _plain_data.spine_copy(flat)
+            if copied_flat is None:
+                return None
+            copied = frame.copy(deep=True)
+            import pandas as pd
+
+            offset = 0
+            for n in writable:
+                values = pd.Series(copied_flat[offset : offset + len(cells[n])], dtype=object).array
+                offset += len(cells[n])
+                if is_series:
+                    return pd.Series(values, index=copied.index, name=copied.name, dtype=object)
+                copied.isetitem(positions[n], values)
+            return copied
+        except Exception:
+            logger.debug("could not copy the cells of a %s cell by cell", type(frame).__name__, exc_info=True)
+            return None
 
     @staticmethod
     def _premade_copies(
