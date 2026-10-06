@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import logging
 import secrets
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -502,6 +502,7 @@ class StatementProcessor:
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
+            run.ipython_bindings = self.bindings()
 
         done = self._check_redundant_import(run)
         if done is not None:
@@ -801,6 +802,7 @@ class StatementProcessor:
             # A draw before the error still moved the generator.
             if run.carriers_advanced:
                 self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
+            self._forget_ipython_bindings(run)
             metrics["status"] = CacheStatus.ERROR
             metrics["error"] = result.error
             metrics["total_time"] = _perf_counter() - run.process_start
@@ -829,7 +831,40 @@ class StatementProcessor:
                 metrics["miss_reason"] = reason
 
         self._post_execute(run, execution)
+        self._forget_ipython_bindings(run)
         return metrics
+
+    def _forget_ipython_bindings(self, run: StatementRun) -> None:
+        """Forget how every name a magic or shell command bound was computed
+        (:meth:`forget_rebound`), its assignment targets among them."""
+        if run.ipython_bindings is None:
+            return
+        self.forget_rebound(run.ipython_bindings)
+        for name in run.outputs:
+            self.forget_variable(name)
+
+    def bindings(self) -> dict[str, int]:
+        """The identity of every binding in the namespace, for :meth:`forget_rebound`."""
+        return {name: id(value) for name, value in self.shell.user_ns.items()}
+
+    def forget_rebound(self, before: dict[str, int], lineage_before: Mapping[str, str] | None = None) -> None:
+        """Forget how every name bound, rebound or deleted since *before*
+        (:meth:`bindings`) was computed, unless cash recorded its lineage
+        since (it differs from *lineage_before*, when given).
+
+        IPython binds them (``files = !ls``, ``%time x = f()``, ``%run``),
+        not code cash can read, so no lineage describes their values: the one
+        they had would key a downstream statement to the value before. Without
+        one, a statement reading them runs uncached.
+        """
+        ns = self.shell.user_ns
+        lineage = self.tracking_state.variable_lineage
+        for name in before.keys() | ns.keys():
+            if name in ns and before.get(name) == id(ns[name]):
+                continue
+            if lineage_before is not None and lineage.get(name) != lineage_before.get(name):
+                continue
+            self.forget_variable(name)
 
     @property
     def persist_all(self) -> bool:
