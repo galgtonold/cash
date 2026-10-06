@@ -98,10 +98,31 @@ def test_net_loss_without_a_producer_keeps_the_hasher_advice():
     assert "frozen" not in fix
 
 
-def test_net_loss_says_an_ignored_argument_is_hashed_for_the_change_check(disk_cash):
-    """An argument left out with ``ignore=`` is still hashed in full on every
-    miss, for the in-place-change check. CACHE-NET-LOSS blamed "a large
-    argument hashed on every call" without saying it was the ignored one."""
+def test_net_loss_says_an_argument_key_replaces_is_hashed_for_the_change_check(disk_cash):
+    """Under ``key=`` every argument is still hashed in full on every miss,
+    for the in-place-change check. CACHE-NET-LOSS blamed "a large argument
+    hashed on every call" without saying it was one the key leaves out."""
+    disk_cash._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
+    scratch = [float(i) for i in range(300_000)]
+
+    @disk_cash.cache(key=lambda i, scratch: i)
+    def step(i, scratch):
+        return i + 1
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        for i in range(5):
+            step(i, scratch)
+    found = [str(w.message) for w in rec if "CACHE-NET-LOSS" in str(w.message)]
+    assert found, [str(w.message) for w in rec]
+    assert "The costliest argument is 'scratch' (list)" in found[0], found[0]
+    assert "key= replaces it in the key" in found[0], found[0]
+    assert "This usually means a large argument" not in found[0]
+
+
+def test_an_ignored_argument_costs_a_miss_nothing(disk_cash):
+    """With ``ignore=`` the argument is not hashed at all, so a miss costs
+    about the body and no CACHE-NET-LOSS blames it."""
     disk_cash._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
     scratch = [float(i) for i in range(300_000)]
 
@@ -114,7 +135,4 @@ def test_net_loss_says_an_ignored_argument_is_hashed_for_the_change_check(disk_c
         for i in range(5):
             step(i, scratch)
     found = [str(w.message) for w in rec if "CACHE-NET-LOSS" in str(w.message)]
-    assert found, [str(w.message) for w in rec]
-    assert "The costliest argument is 'scratch' (list)" in found[0], found[0]
-    assert "the key leaves it out" in found[0], found[0]
-    assert "This usually means a large argument" not in found[0]
+    assert not any("'scratch'" in m for m in found), found

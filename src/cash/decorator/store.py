@@ -457,12 +457,14 @@ class ResultStore:
                 ttl=ttl,
                 ttl_declared=ttl_declared,
                 args_hash=call.args_hash,
-                # Every argument's hash, when ``key=`` or ignored parameters
-                # decided ``args_hash``: a later hit whose arguments differ
-                # was matched by them, which explain() says.
+                # Every argument's hash, when ``key=`` decided ``args_hash``:
+                # a later hit whose arguments differ was matched by it, which
+                # explain() says. Parameters left out with ``ignore=`` are
+                # never hashed, so there is nothing to record for them.
                 call_args_hash=(
                     call.call_args_hash
-                    if getattr(self._registry.cached.get(func_name), "arg_key", None) is not None
+                    if getattr(getattr(self._registry.cached.get(func_name), "arg_key", None), "key_fn", None)
+                    is not None
                     else None
                 ),
                 state_hash=call.state_hash,

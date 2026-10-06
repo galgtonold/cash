@@ -4,6 +4,7 @@ effects it observes while a body runs."""
 from __future__ import annotations
 
 import ast
+import dataclasses
 import dis
 import hashlib
 import inspect
@@ -18,6 +19,7 @@ from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
+from ..analysis.purity_visitor import ARGUMENT_MUTATION_NOT_STORED
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
@@ -39,6 +41,7 @@ from ..install_paths import is_user_module
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
+from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
 from .function_identity import func_key
@@ -506,6 +509,37 @@ class PurityChecks:
         )
         return True
 
+    def _checked_arguments(self, func_name: str, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        """The arguments the in-place-change check looks at, canonicalised
+        (`ArgHasher.normalize_call_args`): every one, except the parameters
+        left out with ``ignore=`` or ``cash.Ignore[T]``.
+
+        Ignoring a parameter is the user's statement that it does not matter
+        to the call, as ``assume_safe=True`` is for an effect: hashing a
+        200 MB scratch buffer twice on every miss to check it was the cost
+        ``ignore=`` was meant to remove. ``key=`` still has every argument
+        checked: it says how to tell calls apart, not that an argument does
+        not matter.
+        """
+        cf = self._registry.cached.get(func_name)
+        arg_key = getattr(cf, "arg_key", None)
+        if arg_key is None or arg_key.key_fn is not None:
+            return self._args.normalize_call_args(func_name, args, kwargs)
+        normalized = self._args.normalize_call_args(func_name, args, kwargs, signature=cf.signature)
+        return keyed_arguments(arg_key, cf.signature, func_name, args, kwargs, normalized)
+
+    def checked_arguments_hash(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
+        """The hash the in-place-change check compares across the body: that
+        of `PurityChecks._checked_arguments`, made as the key makes it
+        (`ArgHasher.serialize_args`, or `ArgHasher.hash_payload` of what
+        ``ignore=`` leaves), so that with ``ignore=`` the key's own argument
+        hash is the one taken before the body. Raises what hashing raised."""
+        cf = self._registry.cached.get(func_name)
+        arg_key = getattr(cf, "arg_key", None)
+        if arg_key is None or arg_key.key_fn is not None:
+            return self._args.serialize_args(func_name, args, kwargs)
+        return self._args.hash_payload(*self._checked_arguments(func_name, args, kwargs))
+
     def argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
         """``{parameter: hash}`` of the arguments that CAN change, before the body.
 
@@ -530,7 +564,7 @@ class PurityChecks:
             return None
         started = _perf_counter()
         try:
-            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             return None
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
@@ -563,7 +597,7 @@ class PurityChecks:
         draw was stored and served for every later call.
         """
         try:
-            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             canon_args, canon_kwargs = args, kwargs
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
@@ -588,7 +622,7 @@ class PurityChecks:
         taken whatever the size (`_plain_data.identity_snapshot`).
         """
         try:
-            canon_args, canon_kwargs = self._args.normalize_call_args(func_name, args, kwargs)
+            canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
             return {}
         found: dict[str, tuple[Any, list]] = {}
@@ -622,7 +656,8 @@ class PurityChecks:
 
         Runs on every miss, whatever the arguments' size: one more hash of
         them after the body. An argument that cannot be hashed again cannot
-        be shown unchanged, so the result is not stored.
+        be shown unchanged, so the result is not stored. A parameter left
+        out with ``ignore=`` is not looked at (`PurityChecks._checked_arguments`).
         """
         if observer is None:
             return
@@ -655,7 +690,7 @@ class PurityChecks:
                 )
                 return
         try:
-            after = self._args.serialize_args(func_name, args, kwargs)
+            after = self.checked_arguments_hash(func_name, args, kwargs)
         except Exception:
             # Hashed for the key, not after the body: nothing says the body
             # left them as they were, and a hit would skip whatever it did.
@@ -910,7 +945,34 @@ class PurityChecks:
             if len(report.opaque_callees) > 5:
                 opaque_list += f", ... +{len(report.opaque_callees) - 5} more"
             issues.append(make_opaque_issue(func_name, opaque_list))
-        return issues
+        return self._ignored_mutations_unchecked(func_name, issues)
+
+    def _ignored_mutations_unchecked(self, func_name: str, issues: list) -> list:
+        """*issues*, with a finding that the function changes an ignored
+        parameter in place saying what cash does about it: nothing
+        (`PurityChecks._checked_arguments`). The analyzer's wording -- "a call
+        that makes it is not stored" -- holds only for an argument the
+        in-place-change check looks at."""
+        cf = self._registry.cached.get(func_name)
+        arg_key = getattr(cf, "arg_key", None)
+        if arg_key is None or arg_key.key_fn is not None:
+            return issues
+        own = {func_name, getattr(cf.func, "__qualname__", None)}
+        rewritten = []
+        for issue in issues:
+            text = getattr(issue, "description", "")
+            if getattr(issue, "where", None) in own and ARGUMENT_MUTATION_NOT_STORED in text:
+                for name in arg_key.ignored:
+                    if f"the argument '{name}' in place" in text:
+                        text = text.replace(
+                            ARGUMENT_MUTATION_NOT_STORED,
+                            f"'{name}' is ignored, so cash does not check it: the call is stored, and a "
+                            f"cache hit does not make that change",
+                        )
+                        issue = dataclasses.replace(issue, description=text)
+                        break
+            rewritten.append(issue)
+        return rewritten
 
     def _warn_ambient_reads(self, func_name: str, issues: list, per_report: bool) -> list:
         """Warn about the ambient reads among *issues*; return the rest.

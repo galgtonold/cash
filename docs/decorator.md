@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/store.py:ResultStore.store @eeff78d0, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/store.py:ResultStore.store @60e2897e, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -487,7 +487,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @ed2b06b8 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @0e5f2f74 -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key
@@ -513,14 +513,23 @@ raises runs the call uncached with
 that reads an iterator argument, which leaves the body an emptied iterator
 ([`KEY-ITERATOR-CONSUMED`](warnings.md#key-iterator-consumed)).
 
-<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138, cash/decorator/runtime.py:KeyBuilder.call_args_hash @197956e9 -->
+<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @1d34c690, cash/decorator/runtime.py:KeyBuilder.call_args_hash @18fb6b48 -->
 A hit whose arguments differ from those of the call that stored the entry
 is not reported, since that is the point. To see it,
 `f.explain(*args).details["matched_by"]` says when a hit was matched by
-`key=` or the ignored parameters. The check that the body did not change an
-argument in place still looks at every argument, ignored ones included, so
-every miss hashes a large ignored argument in full, before and after the
-body: leaving it out of the key makes hits cheap, not misses.
+`key=`. Under `ignore=` it is on every hit, since cash never hashes the
+ignored arguments and cannot tell whether they differ.
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._checked_arguments @51380d20 -->
+**Ignored arguments are not checked for in-place changes.** On a miss cash
+normally checks that the body did not change an argument in place (a body
+that sorts the list it was handed is not stored). Ignoring a parameter is
+your statement that it does not matter to the call, like `assume_safe=True`:
+cash takes your word, so a scratch buffer left out with `ignore=` costs a
+miss nothing, and a body that changes it in place is cached all the same.
+`key=` is different: it says how to tell calls apart, not that an argument
+does not matter, so every argument is still checked, and every miss hashes
+each one in full, before and after the body.
 [`CACHE-NET-LOSS`](warnings.md#cache-net-loss) says so when that is what a
 miss costs.
 

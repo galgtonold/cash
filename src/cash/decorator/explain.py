@@ -753,7 +753,16 @@ class Explainer:
         self, cf: CachedFunction, args: tuple, kwargs: dict, built: BuiltKey, raw_metadata: dict, details: dict
     ) -> None:
         """Say so when a hit was matched by ``key=`` or ignored parameters:
-        the entry was written by a call whose arguments differ from these."""
+        the entry was written by a call whose arguments differ from these.
+
+        Ignored parameters are never hashed (`PurityChecks._checked_arguments`),
+        so a hit under ``ignore=`` always says they were not compared."""
+        if cf.arg_key.key_fn is None:
+            details["matched_by"] = (
+                f"{cf.arg_key.how}: left out of the key and never hashed, so cash cannot tell whether "
+                f"they are the values the entry was written with"
+            )
+            return
         stored = raw_metadata.get("call_args_hash")
         token = _EXPLAINING.set(True)
         try:

@@ -1402,12 +1402,12 @@ class ArgHasher:
                 failure.append(e)
             return None
 
-    def note_arg_cost(self, func_name: str, unkeyed: Callable[[str], bool] | None = None) -> None:
+    def note_arg_cost(self, func_name: str, unkeyed: bool = False) -> None:
         """Keep the costliest argument to hash seen for *func_name*.
 
         Only its description is kept -- parameter, type, seconds, the cached
-        function that produced it, and whether *unkeyed* says the key leaves
-        it out (hashed only for the in-place-change check) -- never the
+        function that produced it, and *unkeyed*: ``key=`` replaced it in the
+        key, so it was hashed only for the in-place-change check -- never the
         value, which may be large.
         """
         cost = getattr(ARG_COST, "last", None)
@@ -1418,4 +1418,4 @@ class ArgHasher:
         cf = self._cached.get(func_name)
         if cf is None or (cf.arg_cost is not None and cf.arg_cost[2] >= seconds):
             return
-        cf.arg_cost = (label, type_name, seconds, producer, old_pandas, bool(unkeyed and unkeyed(label)))
+        cf.arg_cost = (label, type_name, seconds, producer, old_pandas, unkeyed)

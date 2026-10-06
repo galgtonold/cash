@@ -3,7 +3,7 @@ are left out of the argument part of the key, and nothing else is.
 
 The names are checked against the signature when the function is decorated.
 The list and the annotation make one set; either combined with ``key=``
-raises. The checks that look at the arguments still see the ignored ones.
+raises. The in-place-change check does not look at the ignored ones.
 """
 
 from __future__ import annotations
@@ -202,17 +202,58 @@ def test_the_default_of_a_keyed_parameter_still_stops_caching(cash_instance):
     assert "KEY-UNHASHABLE-DEFAULT" in [getattr(w.message, "code", None) for w in caught]
 
 
-def test_the_argument_mutation_check_still_sees_an_ignored_argument(cash_instance):
+def test_an_ignored_argument_is_not_checked_for_in_place_changes(cash_instance):
+    """Ignoring a parameter says it does not matter, as ``assume_safe`` says
+    of an effect: the call is stored, and the static finding says so rather
+    than claiming the call is not stored."""
     @cash_instance.cache(ignore=["log"])
     def run(x, log):
         log.append(x)
         return x
 
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        run(1, [])
+        run(1, [])
+    assert run.cache_info()["hits"] == 1
+    text = " ".join(str(w.message) for w in rec if "IMPURE-SIDE-EFFECTS" in str(w.message))
+    assert "'log' is ignored, so cash does not check it: the call is stored" in text, text
+    assert "is not stored" not in text
+
+
+def test_a_keyed_argument_beside_an_ignored_one_is_still_checked(cash_instance):
+    @cash_instance.cache(ignore=["scratch"])
+    def run(rows, scratch):
+        rows.sort()
+        return len(rows)
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        run(1, [])
-        run(1, [])
-    assert run.cache_info()["hits"] == 0  # the call changed an argument: never stored
+        run([3, 1, 2], [0])
+        run([3, 1, 2], [0])
+    assert run.cache_info()["hits"] == 0  # 'rows' changed in place: never stored
+
+
+def test_a_miss_does_not_hash_an_ignored_argument(cash_instance):
+    """A 200 MB scratch buffer left out of the key cost every miss two full
+    hashes of it, for the in-place-change check."""
+    hashed = []
+
+    class Buffer:
+        def __reduce__(self):
+            hashed.append(1)
+            return (Buffer, ())
+
+    @cash_instance.cache(ignore=["scratch"])
+    def step(i, scratch):
+        return i + 1
+
+    buf = Buffer()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert [step(i, buf) for i in range(3)] == [1, 2, 3]
+    assert step.cache_info()["misses"] == 3
+    assert hashed == []
 
 
 def test_a_hit_does_not_run_the_body_so_a_debug_print_does_not_happen(cash_instance, capsys):
@@ -233,10 +274,11 @@ def test_explain_says_when_a_hit_was_matched_by_ignored_parameters(cash_instance
         return x
 
     f(1)
-    assert "matched_by" not in f.explain(1).details
     other = f.explain(1, debug=True)
     assert other.would_hit
+    # Never hashed, so never compared: said on every hit.
     assert "ignored parameters (debug)" in other.details["matched_by"]
+    assert "never hashed" in f.explain(1).details["matched_by"]
 
 
 class _Model:

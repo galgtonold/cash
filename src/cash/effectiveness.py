@@ -121,7 +121,7 @@ class EffectivenessLedger:
 
         ``culprit`` is the costliest argument to hash seen for this function:
         ``(parameter, type name, seconds, producer or None, frame without
-        copy-on-write, left out of the key)``, so the message can name it
+        copy-on-write, replaced in the key by ``key=``)``, so the message can name it
         instead of guessing.
 
         ``body_seconds`` is the function's OWN time, excluding everything cash
@@ -300,8 +300,8 @@ def _message(
     if len(culprit) > 5 and culprit[5]:
         what = what.replace(" This usually means a large argument is being hashed in full on every call.", "")
         what += (
-            f" The costliest argument is '{param}' ({type_name}), about {seconds * 1000:.0f}ms to hash: the "
-            f"key leaves it out, and every miss still hashes it in full, before and after the body, to "
+            f" The costliest argument is '{param}' ({type_name}), about {seconds * 1000:.0f}ms to hash: key= "
+            f"replaces it in the key, and every miss still hashes it in full, before and after the body, to "
             f"check that the call does not change it in place."
         )
     else:

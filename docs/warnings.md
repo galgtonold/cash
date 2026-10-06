@@ -602,10 +602,12 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @89f14bf4 -->
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @7507ae49, cash/_plain_data.py:identity_changed @a853a1cf -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @aa8235d5, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @112b2842 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @098b9d7f, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that changes an argument is **not stored**, so it runs every time. The
-arguments are checked on every miss, whatever their size, and one that cannot
+arguments are checked on every miss, whatever their size, except those
+[left out of the key with `ignore=`](decorator.md#leaving-arguments-out-of-the-key),
+which are not checked at all. One that cannot
 be hashed again after the call counts as changed. So does a draw from a random
 generator held by an argument that `__cash_key__` or a registered hasher keys,
 which that key does not see move. Past about 50 ms of hashing,
@@ -1395,7 +1397,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._replay_module_state @afa118c0 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._replay_module_state @9bcf3cff -->
 **What happened.** You edited one of your modules, so cash reloaded it. A
 reload runs the module's top level again, which drops what cells set on it
 (`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash runs those
@@ -1666,7 +1668,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @eeff78d0 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @60e2897e -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

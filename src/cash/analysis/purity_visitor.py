@@ -149,6 +149,12 @@ def _names_a_class(func: ast.AST) -> bool:
     return last[:1].isupper() and not last.isupper()
 
 
+#: How a finding that the body changes an argument in place ends.
+ARGUMENT_MUTATION_NOT_STORED = (
+    "a cache hit would not make that change, so a call that makes it is not stored and runs every time"
+)
+
+
 class PurityVisitor(ast.NodeVisitor):
     """Single-function-body visitor that collects :class:`PurityIssue`s.
 
@@ -971,16 +977,12 @@ class PurityVisitor(ast.NodeVisitor):
         root = (base or "").split(".")[0].split("[")[0]
         if root and root in self._param_names:
             return (
-                f"{kind} mutation that changes the argument '{root}' in place; "
-                f"a cache hit would not make that change, so a call that makes "
-                f"it is not stored and runs every time"
+                f"{kind} mutation that changes the argument '{root}' in place; {ARGUMENT_MUTATION_NOT_STORED}"
             )
         if root and root in self._param_elements:
             return (
                 f"{kind} mutation that changes an element of the argument "
-                f"'{self._param_elements[root]}' in place; a cache hit would not "
-                f"make that change, so a call that makes it is not stored and "
-                f"runs every time"
+                f"'{self._param_elements[root]}' in place; {ARGUMENT_MUTATION_NOT_STORED}"
             )
         return f"{kind} mutation"
 

@@ -49,10 +49,11 @@ The reason is `hit` or one of `no_entry`, `ttl_expired`, `file_changed`,
 changed or which argument type could not be hashed. The result is a
 [`CacheExplanation`](../api/cash.md).
 
-<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @99fa5138 -->
-For a function with `key=` or ignored parameters, a hit whose arguments
-differ from those of the call that stored the entry also has `matched_by`,
-saying which of the two matched them.
+<!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @1d34c690 -->
+For a function with `key=`, a hit whose arguments differ from those of the
+call that stored the entry also has `matched_by`. For a function with ignored
+parameters every hit has it: cash never hashes the ignored arguments, so it
+cannot tell whether they differ.
 
 <!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @206fd76a -->
 `func.cache_info()` counts the hits and misses of this wrapper since it was

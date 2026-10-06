@@ -461,7 +461,10 @@ class KeyBuilder:
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
-        call_args_hash = args_hash if spec.arg_key is None else None
+        # What the in-place-change check compares after the body: the key's
+        # own argument hash, unless ``key=`` replaced it
+        # (`PurityChecks.checked_arguments_hash`).
+        call_args_hash = args_hash if spec.arg_key is None or spec.arg_key.key_fn is None else None
         ttls = [t for t in reached_ttls if t is not None]
         return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
 
@@ -544,24 +547,23 @@ class KeyBuilder:
             return None
 
     def call_args_hash(self, spec: CachedFunction, args: tuple, kwargs: dict, built: BuiltKey) -> str | None:
-        """The hash of every argument of the call, whatever ``key=`` or the
-        ignored parameters left out: what the argument-mutation check compares
-        after the body and what an entry records, so explain() can say a hit
-        was matched by ``key=`` / ``ignore``. None when they cannot all be
-        hashed."""
-        if built.call_args_hash is not None or spec.arg_key is None:
+        """The hash the argument-mutation check compares after the body
+        (`PurityChecks.checked_arguments_hash`). Under ``key=``, the hash of
+        every argument, which an entry also records so explain() can say a
+        hit was matched by ``key=``; None when they cannot all be hashed.
+        Otherwise the key's own argument hash: a parameter left out with
+        ``ignore=`` is not checked, so not hashed."""
+        if built.call_args_hash is not None or spec.arg_key is None or spec.arg_key.key_fn is None:
             return built.call_args_hash
         try:
             digest = self._args.serialize_args(spec.name, args, kwargs, normalized=built.normalized_args)
         except Exception:  # a hash for the record only, never the key
             logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
             return None
-        # An argument the key leaves out is still hashed, here and after the
-        # body: when that is what a miss costs, CACHE-NET-LOSS says so.
-        left_out = _unkeyed_parameters(spec)
-        self._args.note_arg_cost(
-            spec.name, unkeyed=lambda label: left_out is EVERY_PARAMETER or label.partition(":")[0] in left_out
-        )
+        # ``key=`` leaves every argument out of the key, yet each is still
+        # hashed here and after the body: when that is what a miss costs,
+        # CACHE-NET-LOSS says so.
+        self._args.note_arg_cost(spec.name, unkeyed=True)
         return digest
 
 
