@@ -809,7 +809,7 @@ class Explainer:
         func_name = cf.name
         token = _EXPLAINING.set(True)
         try:
-            return self._keys.build(cf.func, func_name, cf.dynamic_depends_on, args, kwargs)
+            return self._keys.build(cf, args, kwargs)
         except UnhashableDefault:
             return _uncomputable(
                 func_name,

@@ -33,6 +33,7 @@ from .cache_metadata import CacheMetadata
 from .function_identity import CODE_KEYED_STATS
 
 if TYPE_CHECKING:
+    from .cached_function import CachedFunction
     from .registry import FunctionRegistry
     from .reporting import Notices
 
@@ -224,7 +225,7 @@ class FileDeps:
         self._registry = registry
         self._notices = notices
 
-    def fold_declared_files(self, func_name: str, state_hash: str) -> str:
+    def fold_declared_files(self, cf: CachedFunction, state_hash: str) -> str:
         """Fold which files ``file_depends_on=`` names, as written, into the key.
 
         Their content is checked against the entry on lookup
@@ -234,15 +235,14 @@ class FileDeps:
         As written rather than absolute, so a relative path keys the same on
         every machine.
         """
-        cf = self._registry.cached.get(func_name)
-        declared = cf.declared_files if cf is not None else ()
+        declared = cf.declared_files
         if not declared:
             return state_hash
         names = json.dumps(sorted(declared))
         return hashlib.sha256(f"{state_hash}:files:{names}".encode()).hexdigest()
 
-    def track_declared_files(self, tracker: Any, func_name: str) -> None:
-        """Record *func_name*'s ``file_depends_on=`` paths on *tracker*.
+    def track_declared_files(self, tracker: Any, cf: CachedFunction) -> None:
+        """Record *cf*'s ``file_depends_on=`` paths on *tracker*.
 
         As reads, so the entry snapshots their content and every lookup checks
         it with ``file_dep_is_fresh``, exactly like a file the body opened: a
@@ -256,8 +256,7 @@ class FileDeps:
         another directory checked, and was served, the first directory's file.
         """
 
-        cf = self._registry.cached.get(func_name)
-        for path in cf.declared_files if cf is not None else ():
+        for path in cf.declared_files:
             if glob.has_magic(path):
                 _track_pattern(tracker, path)
             elif os.path.isdir(path):
