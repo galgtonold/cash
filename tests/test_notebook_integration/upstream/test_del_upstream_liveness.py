@@ -18,6 +18,8 @@ The four controls pin the exact boundary of the fix:
 import pytest
 from nbclient.exceptions import CellExecutionError
 
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(90)]
 
 
@@ -92,6 +94,23 @@ def test_consumer_below_del_stays_dead(nb_runner):
     with pytest.raises(CellExecutionError) as ei_iso:
         nb_runner.run_cell(3)
     assert ei_iso.value.ename == "NameError", ei_iso.value.ename
+
+
+def test_a_cached_value_below_its_del_stays_dead(nb_runner):
+    """(b) for a value worth caching: the entry it was stored under does not
+    bring it back for a reader below the del."""
+    nb_runner.create_notebook(
+        [
+            f"import time\ndef slow(v):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S * 2})\n    return v\nx = slow(7)",
+            "del x",
+            "try:\n    y = x + 1\nexcept NameError:\n    y = 'NameError'",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    assert nb_runner.peek("y") == "'NameError'"
+    assert nb_runner.peek("'x' in dir()") == "False"
 
 
 def test_del_in_same_cell_as_consumer_unchanged(nb_runner):

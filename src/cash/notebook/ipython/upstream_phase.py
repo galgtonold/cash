@@ -184,20 +184,6 @@ class UpstreamResolution:
             total_restore_time = 0.0
             upstream_metrics: list[ProcessResult] = []
 
-            for var_name in inputs:
-                if var_name not in self.shell.user_ns:
-                    start_restore = _perf_counter()
-                    try:
-                        metrics = self._restorer.restore_variable(var_name)
-                        total_restore_time += _perf_counter() - start_restore
-                        if metrics:
-                            upstream_metrics.extend(metrics)
-                    except NameError:
-                        # Could not find a source — proceed; upstream re-execution may provide it.
-                        logger.debug(
-                            "[STATE] Could not restore '%s' from cache. Hoping for upstream re-execution.", var_name
-                        )
-
             reexec_metrics, upstream_restore_time, total_execution_time = self._check_and_reexecute_upstream_cells(
                 cell_code,
                 inputs,
