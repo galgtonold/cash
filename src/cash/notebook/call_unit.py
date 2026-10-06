@@ -408,6 +408,11 @@ class CallUnit:
         #: Per call site, how its calls went in the statement run under way
         #: (see :meth:`_entry_for`); emptied by :meth:`begin_statement`.
         self._site_runs: dict[CallSite, _SiteRun] = {}
+        #: The sites the guard switched to run plain in the statement run under
+        #: way: ``site -> (fn, its pooled record, seconds a call takes)``.
+        #: :meth:`CallCache.resolve` hands such a site's *fn* back as it is,
+        #: and counts the call in its record, at the time the timed calls took.
+        self.plain_sites: dict[CallSite, tuple[Any, dict, float]] = {}
         #: Seconds this unit spent on calls beyond their own compute (keys,
         #: lookups, stores, restores), and the compute its hits stood in for.
         #: Monotonic; a statement reads the difference across its run (see
@@ -467,6 +472,7 @@ class CallUnit:
     def begin_statement(self) -> None:
         """A new statement run: every site starts over (see :meth:`_entry_for`)."""
         self._site_runs.clear()
+        self.plain_sites.clear()
         self._keys.begin_statement()
         self.last_returned = None
 
@@ -532,6 +538,9 @@ class CallUnit:
                 _log_plain(took)
                 if len(run.plain_samples) >= _PLAIN_SAMPLES:
                     _decide_site(run, site)
+                    record = self._plain_records.get((names[0], site.source, site.occurrence_index)) if names else None
+                    if run.plain and record is not None:
+                        self.plain_sites[site] = (fn, record, statistics.median(run.plain_samples))
                 self.last_returned = (None, id(result), site.source)
                 return result
             self._last_key_s = None
@@ -932,6 +941,8 @@ class CallUnit:
     def drain(self) -> list[dict]:
         events, self.call_log = self.call_log, []
         self._plain_records = {}
+        # Their records left with the events: the next calls log new ones.
+        self.plain_sites.clear()
         return events
 
 
@@ -1017,6 +1028,11 @@ class CallCache:
             ttl_provider,
             persist_provider,
         )
+        #: The unit's sites run plain (one dict, emptied in place), read on
+        #: every call.
+        self._plain_sites = self._call_unit.plain_sites
+        #: The same by the index of this statement's site.
+        self._plain_at: dict[int, tuple[Any, dict, float]] = {}
 
     def begin_cell(self) -> None:
         self._call_unit.begin_cell()
@@ -1034,6 +1050,7 @@ class CallCache:
 
     def set_sites(self, sites: list[CallSite], plain_value_source: str | None = None) -> None:
         self._sites = sites
+        self._plain_at.clear()
         # One call per statement run: each site's guard starts over.
         self._call_unit.begin_statement()
         self._call_unit.plain_value_source = plain_value_source
@@ -1053,15 +1070,36 @@ class CallCache:
 
     def resolve(self, fn, site_index: int = 0):
         """Return *fn* or a cached counterpart. Never raises."""
-        if not interceptable(fn):
-            return fn
-
         try:
             site = self._sites[site_index]
         except (IndexError, TypeError):
             # No site registered for this index: the rewrite never routes a
             # call here without one, and a call with no site has nothing to
             # be keyed on.
+            return fn
+
+        plain = None
+        if self._plain_sites:
+            plain = self._plain_at.get(site_index)
+            if plain is None:
+                # Looked up by the site, which compares field by field
+                # (the guard's site is an equal object, not this one): once.
+                plain = self._plain_sites.get(site)
+                if plain is not None:
+                    self._plain_at[site_index] = plain
+        elif self._plain_at:
+            self._plain_at.clear()  # the log was drained: see `CallUnit.drain`
+        if plain is not None and plain[0] is fn:
+            # The guard runs the rest of this site's calls plain: the
+            # function itself, called from the user's own line, with no
+            # wrapper to enter and no warnings to relay. A comprehension
+            # calling a cheap helper 200,000 times paid ~8 us a call for the
+            # wrapper -- 60x the plain kernel.
+            record = plain[1]
+            record["calls"] += 1
+            record["execution_time"] += plain[2]
+            return fn
+        if not interceptable(fn):
             return fn
 
         # Keyed on the SITE, not the index -- see the long comment on
