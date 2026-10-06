@@ -87,6 +87,7 @@ they talk to the outside world.
 | draws on the current pyplot figure (`plt.plot`, `plt.show`) | runs every time |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
+| sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps) | runs every time |
 | reads from an iterator or open file held in a variable (`next(rows)`, `fh.readline()`, `islice(src, 3)`) | runs every time: a hit would not move the iterator on; a slow call inside it is still cached |
 | keeps or changes an object another variable or container also holds (`models = {"m": m}`, `fitted = m.fit()`, `d["a"] = ...` after `d = dfs[0]` or in `for d in dfs:`) | runs every time: a restored copy would not be that object. IPython's output history (`Out`, `_`) holding a value you displayed does not count |
 | keeps what a method returns and the call changed the object it was called on (`history = net.fit(X)`, `out = trainer.train()`) | runs every time; cash watches the object around the statement's first run, and one it cannot pickle counts as changed. An iterator, queue or open file is left to the iterator row, so `n = q.qsize()` is cached |

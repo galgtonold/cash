@@ -44,7 +44,7 @@ from ..lineage_formula import (
     module_source_component,
     no_cache_value_component,
     output_lineage,
-    module_data_lineage_component,
+    recorded_reads_lineage_component,
     statement_environment_component,
 )
 from ..run_memo import stats_this_run
@@ -278,8 +278,8 @@ class StatementLineage:
             virtual_modules=virtual_modules,
             compute_hash_fn=self.compute_hash_fn,
             virtual_callables=self.callables.by_lineage,
-            module_data_seen=self.tracking_state.module_data_seen,
-            module_data_by_key=self.tracking_state.module_data_by_key,
+            recorded_reads=self.tracking_state.recorded_reads,
+            recorded_reads_by_key=self.tracking_state.recorded_reads_by_key,
         )
 
     def _input_lineages(
@@ -322,14 +322,15 @@ class StatementLineage:
         tree: ast.Module | None = None,
         virtual_lineage: dict[str, str] | None = None,
         no_cache_values: dict[str, str] | None = None,
-        module_data: str = "",
+        recorded_reads: str | None = None,
     ) -> dict[str, str]:
         """The lineage of each output of a simulated statement.
 
         *no_cache_values* are the value digests a ``no-cache`` statement
         recorded when it last ran, read back so the simulation reaches the
-        lineage the runtime recorded; *module_data* the same for the data of
-        the user's modules it read (``module_data_lineage_component``).
+        lineage the runtime recorded; *recorded_reads* the same for the
+        environment and the data of the user's modules it read
+        (``recorded_reads_lineage_component``).
 
         Built by the runtime's own formula (``lineage_formula``), one output at
         a time as the runtime does: a module-source component belongs to the
@@ -350,7 +351,7 @@ class StatementLineage:
         except (TypeError, ValueError, AttributeError):
             logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
             func_component = ""
-        environment = statement_environment_component(stmt_code, user_ns) + module_data
+        environment = statement_environment_component(stmt_code, user_ns) if recorded_reads is None else recorded_reads
         return {
             out: output_lineage(
                 source_hash,
@@ -723,7 +724,9 @@ class StatementLineage:
             tree,
             virtual_lineage,
             no_cache_values=self.tracking_state.no_cache_values.get(cache_key),
-            module_data=module_data_lineage_component(self.tracking_state, cache_key),
+            recorded_reads=recorded_reads_lineage_component(
+                self.tracking_state, cache_key, stmt_code, self.shell.user_ns
+            ),
         )
         _log_lineage_calc(stmt_code, source_hash, input_lineages_all, file_hash_component, lineage_by_out)
 

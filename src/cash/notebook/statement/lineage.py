@@ -41,7 +41,7 @@ from ..lineage_formula import (
     no_cache_value_component,
     no_cache_value_digest,
     output_lineage,
-    module_data_lineage_component,
+    recorded_reads_lineage_component,
     statement_environment_component,
 )
 from ..restored_var import hashed_by_lineage
@@ -167,12 +167,10 @@ class StatementLineageBuilder:
         # yet another model, so a consumer never agrees with the value recorded
         # beside it -- measured, it broke even the first clean run.
         lineage_inputs = inputs | lineage_hidden_reads(code)
-        # The environment it read, as its key folds it: a new value is a new
-        # lineage, so what is built on an output misses too.
-        # And the data of the user's modules it read, as its key folded it.
-        environment = statement_environment_component(code, user_ns) + module_data_lineage_component(
-            tracking_state, cache_key
-        )
+        # The environment and the data of the user's modules it read, as its
+        # key folds them: a new value is a new lineage, so what is built on an
+        # output misses too.
+        environment = recorded_reads_lineage_component(tracking_state, cache_key, code, user_ns)
         value_digests: dict[str, str] = {}
 
         _clear_rebound_edges(tracking_state, outputs, inputs, user_ns)

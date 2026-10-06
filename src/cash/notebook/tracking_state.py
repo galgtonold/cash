@@ -159,16 +159,17 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineageBuilder, VirtualLineage.
     no_cache_values: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    # What the data of the user's modules a statement reads held when the
-    # runtime last keyed it (``lineage_formula.module_data_component``): by
-    # the statement's key without that data, and by its full key. The values
-    # are read when the statement runs; the simulation, which cannot know
-    # what a module held at that point of the notebook, reads them back, so
+    # What the environment variables and the data of the user's modules a
+    # statement reads held when the runtime last keyed it
+    # (``cache_key._recorded_reads_component``): by the statement's key without
+    # them, and by its full key. The values are read when the statement runs;
+    # the simulation, which cannot know what they held at that point of the
+    # notebook, reads them back, so ``os.environ["MODE"] = "b"`` or
     # ``mylib.K = 7`` in a cell BELOW a reader does not re-key the reader.
     # W: compute_cache_key (runtime keys). R: compute_cache_key (other keys),
     # StatementLineageBuilder, StatementLineage.
-    module_data_seen: dict[str, str] = field(default_factory=dict)
-    module_data_by_key: dict[str, str] = field(default_factory=dict)
+    recorded_reads: dict[str, str] = field(default_factory=dict)
+    recorded_reads_by_key: dict[str, str] = field(default_factory=dict)
 
     # Local module name -> the statements that set state on it
     # (``callee_reach.module_state_writes``), in the order they last ran. A

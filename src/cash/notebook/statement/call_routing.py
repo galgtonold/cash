@@ -528,9 +528,9 @@ class CallRouting:
                     user_ns=self.shell.user_ns,
                     function_tracker=self.function_tracker,
                     compute_hash_fn=self.compute_hash,
-                    module_data_seen=self.tracking_state.module_data_seen,
-                    module_data_by_key=self.tracking_state.module_data_by_key,
-                    record_module_data=True,
+                    recorded_reads=self.tracking_state.recorded_reads,
+                    recorded_reads_by_key=self.tracking_state.recorded_reads_by_key,
+                    record_reads=True,
                 ),
                 # `self.current_loop_vars_for_call_key` (bound method, not
                 # a lambda capturing a snapshot) so it re-reads
