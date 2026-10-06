@@ -339,6 +339,9 @@ After the ttl, the next call recomputes and replaces the entry.
   as it stands now: shortening it expires older entries at once, and
   lengthening it keeps them longer. `cash.cleanup()` judges them the same way
   while the function is decorated in that process.
+- **A caller refreshes as often.** A cached function that reaches one with a
+  ttl, whether it calls it by name, is passed it as an argument, or finds it
+  in a dict, list or closure, uses the shorter of the two ttls.
 - **A default for every function** comes from configuration: set
   `default_ttl` on the disk tier; see
   [Deploying](tutorials/feature-guides/deploying.md#a-default-lifetime-for-every-entry).

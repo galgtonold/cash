@@ -38,6 +38,7 @@ from .call_state import (
     CACHE_MISS,
     CAPTURE_WATCH,
     NESTED_CASH_SECONDS,
+    REACHED_TTLS,
     THREADS_IN_CALLS,
     BodyRun,
     BuiltKey,
@@ -301,6 +302,11 @@ class KeyBuilder:
 
         Raises `KeyBuildFailed` when the state cannot be built.
         """
+        reached_ttls = REACHED_TTLS.get()
+        if reached_ttls is not None:
+            # What the caller computes from this function is as fresh as it.
+            spec = self._registry.cached.get(func_name)
+            reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl if spec is not None else None))
         active = _CALLEE_STATES.get()
         if func_name in active:
             return f"cycle:{func_name}"
@@ -350,6 +356,8 @@ class KeyBuilder:
         classes_token = CLASSES_FOLDED.set(set())
         # Each function's globals are folded once per key (`READS_FOLDED`).
         reads_token = READS_FOLDED.set({})
+        reached_ttls: list = []
+        ttls_token = REACHED_TTLS.set(reached_ttls)
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
@@ -389,13 +397,15 @@ class KeyBuilder:
             self._args.note_arg_cost(func_name)
         finally:
             PLAIN_CENSUS.memo = previous
+            REACHED_TTLS.reset(ttls_token)
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
         call_args_hash = args_hash if spec.arg_key is None else None
-        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash)
+        ttls = [t for t in reached_ttls if t is not None]
+        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
 
     def key_arguments(self, spec: CachedFunction, args: tuple, kwargs: dict, normalized: tuple[tuple, dict]) -> tuple:
         """`keyed_arguments` for *spec*'s ``key=`` or ignored parameters.
@@ -727,6 +737,10 @@ class CallRunner:
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
+        if built.reached_ttl is not None:
+            # A cached function the key reached as a value, not by a graph
+            # edge: its ttl is per call, not per function.
+            call.ttl = built.reached_ttl if call.ttl is None else min(call.ttl, built.reached_ttl)
 
         raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
