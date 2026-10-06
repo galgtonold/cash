@@ -77,11 +77,13 @@ def resolve_dynamic_dependencies(
                         "KEY-DYNAMIC-DEP-FAILED",
                         f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
                         f"returned a {type(ds).__name__}, which is not a DataSource, "
-                        f"so cash cannot tell when it changes and the call ran uncached.",
+                        f"so cash cannot tell when it changes and the call -- and any cached call around it -- ran uncached.",
                         fix,
                     )
                 token = state_token_of(ds)
-                dynamic_state_parts.append(token)
+                # With its id: two sources that traded tokens (x 3->5,
+                # y 5->3) left the sorted tokens, and so the key, unchanged.
+                dynamic_state_parts.append(f"{ds.get_id()}={token}")
                 if sources is not None:
                     sources.append((ds, token))
         except KeyBuildFailed:
@@ -91,13 +93,14 @@ def resolve_dynamic_dependencies(
                 "KEY-DYNAMIC-DEP-FAILED",
                 f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
                 f"{type(e).__name__} ({e}), so cash cannot tell whether that "
-                f"dependency changed and the call ran uncached.",
+                f"dependency changed and the call -- and any cached call around it -- ran uncached.",
                 fix,
             ) from e
 
     if dynamic_state_parts:
-        # Sort to ensure deterministic order if multiple sources
-        return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode("utf-8")).hexdigest()
+        # In the order resolved: two sources sharing an id still differ by
+        # position.
+        return hashlib.sha256("\x00".join(dynamic_state_parts).encode("utf-8")).hexdigest()
     return ""
 
 

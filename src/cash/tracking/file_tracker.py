@@ -163,11 +163,19 @@ class FileAccessTracker:
         # EARLIER version of the file (see `FileDeps.credit_remembered_reads`).
         self.stale_memo_reads: set[str] = set()
         # Sources a cached call in this block depends on through
-        # ``dynamic_depends_on=`` that are not files: id -> (source, its
-        # token when that call keyed on it). An entry of this block's own
-        # records them and asks them again on lookup
+        # ``dynamic_depends_on=`` that are not files: (id, token, object id)
+        # -> (source, its token when that call keyed on it). An entry of this
+        # block's own records them and asks them again on lookup
         # (`pass_dynamic_sources_up`, `dynamic_sources_fresh`).
-        self.dynamic_sources: dict[str, tuple[Any, str]] = {}
+        self.dynamic_sources: dict[tuple[str, str, int], tuple[Any, str]] = {}
+        # The resolver calls behind them, each to be asked again by this
+        # process (`dynamic_sources.Resolution`): a resolver may hand out a
+        # new source object, which the recorded one never answers for.
+        self.dynamic_resolutions: dict[tuple, Any] = {}
+        # Cached functions called in this block whose resolver failed: what
+        # they depend on is unknown, so an entry of this block's own could
+        # never be checked against it and is not stored.
+        self.unresolved_dynamic: set[str] = set()
         # Files and directories this block CREATED (opened with "w"/"x",
         # made with mkdir/mkdtemp), resolved. What the block reads back from
         # them is its own output, not an input: unzipping into a temporary
@@ -594,10 +602,24 @@ class FileAccessTracker:
 
     def add_dynamic_source(self, source_id: str, source: Any, token: str) -> None:
         """Record a data source this block depends on, with its token now,
-        here and on the parents. The first token seen is kept: one that
+        here and on the parents. Every source is kept, two with one id too:
+        an id may name a catalog rather than the table, and keeping the
+        first source met under it lost a change to the second. A token that
         moved within the block makes the entry miss on its next lookup."""
         for tracker in self._self_and_parents():
-            tracker.dynamic_sources.setdefault(source_id, (source, token))
+            tracker.dynamic_sources.setdefault((source_id, token, id(source)), (source, token))
+
+    def add_unresolved_dynamic(self, func_name: str) -> None:
+        """Record that *func_name*, called in this block, could not resolve
+        its ``dynamic_depends_on=`` sources, here and on the parents."""
+        for tracker in self._self_and_parents():
+            tracker.unresolved_dynamic.add(func_name)
+
+    def add_dynamic_resolution(self, key: tuple, resolution: Any) -> None:
+        """Record a ``dynamic_depends_on=`` resolver call this block depends
+        on, here and on the parents (`dynamic_sources.Resolution`)."""
+        for tracker in self._self_and_parents():
+            tracker.dynamic_resolutions.setdefault(key, resolution)
 
 
 #: Seconds spent recording reads; `tracking_seconds`.

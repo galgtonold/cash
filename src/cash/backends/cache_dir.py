@@ -17,6 +17,9 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import socket
+import time
+import zlib
 from collections.abc import Callable
 from typing import Any
 
@@ -44,7 +47,9 @@ __all__ = [
     "create_temp_file",
     "entry_totals",
     "is_cash_file",
+    "owned_temp_prefix",
     "recreate_cache_dir",
+    "remove_orphan_temp_files",
     "warn_if_unwritable",
     "write_all",
 ]
@@ -210,6 +215,55 @@ def create_temp_file(directory: str, prefix: str = ".tmp-", suffix: str = ".part
     raise FileExistsError(
         f"could not find an unused temporary name in {directory!r} after {_TEMP_NAME_ATTEMPTS} attempts"
     ) from last
+
+
+def owned_temp_prefix() -> str:
+    """The prefix of a ``.tmp-*.part`` temp file that names its writer:
+    ``.tmp-<host>.<pid>-``, so `remove_orphan_temp_files` can tell a write in
+    progress from one whose process was killed (a kernel restart, an OOM kill)."""
+    return f".tmp-{_host_tag()}.{os.getpid()}-"
+
+
+def _host_tag() -> str:
+    return f"{zlib.crc32(socket.gethostname().encode('utf-8', 'replace')) & 0xFFFF:04x}"
+
+
+#: A ``.tmp-*.part`` file untouched this long is a dead write's, whoever wrote
+#: it: a live write keeps writing into it. Only for one whose writer cannot be
+#: asked: another machine's, or one whose pid is in use again.
+ORPHAN_TEMP_AGE = 24 * 3600.0
+
+
+def remove_orphan_temp_files(cache_dir: str) -> int:
+    """Delete the temp files of entry writes whose process died mid-write.
+
+    A write goes to a ``.tmp-*.part`` file renamed into place when complete;
+    a process killed in between leaves it behind, up to an entry's size, and
+    nothing else counts or evicts it. One written on this machine by a process
+    that no longer runs goes now; any other once untouched for
+    `ORPHAN_TEMP_AGE`. Returns how many were removed.
+    """
+    import psutil
+
+    host = _host_tag()
+    removed = 0
+    now = time.time()
+    try:
+        with os.scandir(cache_dir) as found:
+            names = [(e.name, e.path) for e in found if e.name.startswith(".tmp-") and e.name.endswith(".part")]
+    except OSError:
+        return 0
+    for name, path in names:
+        owner = name[len(".tmp-") : -len(".part")].partition("-")[0]
+        tag, _, pid = owner.partition(".")
+        try:
+            dead = tag == host and pid.isdigit() and not psutil.pid_exists(int(pid))
+            if dead or now - os.stat(path).st_mtime > ORPHAN_TEMP_AGE:
+                os.remove(path)
+                removed += 1
+        except OSError:
+            continue  # renamed into place or removed meanwhile
+    return removed
 
 
 def write_all(fd: int, data: bytes) -> None:

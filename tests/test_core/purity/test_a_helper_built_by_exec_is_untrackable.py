@@ -19,6 +19,11 @@ _NS: dict = {}
 exec("def score(x):\n    return x + 1\n", _NS)
 SCORE = _NS["score"]
 FORMULA = eval("lambda x: x * 2", {"__builtins__": {}})
+# A class so: its methods are such functions, and the class itself names no
+# module ("builtins"), so it read as library code too.
+_RULES: dict = {}
+exec("class Rule:\n    def apply(self, x):\n        return x * 2\n", _RULES)
+RULE = _RULES["Rule"]
 
 # Built into this module's own namespace: a module to judge it by, keyed by
 # its bytecode like any function without a source file.
@@ -37,6 +42,10 @@ def calls_eval_lambda(x):
     return FORMULA(x)
 
 
+def calls_exec_class(x):
+    return RULE().apply(x)
+
+
 def calls_waived(x):
     return SCORE(x)  # @cash:assume-safe
 
@@ -45,7 +54,7 @@ def calls_in_module(x):
     return in_module(x)  # noqa: F821 - defined by the exec above
 
 
-@pytest.mark.parametrize("fn", [calls_exec_helper, calls_eval_lambda])
+@pytest.mark.parametrize("fn", [calls_exec_helper, calls_eval_lambda, calls_exec_class])
 def test_calling_it_raises_and_names_the_line(tmp_path, fn):
     with pytest.raises(CashImpureFunctionError, match=r"untrackable_dep.*built by exec\(\)/eval\(\)"):
         _cash(tmp_path).cache(fn)(3)

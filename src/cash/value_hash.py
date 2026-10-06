@@ -31,9 +31,14 @@ HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, Recu
 _BULKY_TYPE_NAMES = frozenset({"DataFrame", "Series", "ndarray"})
 
 
-def _is_bulky(t: type) -> bool:
-    """A frame, array or table type: hashed on its own rather than pickled
-    with the collection that holds it."""
+def is_bulky(value: Any) -> bool:
+    """A frame, array or table: hashed on its own rather than pickled with
+    the collection that holds it."""
+    return _is_bulky_type(type(value))
+
+
+def _is_bulky_type(t: type) -> bool:
+    """`is_bulky`, asked of a type."""
     return t.__name__ in _BULKY_TYPE_NAMES or builtin_hash_family(t) is not None
 
 
@@ -51,14 +56,14 @@ def _hash_collection(obj: Any) -> str:
     values = [v for _, v in items] if items is not None else (list(obj) if isinstance(obj, (list, tuple)) else [])
     # Asked of each TYPE once: asked of each item, a list of 200,000 ints
     # cost 0.9 s here, 30x the pickle that hashes it.
-    if any(map(_is_bulky, set(map(type, values)))):
+    if any(map(_is_bulky_type, set(map(type, values)))):
         parts = [f"{type(obj).__name__}:{len(obj)}"]
         if items is not None:
             parts.extend(f"{compute_hash(k)}={compute_hash(v)}" for k, v in items)
         else:
             parts.extend(compute_hash(v) for v in values)
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-    return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
+    return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
 
 
 def identity_hash(obj: Any) -> str:
@@ -147,7 +152,7 @@ def compute_hash(obj: Any) -> str:
             # Exact types: a subclass is pickled whole, with the attributes
             # it holds beside its items.
             return _hash_collection(obj)
-        return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
+        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
     except BaseException as exc:
@@ -156,7 +161,7 @@ def compute_hash(obj: Any) -> str:
         return identity_hash(obj)
 
     try:
-        return hashlib.sha256(kept_state.dumps(obj)).hexdigest()
+        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
     except HASH_ERRORS:
         # Python 3.13 raises AttributeError for an instance of a class
         # defined inside a function ("Can't get local object").

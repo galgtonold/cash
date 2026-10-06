@@ -21,7 +21,7 @@ from .call_state import KeyBuildFailed
 from .code_refs import CodeRefs
 from .function_identity import hash_callable_source
 from .key_values import SYNC_TYPES, is_immutable_capture, iter_contained
-from .user_code import cash_wrapped, is_user_class, is_user_code_object, user_layers
+from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, user_layers
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -327,6 +327,12 @@ class CodeSurface:
         (`CodeRefs.reached`), in the order the walk reaches them."""
         digests: list[str] = []
         for target in self._refs.reached(obj):
+            if is_cash_wrapper(target):
+                # A cached function: what a call of it computes from, its
+                # globals and dependencies included (`KeyBuilder.callee_state`),
+                # as when the code that reaches it calls it by name.
+                digests.append(f"{getattr(target, '__qualname__', '?')}:cached:{target._cash_state()}")
+                continue
             digest = self._code_surface_own(target)
             if digest is not None:
                 digests.append(f"{getattr(target, '__qualname__', '?')}:{digest}")

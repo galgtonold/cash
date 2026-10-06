@@ -28,11 +28,11 @@ from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH, BodyRun, Call
-from .dynamic_sources import DynamicSources, recorded_sources, remember_sources
+from .dynamic_sources import DynamicSources, recorded_sources, remember_sources, source_key
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
-from .purity_checks import compared_by_identity
+from .purity_checks import sentinel_ref
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -229,6 +229,12 @@ class ResultStore:
                 f"a memoised helper handed it data read from an earlier version of "
                 f"{sorted(stale_memo)[0]}; a fresh process reads the file as it is now"
             )
+        unresolved = getattr(tracker, "unresolved_dynamic", None)
+        if refusal is None and unresolved:
+            refusal = (
+                f"a cached function it calls depends, through dynamic_depends_on=, on sources "
+                f"nothing could record ({sorted(unresolved)[0]}), so nothing could tell when they change"
+            )
         if refusal is None:
             refusal = self._unpicklable_source_refusal(func_name, recorded_sources(tracker))
         if refusal is None and self._files.code_moved_since_keyed(func, func_name):
@@ -293,25 +299,11 @@ class ResultStore:
         return f"a cached function it calls depends on {ids[0]}, which cannot be pickled with the entry"
 
     def _result_ref(self, func_name: str, result: Any) -> list | None:
-        """``["global" | "closure", name]`` when *result* is that variable's own
-        object and its type compares by identity (a sentinel), else None."""
-        # A type with its own ``__eq__`` compares by value, which a copy keeps.
-        if type(result) in IMMUTABLE_PRIMS or not compared_by_identity(result):
-            return None
+        """``["global" | "closure", name]`` when the body returns that sentinel (`sentinel_ref`)."""
         spec = self._registry.cached.get(func_name)
         if spec is None:
             return None
-        func = inspect.unwrap(spec.func)
-        try:
-            for name, cell in zip(func.__code__.co_freevars, func.__closure__ or ()):
-                if cell.cell_contents is result:
-                    return ["closure", name]
-            for name, value in getattr(func, "__globals__", {}).items():
-                if value is result:
-                    return ["global", name]
-        except (AttributeError, ValueError, RuntimeError):
-            return None
-        return None
+        return sentinel_ref(inspect.unwrap(spec.func), result)
 
     def restore_identity(self, func_name: str, metadata: CacheMetadata, value: Any) -> Any:
         """What a hit hands back for *value*: the identity and flags the result had.
@@ -516,7 +508,7 @@ class ResultStore:
                 result_ref=self._result_ref(func_name, result),
                 # The non-file sources its cached callees resolved, with their
                 # tokens: a lookup asks them again (`dynamic_sources_fresh`).
-                dynamic_sources=dynamic.records if dynamic is not None else None,
+                dynamic_sources=(dynamic.records or None) if dynamic is not None else None,
                 process_local=True if dynamic is not None and not dynamic.picklable else None,
                 **(request.manifest or {}),
             )
@@ -524,6 +516,8 @@ class ResultStore:
             # Kept, not a temporary: TieredBackend writes back where the value
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
+            if dynamic is not None:
+                self._store_sources(dynamic)
             self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
             if dynamic is not None:
                 remember_sources(cache_key, dynamic)
@@ -750,6 +744,28 @@ class ResultStore:
             {"n_chunks": n_chunks, "total_items": chunks.total_items, **_returned(returned)},
             chunks.stream,
         )
+
+    def _store_sources(self, dynamic: DynamicSources) -> None:
+        """Store each source too large for a caller's entry once, under its
+        `source_key`, unless an earlier caller stored it already. Written
+        before the entry: an entry is never there without what it names.
+        One that goes later (evicted, or not written) makes its callers miss.
+        No ttl of its own: entries with different ttls may name it."""
+        backend = self._backend_slot.backend
+        for digest, data in dynamic.blobs.items():
+            key = source_key(digest)
+            if backend.peek_metadata(key) is not None:
+                continue
+            serializer = PickleSerializer()
+            metadata = CacheMetadata(
+                key=key,
+                timestamp=time.time(),
+                serializer_cls=type(serializer),
+                # Goes where the entries naming it go (`_write_one_chunk`).
+                decorator_entry=True,
+                copy_required=False,
+            ).to_dict()
+            backend.set(key, data, metadata, serializer=serializer)
 
     def _write_one_chunk(
         self,

@@ -247,8 +247,12 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
+        def in_notebook(code: str) -> bool:
+            self.statements.set_notebook_functions(notebook_cells)
+            return self.statements.in_notebook(code)
+
         module_data = self._reaches_watched_module_data(current_cell_idx, notebook_cells, required_inputs, cell_code)
-        if outside_changes(self.tracking_state.reads, module_data=module_data):
+        if outside_changes(self.tracking_state.reads, in_notebook, module_data=module_data):
             # The environment or a module's data, read by a statement, was
             # changed outside the notebook's cells: no cell's code says so, so
             # simulate them all again, as for a changed file.

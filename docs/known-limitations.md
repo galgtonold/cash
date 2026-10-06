@@ -205,13 +205,18 @@ notebook, or the cells from the edited one down.
 
 A change made outside the notebook's cells (the shell or a launcher setting a
 variable, a console attached to the kernel, an edit of the module's file) is
-seen: running only the last cell rebuilds what was built on the old value. So
-is a change to the environment made inside a function a cell calls, without
-the cell spelling it (`setup()` doing `os.environ["MODE"] = "b"`): cash
-cannot tell it from one made outside. Your module's data is looked at for
-such a change (hashed in full) only before a cell that reads it or uses
-something built from it; a cell that does neither runs without paying for
-it, and the change is seen by the next one that does.
+seen: running only the last cell rebuilds what was built on the old value. A
+change a cell makes is the notebook's own however the cell makes it: itself,
+in a function it calls (`setup()` doing `os.environ["MODE"] = "b"`), with a
+magic (`%env`, `%cd`) or by reloading the module. Your module's data is
+looked at for an outside change (hashed in full) only before a cell that
+reads it or uses something built from it, and around a statement only when
+the statement reaches the module or names the value itself; a cell that does
+neither runs without paying for it. A statement that changes the data in
+place through something else holding it (`holder["t"][0] = 5`, where
+`holder["t"] = mylib.TABLE` above) is not seen as the notebook's own: the
+change counts as made outside, so the cells after it run again rather than
+reuse an answer.
 
 ### Re-running a cell above an in-place change
 

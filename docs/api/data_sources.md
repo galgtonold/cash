@@ -73,6 +73,8 @@ Subclass `DataSource` and implement its two methods.
 version, a digest, a maximum id. A `bool` cannot, so the entry would never be
 recomputed; cash warns
 [`KEY-BOOL-STATE-TOKEN`](../warnings.md#key-bool-state-token) if it sees one.
+An array, a frame or a table -- or a list or dict holding one -- is keyed by
+its full content; anything else by its `str()`.
 
 ```python
 from cash import DataSource

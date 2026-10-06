@@ -14,6 +14,7 @@ import ast
 import dis
 import functools
 import inspect
+import sqlite3
 import sys
 import types
 from collections.abc import Iterable, Mapping
@@ -25,6 +26,7 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
+from ..value_types import is_runtime_machinery
 
 __all__ = ["Reach", "module_state_writes", "reached_user_code"]
 
@@ -235,23 +237,70 @@ class _Found:
                 self._body_reads(value.__code__)
             else:
                 self._module_body_reads(value)
-        elif label is not None and _is_data(value):
-            self.data.setdefault(label, value)
+            # A decorator's wrapper reaches the function it wraps through
+            # its closure (``def w(*a): return f(*a)``).
+            for cell in value.__closure__ or ():
+                try:
+                    self.value(cell.cell_contents)
+                except ValueError:  # an empty cell
+                    pass
+            self._wrapped(value)
+        elif isinstance(value, types.FunctionType):
+            # A wrapper that is not the user's code (``@cash.cache``'s): what
+            # calling it runs is the function it wraps.
+            self._wrapped(value)
+        else:
+            if label is not None and _is_data(value):
+                self.data.setdefault(label, value)
+            if value is not None and not inspect.isroutine(value):
+                # An instance: its methods run when the statement calls them.
+                self._class(type(value))
+
+    def _wrapped(self, value: Any) -> None:
+        """The function *value* wraps (``functools.wraps``' ``__wrapped__``)."""
+        try:
+            wrapped = inspect.getattr_static(value, "__wrapped__", None)
+        except Exception:  # noqa: BLE001 - an object's attribute lookup
+            return
+        if isinstance(wrapped, types.FunctionType):
+            self.value(wrapped)
 
     def _class(self, cls: type) -> None:
-        """A class: its ``__init__``, and when it is the user's, the data it
-        holds (``Settings.scale``), which its methods read through ``self``."""
+        """A class: its ``__init__``; when it is the user's, its methods and
+        those it inherits from the user's classes (``model.predict(2)`` runs
+        ``Model.predict``, and what that reads), and when it is a local
+        module's, the data it holds (``Settings.scale``), which its methods
+        read through ``self``."""
+        if not self._users_class(cls):
+            self.value(vars(cls).get("__init__"))
+            return
+        if id(cls) in self._function_ids:
+            return
+        self._function_ids.add(id(cls))
         home = _loaded(getattr(cls, "__module__", None))
-        local = home is not None and _is_local(home)
-        if local:
-            if id(cls) in self._function_ids:
-                return
-            self._function_ids.add(id(cls))
+        if home is not None and _is_local(home):
             self.modules.add(home.__name__)
             for attr, attr_value in list(vars(cls).items()):
                 if not attr.startswith("__") and _is_data(attr_value):
                     self.data.setdefault(f"{home.__name__}.{cls.__qualname__}.{attr}", attr_value)
-        self.value(vars(cls).get("__init__"))
+        for klass in cls.__mro__:
+            if not self._users_class(klass):
+                continue
+            for attr_value in list(vars(klass).values()):
+                for fn in _class_member_functions(attr_value):
+                    self.value(fn)
+
+    def _users_class(self, cls: type) -> bool:
+        """Defined in a local module, or in a cell: its methods' globals are the namespace."""
+        home = _loaded(getattr(cls, "__module__", None))
+        if home is not None and _is_local(home):
+            return True
+        return any(
+            fn.__globals__ is self.namespace
+            for member in list(vars(cls).values())
+            for fn in _class_member_functions(member)
+            if isinstance(fn, types.FunctionType)
+        )
 
     def chain(self, root: str, attrs: tuple[str, ...]) -> None:
         """``mod.sub.attr`` (*root* ``mod``, *attrs* innermost first): each
@@ -326,13 +375,29 @@ class _Found:
         return fn.__globals__ is self.namespace or own_code_is_user(fn, None)
 
 
+def _class_member_functions(member: Any) -> Iterable[Any]:
+    """The functions a class attribute runs: a method, a static or class
+    method, a property's accessors."""
+    if isinstance(member, (staticmethod, classmethod)):
+        yield member.__func__
+    elif isinstance(member, property):
+        yield from (f for f in (member.fget, member.fset, member.fdel) if f is not None)
+    elif isinstance(member, types.FunctionType):
+        yield member
+
+
 def _is_data(value: Any) -> bool:
     """Whether *value* is data a function reads, rather than code or a
-    module, which other channels key."""
+    module, which other channels key, or a handle no result is computed
+    from: a lock, a logger, a stream (`is_runtime_machinery`) or a database
+    connection, whose answers are read through it, not held in it. Hashed
+    by identity, such a handle gave the statement a new key in every
+    process."""
     return not (
         value is None
-        or isinstance(value, (types.ModuleType, type))
+        or isinstance(value, (types.ModuleType, type, sqlite3.Connection, sqlite3.Cursor))
         or inspect.isroutine(value)
+        or is_runtime_machinery(value)
         or getattr(value, "_is_file_tracker_patch", False) is True
     )
 

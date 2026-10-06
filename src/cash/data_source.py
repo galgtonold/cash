@@ -54,4 +54,22 @@ def state_token_of(source: DataSource) -> str:
                 f"changes.",
                 "return something that moves with the data -- a version, a digest, an mtime -- from state_token().",
             )
+    return _token_text(token)
+
+
+def _token_text(token: Any) -> str:
+    """*token* as text that changes whenever it does. A frame, array or
+    table -- or a collection holding one -- is its content digest: its
+    printed form elides the middle of a long array and rounds floats to 8
+    digits, so a change there kept the key."""
+    if isinstance(token, str):
+        return token
+    if not isinstance(token, (int, float, bytes, type(None))):
+        from .value_hash import is_bulky, compute_hash
+
+        if is_bulky(token) or (
+            isinstance(token, (list, tuple, dict, set, frozenset))
+            and any(is_bulky(v) for v in (token.values() if isinstance(token, dict) else token))
+        ):
+            return f"{type(token).__name__}:{compute_hash(token)}"
     return str(token)

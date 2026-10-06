@@ -129,3 +129,49 @@ def test_a_frozen_result_may_be_one_cash_cannot_copy(cash):
 
     assert len(runs) == 1, "a frozen result was refused for being uncopyable"
     assert first is second, "frozen promises the same object back, not a copy"
+
+
+class _Worker:
+    def __init__(self, n):
+        self.n = n
+        self.lock = threading.Lock()
+        self.done = []
+
+
+def test_a_frame_of_objects_holding_a_lock_is_recomputed(cash):
+    """The same rule for a pandas frame whose object column holds them.
+
+    The frame copy fell back to a pandas deep copy when the pickle round trip
+    of its cells failed, which shares the cells: an edit to a returned worker
+    showed up in every later hit (``[]``, then ``['job']``, then ``['job', 'job']``).
+    """
+    pd = pytest.importorskip("pandas")
+    runs = []
+
+    @cash.cache(assume_safe=True)
+    def workers():
+        runs.append(1)
+        return pd.DataFrame({"name": ["a", "b"], "worker": [_Worker(1), _Worker(2)]})
+
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        for _ in range(3):
+            frame = workers()
+            assert frame["worker"][0].done == [], "a caller's edit reached the next call"
+            frame["worker"][0].done.append("job")
+    assert len(runs) == 3
+    assert any(issubclass(w.category, CashCacheStoreFailedWarning) for w in seen), [str(w.message) for w in seen]
+
+
+def test_the_memory_backend_keeps_a_notebook_frame_it_cannot_fully_copy():
+    """A notebook payload is kept, with its frame copied and the cells shared."""
+    pd = pytest.importorskip("pandas")
+    from cash.exceptions import CacheBackendError
+
+    backend = InMemoryBackend()
+    frame = pd.DataFrame({"worker": [_Worker(1)]})
+    with pytest.raises(CacheBackendError):
+        backend.set("k", frame, {"copy_required": True})
+    assert backend.get("k") == (None, None)
+    backend.set("stmt", {"df": frame}, {})
+    assert backend.get("stmt")[1]["df"]["worker"][0].n == 1

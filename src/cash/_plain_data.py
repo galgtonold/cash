@@ -62,15 +62,16 @@ def fake_clock() -> tuple[tuple, dict]:
 _FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
 
 
-def _dump(value: Any, fast: bool) -> bytes:
-    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1])
+def _dump(value: Any, fast: bool, keyed: bool = False) -> bytes:
+    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1], keyed=keyed)
 
 
 def key_dumps(value: Any) -> bytes:
     """``pickle.dumps(value)`` for a cache key: a clock test double's date
     pickles as the date (`fake_clock`), and a C base's reduce keeps the
-    subclass's attributes (`kept_state`)."""
-    return _dump(value, fast=False)
+    subclass's attributes (`kept_state`), and so does one a class of the
+    user's leaves out of its own pickled state (`kept_state.chooses_its_state`)."""
+    return _dump(value, fast=False, keyed=True)
 
 
 def content_dumps(value: Any) -> bytes:
@@ -84,7 +85,7 @@ def content_dumps(value: Any) -> bytes:
     inside an object pickle stores as it asks to -- needs the memo.
     """
     try:
-        return _dump(value, fast=True)
+        return _dump(value, fast=True, keyed=True)
     except (ValueError, RecursionError):  # fast mode refuses a cycle
         return key_dumps(value)
 
@@ -574,6 +575,7 @@ def copy_plain(value: Any, immutable: bool | None = None, levels: list[set] | No
         and len(levels) == 2
         and all(t in IMMUTABLE_LEAF_TYPES for t in levels[1])
         and all(t in PLAIN_SEQS or t in IMMUTABLE_LEAF_TYPES for t in levels[0])
+        and not _row_held_twice(value)
     ):
         rows = list(map(list, value)) if levels[0] == {list} else [list(x) if type(x) is list else x for x in value]
         return True, (tuple(rows) if type(value) is tuple else rows)
@@ -581,6 +583,19 @@ def copy_plain(value: Any, immutable: bool | None = None, levels: list[set] | No
     if spine is not None:
         return True, spine
     return True, pickle.loads(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+
+
+def _row_held_twice(value: list | tuple) -> bool:
+    """Is one list a row of *value* twice (``[row, row]``)? A list per row
+    would split it in two; `spine_copy` sees it and leaves it to pickle,
+    which keeps it one list."""
+    if all(type(x) is list for x in value):
+        rows, held_once = value, _unshared_refs() - 1
+    else:
+        rows, held_once = [x for x in value if type(x) is list], _unshared_refs()
+    # A row held twice has more references than one held once: only then
+    # are the ids compared, as `dict_rows_unchecked` does.
+    return bool(rows) and max(map(sys.getrefcount, rows)) > held_once and len(set(map(id, rows))) != len(rows)
 
 
 @contextlib.contextmanager

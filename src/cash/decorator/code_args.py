@@ -15,6 +15,7 @@ from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import ISSUE_UNTRACKABLE_DEP
+from ..code_digest import unwrap_partials
 from ..content_hashers import builtin_family_of, held_objects
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashImpurityWarning
@@ -652,7 +653,11 @@ class CodeArgs:
             if helpers:
                 parts.append(f"argclass:{carrier.__qualname__}#helpers:{helpers}")
             return parts
-        fn = getattr(carrier, "__func__", carrier)
+        # Under a partial (`apply(partial(price, k=1), x)`), the function it
+        # calls: its code was keyed (`CodeSurface._code_surface_own`), and
+        # what that code reads was not.
+        fn = unwrap_partials(carrier)
+        fn = getattr(fn, "__func__", fn)
         if not isinstance(fn, types.FunctionType):
             return []
         digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)

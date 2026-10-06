@@ -14,7 +14,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_module
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
-from .user_code import cash_wrapped, is_user_code_object, user_layers
+from .user_code import cash_wrapped, is_cash_wrapper, is_user_code_object, user_layers
 
 #: How many user-code objects one reference walk (`CodeRefs.reached`)
 #: may reach. Not a depth or a count that real code meets: the walk follows
@@ -124,6 +124,15 @@ class CodeRefs:
         seen_names: set[str] = set()
 
         def consider(value: Any) -> None:
+            if is_cash_wrapper(value) and getattr(value, "_cash_state", None) is not None:
+                # A cached function: the wrapper itself, which stands for
+                # its whole state (`CodeSurface._code_ref_closure`). Its
+                # code alone left out the globals it reads and its own
+                # dependencies, so an edit to its constants served the
+                # caller's old result.
+                if cash_wrapped(value) is not obj:
+                    targets.append(value)
+                return
             value = cash_wrapped(value)
             if value is None or value is obj:
                 return
@@ -201,5 +210,7 @@ class CodeRefs:
                             "creating it on every read.",
                         )
                     yield target
-                    following.append(target)
+                    # A cached function's state covers what it reaches.
+                    if not is_cash_wrapper(target):
+                        following.append(target)
             frontier = following

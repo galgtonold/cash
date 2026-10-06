@@ -226,3 +226,192 @@ def test_a_caller_served_from_its_entry_passes_the_source_on(cash_instance):
     source.n = 2
     outer()
     assert len(outer_runs) == 2
+
+
+VERSIONS = {"a": 1, "b": 1}
+
+
+class Warehouse(DataSource):
+    """Its id names the catalog, not the table."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def get_id(self) -> str:
+        return "warehouse"
+
+    def state_token(self):
+        return VERSIONS[self.name]
+
+
+def test_two_sources_with_one_id_are_both_checked(cash_instance):
+    runs: list = []
+
+    @cash_instance.cache(dynamic_depends_on=lambda name: Warehouse(name), assume_safe=True)
+    def load(name):
+        return name
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load("a") + load("b")
+
+    report()
+    report()
+    assert len(runs) == 1
+    VERSIONS["b"] = 2
+    try:
+        report()
+    finally:
+        VERSIONS["b"] = 1
+    assert len(runs) == 2
+
+
+class Snapshot(DataSource):
+    """A handle on one catalog version: a refresh builds a new one."""
+
+    def __init__(self, name, version):
+        self.name, self.version = name, version
+
+    def get_id(self) -> str:
+        return "dataset:" + self.name
+
+    def state_token(self):
+        return self.version
+
+
+def test_a_resolver_that_hands_out_a_new_source_is_asked_again(cash_instance):
+    handles = {"prices": Snapshot("prices", "1")}
+    runs: list = []
+
+    @cash_instance.cache(dynamic_depends_on=lambda name: handles[name], assume_safe=True)
+    def load(name):
+        return name
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load("prices")
+
+    report()
+    report()
+    assert len(runs) == 1
+    handles["prices"] = Snapshot("prices", "2")  # the catalog refreshed
+    report()  # the old handle still answers "1"; the resolver does not
+    assert len(runs) == 2
+    report()
+    assert len(runs) == 2
+
+
+def test_a_resolver_that_names_another_file_is_asked_again(cash_instance, tmp_path):
+    from cash import FileDataSource
+
+    (tmp_path / "v1.txt").write_text("one", encoding="utf-8")
+    (tmp_path / "v2.txt").write_text("two", encoding="utf-8")
+    latest = {"path": str(tmp_path / "v1.txt")}
+    runs: list = []
+
+    @cash_instance.cache(dynamic_depends_on=lambda: FileDataSource(latest["path"]), assume_safe=True)
+    def load():
+        return 1
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load()
+
+    report()
+    report()
+    assert len(runs) == 1
+    latest["path"] = str(tmp_path / "v2.txt")
+    report()
+    assert len(runs) == 2
+
+
+def test_a_caller_of_a_failed_resolver_is_not_stored(cash_instance):
+    """The callee runs uncached with KEY-DYNAMIC-DEP-FAILED; its caller was
+    stored with no record of the dependency and served for good after."""
+    up = [False]
+    source = Counter()
+    runs: list = []
+
+    def resolve(name):
+        if not up[0]:
+            raise ConnectionError("catalog timed out")
+        return source
+
+    @cash_instance.cache(dynamic_depends_on=resolve, assume_safe=True)
+    def load(name):
+        return name
+
+    @cash_instance.cache(assume_safe=True)
+    def report():
+        runs.append(1)
+        return load("a")
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        report()
+    assert any("KEY-DYNAMIC-DEP-FAILED" in str(w.message) for w in rec)
+    up[0] = True
+    report()
+    assert len(runs) == 2  # nothing was stored for the failed call
+    report()
+    assert len(runs) == 2
+    source.n = 2
+    report()
+    assert len(runs) == 3
+
+
+BIG_JOB = """
+    import os, sys
+    import cash
+    from cash import DataSource
+
+    class Frame(DataSource):
+        # Carries its data, as an in-memory table handle does.
+        def __init__(self, name):
+            self.name = name
+            self.payload = os.urandom(200_000)
+
+        def get_id(self):
+            return "frame:" + self.name
+
+        def state_token(self):
+            return os.environ["FRAME_VERSION"]
+
+    SOURCES = {"x": Frame("x")}
+
+    @cash.cache(dynamic_depends_on=lambda name: SOURCES[name], assume_safe=True)
+    def load(name):
+        return 1
+
+    @cash.cache(assume_safe=True)
+    def r1():
+        print("[R1]", file=sys.stderr)
+        return load("x") + 1
+
+    @cash.cache(assume_safe=True)
+    def r2():
+        return load("x") + 2
+
+    @cash.cache(assume_safe=True)
+    def r3():
+        return load("x") + 3
+
+    print(r1(), r2(), r3())
+"""
+
+
+def test_a_large_source_is_stored_once_for_all_its_callers(tmp_path):
+    (tmp_path / "job.py").write_text(textwrap.dedent(BIG_JOB), encoding="utf-8")
+    first = run_python("job.py", cwd=tmp_path, env={"FRAME_VERSION": "1"})
+    assert first.stdout.strip() == "2 3 4"
+    size = sum(p.stat().st_size for p in (tmp_path / ".cash").rglob("*") if p.is_file())
+    # One copy of the 200 kB source, not one per caller.
+    assert 200_000 < size < 400_000, size
+    again = run_python("job.py", cwd=tmp_path, env={"FRAME_VERSION": "1"})
+    assert again.stdout.strip() == "2 3 4"
+    assert "[R1]" not in again.stderr  # served, its source read back from the shared copy
+    moved = run_python("job.py", cwd=tmp_path, env={"FRAME_VERSION": "2"})
+    assert "[R1]" in moved.stderr

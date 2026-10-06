@@ -408,13 +408,14 @@ recompute time you can feel on every restart.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @0d53b612 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @edceb490 -->
 **What happened.** The result shares state with an object the caller still
 holds: it is an argument, holds one, is a view of an array argument, or is a
 module global. On the first run, a write through one shows in the other. A
 cache hit returns a separate copy, so from then on it does not. A module
-global whose type compares by identity (a plain class without `__eq__`, such
-as a sentinel) is not reported: a hit hands back that global itself.
+global the function names and whose type compares by identity (a plain class
+without `__eq__`, such as a sentinel) is not reported: a hit hands back that
+global itself.
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on
@@ -883,7 +884,8 @@ such as `depends_on=[math.sqrt]`, will not change between runs.
 <!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @25ce0fda -->
 **What happened.** A `dynamic_depends_on=` resolver raised, or returned
 something that is not a `DataSource`, a list of them, or `None`. The call ran
-uncached.
+uncached, and so did any cached function that called it: its result depends
+on sources nothing recorded.
 
 **Why it matters.** Every such call recomputes. Nothing stale is served.
 
@@ -1401,8 +1403,11 @@ bottom once. It is shown once per session.
 **What happened.** You edited one of your modules, so cash reloaded it. A
 reload runs the module's top level again, which drops what cells set on it
 (`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash runs those
-statements again right after the reload, and one of them raised. The message
-names the statement and the error.
+statements again right after the reload, and one of them raised, or could not
+run again: something it reads changed since it ran (`mylib.set_k(k)` with `k`
+rebound by a later cell), so running it again would set a value the notebook
+never set. A statement that only binds attributes (`mylib.K = k`) has the
+values it set put back instead. The message names the statement and why.
 
 **Why it matters.** The module holds the file's value for what that statement
 set, not the one the notebook set, until the statement runs.

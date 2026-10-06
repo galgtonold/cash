@@ -590,9 +590,10 @@ def _track_sqlite_wal(tracker: Any, database: Any) -> None:
 
 
 class _WorkerReads:
-    """What a task run in a worker process returned, and the files it read."""
+    """What a task run in a worker process returned, the files it read, and
+    the ``dynamic_depends_on=`` sources of the cached calls it made."""
 
-    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote")
+    __slots__ = ("value", "files", "absent", "unresolved", "present", "remote", "dynamic")
 
     def __init__(
         self,
@@ -602,12 +603,19 @@ class _WorkerReads:
         unresolved: list[str],
         present: dict[str, str],
         remote: list[str],
+        dynamic: tuple[list, dict, list[str]] = ([], {}, []),
     ) -> None:
         self.value, self.files, self.absent, self.unresolved = value, files, absent, unresolved
         self.present, self.remote = present, remote
+        #: ``([(id, source, token)], resolutions, functions whose resolver
+        #: failed)``, as the worker's tracker collected them.
+        self.dynamic = dynamic
 
     def __reduce__(self):
-        return (_WorkerReads, (self.value, self.files, self.absent, self.unresolved, self.present, self.remote))
+        return (
+            _WorkerReads,
+            (self.value, self.files, self.absent, self.unresolved, self.present, self.remote, _portable(self.dynamic)),
+        )
 
     def relay_to(self, tracker: Any) -> Any:
         """Credit what the worker read to *tracker*; the task's own value."""
@@ -622,7 +630,44 @@ class _WorkerReads:
                 tracker.add_tracked_present(path, kind)
             for url in self.remote:
                 tracker.add_tracked_remote(url)
+            sources, resolutions, failed = self.dynamic
+            if hasattr(tracker, "add_dynamic_source"):
+                for source_id, source, token in sources:
+                    tracker.add_dynamic_source(source_id, source, token)
+                for key, resolution in resolutions.items():
+                    tracker.add_dynamic_resolution(key, resolution)
+                for func_name in failed:
+                    tracker.add_unresolved_dynamic(func_name)
         return self.value
+
+
+def _dynamic_of(tracker: Any) -> tuple[list, dict, list[str]]:
+    """What *tracker* collected of ``dynamic_depends_on=`` (`_WorkerReads.dynamic`)."""
+    sources = [(key[0], source, token) for key, (source, token) in getattr(tracker, "dynamic_sources", {}).items()]
+    return (
+        sources,
+        dict(getattr(tracker, "dynamic_resolutions", {})),
+        sorted(getattr(tracker, "unresolved_dynamic", ())),
+    )
+
+
+def _portable(dynamic: tuple[list, dict, list[str]]) -> tuple[list, dict, list[str]]:
+    """*dynamic* as it crosses back from a worker process: the resolver
+    calls stay behind (only the worker could run them again), and a source
+    that does not pickle becomes a dependency nothing can check, which keeps
+    the caller from being stored, rather than breaking the pool's result."""
+    import pickle
+
+    sources, _resolutions, failed = dynamic
+    kept, failed = [], list(failed)
+    for source_id, source, token in sources:
+        try:
+            pickle.dumps(source)
+        except Exception:  # noqa: BLE001 - pickle raises whatever __reduce__ raises
+            failed.append(source_id)
+            continue
+        kept.append((source_id, source, token))
+    return kept, {}, failed
 
 
 class _ReadsInWorker:
@@ -656,6 +701,7 @@ class _ReadsInWorker:
             sorted(tracker.get_unresolved_files()),
             dict(tracker.get_present_files()),
             sorted(tracker.get_accessed_remote_urls()),
+            _dynamic_of(tracker),
         )
 
 

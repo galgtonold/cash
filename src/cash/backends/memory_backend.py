@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import copy
 import ctypes
+import io
 import logging
 import pickle
 import sys
@@ -92,7 +93,7 @@ class InMemoryBackend(CacheBackend):
         #: value, by the frame's ``id``: whether its cells need a deep copy.
         #: Decided once when the value is stored; the stored frames are private
         #: and alive as long as the entry, so the ids stay theirs.
-        self._frame_cells: dict[str, dict[int, bool]] = {}
+        self._frame_cells: dict[str, dict[int, bool | None]] = {}
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -155,6 +156,9 @@ class InMemoryBackend(CacheBackend):
             value_type = type(value)
             if _is_pandas_frame(value_type):
                 return InMemoryBackend._copy_frame(value, known_cells, record_cells)
+            if value_type.__name__ == "ndarray" and value_type is getattr(sys.modules.get("numpy"), "ndarray", None):
+                if not value.dtype.hasobject:
+                    return _copy_array(value)
             if value_type is list or value_type is tuple:
                 if all(type(item) in IMMUTABLE_PRIMS for item in value):
                     return value if value_type is tuple else list(value)
@@ -204,7 +208,10 @@ class InMemoryBackend(CacheBackend):
 
     @staticmethod
     def _copy_frame(
-        frame: Any, known_cells: dict[int, bool] | None = None, record_cells: dict[int, bool] | None = None
+        frame: Any,
+        known_cells: dict[int, bool] | None = None,
+        record_cells: dict[int, bool] | None = None,
+        memo: dict[int, Any] | None = None,
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
@@ -226,18 +233,24 @@ class InMemoryBackend(CacheBackend):
         entry and never written, so the answer for it cannot change: the store
         records it for the copy it keeps (*record_cells*, by ``id``), and a
         hit reads it back (*known_cells*) instead of scanning again.
+
+        *memo*, when given, receives ``id(cell) -> copy`` for each cell
+        copied: a cell list returned beside its frame stays the frame's.
         """
         mutable = known_cells.get(id(frame)) if known_cells is not None else None
         if mutable is None:
             mutable = _holds_mutable_cells(frame)
         copied = None
         if mutable:
-            copied = InMemoryBackend._copy_cells(frame)
+            copied = InMemoryBackend._copy_cells(frame, memo)
             if copied is None:
                 try:
                     copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
                 except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                     logger.debug("could not copy the cells of a %s", type(frame).__name__)
+                    # Recorded as None: a store that must isolate its value
+                    # refuses it (`set`), as it does a bare uncopiable object.
+                    mutable = None
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
@@ -246,6 +259,74 @@ class InMemoryBackend(CacheBackend):
 
     @staticmethod
     def _deep_copy(
+        value: Any,
+        memo: dict[int, Any],
+        known_cells: dict[int, bool] | None,
+        record_cells: dict[int, bool] | None,
+    ) -> Any:
+        """A copy of *value* as a disk hit hands it back: a pickle round trip.
+
+        ``copy.deepcopy`` differed from the disk tier in ways a caller sees:
+        it trusts a class's ``__deepcopy__``, so one that returns ``self``
+        ("immutable, no need to copy") handed every hit the entry's own
+        object; it drops the attributes of a subclass of a C type
+        (`kept_state` keeps them); it makes a read-only numpy array
+        writable; and it recurses a few Python frames per level, so a chain
+        of a few hundred linked objects could not be copied at all. The round
+        trip is the disk tier's own copy, run in C: about 5x faster than
+        ``deepcopy`` on 10,000 small dataclasses. Array data goes out of band
+        and is copied once, read-only staying read-only.
+
+        What *memo* already holds (``id(original) -> copy``, `_premade_copies`)
+        and every frame met on the way are not pickled but put into the copy
+        as they are: a pandas frame copied by `_copy_frame` (its cells a
+        container at a time, and a cell list returned beside the frame still
+        the frame's), a polars one cloned.
+
+        A value pickle refuses (a lambda, a lock: no disk tier can hold it
+        either) is copied by ``deepcopy`` (`_deepcopy_with_frames`).
+        """
+        frames = _frame_types()
+        ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+
+        def persistent_id(obj: Any) -> int | None:
+            obj_type = type(obj)
+            if obj_type in _ATOMS:
+                return None
+            key = id(obj)
+            if key in memo:
+                return key
+            if obj_type is ndarray and not obj.dtype.hasobject:
+                memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
+                return key
+            if frames and isinstance(obj, frames):
+                if _is_pandas_frame(type(obj)):
+                    memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
+                else:
+                    memo[key] = _copy_polars(obj)
+                return key
+            return None
+
+        try:
+            buffers: list[pickle.PickleBuffer] = []
+            stream = kept_state.dumps(
+                value,
+                pickle.HIGHEST_PROTOCOL,
+                buffer_callback=buffers.append,
+                persistent_id=persistent_id if memo or frames or ndarray else None,
+            )
+            unpickler = pickle.Unpickler(
+                io.BytesIO(stream),
+                buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
+            )
+            unpickler.persistent_load = memo.__getitem__
+            return unpickler.load()
+        except Exception:  # noqa: BLE001 - whatever pickle refuses, deepcopy may copy
+            logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
+        return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
+
+    @staticmethod
+    def _deepcopy_with_frames(
         value: Any,
         memo: dict[int, Any],
         known_cells: dict[int, bool] | None,
@@ -283,7 +364,7 @@ class InMemoryBackend(CacheBackend):
         return copy.deepcopy(value, before)
 
     @staticmethod
-    def _copy_cells(frame: Any) -> Any:
+    def _copy_cells(frame: Any, memo: dict[int, Any] | None = None) -> Any:
         """A copy of *frame* whose list cells are new lists, without pickling it.
 
         A column of ``(action, datetime)`` lists is plain data, and a pickle
@@ -295,13 +376,17 @@ class InMemoryBackend(CacheBackend):
         copies it, with the sharing kept.
         """
         try:
+            if _mutable_labels(frame):
+                return None  # only the pickle round trip copies those
             is_series = getattr(frame, "ndim", 2) == 1
             positions = [0] if is_series else [i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
             columns = [frame] if is_series else [frame.iloc[:, i] for i in positions]
             cells = [column.tolist() for column in columns]
             writable = [n for n, column_cells in enumerate(cells) if not _plain_data.immutable_below(column_cells)]
             flat = [cell for n in writable for cell in cells[n]]
-            copied_flat = _plain_data.spine_copy(flat)
+            copied_flat = _plain_data.spine_copy(flat, memo)
+            if memo is not None:
+                memo.pop(id(flat), None)  # this list is ours, and gone on return
             if copied_flat is None:
                 return None
             copied = frame.copy(deep=True)
@@ -312,7 +397,10 @@ class InMemoryBackend(CacheBackend):
                 values = pd.Series(copied_flat[offset : offset + len(cells[n])], dtype=object).array
                 offset += len(cells[n])
                 if is_series:
-                    return pd.Series(values, index=copied.index, name=copied.name, dtype=object)
+                    # In place: a new Series would drop its attrs, its flags
+                    # and a subclass, which a disk hit keeps.
+                    copied.iloc[:] = values
+                    return copied
                 copied.isetitem(positions[n], values)
             return copied
         except Exception:
@@ -327,11 +415,18 @@ class InMemoryBackend(CacheBackend):
         record_cells: dict[int, bool] | None = None,
         depth: int = 0,
     ) -> None:
-        """Put a copy of each plain container in *value*'s dicts into *memo*."""
+        """Put a copy of each plain container in *value*'s dicts into *memo*.
+
+        The frames first: a list that is also one of their cells is then
+        found in the memo as the frame's copy of it.
+        """
+        for item in value.values():
+            if _is_pandas_frame(type(item)) and id(item) not in memo:
+                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells, memo)
         for item in value.values():
             item_type = type(item)
-            if _is_pandas_frame(item_type) and id(item) not in memo:
-                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells)
+            if _is_pandas_frame(item_type):
+                pass
             elif item_type is dict:
                 # JSON-like data (a variable holding an index, a namespace of
                 # such variables) is copied whole; any other dict is looked into.
@@ -435,7 +530,7 @@ class InMemoryBackend(CacheBackend):
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
-        frame_cells: dict[int, bool] = {}
+        frame_cells: dict[int, bool | None] = {}
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
@@ -448,9 +543,15 @@ class InMemoryBackend(CacheBackend):
             # variables a cell left behind, and one unisolatable variable among
             # them (an open handle in scope) must not stop the statement being
             # cached -- the notebook re-executes what it cannot restore.
-            stored = self._safe_deep_copy(
-                value, key, required=bool((metadata or {}).get("copy_required")), record_cells=frame_cells
-            )
+            required = bool((metadata or {}).get("copy_required"))
+            stored = self._safe_deep_copy(value, key, required=required, record_cells=frame_cells)
+            if required and None in frame_cells.values():
+                # A frame whose object cells pickle cannot copy (a worker
+                # holding a lock) would share those cells with every hit.
+                raise CacheBackendError(
+                    "the result holds a pandas frame whose object cells could not be copied, "
+                    "so caching it would hand every caller the same objects"
+                )
         else:
             _size, immutable, levels = plain
             stored = _plain_data.copy_plain(value, immutable, levels)[1]
@@ -749,20 +850,89 @@ _IMMUTABLE_CELLS = frozenset(
 )
 
 
-def _is_pandas_frame(value_type: type) -> bool:
-    """A pandas DataFrame or Series (or a subclass defined in pandas).
+#: Types `InMemoryBackend._deep_copy`'s pickler copies itself, without a look.
+_ATOMS = frozenset({str, int, float, bool, type(None), bytes, complex})
 
-    By module as well as name: polars, cudf and others call their frames
-    ``DataFrame`` too, and have no ``copy(deep=...)``.
+
+def _copy_array(array: Any) -> Any:
+    """A copy of a numpy array of numbers, read-only if it was, as a
+    pickle round trip makes it."""
+    copied = array.copy(order="K")
+    if not array.flags.writeable:
+        copied.flags.writeable = False
+    return copied
+
+
+def _copy_polars(frame: Any) -> Any:
+    """A copy of a polars frame or series: a clone, which shares its immutable
+    buffers, with the Python objects of an ``Object`` column copied too.
+
+    A clone shares those objects with the entry and every hit, and pickle
+    refuses an ``Object`` column, so no disk tier holds one: the RAM entry
+    is the only copy there is.
     """
-    return value_type.__name__ in ("DataFrame", "Series") and value_type.__module__.startswith("pandas")
+    import polars as pl
+
+    copied = copy.deepcopy(frame)
+    columns = [copied] if isinstance(copied, pl.Series) else copied.get_columns()
+    fresh = [
+        pl.Series(column.name, InMemoryBackend._deep_copy(column.to_list(), {}, None, None), dtype=pl.Object)
+        for column in columns
+        if column.dtype == pl.Object
+    ]
+    if not fresh:
+        return copied
+    return fresh[0] if isinstance(copied, pl.Series) else copied.with_columns(fresh)
+
+
+def _frame_types() -> tuple[type, ...]:
+    """The pandas and polars frame and series classes, of those imported.
+
+    Never imports either: a value cannot hold a frame of a library that
+    is not imported.
+    """
+    modules = (sys.modules.get("pandas"), sys.modules.get("polars"))
+    if _FRAME_TYPES and _FRAME_TYPES[0] == modules:
+        return _FRAME_TYPES[1]
+    found: list[type] = []
+    complete = True
+    for module in modules:
+        frame, series = getattr(module, "DataFrame", None), getattr(module, "Series", None)
+        if isinstance(frame, type) and isinstance(series, type):
+            found += [frame, series]
+        elif module is not None:
+            complete = False  # still importing: asked again next time
+    if complete:
+        _FRAME_TYPES[:] = [modules, tuple(found)]
+    return tuple(found)
+
+
+#: `_frame_types`' last answer: ``[modules, types]``.
+_FRAME_TYPES: list = []
+
+
+def _is_pandas_frame(value_type: type) -> bool:
+    """A pandas DataFrame or Series, or any subclass of one.
+
+    By class, not by name: polars, cudf and others call their frames
+    ``DataFrame`` too, and have no ``copy(deep=...)``. A subclass defined
+    outside pandas (a user's own, geopandas') is a frame too: its deep copy
+    shares the lists in its cells just the same. Never imports pandas: a
+    value cannot hold a frame before pandas is imported.
+    """
+    pd = sys.modules.get("pandas")
+    try:
+        return issubclass(value_type, (pd.DataFrame, pd.Series))  # type: ignore[union-attr]
+    except (AttributeError, TypeError):  # no pandas, or one still importing
+        return False
 
 
 def _holds_mutable_cells(frame: Any) -> bool:
     """Does a DataFrame or Series hold a Python object that can be changed in place?
 
-    Only object columns can; each is classified by pandas' C-level
-    ``infer_dtype``, not a Python loop over its cells.
+    Object columns can, and so can the labels (`_mutable_labels`); each is
+    classified by pandas' C-level ``infer_dtype``, not a Python loop over
+    its cells.
     """
     try:
         from pandas.api.types import infer_dtype
@@ -771,6 +941,30 @@ def _holds_mutable_cells(frame: Any) -> bool:
             columns = [frame] if str(frame.dtype) == "object" else []
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns)
+        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns) or (
+            _mutable_labels(frame)
+        )
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
         return False
+
+
+def _mutable_labels(frame: Any) -> bool:
+    """Does a frame's index, column index or a categorical's categories hold
+    a Python object that can be changed in place?
+
+    A deep pandas copy copies these arrays but not the objects in them: a
+    hashable object with mutable state (a sensor keyed by name that carries
+    its calibration) stayed one object shared by the entry and every hit.
+    """
+    from pandas.api.types import infer_dtype
+
+    indexes = [frame.index] if getattr(frame, "ndim", 2) == 1 else [frame.index, frame.columns]
+    dtypes = [frame.dtype] if getattr(frame, "ndim", 2) == 1 else list(frame.dtypes)
+    arrays = []
+    for index in indexes:
+        arrays.extend(getattr(index, "levels", None) or [index])
+    dtypes += [array.dtype for array in arrays]
+    arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
+    return any(
+        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in _IMMUTABLE_CELLS for array in arrays
+    )
