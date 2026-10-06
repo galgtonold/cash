@@ -31,8 +31,30 @@ class ControlStructureResult:
 
 
 def is_control_structure(node: ast.AST) -> bool:
-    """Check if an AST node is a control structure that should be processed."""
-    return isinstance(node, (ast.For, ast.While, ast.If, ast.With, ast.Try))
+    """Check if an AST node is a control structure that should be processed.
+
+    A structure whose header binds a name with ``:=`` is not: the handlers
+    evaluate an ``if``/``elif`` test or a ``for`` iterable themselves, outside
+    any statement, so the name it binds would get no lineage and an edit
+    above it would never re-run it. Run as one plain statement, its header
+    is an output like any other assignment's, at the runtime and in the
+    upstream simulation alike, which both ask here.
+    """
+    if not isinstance(node, (ast.For, ast.While, ast.If, ast.With, ast.Try)):
+        return False
+    return not _header_binds(node)
+
+
+def _header_binds(node: ast.AST) -> bool:
+    """Whether an ``if``/``elif`` test or a ``for`` iterable of *node* holds a ``:=``."""
+    headers: list[ast.AST] = []
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        headers.append(node.iter)
+    current = node
+    while isinstance(current, ast.If):
+        headers.append(current.test)
+        current = current.orelse[0] if len(current.orelse) == 1 else None
+    return any(isinstance(sub, ast.NamedExpr) for header in headers for sub in ast.walk(header))
 
 
 def get_control_structure_type(node: ast.AST) -> str | None:

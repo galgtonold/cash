@@ -213,6 +213,10 @@ class VirtualLineage:
                     cell_hash[:12],
                 )
                 break
+            if cached.stopped_at != self._stop_index(cell_code):
+                # The cell has run (or failed) since: what of it ran changed,
+                # not its code.
+                break
             if cached.cell_environment != self._cell_environment(cell_code):
                 # An environment variable the cell reads has another value:
                 # its outputs' lineages fold it, so re-simulate from here --
@@ -523,6 +527,7 @@ class VirtualLineage:
         if new_cache_entries is None:
             new_cache_entries = []
         cell_hash = exact_source_digest(cell_code)
+        stopped_at = self.tracking_state.failed_cells.get(cell_hash)
         simulation_trace = sim.trace
         virtual_lineage = sim.virtual_lineage
         virtual_modules = sim.virtual_modules
@@ -570,7 +575,11 @@ class VirtualLineage:
 
             cell_stmt_occurrence_counts: dict = {}
 
-            for node in tree.body:
+            for index, node in enumerate(tree.body):
+                # The statement this cell's last run raised at, and every one
+                # after it, never ran: the kernel holds what came before.
+                if index == stopped_at:
+                    break
                 # A top-level ``raise`` unconditionally aborts the cell — every
                 # statement after it is dead code that never runs in a real
                 # from-start execution. Stop here so the simulation does not
@@ -624,8 +633,13 @@ class VirtualLineage:
                 vars_with_stale_files=set(sim.vars_with_stale_files),
                 cell_file_deps=dict(cell_file_deps),
                 cell_environment=self._cell_environment(cell_code),
+                stopped_at=stopped_at,
             )
         )
+
+    def _stop_index(self, cell_code: str) -> int | None:
+        """Where the simulation of *cell_code* stops (``TrackingState.failed_cells``)."""
+        return self.tracking_state.failed_cells.get(exact_source_digest(cell_code))
 
     def _cell_environment(self, cell_code: str) -> str:
         """What the environment reads written in *cell_code* return now

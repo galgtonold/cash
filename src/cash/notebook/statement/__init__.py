@@ -20,7 +20,7 @@ only the names above.
 
 The file-snapshot helper (`snapshot_file_deps`) lives in
 :mod:`cash.tracking.file_dep_snapshot`, not here: it has cross-subsystem
-callers (the decorator path in ``src/cash/core.py``, ``Restorer``, and
+callers (the decorator path in ``src/cash/core.py`` and
 ``upstream/virtual_lineage.py``).
 """
 

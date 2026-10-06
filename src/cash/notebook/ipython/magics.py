@@ -30,7 +30,6 @@ from ..control_structures import ControlStructureProcessor
 from ..live_cells import install_expiry_hook, register_target
 from ..live_cells import reset as _reset_live_cells
 from ..module_invalidator import ModuleInvalidator
-from ..restore import Restorer
 from ..server_discovery import (
     extract_notebook_path_from_vscode_cell_id,
     in_colab,
@@ -40,6 +39,7 @@ from ..server_discovery import (
 )
 from ..statement import ProcessResult, StatementProcessor
 from ..statement.capture import replay_outputs
+from ..statement.run import ECHO_FIELD
 from ..tracking_state import TrackingState
 from ..upstream import UpstreamChecker
 from ._args import parse_mode, strip_inline_comment
@@ -148,12 +148,6 @@ class CashMagics(Magics):
 
         self._module_invalidator = ModuleInvalidator(shell)
 
-        self._restorer = Restorer(
-            shell,
-            backend=cash_instance.backend,
-            tracking_state=self.tracking_state,
-        )
-
         self._cell_executor = CellExecutor(
             shell,
             cash_instance=cash_instance,
@@ -161,7 +155,6 @@ class CashMagics(Magics):
             tracking_state=self.tracking_state,
             statement_processor=self._statement_processor,
             upstream_checker=self._upstream_checker,
-            restorer=self._restorer,
             module_invalidator=self._module_invalidator,
             control_structure_processor=self._control_structure_processor,
         )
@@ -935,7 +928,9 @@ class CashMagics(Magics):
 
         # Delegate to original run_cell with "pass" so IPython keeps its
         # execution count + history consistent.
-        return self._original_run_cell("pass", *args, **kwargs)
+        result = self._original_run_cell("pass", *args, **kwargs)
+        self._record_output_history(done, result)
+        return result
 
     def _finalize_cell_body(self, raw_cell: str, done: PipelineCompleted) -> None:
         """Finaliser body shared by the sync and async tails.
@@ -1027,11 +1022,36 @@ class CashMagics(Magics):
         self._finalize_cell_body(raw_cell, done)
         # Replace ``transformed_cell`` so IPython runs our ``"pass"`` and NOT
         # the original user cell again (see _substitute_cell_kwargs).
-        return await self._original_run_cell_async(
+        result = await self._original_run_cell_async(
             "pass",
             *args,
             **self._substitute_cell_kwargs("pass", kwargs),
         )
+        self._record_output_history(done, result)
+        return result
+
+    def _record_output_history(self, done: PipelineCompleted, result: Any) -> None:
+        """Give IPython's output history the value the cell echoed as its result.
+
+        cash runs the cell's statements itself and shows the last expression
+        with ``display``, so IPython's display hook never saw it: ``_`` and
+        ``Out`` stayed as they were and ``res = _`` bound the previous result.
+        Called after the ``"pass"`` stand-in ran, so the execution count is the
+        cell's own, as when IPython's hook runs inside the cell.
+        """
+        cell_rows = [m for m in done.all_metrics if not m.get("is_upstream")]
+        if not cell_rows or ECHO_FIELD not in cell_rows[-1]:
+            return
+        value = cell_rows[-1][ECHO_FIELD]
+        if value is None:
+            return
+        try:
+            self.shell.displayhook.update_user_ns(value)
+        except (AttributeError, KeyError, TypeError):  # a shell without IPython's history
+            logger.debug("Recording the cell result in the output history failed", exc_info=True)
+            return
+        if result is not None and hasattr(result, "result"):
+            result.result = value
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
         """Compute and store ``_last_cell_metrics`` for ``%cash_status``."""

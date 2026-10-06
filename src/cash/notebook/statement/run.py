@@ -27,7 +27,11 @@ if TYPE_CHECKING:
     from cash.analysis.cacheability import StatementAnalysis
     from cash.notebook.statement.results import ProcessResult
 
-__all__ = ["CodeRunner", "StatementExecution", "StatementRun", "error_result"]
+__all__ = ["ECHO_FIELD", "CodeRunner", "StatementExecution", "StatementRun", "echoes", "error_result"]
+
+#: The key that carries the value a cell's last expression echoed: in a
+#: statement's metrics, and in the cache entry that replays it on a hit.
+ECHO_FIELD = "echo_value"
 
 
 @dataclass
@@ -109,6 +113,21 @@ class StatementExecution:
     written_paths: frozenset[str] = frozenset()
     #: Files and URLs read only inside calls the cache holds.
     cached_call_reads: frozenset[str] = frozenset()
+    #: The value the statement echoed as its cell's result, in a one-item
+    #: tuple; empty when it echoed nothing.
+    echo: tuple[Any, ...] = ()
+
+
+def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:
+    """Whether the statement *code* (parsed: *tree*) echoes its value as the
+    cell's result, as :class:`CodeRunner` decides it."""
+    return (
+        is_last
+        and tree is not None
+        and bool(tree.body)
+        and isinstance(tree.body[-1], ast.Expr)
+        and not code.rstrip().endswith(";")
+    )
 
 
 class CodeRunner:
@@ -147,7 +166,7 @@ class CodeRunner:
         expression = ast.Expression(body=tree.body[-1].value)
         ast.fix_missing_locations(expression)
         units.append(compile(expression, filename, "eval", flags=flags))
-        self._echo = self.is_last and not self.code.rstrip().endswith(";")
+        self._echo = echoes(self.code, tree, self.is_last)
         return units
 
     def run(self) -> None:
@@ -172,7 +191,13 @@ class CodeRunner:
         self._show(value)
 
     def _show(self, value: Any) -> None:
-        if self._echo and value is not None:
+        if not self._echo:
+            return
+        # IPython's output history (``_``, ``Out``) is filled once the cell is
+        # done, from this value (``CashMagics._record_output_history``); a hit
+        # needs it as much as the display, so a None is recorded too.
+        self.execution.echo = (value,)
+        if value is not None:
             from IPython.display import display
 
             display(value)

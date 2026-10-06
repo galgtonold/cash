@@ -16,6 +16,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement.results import COST_MODEL_KEYS
+from cash.notebook.statement.run import ECHO_FIELD, echoes
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -62,6 +63,13 @@ class CacheHitServer:
         (``StatementRandomness.seed_epochs``).
         """
         cache_key, inputs, metrics, process_start = run.cache_key, run.inputs, run.metrics, run.process_start
+        if echoes(run.code, run.tree, run.is_last) and not (
+            isinstance(cached_data, dict) and ECHO_FIELD in cached_data
+        ):
+            # Stored where it was not the cell's result: the entry has no value
+            # for IPython's output history (``_``, ``Out``) to take.
+            logger.debug("[CACHE] Entry holds no echoed value for a cell result, running it instead.")
+            return None
         try:
             self._log_hit(cache_key, inputs, metadata)
             self._restorer.restore_from_cache(
@@ -146,6 +154,8 @@ class CacheHitServer:
             metrics["stdout"] = payload.get("stdout", "")
             metrics["stderr"] = payload.get("stderr", "")
             metrics["rich_outputs"] = payload.get("rich_outputs", [])
+            if ECHO_FIELD in payload:
+                metrics[ECHO_FIELD] = payload[ECHO_FIELD]
         else:
             metrics["stdout"] = ""
             metrics["stderr"] = ""

@@ -263,6 +263,23 @@ even serve `r` after cell 2 is deleted. **Fix:** define a function above the
 functions that call it. A module-level read of a name bound only below raises
 [`ForwardReferenceError`](#forwardreferenceerror) instead.
 
+### A name a magic binds
+
+<!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @5404cd79 -->
+cash reads a cell's Python, not what IPython makes of its magics. A name bound
+by one (`files = !ls`, `t = %time f()`, `%%capture out`, `%%bash --out o`) has
+no producer cash knows of, so editing a cell the command reads and re-running a
+cell below does not run the command again. The body of a cell magic other than
+`%%time`, `%%capture`, `%%prun` and `%%debug` is not Python in the notebook's
+namespace (`%%writefile`, `%%script`, `%%timeit`, `%%bash`), and cash never runs
+it. **Fix:** re-run the magic's cell after such an edit.
+
+<!-- claim: cash/analysis/code_analyzer.py:_exec_literal @ba4cb7eb -->
+The same holds for `exec(code)` when `code` is not a string literal: cash reads
+`exec("w = base * 2")` as the assignment it runs, but not text built at run
+time. **Fix:** write the assignment out, or re-run that cell after an edit above
+it.
+
 ### Background threads
 
 A thread that changes data after its cell has finished is outside cash's view.
@@ -395,6 +412,13 @@ cell you are not about to run, and before a Run All on a fresh kernel.
 JupyterLab's autosave runs on a timer, so a quick edit-then-run can miss it. When
 the cell you run is itself unsaved, cash can tell and adds a "Notebook file is
 stale" warning row.
+
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._as_run @73be869e, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_to_undo @bc9c4f06 -->
+A cell you ran with an unsaved edit is not undone by the cells below it. When
+the frontend sends cell ids, cash reads that cell as it ran until the file
+changes. Without them it cannot tell which cell the edit belongs to: a later
+cell whose check would rebuild a name from the saved code stops with an
+`UpstreamStateError` that asks you to save, and runs once you have.
 
 With the same notebook open in two tabs, cash can read the other tab's unsaved
 cells. Save before switching tabs.

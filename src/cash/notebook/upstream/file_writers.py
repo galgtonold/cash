@@ -9,6 +9,7 @@ schedules them for the files the checked cell depends on.
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import os
 import stat
@@ -16,6 +17,7 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
+from ..._memo import STATEMENTS
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
@@ -79,6 +81,7 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
     return {name: path for name, path in bound.items() if path is not None}
 
 
+@functools.lru_cache(maxsize=STATEMENTS)
 def _only_defines(code: str) -> bool:
     """True when *code* only defines functions or classes."""
     try:
@@ -592,12 +595,13 @@ class FileWriterScheduler:
         return kept
 
     @staticmethod
-    def _called_names(code: str) -> set[str]:
+    @functools.lru_cache(maxsize=STATEMENTS)
+    def _called_names(code: str) -> frozenset[str]:
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            return set()
-        return set(called_names(tree))
+            return frozenset()
+        return frozenset(called_names(tree))
 
     def _trace_defs(self, simulation_trace: list | None) -> dict:
         """``{name: trace entry}`` of the last ``def`` binding each name.

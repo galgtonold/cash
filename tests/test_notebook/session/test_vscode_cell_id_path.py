@@ -244,7 +244,6 @@ class TestEarlyCellIdCapture:
                 tracking_state=MagicMock(),
                 statement_processor=m._statement_processor,
                 upstream_checker=m._upstream_checker,
-                restorer=MagicMock(),
                 module_invalidator=MagicMock(),
                 control_structure_processor=m._control_structure_processor,
             )

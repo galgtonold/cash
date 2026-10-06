@@ -16,7 +16,7 @@ class TrackingState:
     """Shared mutable state for variable lineage and dependency tracking.
 
     ``CashMagics`` creates one instance and hands the same object to the
-    ``StatementProcessor``, the ``UpstreamChecker`` and the ``Restorer``, so
+    ``StatementProcessor`` and the ``UpstreamChecker``, so
     every component reads and writes the same containers. Each field below
     says who writes it and who reads it; keep that comment current when a
     writer or reader is added. Lineage itself is written only through
@@ -57,6 +57,13 @@ class TrackingState:
     # W: CellExecutor. R: UpstreamChecker.
     executed_cell_source_hashes: set[str] = field(default_factory=set)
 
+    # sha256(cell source) -> the index of the top-level statement that raised
+    # when the cell last ran, for a cell whose last run failed. The statements
+    # after it never ran, so the upstream simulation stops there rather than
+    # crediting (and re-running) them; a run that completes drops the entry.
+    # W: CellExecutor. R: VirtualLineage.
+    failed_cells: dict[str, int] = field(default_factory=dict)
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.
@@ -87,12 +94,12 @@ class TrackingState:
     observed_rng_statement_draws: dict[str, set[str]] = field(default_factory=dict)
 
     # Variable -> every content hash seen for it.
-    # W: StatementLineageBuilder, both restorers. R: Restorer, UpstreamChecker.
+    # W: StatementLineageBuilder, both restorers. R: UpstreamChecker.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)
 
     # Variable -> the cache key that last produced it.
-    # W: StatementLineageBuilder, StatementRestorer. R: Restorer, freshness
-    # checks, end-of-cell persistence, UpstreamChecker.
+    # W: StatementLineageBuilder, StatementRestorer. R: freshness checks,
+    # end-of-cell persistence, UpstreamChecker.
     variable_sources: dict[str, str] = field(default_factory=dict)
 
     # The names the cells below the running one read: what a restart may need

@@ -26,6 +26,7 @@ __all__ = [
     "module_function_global_changes",
     "source_global_mutations",
     "source_called_names",
+    "source_global_rebinds",
     "callee_global_mutations",
     "stateful_self_functions",
     "partial_arg_mutations",
@@ -422,6 +423,23 @@ def source_global_mutations(source: str) -> frozenset[str]:
         return free_vars_mutated_in_function(node)
     except RecursionError:
         return frozenset()
+
+
+@functools.lru_cache(maxsize=4096)
+def source_global_rebinds(source: str) -> frozenset[str]:
+    """Names the function defined by *source* binds or deletes under a
+    ``global`` declaration, at any depth. Empty for anything that is not a
+    single function definition."""
+    node = _parse_function(source)
+    if node is None:
+        return frozenset()
+    declared = {name for sub in ast.walk(node) if isinstance(sub, ast.Global) for name in sub.names}
+    if not declared:
+        return frozenset()
+    stored = {
+        sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del))
+    }
+    return frozenset(declared & stored)
 
 
 @functools.lru_cache(maxsize=4096)

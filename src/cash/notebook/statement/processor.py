@@ -56,7 +56,7 @@ from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
 from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
-from cash.notebook.statement.run import CodeRunner, StatementExecution, StatementRun, error_result
+from cash.notebook.statement.run import ECHO_FIELD, CodeRunner, StatementExecution, StatementRun, error_result
 from cash.notebook.statement.store import StatementStore
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
@@ -187,9 +187,7 @@ class StatementProcessor:
         self._file_deps = StatementFileDeps()
 
         # Statement-level cache restorer. Hydrates outputs from a cached
-        # payload + replays stdout/stderr/rich-outputs.  Distinct from the
-        # variable-granular Restorer in restore.py (owned by CashMagics) —
-        # see that module's docstring for the unit-of-work distinction.
+        # payload + replays stdout/stderr/rich-outputs.
         # Stateless w.r.t. tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
@@ -781,6 +779,8 @@ class StatementProcessor:
         # ``metadata['outputs']`` and ``evaluated_vars`` (which hold variable
         # NAMES from AST analysis), so they never mix in badge fields.
         metrics["rich_outputs"] = captured.outputs
+        if execution.echo:
+            metrics[ECHO_FIELD] = execution.echo[0]
         if decorator_calls:
             metrics["decorator_calls"] = decorator_calls
 

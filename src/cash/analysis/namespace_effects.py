@@ -11,6 +11,7 @@ the objects the notebook holds, which the pure-AST modules
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import os
 import textwrap
@@ -18,14 +19,15 @@ import types
 from collections.abc import Mapping
 from typing import Any
 
-from .._memo import USER_CALLEES, LruMemo
+from .._memo import STATEMENTS, USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
-from ..exceptions import CashCacheIneffectiveWarning
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
 from ..purity import is_pure
 from ..source_reading import getsource
-from .ast_util import resolve_callee
+from .ast_util import called_names, resolve_callee
+from .callee_effects import source_called_names, source_global_rebinds
 from .file_effects import (
     READ_TEXT_MARKERS,
     REPEATABILITY_REPLACING,
@@ -46,6 +48,7 @@ __all__ = [
     "resolve_path_list",
     "statement_saves_current_pyplot_figure",
     "capturable_globals",
+    "notebook_global_rebinds",
     "bare_call_argument_names",
     "bare_call_arguments",
     "is_estimator",
@@ -100,18 +103,27 @@ def statement_user_writer_call(
     """
     if not namespace or "(" not in code:
         return None
-    if tree is None:
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    for node in calls:
         found = user_callee_writing_files(resolve_callee(node.func, namespace))
         if found:
             return ast.unparse(node.func), found
     return None
+
+
+@functools.lru_cache(maxsize=STATEMENTS)
+def _calls(code: str) -> tuple[ast.Call, ...]:
+    """The calls in *code*, in walk order; read them, never change them.
+
+    Memoised by the text: the upstream check asks about every statement
+    above the cell on every run. The callees are still resolved on every
+    question, since a name can be rebound.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return ()
+    return tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
 
 
 #: How many user functions one question may follow before cash gives up on
@@ -943,6 +955,36 @@ def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
     statement). A module is never a value to capture either.
     """
     return frozenset(n for n in names if n in namespace and not isinstance(namespace[n], types.ModuleType))
+
+
+def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """Names a function defined in the notebook binds under ``global`` when
+    *tree* calls it, directly or through other notebook functions.
+
+    Such a name is the notebook's variable whether or not it is bound yet:
+    the function's globals are the namespace (*namespace* itself). The first
+    run of ``def setw(): global w; w = ...`` + ``setw()`` is the one that
+    creates ``w``, which :func:`capturable_globals` cannot see.
+    """
+    out: set[str] = set()
+    seen: set[str] = set()
+    pending = list(called_names(tree))
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        func = namespace.get(name)
+        if getattr(func, "__globals__", None) is not namespace:
+            continue
+        try:
+            source = resolve_source(name)
+        except SOURCE_RETRIEVAL_ERRORS:
+            continue
+        if source:
+            out |= source_global_rebinds(source)
+            pending.extend(source_called_names(source))
+    return frozenset(out)
 
 
 #: Types a call cannot change in place.

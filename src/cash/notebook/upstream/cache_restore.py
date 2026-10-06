@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..._clock import perf_counter as _perf_counter
@@ -95,6 +96,9 @@ class CacheRestorer:
         self.statements = statements
         #: Names the forward probe bound to ``_FORWARD_PROBE_PLACEHOLDER``.
         self._probe_placeholders: set[str] = set()
+        #: Called with the names a restore is about to bind, before it binds
+        #: them; raises to stop it (the checker's unsaved-run refusal).
+        self.guard: Callable[[set[str]], None] | None = None
 
     def try_virtual_restore(
         self,
@@ -158,6 +162,8 @@ class CacheRestorer:
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
                 variables_to_restore = cached_data.get("variables", {})
+                if self.guard is not None:
+                    self.guard(set(variables_to_restore))
                 restored_vars = self._restore_vars_from_cache(
                     variables_to_restore,
                     metadata,

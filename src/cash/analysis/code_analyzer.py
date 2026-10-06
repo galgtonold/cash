@@ -13,6 +13,7 @@ import functools
 import importlib
 import inspect
 import logging
+import re
 import sys
 import textwrap
 import types
@@ -28,7 +29,7 @@ from ..source_reading import getsource
 from .ast_util import bytecode_global_refs, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
-from .namespace_effects import capturable_globals
+from .namespace_effects import capturable_globals, notebook_global_rebinds
 
 __all__ = [
     "CodeAnalyzer",
@@ -88,6 +89,25 @@ class _CallVisitor(ast.NodeVisitor):
                 parts.append(curr.id)
                 self.names_to_resolve.append(".".join(reversed(parts)))
         self.generic_visit(node)
+
+
+def _exec_literal(node: ast.Call) -> ast.Module | None:
+    """The code ``exec("...")`` runs in the namespace it is called from, parsed:
+    a single string-literal argument, no namespaces of its own. None for any
+    other call, or text that does not parse."""
+    if not (
+        isinstance(node.func, ast.Name)
+        and node.func.id == "exec"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    ):
+        return None
+    try:
+        return ast.parse(node.args[0].value)
+    except (SyntaxError, ValueError):
+        return None
 
 
 class _FlowVisitor(ast.NodeVisitor):
@@ -329,6 +349,12 @@ class _FlowVisitor(ast.NodeVisitor):
             self.visit(node.value)
 
     def visit_Call(self, node: ast.Call) -> None:
+        executed = _exec_literal(node) if len(self.scopes) == 1 else None
+        if executed is not None:
+            # ``exec('w = base * 2')`` runs its text in the cell's namespace:
+            # what it reads and binds is the statement's, as if written inline.
+            for stmt in executed.body:
+                self.visit(stmt)
         if isinstance(node.func, ast.Attribute):
             for keyword in node.keywords:
                 if keyword.arg == "inplace" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
@@ -619,7 +645,7 @@ class CodeAnalyzer:
             flags.append(is_start)
             # A dropped magic is a self-contained logical line; do not let its
             # characters perturb the scanner state for following lines.
-            if is_start and line.strip().startswith(("%", "!")):
+            if is_start and _is_magic_line(line):
                 prev_backslash = False
                 continue
             i, n = 0, len(line)
@@ -688,8 +714,16 @@ class CodeAnalyzer:
     def strip_magics(code: str) -> str:
         """Remove Jupyter magics from code.
 
-        Only lines that *begin a logical line* and start with ``%`` or ``!``
-        are treated as magics. A ``%`` (modulo / ``%``-format) or ``!`` that
+        A cell magic keeps its body only when the body runs as Python in the
+        user's namespace (``%%time``, ``%%capture``); any other cell magic
+        (``%%writefile``, ``%%script``, ``%%timeit``, ``%%bash``) runs no code
+        there, so the cell strips to nothing (:func:`_cell_magic_body`).
+
+        Only lines that *begin a logical line* and start with ``%`` or ``!``,
+        or assign one (``files = !ls``, ``t = %time f()``), are treated as
+        magics. The name such a line binds comes from IPython, not from code
+        cash can read, so it has no producer here, as a name bound by a
+        statement cash cannot see. A ``%`` (modulo / ``%``-format) or ``!`` that
         opens a continuation line of a multi-line statement is real Python and
         is preserved — otherwise a valid statement such as::
 
@@ -709,10 +743,11 @@ class CodeAnalyzer:
             return code
         except SyntaxError:
             pass
+        code = _cell_magic_body(code)
         starts = CodeAnalyzer._logical_line_start_flags(code)
         out: list[str] = []
         for line, is_start in zip(code.split("\n"), starts):
-            if is_start and line.strip().startswith(("%", "!")):
+            if is_start and _is_magic_line(line):
                 indent = line[: len(line) - len(line.lstrip())]
                 if indent:
                     # An indented magic is the leading (often sole) statement of
@@ -805,7 +840,7 @@ class CodeAnalyzer:
             # runs it uncached).
             extra = callee_global_mutations(tree, resolve_source)
             if user_ns is not None:
-                extra = capturable_globals(extra, user_ns)
+                extra = capturable_globals(extra, user_ns) | notebook_global_rebinds(tree, resolve_source, user_ns)
             if extra:
                 outputs = outputs | set(extra)
         if user_ns is not None and outputs:
@@ -909,6 +944,35 @@ class CodeAnalyzer:
         visitor = _ForbiddenVisitor(user_ns)
         visitor.visit(tree)
         return list(set(visitor.found_reasons))
+
+
+#: Cell magics whose body IPython runs as Python in the user's namespace. Any
+#: other cell magic writes its body to a file, hands it to another program or
+#: runs it in a scope of its own (``%%timeit``), so none of it binds a name.
+_PYTHON_BODY_CELL_MAGICS = frozenset({"time", "capture", "prun", "debug"})
+
+#: A line that assigns the result of a magic or a shell command, as IPython's
+#: ``MagicAssign`` and ``SystemAssign`` transforms read it.
+_MAGIC_ASSIGN = re.compile(r"\s*[A-Za-z_][\w.]*(\s*,\s*[A-Za-z_][\w.]*)*\s*=\s*[%!]")
+
+
+def _is_magic_line(line: str) -> bool:
+    """Whether *line*, beginning a logical line, is IPython syntax rather than Python."""
+    return line.strip().startswith(("%", "!")) or _MAGIC_ASSIGN.match(line) is not None
+
+
+def _cell_magic_body(code: str) -> str:
+    """*code* without its cell magic: the body when IPython runs it as Python
+    in the user's namespace, else nothing. *code* unchanged when it is not a
+    cell magic (IPython reads ``%%`` as one only on the cell's first line)."""
+    lines = code.split("\n")
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if first is None or not lines[first].startswith("%%"):
+        return code
+    name = lines[first][2:].split(maxsplit=1)[0] if lines[first][2:].strip() else ""
+    if name not in _PYTHON_BODY_CELL_MAGICS:
+        return ""
+    return "\n".join(lines[first + 1 :])
 
 
 @functools.lru_cache(maxsize=1024)

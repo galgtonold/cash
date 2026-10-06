@@ -87,6 +87,8 @@ class ProcessResult(ProcessResultRequired, total=False):
     cash_tax: float
     # Rich display outputs captured on a miss or replayed on a hit.
     rich_outputs: list[Any]
+    # The value the cell's last expression echoed, for IPython's ``_``/``Out``.
+    echo_value: Any
     outputs: list[str]
     storage: list[str]
     _output_flushed: bool

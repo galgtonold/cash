@@ -165,6 +165,15 @@ REMOTE_URLS = 1024
 #: accounted on every iteration.
 STATEMENTS = 4096
 
+#: One entry per notebook cell source: a long notebook has hundreds of cells,
+#: and every edit adds one. Read again on every cell run, so a memo smaller
+#: than the notebook would be emptied before it is used.
+NOTEBOOK_CELLS = 8192
+
+#: One entry per version of the whole notebook: the checks of every cell run
+#: in a settled notebook read the same one.
+NOTEBOOK_VERSIONS = 4
+
 #: What one user function's own body says about writing files, by its code:
 #: whether it replaces a file itself, and the calls it makes.
 USER_CALLEES = 500

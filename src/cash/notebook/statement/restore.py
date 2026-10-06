@@ -5,18 +5,9 @@ payload" — write the variables into ``user_ns``, reconstitute lineage
 + source tracking, replay captured stdout / stderr / rich outputs.
 
 Single public entry: :meth:`StatementRestorer.restore_from_cache`.
-
-**Distinct from the variable-granular Restorer:**
-
-* :class:`StatementRestorer` (this module) — restores a statement's
-  *outputs as a unit*: multiple vars + replayed display data + RNG
-  state.  Triggered on a cache *hit* for a freshly-running statement.
-* :class:`Restorer` (``restore.py``) — restores **one variable** from
-  cache so it's present in ``user_ns`` before something depends on it.
-  Triggered during upstream resolution.
-
-Different unit of work, same backend.  Both can be safely active in
-the same session because their callers ensure they don't collide.
+It restores a statement's *outputs as a unit*: multiple vars + replayed
+display data + RNG state, on a cache *hit* for a freshly-running
+statement.
 
 Replayed output goes through :func:`~cash.notebook.statement.capture.replay_outputs`,
 which imports ``IPython.display`` only when there is rich output to show.

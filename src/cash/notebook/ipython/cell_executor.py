@@ -21,10 +21,9 @@ one cell-execution code path.
   ``publish_display_data()`` directly.  The badge and the error display are
   drawn by the :class:`BadgePresenter` it is given, the same one
   ``CashMagics`` draws the final badge with.
-- ``CellExecutor`` does not restore variables.  Variable-granular cache
-  work is :class:`Restorer`'s job.  The executor calls
-  ``restorer.restore_variable(var_name)`` during upstream resolution; it
-  never reaches into the backend itself.
+- ``CellExecutor`` does not restore variables.  What the cell reads is
+  brought up to date by :class:`UpstreamResolution`; the executor never
+  reaches into the backend itself.
 
 **Stepping aside**:
 
@@ -77,7 +76,6 @@ from .upstream_phase import UpstreamResolution
 if TYPE_CHECKING:
     from ..control_structures import ControlStructureProcessor
     from ..module_invalidator import ModuleInvalidator
-    from ..restore import Restorer
     from ..statement import StatementProcessor
     from ..upstream import UpstreamChecker
     from ._types import TimingBreakdown
@@ -208,7 +206,6 @@ class CellExecutor:
         tracking_state: "TrackingState",
         statement_processor: "StatementProcessor",
         upstream_checker: "UpstreamChecker",
-        restorer: "Restorer",
         module_invalidator: "ModuleInvalidator",
         control_structure_processor: "ControlStructureProcessor",
     ) -> None:
@@ -225,7 +222,6 @@ class CellExecutor:
             badges,
             statement_processor,
             upstream_checker,
-            restorer,
             control_structure_processor,
         )
 
@@ -415,6 +411,7 @@ class CellExecutor:
             state = self._statement_processor.tracking_state
             digest = exact_source_digest(raw_cell)
             state.executed_cell_source_hashes.add(digest)
+            state.failed_cells.pop(digest, None)
             changed, pre, post = self._statement_processor.cell_rng_observation()
             if changed and post is not None:
                 state.rng_post_states[digest] = post
@@ -765,9 +762,14 @@ class CellExecutor:
                     written_later=written_later[i],
                     buffered=buffered_result_outputs,
                 )
-            buffered_result_outputs, render_time = yield from self._badged_steps(
-                cell, node, steps, step=unified_step, total=total_steps_unified
-            )
+            try:
+                buffered_result_outputs, render_time = yield from self._badged_steps(
+                    cell, node, steps, step=unified_step, total=total_steps_unified
+                )
+            except BaseException:
+                # What follows never ran; the upstream check must not credit it.
+                self.tracking_state.failed_cells[exact_source_digest(raw_cell)] = i
+                raise
             badge_render_time += render_time
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
