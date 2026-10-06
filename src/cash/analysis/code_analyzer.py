@@ -29,7 +29,7 @@ from ..source_reading import getsource
 from .ast_util import bytecode_global_refs, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
-from .namespace_effects import capturable_globals
+from .namespace_effects import capturable_globals, notebook_global_rebinds
 
 __all__ = [
     "CodeAnalyzer",
@@ -840,7 +840,7 @@ class CodeAnalyzer:
             # runs it uncached).
             extra = callee_global_mutations(tree, resolve_source)
             if user_ns is not None:
-                extra = capturable_globals(extra, user_ns)
+                extra = capturable_globals(extra, user_ns) | notebook_global_rebinds(tree, resolve_source, user_ns)
             if extra:
                 outputs = outputs | set(extra)
         if user_ns is not None and outputs:
