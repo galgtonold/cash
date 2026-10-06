@@ -84,6 +84,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
 from ..callee_reach import module_state_writes
+from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
 from ..magic_effects import is_magic_statement, magic_base, magic_effects, magic_output_lineage, simulation_cell
 from ..module_state import ModuleStateWriter, rebound_attributes
@@ -1217,7 +1218,11 @@ class StatementProcessor:
         run.moves_holders = any(
             id(captured_vars[name]) == run.bound_before.get(name) for name in run.outputs if name in captured_vars
         )
-        captured_vars.update(holders)
+        # By where they hold the outputs' objects, when every place can be
+        # set again (`holder_patches`): stored whole, `data` brought along
+        # every other frame it holds into each entry.
+        patches = holder_patches(holders, {name: captured_vars[name] for name in run.outputs if name in captured_vars})
+        captured_vars.update(patches if patches is not None else holders)
         return None
 
     def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:

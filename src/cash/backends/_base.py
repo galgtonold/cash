@@ -126,6 +126,8 @@ class EntryMetadata(TypedDict, total=False):
     function: str
     #: The RAM tier must store a real copy, or refuse the value.
     copy_required: bool
+    #: The RAM tier could not copy the value and keeps the object itself.
+    by_reference: bool
     # Read by the persistence policy (`persistence_policy.PersistencePolicy`).
     #: Persist whatever the policy says (``@cash:persist``, ``persist_all``).
     force_persist: bool

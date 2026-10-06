@@ -20,10 +20,13 @@ never a wrong value.
 
 The walk goes through what restoring copies wholesale and what identity
 matters in: the builtin containers, and the attributes of objects of the
-notebook's own classes and of ``SimpleNamespace`` / dataclass instances.
-Everything else is one leaf, whose own count is checked. Values with no
-identity worth keeping (numbers, strings, classes, functions, enum members,
-numpy scalars and dtypes, ...) are skipped.
+notebook's own classes, of ``SimpleNamespace`` / dataclass instances and of
+estimators (a ``Pipeline`` holds the step objects it was built from), and
+the object a bound method is bound to and the cells a closure keeps
+(``hooks = {'log': tracker.log}``). Everything else is one leaf, whose own
+count is checked. Values with no identity worth keeping (numbers, strings,
+classes, functions bound to nothing, enum members, numpy scalars and dtypes,
+...) are skipped.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-__all__ = ["output_history", "share_group", "shared_names"]
+__all__ = ["holds_part_of", "output_history", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 _VALUE_TYPES: tuple[type, ...] = (
@@ -68,11 +71,12 @@ _VALUE_TYPES: tuple[type, ...] = (
     # Pickled by reference, so a restore hands back the very same object.
     type,
     types.ModuleType,
-    types.FunctionType,
-    types.BuiltinFunctionType,
-    types.MethodType,
     types.CodeType,
 )
+
+#: Functions and methods: values too, unless bound to an object or closing
+#: over one (`_bound_objects`).
+_CALLABLE_TYPES: tuple[type, ...] = (types.FunctionType, types.BuiltinFunctionType, types.MethodType)
 
 #: The commonest value types, by exact type: one set lookup tells a string or a
 #: datetime from a container where `isinstance` against `_VALUE_TYPES` walks the
@@ -116,12 +120,60 @@ def _library_value_types() -> tuple[type, ...]:
     return tuple(found)
 
 
+def _bound_objects(value: Any) -> list[Any] | None:
+    """What a function or method carries along when it is restored, or None
+    when it carries nothing.
+
+    A bound method (``tracker.log``, ``results.append``) pickles its
+    ``__self__`` by value, and a deep copy of a builtin one keeps the very
+    object of the run that stored it; a closure (``make(store)``) keeps the
+    cells of that run. Either way the restored hook would write into an
+    object that is not the one the notebook's names are bound to.
+    """
+    if isinstance(value, types.FunctionType):
+        return list(value.__closure__) if value.__closure__ else None
+    owner = getattr(value, "__self__", None)
+    if owner is None or isinstance(owner, (types.ModuleType, type)):
+        return None
+    return [owner]
+
+
+def _is_value(value: Any, value_types: tuple[type, ...]) -> bool:
+    """Whether *value* has no identity a restore must keep (`_VALUE_TYPES`,
+    a function or method that carries nothing)."""
+    if isinstance(value, value_types):
+        return True
+    return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
+
+
+_ESTIMATOR_CLASSES: dict[type, bool] = {}
+
+
+def _is_estimator_class(cls: type) -> bool:
+    """Whether *cls* has scikit-learn's estimator interface. A pipeline or an
+    ensemble holds the estimators it was built from (``Pipeline([('s',
+    scaler), ...])``), and a restore copies them along with it."""
+    known = _ESTIMATOR_CLASSES.get(cls)
+    if known is None:
+        try:
+            known = callable(getattr(cls, "get_params", None)) and callable(getattr(cls, "fit", None))
+        except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
+            known = False
+        _ESTIMATOR_CLASSES[cls] = known
+    return known
+
+
 def _attributes_of(value: Any) -> dict[str, Any] | None:
     """The attributes a restore copies with *value* and the caller can reach,
-    for an object of the notebook's own classes, a ``SimpleNamespace`` or a
-    dataclass; ``None`` for anything else (a leaf)."""
+    for an object of the notebook's own classes, a ``SimpleNamespace``, a
+    dataclass or an estimator; ``None`` for anything else (a leaf)."""
     cls = type(value)
-    if not (cls.__module__ == "__main__" or cls is types.SimpleNamespace or dataclasses.is_dataclass(cls)):
+    if not (
+        cls.__module__ == "__main__"
+        or cls is types.SimpleNamespace
+        or dataclasses.is_dataclass(cls)
+        or _is_estimator_class(cls)
+    ):
         return None
     try:
         own = object.__getattribute__(value, "__dict__")
@@ -136,8 +188,48 @@ def _children(value: Any) -> Iterable[Any] | None:
         return [*value.keys(), *value.values()]
     if isinstance(value, _CONTAINERS):
         return list(value)
+    if isinstance(value, _CALLABLE_TYPES):
+        return _bound_objects(value)
+    if isinstance(value, types.CellType):
+        try:
+            return [value.cell_contents]
+        except ValueError:
+            return None
     attrs = _attributes_of(value)
     return None if attrs is None else list(attrs.values())
+
+
+def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
+    """The ids of the objects *value* is and holds, as `_walk` goes through
+    them, that have an identity of their own: not values, nor tuples and
+    frozensets (their contents are yielded)."""
+    seen: set[int] = set()
+    stack = [value]
+    while stack:
+        obj = stack.pop()
+        if _is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if not isinstance(obj, _IMMUTABLE_CONTAINERS):
+            yield id(obj)
+        stack.extend(_children(obj) or ())
+
+
+def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
+    """Whether *value* is or holds an object one of *sources* is or holds.
+
+    A function's result restored as a copy is only the same as calling the
+    function when it holds nothing the caller has too: ``bundle(model, df)``
+    returning ``{'model': model, ...}``, or ``pick(cfg, 'a')`` returning
+    ``cfg['a']``, hand back an object a later ``model.fit()`` or
+    ``c['n'] = 5`` must reach through both names. Walked as `_walk` walks:
+    the builtin containers and the attributes of the notebook's own objects.
+    """
+    value_types = _VALUE_TYPES + _library_value_types()
+    own = set(_identities(value, value_types))
+    if not own:
+        return False
+    return any(key in own for source in sources for key in _identities(source, value_types))
 
 
 def _excess(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:
@@ -277,12 +369,33 @@ def share_group(
         shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns)
         if not shared:
             return {name: group[name] for name in joined}, set()
-        if not found or any(foreign(name) for name in found):
+        if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group):
             break
         joined |= found
         group.update((name, user_ns[name]) for name in found)
     outputs = set(group) - joined
     return {}, (shared & outputs) or outputs
+
+
+def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
+    """Whether *group* holds a closure or a builtin bound method that carries
+    an object (``lambda v: store.append(v)``, ``results.append``).
+
+    A deep copy keeps such a function as it is, still bound to the object of
+    the run that stored it, while the holder variable is restored as a copy:
+    stored together, the two would no longer be the same object."""
+    value_types = _VALUE_TYPES + _library_value_types()
+    seen: set[int] = set()
+    stack = list(group.values())
+    while stack:
+        obj = stack.pop()
+        if _is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, (types.FunctionType, types.BuiltinFunctionType)):
+            return True
+        stack.extend(_children(obj) or ())
+    return False
 
 
 def _check_group(
@@ -300,7 +413,7 @@ def _check_group(
     a variable."""
     value_types = _VALUE_TYPES + _library_value_types()
     nodes, inbound, checked, owner = _walk(group, bindings, value_types, keep_identity)
-    internal = _count_held(cash_held, nodes, inbound, value_types)
+    internal = _count_held(cash_held, nodes, inbound, value_types, named_held)
     named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
     for mapping, key in named_held:
         if id(mapping.get(key)) in nodes:
@@ -356,7 +469,7 @@ def _find_holders(
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
             if not (isinstance(holder, _CONTAINERS) or _attributes_of(holder) is not None):
-                # A frame, a closure cell, a module, a library's object.
+                # A frame, a closure cell, a function, a module, a library's object.
                 return None
             seen.add(id(holder))
             upper.append(holder)
@@ -368,11 +481,56 @@ def _find_holders(
 
 
 def _count_held(
-    held: list[Any], nodes: dict[int, Any], inbound: dict[int, int], value_types: tuple[type, ...]
+    held: list[Any],
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    value_types: tuple[type, ...],
+    named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
 ) -> set[int]:
     """Add to *inbound* the references that the containers in *held*, which
     cash holds itself, and the containers inside them make to *nodes*; the
-    ids of those containers."""
+    ids of those containers.
+
+    A container inside one of *held* is cash's own only while nothing else
+    holds it -- the references *held*, *named_held* and other such
+    containers make to it are its whole count. One a notebook variable holds
+    too (a list a cell ended with, so ``Out`` holds it: ``frames = [df1,
+    df2]\nframes``) is the user's: its references to *nodes* are a holder's,
+    and so are those of everything inside it.
+    """
+    roots = {id(obj) for obj in held}
+    reach, refs, edges = _walk_held(held, nodes, value_types)
+    for mapping, key in named_held:
+        if id(mapping.get(key)) in reach:
+            refs[id(mapping.get(key))] += 1
+    users = _excess(reach, refs, list(reach))
+    del reach
+    while users:
+        key = users.pop()
+        if key in refs:
+            del refs[key]
+            users.extend(child for child in edges.get(key, ()) if child in refs)
+    own = roots | set(refs)
+    for key in own:
+        for child in edges.get(key, ()):
+            if child in nodes:
+                inbound[child] += 1
+    return own
+
+
+def _walk_held(
+    held: list[Any], nodes: dict[int, Any], value_types: tuple[type, ...]
+) -> tuple[dict[int, Any], dict[int, int], dict[int, list[int]]]:
+    """``(reach, refs, edges)`` for the containers in *held* and inside them:
+    *reach* the containers inside them by id (not *held* itself, nor
+    *nodes*), *refs* how many references the walked containers make to each
+    one, *edges* the ids each walked container refers to (*reach* and
+    *nodes* ones, once per reference). Returns before the counts are read,
+    so none of its local references are left to inflate them."""
+    roots = {id(obj) for obj in held}
+    reach: dict[int, Any] = {}
+    refs: dict[int, int] = {}
+    edges: dict[int, list[int]] = {}
     seen: set[int] = set()
     stack = list(held)
     exact = _EXACT_VALUE_TYPES
@@ -382,25 +540,32 @@ def _count_held(
         if id(obj) in seen:
             continue
         seen.add(id(obj))
+        out = edges.setdefault(id(obj), [])
         for child in _children(obj) or ():
             ctype = type(child)
-            if ctype in exact or (ctype not in containers and isinstance(child, value_types)):
+            if ctype in exact or (ctype not in containers and _is_value(child, value_types)):
                 continue
             ckey = id(child)
             if ckey in nodes:
                 # A walked node: its own references are counted already.
-                inbound[ckey] += 1
-            else:
-                if ctype is tuple or ctype is frozenset:
-                    for item in child:
-                        itype = type(item)
-                        if itype not in exact and (itype in containers or not isinstance(item, value_types)):
-                            break
-                    else:
-                        # Nothing inside to count, and not a node (see `_walk`).
-                        continue
+                out.append(ckey)
+                continue
+            if ctype is tuple or ctype is frozenset:
+                for item in child:
+                    itype = type(item)
+                    if itype not in exact and (itype in containers or not _is_value(item, value_types)):
+                        break
+                else:
+                    # Nothing inside to count, and not a node (see `_walk`).
+                    continue
+            if ckey in roots:
+                continue
+            out.append(ckey)
+            refs[ckey] = refs.get(ckey, 0) + 1
+            if ckey not in reach:
+                reach[ckey] = child
                 stack.append(child)
-    return seen
+    return reach, refs, edges
 
 
 def _walk(
@@ -435,7 +600,7 @@ def _walk(
         if name not in identity and reached is None:
             reached = len(order)
         root = group[name]
-        if isinstance(root, value_types):
+        if _is_value(root, value_types):
             continue
         key = id(root)
         inbound[key] = inbound.get(key, 0) + 1 + sum(1 for m in bindings if m.get(name) is root)
@@ -451,12 +616,12 @@ def _walk(
                 continue
             for child in children:
                 ctype = type(child)
-                if ctype in exact or (ctype not in containers and isinstance(child, value_types)):
+                if ctype in exact or (ctype not in containers and _is_value(child, value_types)):
                     continue
                 if ctype is tuple or ctype is frozenset:
                     for item in child:
                         itype = type(item)
-                        if itype not in exact and (itype in containers or not isinstance(item, value_types)):
+                        if itype not in exact and (itype in containers or not _is_value(item, value_types)):
                             break
                     else:
                         # Holds nothing but values: no identity to count, and
@@ -481,7 +646,7 @@ def _walk(
         if isinstance(value, _IMMUTABLE_CONTAINERS):
             carries[ckey] = any(
                 type(c) not in exact
-                and (type(c) in containers or not isinstance(c, value_types))
+                and (type(c) in containers or not _is_value(c, value_types))
                 and carries.get(id(c), id(c) in nodes)
                 for c in value
             )
