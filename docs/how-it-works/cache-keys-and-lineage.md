@@ -69,7 +69,7 @@ For other types, register a hasher; see
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @24453147 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @8a0c56a4 -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -82,7 +82,7 @@ colons, in this order, and hashes the result:
 | Occurrence | `occ` and a 0-based index, which tells a statement repeated in the cell apart. |
 | Callee globals | `callees:`, then `name:lineage` per global a called function reads. |
 | Environment | `env:`, then a digest per `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` it, or a function of yours it calls, reads. |
-| Module data | `moddata:`, then `module.name=digest` per piece of a local module's data it, or a function of yours it calls, reads, by its value now. |
+| Module data | `moddata:`, then `module.name=digest` per piece of a local module's data it, or a function of yours it calls, reads, by the value it held when the statement ran. |
 
 The key is `namespace:` followed by the SHA-256 of the joined parts, for
 example `stmt:ffd3d255…`.

@@ -31,7 +31,7 @@ def test_the_body_runs_once(nb_runner, cell):
     nb_runner.run_cell(3)
 
     assert nb_runner.peek("z") == "3"
-    assert (nb_runner.work_dir / "log").read_text() == "r"
+    assert (nb_runner.work_dir / "log").read_text(encoding="utf-8") == "r"
 
 
 @pytest.mark.parametrize("magic", ["%time x = 2", "x = %time 2"])
