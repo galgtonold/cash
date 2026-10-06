@@ -57,6 +57,13 @@ class TrackingState:
     # W: CellExecutor. R: UpstreamChecker.
     executed_cell_source_hashes: set[str] = field(default_factory=set)
 
+    # sha256(cell source) -> the index of the top-level statement that raised
+    # when the cell last ran, for a cell whose last run failed. The statements
+    # after it never ran, so the upstream simulation stops there rather than
+    # crediting (and re-running) them; a run that completes drops the entry.
+    # W: CellExecutor. R: VirtualLineage.
+    failed_cells: dict[str, int] = field(default_factory=dict)
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.

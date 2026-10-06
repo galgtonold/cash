@@ -412,6 +412,7 @@ class CellExecutor:
             state = self._statement_processor.tracking_state
             digest = exact_source_digest(raw_cell)
             state.executed_cell_source_hashes.add(digest)
+            state.failed_cells.pop(digest, None)
             changed, pre, post = self._statement_processor.cell_rng_observation()
             if changed and post is not None:
                 state.rng_post_states[digest] = post
@@ -729,9 +730,14 @@ class CellExecutor:
                     written_later=written_later[i],
                     buffered=buffered_result_outputs,
                 )
-            buffered_result_outputs, render_time = yield from self._badged_steps(
-                cell, node, steps, step=unified_step, total=total_steps_unified
-            )
+            try:
+                buffered_result_outputs, render_time = yield from self._badged_steps(
+                    cell, node, steps, step=unified_step, total=total_steps_unified
+                )
+            except BaseException:
+                # What follows never ran; the upstream check must not credit it.
+                self.tracking_state.failed_cells[exact_source_digest(raw_cell)] = i
+                raise
             badge_render_time += render_time
 
         return (all_metrics, buffered_result_outputs, badge_render_time)

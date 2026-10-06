@@ -81,6 +81,28 @@ class TestExceptionRecovery:
         out = nb_runner.get_output(3)
         assert "y = 15" in out, f"Got: {out}"
 
+    def test_the_lines_after_a_failed_assert_stay_unrun(self, nb_runner):
+        """A cell that raised part-way leaves the lines after the error unrun;
+        the next cell must not run them either."""
+        import contextlib
+
+        from nbclient.exceptions import CellExecutionError
+
+        nb_runner.create_notebook(
+            [
+                "prices = [10, -1, 30]",
+                "assert all(p > 0 for p in prices), 'negative price'\nprices = [p * 1.2 for p in prices]",
+                "total = sum(prices)",
+            ]
+        )
+        nb_runner.start_kernel()
+        nb_runner.run_cell(1)
+        with contextlib.suppress(CellExecutionError):
+            nb_runner.run_cell(2)  # AssertionError
+        nb_runner.run_cell(3)
+
+        assert nb_runner.peek("total") == "39"
+
 
 @pytest.mark.core
 class TestTryCatchPatterns:

@@ -104,6 +104,10 @@ class SimulationCacheEntry(NamedTuple):
     """What the environment reads written in the cell returned when it was
     simulated (``statement_environment_component``): empty when it reads none."""
 
+    stopped_at: int | None = None
+    """The statement the simulation stopped before, because the cell's last
+    run raised there (``TrackingState.failed_cells``); None when it ran whole."""
+
 
 @dataclass
 class SimulationCache:
