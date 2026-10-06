@@ -33,13 +33,17 @@ def dumps(
     fast: bool = False,
     buffer_callback: Any = None,
     extra: dict | None = None,
+    persistent_id: Any = None,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
-    are reducers by type that come first (a clock test double's)."""
+    are reducers by type that come first (a clock test double's);
+    *persistent_id* is the pickler's hook of that name."""
     buf = io.BytesIO()
     pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
     pickler.fast = fast
+    if persistent_id is not None:
+        pickler.persistent_id = persistent_id
     pickler.dispatch_table = _KeepDict(protocol, extra)
     pickler.dump(value)
     return buf.getvalue()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import copy
 import ctypes
+import io
 import logging
 import pickle
 import sys
@@ -155,6 +156,9 @@ class InMemoryBackend(CacheBackend):
             value_type = type(value)
             if _is_pandas_frame(value_type):
                 return InMemoryBackend._copy_frame(value, known_cells, record_cells)
+            if value_type.__name__ == "ndarray" and value_type is getattr(sys.modules.get("numpy"), "ndarray", None):
+                if not value.dtype.hasobject:
+                    return _copy_array(value)
             if value_type is list or value_type is tuple:
                 if all(type(item) in IMMUTABLE_PRIMS for item in value):
                     return value if value_type is tuple else list(value)
@@ -198,7 +202,10 @@ class InMemoryBackend(CacheBackend):
 
     @staticmethod
     def _copy_frame(
-        frame: Any, known_cells: dict[int, bool] | None = None, record_cells: dict[int, bool] | None = None
+        frame: Any,
+        known_cells: dict[int, bool] | None = None,
+        record_cells: dict[int, bool] | None = None,
+        memo: dict[int, Any] | None = None,
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
@@ -220,13 +227,16 @@ class InMemoryBackend(CacheBackend):
         entry and never written, so the answer for it cannot change: the store
         records it for the copy it keeps (*record_cells*, by ``id``), and a
         hit reads it back (*known_cells*) instead of scanning again.
+
+        *memo*, when given, receives ``id(cell) -> copy`` for each cell
+        copied: a cell list returned beside its frame stays the frame's.
         """
         mutable = known_cells.get(id(frame)) if known_cells is not None else None
         if mutable is None:
             mutable = _holds_mutable_cells(frame)
         copied = None
         if mutable:
-            copied = InMemoryBackend._copy_cells(frame)
+            copied = InMemoryBackend._copy_cells(frame, memo)
             if copied is None:
                 try:
                     copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
@@ -240,6 +250,74 @@ class InMemoryBackend(CacheBackend):
 
     @staticmethod
     def _deep_copy(
+        value: Any,
+        memo: dict[int, Any],
+        known_cells: dict[int, bool] | None,
+        record_cells: dict[int, bool] | None,
+    ) -> Any:
+        """A copy of *value* as a disk hit hands it back: a pickle round trip.
+
+        ``copy.deepcopy`` differed from the disk tier in ways a caller sees:
+        it trusts a class's ``__deepcopy__``, so one that returns ``self``
+        ("immutable, no need to copy") handed every hit the entry's own
+        object; it drops the attributes of a subclass of a C type
+        (`kept_state` keeps them); it makes a read-only numpy array
+        writable; and it recurses a few Python frames per level, so a chain
+        of a few hundred linked objects could not be copied at all. The round
+        trip is the disk tier's own copy, run in C: about 5x faster than
+        ``deepcopy`` on 10,000 small dataclasses. Array data goes out of band
+        and is copied once, read-only staying read-only.
+
+        What *memo* already holds (``id(original) -> copy``, `_premade_copies`)
+        and every frame met on the way are not pickled but put into the copy
+        as they are: a pandas frame copied by `_copy_frame` (its cells a
+        container at a time, and a cell list returned beside the frame still
+        the frame's), a polars one cloned.
+
+        A value pickle refuses (a lambda, a lock: no disk tier can hold it
+        either) is copied by ``deepcopy`` (`_deepcopy_with_frames`).
+        """
+        frames = _frame_types()
+        ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+
+        def persistent_id(obj: Any) -> int | None:
+            obj_type = type(obj)
+            if obj_type in _ATOMS:
+                return None
+            key = id(obj)
+            if key in memo:
+                return key
+            if obj_type is ndarray and not obj.dtype.hasobject:
+                memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
+                return key
+            if frames and isinstance(obj, frames):
+                if _is_pandas_frame(type(obj)):
+                    memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
+                else:
+                    memo[key] = copy.deepcopy(obj)  # polars: a clone, sharing its immutable buffers
+                return key
+            return None
+
+        try:
+            buffers: list[pickle.PickleBuffer] = []
+            stream = kept_state.dumps(
+                value,
+                pickle.HIGHEST_PROTOCOL,
+                buffer_callback=buffers.append,
+                persistent_id=persistent_id if memo or frames or ndarray else None,
+            )
+            unpickler = pickle.Unpickler(
+                io.BytesIO(stream),
+                buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
+            )
+            unpickler.persistent_load = memo.__getitem__
+            return unpickler.load()
+        except Exception:  # noqa: BLE001 - whatever pickle refuses, deepcopy may copy
+            logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
+        return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
+
+    @staticmethod
+    def _deepcopy_with_frames(
         value: Any,
         memo: dict[int, Any],
         known_cells: dict[int, bool] | None,
@@ -277,7 +355,7 @@ class InMemoryBackend(CacheBackend):
         return copy.deepcopy(value, before)
 
     @staticmethod
-    def _copy_cells(frame: Any) -> Any:
+    def _copy_cells(frame: Any, memo: dict[int, Any] | None = None) -> Any:
         """A copy of *frame* whose list cells are new lists, without pickling it.
 
         A column of ``(action, datetime)`` lists is plain data, and a pickle
@@ -297,7 +375,9 @@ class InMemoryBackend(CacheBackend):
             cells = [column.tolist() for column in columns]
             writable = [n for n, column_cells in enumerate(cells) if not _plain_data.immutable_below(column_cells)]
             flat = [cell for n in writable for cell in cells[n]]
-            copied_flat = _plain_data.spine_copy(flat)
+            copied_flat = _plain_data.spine_copy(flat, memo)
+            if memo is not None:
+                memo.pop(id(flat), None)  # this list is ours, and gone on return
             if copied_flat is None:
                 return None
             copied = frame.copy(deep=True)
@@ -326,11 +406,18 @@ class InMemoryBackend(CacheBackend):
         record_cells: dict[int, bool] | None = None,
         depth: int = 0,
     ) -> None:
-        """Put a copy of each plain container in *value*'s dicts into *memo*."""
+        """Put a copy of each plain container in *value*'s dicts into *memo*.
+
+        The frames first: a list that is also one of their cells is then
+        found in the memo as the frame's copy of it.
+        """
+        for item in value.values():
+            if _is_pandas_frame(type(item)) and id(item) not in memo:
+                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells, memo)
         for item in value.values():
             item_type = type(item)
-            if _is_pandas_frame(item_type) and id(item) not in memo:
-                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells)
+            if _is_pandas_frame(item_type):
+                pass
             elif item_type is dict:
                 if depth < 4:
                     InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1)
@@ -743,6 +830,45 @@ _IMMUTABLE_CELLS = frozenset(
         "period",
     }
 )
+
+
+#: Types `InMemoryBackend._deep_copy`'s pickler copies itself, without a look.
+_ATOMS = frozenset({str, int, float, bool, type(None), bytes, complex})
+
+
+def _copy_array(array: Any) -> Any:
+    """A copy of a numpy array of numbers, read-only if it was, as a
+    pickle round trip makes it."""
+    copied = array.copy(order="K")
+    if not array.flags.writeable:
+        copied.flags.writeable = False
+    return copied
+
+
+def _frame_types() -> tuple[type, ...]:
+    """The pandas and polars frame and series classes, of those imported.
+
+    Never imports either: a value cannot hold a frame of a library that
+    is not imported.
+    """
+    modules = (sys.modules.get("pandas"), sys.modules.get("polars"))
+    if _FRAME_TYPES and _FRAME_TYPES[0] == modules:
+        return _FRAME_TYPES[1]
+    found: list[type] = []
+    complete = True
+    for module in modules:
+        frame, series = getattr(module, "DataFrame", None), getattr(module, "Series", None)
+        if isinstance(frame, type) and isinstance(series, type):
+            found += [frame, series]
+        elif module is not None:
+            complete = False  # still importing: asked again next time
+    if complete:
+        _FRAME_TYPES[:] = [modules, tuple(found)]
+    return tuple(found)
+
+
+#: `_frame_types`' last answer: ``[modules, types]``.
+_FRAME_TYPES: list = []
 
 
 def _is_pandas_frame(value_type: type) -> bool:
