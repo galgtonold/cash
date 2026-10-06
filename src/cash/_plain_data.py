@@ -196,11 +196,23 @@ def sharing(value: Any, *, tree: bool = False, held_twice_at: int | None = None)
     return tuple(repeats), first, has_numbers
 
 
+def is_tree(value: Any, leaves: tuple | None = None) -> bool:
+    """Is *value* JSON-like data over *leaves* (`tree_levels`)?"""
+    if type(value) not in TREE_NODES:
+        return False
+    try:
+        for _level in tree_levels(value, leaves):
+            pass
+    except (_NotPlain, TypeError):  # TypeError: an unhashable type among them
+        return False
+    return True
+
+
 #: What a tree nests in (`tree_levels`): exact dicts, lists and tuples.
 TREE_NODES = (dict, list, tuple)
 
 
-def tree_levels(value: Any):
+def tree_levels(value: Any, leaves: tuple | None = None):
     """`_levels` for JSON-like data: exact dicts, lists and tuples, nested,
     over the leaves of plain data; a dict's keys must be leaves too.
 
@@ -209,9 +221,12 @@ def tree_levels(value: Any):
     nothing else -- a dict keeps its order, a list and a tuple differ -- so
     records parsed from JSON are keyed by one pickle at C speed. Walked one
     container at a time, 20k records cost 16x ``json.dumps`` per hit.
+
+    *leaves*, when given, replaces the leaf types.
     """
-    fakes = fake_clock()[0]
-    leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
+    if leaves is None:
+        fakes = fake_clock()[0]
+        leaves = LEAF_TYPES + fakes if fakes else LEAF_TYPES
     level = [value]
     for _ in range(MAX_LEVELS):
         kinds = set(map(type, level))

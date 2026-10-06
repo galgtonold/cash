@@ -18,11 +18,15 @@ IPython or lineage: a caller that needs context passes it in.
 from __future__ import annotations
 
 import copyreg
+import datetime
+import decimal
 import fractions
 import logging
+import operator
 import sys
 import types
 import uuid
+import weakref
 from collections.abc import Callable, Generator
 from typing import Any, NamedTuple
 
@@ -492,8 +496,15 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 items.append((k_form, v if type(v) in prims else (yield v)))
             return (yield from _typed(value, tuple(items), walk))
         if isinstance(value, (list, tuple)):
+            records = record_class(value, walk.content.family) if len(value) >= RECORDS_FROM else None
+            record_form = _record_former(records, walk) if records is not None else None
             for v in value:
-                items.append(v if type(v) in prims else (yield v))
+                if type(v) in prims:
+                    items.append(v)
+                elif type(v) is records:
+                    items.append(record_form(v))
+                else:
+                    items.append((yield v))
             return (yield from _typed(value, tuple(items), walk))
         t = type(value)
         if contains_set(value, walk.holds_set):
@@ -516,6 +527,144 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
         return value
     finally:
         walk.stack.discard(id(value))
+
+
+#: A list or tuple at least this long is checked for records (`record_class`).
+RECORDS_FROM = 8
+
+#: What a record object's attributes may hold below their lists and dicts
+#: (`record_class`): values with no set, frame or code inside. Not a
+#: ``datetime`` or ``time``, whose ``tzinfo`` is any object.
+_RECORD_LEAVES = (*CODELESS_PRIMS, datetime.date, datetime.timedelta, decimal.Decimal)
+
+_OBJECT_RECORD = "object"
+_NAMEDTUPLE_RECORD = "namedtuple"
+
+
+def record_class(value: list | tuple, family: Callable[[type], str | None]) -> type | None:
+    """The class of the records in *value*, or None.
+
+    A list of records -- parsed rows as dataclasses, plain objects or
+    namedtuples -- was walked one object at a time: each searched for a set
+    (`contains_set`) and for frames (`holds_content_data`), and by the
+    decorator for code its attributes hold. That was 15-25 us an element, 13x
+    the same records as dicts. Answered for all of them at once instead:
+    every item that is not a primitive is an instance of one class, and what
+    they hold is JSON-like data (`_plain_data.is_tree`) -- an object's
+    ``__dict__`` over `_RECORD_LEAVES`, a namedtuple's fields over immutable
+    primitives -- so none holds a set, a frame or code. Each record's form is
+    then what the walk gives it (`_record_former`), and the class is the only
+    code they carry. *family* is ``ContentHashing.family``.
+    """
+    kinds = set(map(type, value))
+    kinds.difference_update(CODELESS_PRIMS)
+    if len(kinds) != 1:
+        return None
+    t = kinds.pop()
+    kind = _record_kind(t)
+    if kind is None or family(t) is not None or t in _plain_data.numpy_scalar_set() or t in _plain_data.fake_clock()[0]:
+        return None
+    members = value if len(value) == 1 or type(value[0]) is t and len(set(map(type, value))) == 1 else None
+    if members is None:
+        members = [v for v in value if type(v) is t]
+    if kind is _OBJECT_RECORD:
+        return t if _plain_data.is_tree(list(map(_STATE_OF, members)), _RECORD_LEAVES) else None
+    return t if _plain_data.is_tree(list(map(tuple, members)), IMMUTABLE_PRIMS) else None
+
+
+def _record_former(records: type, walk: _Walk) -> Callable[[Any], Any]:
+    """What makes a record's form (`record_class`): what `_enter` and
+    `_object_steps` make of it. A hooked value is its stand-in; an object,
+    holding no set and no frame, is left to pickle; a namedtuple is its
+    tagged fields."""
+    hook, left = walk.hook, walk.left
+    if _record_kind(records) is _NAMEDTUPLE_RECORD:
+        tag = f"{records.__module__}.{records.__qualname__}"
+        prims = _IMMUTABLE_PRIMS
+
+        def form(value: Any) -> Any:
+            if hook is not None:
+                stand_in = hook(value)
+                if stand_in is not NOT_HOOKED:
+                    return stand_in
+            return ("__cash_type__", tag, tuple([v if type(v) in prims else _tree_form(v, walk) for v in value]))
+
+        return form
+
+    def left_to_pickle(value: Any) -> Any:
+        if hook is not None:
+            stand_in = hook(value)
+            if stand_in is not NOT_HOOKED:
+                return stand_in
+        if left is not None:
+            left.append(value)
+        return value
+
+    return left_to_pickle
+
+
+def _tree_form(value: Any, walk: _Walk) -> Any:
+    """The form of an exact dict, list or tuple over immutable primitives, as
+    `_enter` and `_object_steps` make it: a list or dict met before in the
+    walk is an alias, and is recorded as met."""
+    if walk.hook is not None:
+        stand_in = walk.hook(value)
+        if stand_in is not NOT_HOOKED:
+            return stand_in
+    t = type(value)
+    if t is not tuple:
+        seen = walk.seen
+        first = seen.get(id(value))
+        if first is not None:
+            return ("__cash_alias__", first[0])
+        seen[id(value)] = (len(seen), value)
+    prims = _IMMUTABLE_PRIMS
+    if t is dict:
+        canon = [(k, v if type(v) in prims else _tree_form(v, walk)) for k, v in value.items()]
+    else:
+        canon = [v if type(v) in prims else _tree_form(v, walk) for v in value]
+    return ("__cash_type__", _BUILTIN_CONTAINER_TAGS[t], tuple(canon))
+
+
+def _record_kind(t: type) -> str | None:
+    """Whether a *t* instance can be a record (`record_class`), and which kind;
+    remembered per class."""
+    try:
+        return _RECORD_KINDS[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return None
+    kind = _RECORD_KINDS[t] = _decide_record_kind(t)
+    return kind
+
+
+def _decide_record_kind(t: type) -> str | None:
+    """An object keeps its state in its ``__dict__`` alone, a namedtuple in
+    its fields alone (`object_state` finds nothing else, `_typed` adds
+    nothing), and neither holds state in C (`_holds_native_state`)."""
+    if t in CODELESS_PRIMS or t in _VALUE_LEAVES or issubclass(t, (dict, list, set, frozenset, *_BY_NAME)):
+        return None
+    if _holds_native_state(t):
+        return None
+    for klass in t.__mro__:
+        slots = klass.__dict__.get("__slots__", ())
+        if any(name not in ("__dict__", "__weakref__") for name in ((slots,) if isinstance(slots, str) else slots)):
+            return None
+    if issubclass(t, tuple):
+        if (
+            isinstance(getattr(t, "_fields", None), tuple)
+            and not t.__dictoffset__
+            and not hasattr(t, "default_factory")
+        ):
+            return _NAMEDTUPLE_RECORD
+        return None
+    return _OBJECT_RECORD if t.__dictoffset__ else None
+
+
+_RECORD_KINDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+_STATE_OF = operator.attrgetter("__dict__")
 
 
 #: Exact types that are their own form: `_enter` returns them as they are,
