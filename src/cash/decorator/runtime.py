@@ -48,6 +48,7 @@ from .call_state import (
     run_to_completion,
 )
 from .class_data import CLASSES_FOLDED
+from .closure_fold import EVERY_PARAMETER
 from .explain import MissKind, MissReason, describe_stale_files
 from .file_deps import note_unentered_body, propagate_file_deps_to_active_tracker, snapshot_tracked_deps
 from .function_identity import func_key, hash_callable_source
@@ -93,6 +94,16 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
+
+
+def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
+    """The parameters *spec* leaves out of its key, defaults and all: the
+    ignored ones, or every one under ``key=``."""
+    if spec.arg_key is None:
+        return frozenset()
+    if spec.arg_key.key_fn is not None:
+        return EVERY_PARAMETER
+    return spec.arg_key.ignored
 
 
 def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -202,7 +213,7 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._closures.fold_closure(func, func_name, state_hash)
         chain.append(state_hash)
-        folded_defaults = self._closures.fold_defaults(func, func_name, state_hash)
+        folded_defaults = self._closures.fold_defaults(func, func_name, state_hash, _unkeyed_parameters(spec))
         if folded_defaults is None:
             raise UnhashableDefault
         state_hash = folded_defaults

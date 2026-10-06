@@ -1252,7 +1252,10 @@ those that pass the argument.
 
 **What to do.** Move the value out of the signature (build it in the body, or
 require it), or register a hasher for its type. `def load(session=Session())`
-is the classic case.
+is the classic case. When the parameter does not change the result (a
+connection, a lock, a logger), leave it out of the key with `ignore=` or
+`cash.Ignore`: its default is left out with it, as are all defaults under
+`key=`.
 
 **When it is safe to ignore.** When you do not need the function cached.
 
