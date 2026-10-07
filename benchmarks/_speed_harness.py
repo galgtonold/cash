@@ -150,7 +150,8 @@ class Row:
     plain_s: float
     cash_s: float
     ratio: float
-    # Spread of the per-round ratios: (max - min) / median.
+    # Noise: the median absolute deviation of the per-round ratios
+    # (cash sample i / plain sample i) over their median.
     spread: float
     plain_samples: list[float]
     cash_samples: list[float]
@@ -234,7 +235,7 @@ def measure(scenario: Scenario, repeats: int, quick: bool = False) -> list[Row]:
         med_p, med_c = statistics.median(p), statistics.median(c)
         ratio = med_c / med_p if med_p > 0 else float("inf")
         mid = statistics.median(per_round) if per_round else 0.0
-        spread = (max(per_round) - min(per_round)) / mid if mid > 0 and len(per_round) > 1 else 0.0
+        spread = statistics.median(abs(r - mid) for r in per_round) / mid if mid > 0 else 0.0
         rows.append(
             Row(
                 _row_name(scenario, metric),
@@ -391,7 +392,7 @@ def on_sys_path(folder: Path, modules: tuple[str, ...]) -> Iterator[None]:
 
 
 def format_table(rows: list[Row]) -> str:
-    head = f"{'scenario':<34} {'plain ms':>10} {'cash ms':>10} {'ratio':>8} {'spread':>7}  note"
+    head = f"{'scenario':<34} {'plain ms':>10} {'cash ms':>10} {'ratio':>8} {'noise':>7}  note"
     lines = [head, "-" * len(head)]
     group = None
     for r in rows:

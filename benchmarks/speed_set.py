@@ -112,8 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"\ncash {meta['cash_version']} from {meta['cash_path']}; {meta['repeats']} samples per side; "
         f"{meta['seconds']}s.\nTimes are per call (decorator), per cell (nb_long, nb_module_data) or per run of the "
-        f"measured cells, median {meta['clock']} time.\nratio = cash / plain; spread = range of the per-round ratios "
-        f"over their median (noise)."
+        f"measured cells, median {meta['clock']} time.\nratio = cash / plain; noise = median deviation of the "
+        f"per-round ratios from their median."
     )
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)

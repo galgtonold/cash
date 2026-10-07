@@ -29,8 +29,8 @@ def test_sides_alternate_after_a_warm_up_and_the_ratio_is_of_medians():
     assert order == ["plain", "cash", "plain", "cash", "cash", "plain", "plain", "cash"]
     assert row.plain_samples == [1.0, 2.0, 3.0] and row.cash_samples == [4.0, 8.0, 6.0]
     assert row.ratio == pytest.approx(6.0 / 2.0)
-    # per-round ratios 4, 4, 2 -> (4 - 2) / 4
-    assert row.spread == pytest.approx(0.5)
+    # per-round ratios 4, 4, 2: deviations 0, 0, 2 from 4
+    assert row.spread == 0.0
 
 
 def test_a_scenario_whose_module_is_missing_is_skipped():
