@@ -82,3 +82,33 @@ def test_an_instance_of_a_cells_class_is_still_followed_to_its_methods():
     ns: dict = {"__name__": "__main__"}
     exec("class Model:\n    def run(self):\n        return 1\nm = Model()", ns)
     assert [f.__name__ for f in callee_reach.reached_user_code("y = m.run()", ns).functions] == ["run"]
+
+
+def test_a_statement_of_values_and_library_calls_is_not_walked(monkeypatch):
+    """``x2 = x1 + 1``, ``a = np.arange(9) * x``, ``print(x)``: the upstream
+    scan asks every cell above about them on every cell; nothing they name
+    leads to the user's code, which is told without setting up a walk."""
+    import numpy as np
+
+    callee_reach.names_read.cache_clear()
+    ns: dict = {"__name__": "__main__", "np": np, "x1": 1, "a": np.arange(3), "d": {"k": 1}}
+    callee_reach.reached_user_code("y = x1 + int(a[1]) + d['k']", ns)  # learns the C types
+    walks: list[object] = []
+    real = callee_reach._Found
+    monkeypatch.setattr(callee_reach, "_Found", lambda namespace: walks.append(1) or real(namespace))
+    for code in ("x2 = x1 + 1", "b = np.arange(9) * x1\nx3 = int(b[1])", "print(x1)", "e = d['k']"):
+        assert callee_reach.reached_user_code(code, ns) == callee_reach._EMPTY
+        assert walks == [], code
+
+
+def test_a_function_or_local_module_is_walked_whatever_c_types_were_seen():
+    """``types.FunctionType`` or ``type`` read by a statement are C types of
+    no local module, and are remembered as such: a function or a module
+    reached afterwards must still be followed, not taken for an instance of
+    one."""
+    callee_reach.names_read.cache_clear()
+    ns: dict = {"__name__": "__main__", "types": types, "x": 1, "type": type}
+    callee_reach.reached_user_code("k = (types.FunctionType, types.ModuleType, type(x), type)", ns)
+    assert {types.FunctionType, types.ModuleType, type} <= callee_reach._FOREIGN_C_TYPES
+    exec("def helper(v):\n    return v", ns)
+    assert [f.__name__ for f in callee_reach.reached_user_code("y = helper(1)", ns).functions] == ["helper"]

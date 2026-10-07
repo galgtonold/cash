@@ -65,7 +65,7 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
     if not code or not namespace:
         return _EMPTY
     steps = names_read(code)
-    if not steps:
+    if not steps or all(_leads_nowhere(namespace, root, attrs) for root, attrs in steps):
         return _EMPTY
     found = _Found(namespace)
     for root, attrs in steps:
@@ -76,6 +76,40 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
     found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
     return Reach(tuple(found.functions), frozenset(found.modules), data)
+
+
+def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ...]) -> bool:
+    """Whether `_Found` would take nothing from the step ``root.attrs``:
+    every value it meets is ``None``, a library module, a C routine
+    (``print``, ``np.arange``), a C type or an instance of one
+    (`_FOREIGN_C_TYPES`). Asked before a walk is set up: the upstream scan
+    asks for every cell above on every cell, and most steps are ``x1``,
+    ``np.arange`` or ``print``. Decides each value as `_Found.value` and
+    `_Found.chain` would, in their order; anything else is walked."""
+    obj = namespace.get(root)
+    if not attrs:
+        return _inert(obj)
+    for attr in reversed(attrs):
+        if not isinstance(obj, types.ModuleType):
+            return True  # `_Found.chain` stops here
+        if _is_local(obj):
+            return False
+        obj = vars(obj).get(attr)
+        if not _inert(obj):
+            return False
+    return True
+
+
+def _inert(value: Any) -> bool:
+    """`_Found.value` of *value*, found with no label, adds nothing."""
+    if isinstance(value, types.ModuleType):
+        return not _is_local(value)
+    if isinstance(value, (types.MethodType, types.FunctionType)):
+        return False
+    if isinstance(value, type):
+        # A C type of no local module: its ``__init__`` is a slot, if any.
+        return value in _FOREIGN_C_TYPES
+    return value is None or type(value) in _FOREIGN_C_TYPES or inspect.isroutine(value)
 
 
 @functools.lru_cache(maxsize=4096)
