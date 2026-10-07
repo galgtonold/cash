@@ -14,6 +14,7 @@ import ast
 import dis
 import functools
 import inspect
+import operator
 import sqlite3
 import sys
 import textwrap
@@ -62,7 +63,7 @@ class Reach(NamedTuple):
 _EMPTY = Reach((), frozenset())
 
 
-def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
+def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: bool = True) -> Reach:
     """The user functions *code* can call and the local modules it reaches.
 
     Followed: a name bound to a function, to a class (its ``__init__``), or
@@ -71,6 +72,10 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
     body, transitively; and from each local module reached, the local modules
     its own names come from. A function belongs to the user when it was defined in *namespace*
     (a cell) or in their own code (`own_code_is_user`).
+
+    Without *close*, the local modules the reached ones take their names
+    from are left out: what calling the reached functions can change, not
+    all the data they may lead to (`module_globals`).
     """
     if not code or not namespace:
         return _EMPTY
@@ -83,7 +88,8 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
             found.chain(root, attrs)
         else:
             found.value(namespace.get(root))
-    found.close_modules()
+    if close:
+        found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
     return Reach(tuple(found.functions), frozenset(found.modules), data)
 
@@ -346,7 +352,7 @@ def module_globals(code: str, namespace: Mapping[str, Any] | None) -> dict[str, 
         if isinstance(node, ast.Call) and _call_name(node.func) == "reload":
             return {}
     try:
-        modules = reached_user_code(code, namespace).modules
+        modules = reached_user_code(code, namespace, close=False).modules
     except Exception:  # noqa: BLE001 - an analysis of arbitrary code
         return {}
     found: dict[str, dict[str, Any]] = {}
@@ -365,9 +371,6 @@ def _call_name(func: ast.expr) -> str | None:
     return None
 
 
-_MISSING = object()
-
-
 def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
     """The modules of *before* (`module_globals`) whose globals now hold
     another object than they did, or one more or fewer."""
@@ -377,7 +380,9 @@ def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
         if not isinstance(module, types.ModuleType):
             continue
         now = vars(module)
-        if len(now) != len(held) or any(now.get(key, _MISSING) is not value for key, value in held.items()):
+        # By identity, at C speed: *held* keeps every object it saw alive,
+        # so an id cannot be reused for another one meanwhile.
+        if now.keys() != held.keys() or not all(map(operator.is_, now.values(), held.values())):
             changed.add(name)
     return frozenset(changed)
 
