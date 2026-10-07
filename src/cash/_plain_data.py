@@ -22,7 +22,8 @@ import operator
 import pickle
 import random
 import sys
-from itertools import chain, compress
+from collections import deque
+from itertools import chain, compress, repeat
 from typing import Any
 
 from . import kept_state
@@ -618,6 +619,18 @@ def _gc_paused():
             gc.enable()
 
 
+def _of_kind(items: list, kind: type) -> list[bool]:
+    """Which of *items* are exactly of *kind*, at C speed."""
+    return list(map(operator.is_, map(type, items), repeat(kind)))
+
+
+def _put_at(target: list, mask: list[bool], values) -> None:
+    """``target[i] = next(values)`` for each *i* where *mask* is true, at C
+    speed: a level mixing kinds -- 300,000 record dicts beside the RNG
+    state's tuple in a notebook entry -- was a Python step per item."""
+    deque(map(target.__setitem__, compress(range(len(target)), mask), values), maxlen=0)
+
+
 def spine_copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
     """A copy of nested plain data, or of JSON-like data (exact dicts, lists
     and tuples over immutable leaves), that rebuilds only what can be written
@@ -667,10 +680,15 @@ def _tree_walk(value: Any, leaves: frozenset):
     for _ in range(MAX_LEVELS):
         kinds = set(map(type, level))
         if dict in kinds:
-            dicts = level if len(kinds) == 1 else [c for c in level if type(c) is dict]
+            if len(kinds) == 1:
+                dicts, held = level, map(dict.values, level)
+            else:
+                is_dict = _of_kind(level, dict)
+                dicts = list(compress(level, is_dict))
+                held = list(level)
+                _put_at(held, is_dict, map(dict.values, dicts))
             if not set(map(type, chain.from_iterable(dicts))) <= leaves:
                 raise _NotPlain
-            held = map(dict.values, level) if len(kinds) == 1 else [c.values() if type(c) is dict else c for c in level]
             flat = list(chain.from_iterable(held))
         else:
             flat = list(chain.from_iterable(level))
@@ -696,7 +714,7 @@ def tree_size(value: Any) -> int | None:
         with _gc_paused():  # a dict's values view per dict, see `_gc_paused`
             levels = list(_tree_walk(value, leaves))
         for level, flat, _types in levels:
-            dicts = [c for c in level if type(c) is dict] if dict in set(map(type, level)) else ()
+            dicts = list(compress(level, _of_kind(level, dict))) if dict in set(map(type, level)) else ()
             if dicts:
                 total += _level_size(list(chain.from_iterable(dicts)))
             total += _level_size(flat)
@@ -746,9 +764,14 @@ def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None) -> Any:
                 if memo is not None:
                     memo.update(zip(map(id, nodes[k]), rebuilt))
             else:
-                rebuilt = [node if type(node) is tuple else type(node)(node) for node in nodes[k]]
-                if memo is not None:
-                    memo.update((id(node), copied) for node, copied in zip(nodes[k], rebuilt) if copied is not node)
+                # Tuples shared, each other kind copied by its own type.
+                rebuilt = list(nodes[k])
+                for kind in kinds - {tuple}:
+                    mask = _of_kind(nodes[k], kind)
+                    made = list(map(kind, compress(nodes[k], mask)))
+                    _put_at(rebuilt, mask, made)
+                    if memo is not None:
+                        memo.update(zip(map(id, compress(nodes[k], mask)), made))
         else:
             rebuilt = []
             at = 0
@@ -778,6 +801,6 @@ def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None) -> Any:
         if len(flat) == len(rebuilt):
             new_flat = rebuilt
         else:
-            fresh = iter(rebuilt)
-            new_flat = [next(fresh) if type(x) in _NODES else x for x in flat]
+            new_flat = list(flat)
+            _put_at(new_flat, list(map(_NODES.__contains__, map(type, flat))), rebuilt)
     return None  # unreachable: k reaches 0 above
