@@ -250,3 +250,18 @@ def test_one_row_held_twice_comes_back_as_one_row(make):
         assert got[0] is got[-1]
         got[0].append(1)
         assert got[-1] == [0, 0, 0, 1]
+
+
+def test_a_list_of_ints_next_to_a_tuple_of_ints_is_copied_and_the_tuple_shared():
+    """A notebook entry holds the variables next to the RNG state, a tuple of
+    ints: the level holding the list's ints also holds the tuple. The copy
+    skips rebuilding that level for the copy above it, which never reads it."""
+    state = (3, tuple(range(625)), None)
+    values = list(range(1000))
+    mixed = [1, [2, (3, [4])], "x"]
+    entry = {"variables": {"c": values, "m": mixed}, "rng_state": {"python": state}, "stdout": ""}
+    copied = _plain_data.spine_copy(entry)
+    assert copied == entry
+    assert copied["variables"]["c"] is not values
+    assert copied["variables"]["m"][1][1][1] is not mixed[1][1][1]
+    assert copied["rng_state"]["python"] is state

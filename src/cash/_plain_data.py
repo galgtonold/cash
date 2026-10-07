@@ -487,7 +487,9 @@ def _level_size(flat: list) -> int:
     n = len(flat)
     if n <= SIZE_EXACT_UP_TO:
         return sum(map(sys.getsizeof, flat))
-    picks = random.Random(n).sample(range(n), SIZE_SAMPLE)
+    # With replacement: `choices` draws a float per pick, where `sample`
+    # draws bits until one falls in range, 2-3x slower (10 ms at 200,000).
+    picks = random.Random(n).choices(range(n), k=SIZE_SAMPLE)
     return sum(map(sys.getsizeof, map(flat.__getitem__, picks))) * n // SIZE_SAMPLE
 
 
@@ -766,6 +768,12 @@ def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None) -> Any:
                 at = end
         if k == 0:
             return rebuilt[0]
+        if frozen[k]:
+            # Level k - 1 copies its containers on their own and never reads
+            # what they hold: rebuilding its flat would be a Python step per
+            # item -- 200,000 for a list of ints next to the RNG state's
+            # tuple, the most expensive part of storing it.
+            continue
         flat = flats[k - 1]
         if len(flat) == len(rebuilt):
             new_flat = rebuilt
