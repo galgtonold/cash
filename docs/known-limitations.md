@@ -217,7 +217,9 @@ neither runs without paying for it. A statement that changes the data in
 place through something else holding it (`holder["t"][0] = 5`, where
 `holder["t"] = mylib.TABLE` above) is not seen as the notebook's own: the
 change counts as made outside, so the cells after it run again rather than
-reuse an answer.
+reuse an answer. Where a cell above the reader sets the same module value
+(`mylib.K = 3`), that cell's value is the one the reader gets, as a
+top-to-bottom run gives it: the setting runs again over the outside value.
 
 ### Re-running a cell above an in-place change
 
