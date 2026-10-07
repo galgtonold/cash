@@ -364,7 +364,8 @@ def statement_environment_component(code: str, user_ns: Mapping[str, Any] | None
     kept its lineage, so ``u = t.upper()`` below it hit and returned the
     first tenant's answer.
     """
-    return environment_component(statement_environment_reads(code, user_ns))
+    reads = statement_environment_reads(code, user_ns)
+    return environment_component(reads) if reads else ""
 
 
 def statement_module_data(code: str, user_ns: Mapping[str, Any] | None) -> str:
