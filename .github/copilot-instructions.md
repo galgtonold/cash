@@ -230,6 +230,34 @@ format is cleared on first open.
 - `perf` marks wall-clock threshold tests; CI's unit job skips them.
   `benchmarks/tests/` tests the benchmark tooling and runs separately.
 
+### Performance checks
+
+- **Work counts** (`tests/test_*/internals/test_work_counts.py`, counters in
+  `tests/_work_counts.py`): bytes hashed and pickled, deepcopy steps, statements
+  run, calls keyed, asserted under generous bounds in ordinary unit tests. A
+  change that makes cash do more work fails CI there, with no timer. Add one
+  when you fix a slowdown whose cost can be counted.
+- **Speed set** (`python benchmarks/speed_set.py [--quick] [--json F]`, ~4 min,
+  `--quick` ~1.5 min): ~30 scenarios from real use, each reported as the ratio
+  cash / plain Python measured in the same process, so it compares across
+  machines. Scenarios live in `benchmarks/_speed_scenarios.py`.
+- **A/B** (`python benchmarks/speed_compare.py [A] [B]`, default `main HEAD`;
+  `WORKTREE` = uncommitted `src/`): runs the speed set against each ref's
+  `src/` (temporary git worktrees, `PYTHONPATH`), alternating A B B A, and
+  exits 1 when a ratio rose more than 20% (`--threshold`), every round
+  agreeing. About 8 min with the defaults; on a busy machine, `--rounds 3`.
+- **Per-test durations** (`python benchmarks/durations_diff.py results.xml`):
+  compares a run's `--junitxml` with the last run saved in
+  `~/.cash-test-durations` (`--store`), flags tests >2x and >1 s slower,
+  then saves this run as the new baseline.
+
+On Philipp's PC, the full run ends with both, after the suite (never at the
+same time as it or another long job): run the suite with
+`--junitxml=<temp>/full.xml`, then
+`python benchmarks/durations_diff.py <temp>/full.xml --label <sha>` and
+`python benchmarks/speed_compare.py main <branch head>`, and report what
+either flags.
+
 ### Choosing integration tests
 
 Never run the whole integration suite while iterating; it takes a long time.
