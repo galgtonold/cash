@@ -40,12 +40,15 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       (outside the standard library and `site-packages`) is tracked as soon
       as a cell imports it, and cash reloads it in the kernel when you edit
       it. Editing one function in a module re-runs only what uses that
-      function. The statements that set state on the module (`mylib.K = 7`,
-      `mylib.set_k(7)`) run again right after the reload, which would
-      otherwise put the file's values back. One whose inputs changed since it
-      ran (`mylib.K = k` with `k` rebound, a draw from a generator) is not
-      run again: the values it set are put back, or, when it did more than
-      set attributes, cash warns.
+      function. A reload puts the file's values back for what cells set on
+      the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`).
+      cash treats the module as a variable those statements changed in
+      place, and the next cell you run rebuilds it from them as it
+      rebuilds any variable: in notebook order, each with the inputs it had
+      (the `k` it read, even if a later cell rebound `k`; a draw from the
+      generator state it drew from). When no name in the notebook holds the
+      module, or cash cannot find the notebook, it warns instead
+      ([`NOTEBOOK-RELOAD-STATE`](../warnings.md#notebook-reload-state)).
     - **A global that a called function reads**, even one bound below the
       statement.
     - **The data of a local module it reads**, directly or through the
@@ -147,7 +150,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @2893c33a, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @df9cdf2c -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @0842955b, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @df9cdf2c -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would

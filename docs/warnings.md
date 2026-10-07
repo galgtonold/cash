@@ -1322,7 +1322,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a magic bound is kept, though the magic would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
-| [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload dropped state a cell set on a module, and setting it again failed |
+| [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
@@ -1423,23 +1423,23 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._replay_module_state @c9baae65 -->
+<!-- claim: cash/notebook/module_invalidator.py:ModuleInvalidator._schedule_state_rebuild @b2849090, cash/notebook/upstream/checker.py:_warn_state_not_rebuilt @a1d9ad27 -->
 **What happened.** You edited one of your modules, so cash reloaded it. A
 reload runs the module's top level again, which drops what cells set on it
-(`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash runs those
-statements again right after the reload, and one of them raised, or could not
-run again: something it reads changed since it ran (`mylib.set_k(k)` with `k`
-rebound by a later cell), so running it again would set a value the notebook
-never set. A statement that only binds attributes (`mylib.K = k`) has the
-values it set put back instead. The message names the statement and why.
+(`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash rebuilds
+that state at the next cell you run, from the statements that set it, as it
+rebuilds a variable. Here it cannot: no name in the notebook holds the module
+(the cells only did `from mylib import set_k`), or cash does not know the
+notebook's cells ([NOTEBOOK-NOT-FOUND](#notebook-not-found)) or where the
+cell you ran is among them. The message names the module.
 
-**Why it matters.** The module holds the file's value for what that statement
-set, not the one the notebook set, until the statement runs.
+**Why it matters.** The module holds the file's values for what those
+statements set, not the ones the notebook set, until they run again.
 
-**What to do.** Fix the statement or the module and run the cell that sets it
-again.
+**What to do.** Run the cells that set it again. To have cash rebuild it
+next time, `import mylib` in a cell above the statements that set it.
 
-**When it is safe to ignore.** When you removed what the statement sets on
+**When it is safe to ignore.** When you removed what the statements set on
 purpose and no cell reads it any more.
 
 ### NOTEBOOK-SAVEFIG-SKIP {#notebook-savefig-skip}
