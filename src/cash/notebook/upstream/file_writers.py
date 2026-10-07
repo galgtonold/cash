@@ -645,6 +645,11 @@ class FileWriterScheduler:
             return False
         if statement_writes_files(stmt_code):
             return True
+        if "(" not in stmt_code:
+            # Calls nothing: no user function, defined or not, can write for
+            # it. Most statements of a notebook (``x2 = x1 + 1``); asked of
+            # each one above the cell, on every cell.
+            return False
         if statement_calls_user_writer(stmt_code, self._user_ns()) is not None:
             return True
         defs = self._trace_defs(simulation_trace)
