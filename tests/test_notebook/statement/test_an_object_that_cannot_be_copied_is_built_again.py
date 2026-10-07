@@ -42,7 +42,7 @@ def test_a_closed_file_left_by_a_with_block_is_still_restored(cash_magics, state
     """Control: the file a ``with open(...)`` leaves behind cannot be copied
     either, but nothing about it can change, so the statement still hits."""
     path = tmp_path / "x.txt"
-    path.write_text("hi")
+    path.write_text("hi", encoding="utf-8")
     run_cash_cell(cash_magics, SETUP)
     code = f"with open({str(path)!r}) as f:\n    data = slow(f.read())"
     statement_processor.process_statement(code)
