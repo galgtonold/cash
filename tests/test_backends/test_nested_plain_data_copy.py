@@ -283,13 +283,16 @@ def test_a_hit_on_a_stored_entry_copies_its_parts_without_walking_it_again(monke
     backend = InMemoryBackend()
     entry = _records_entry()
     backend.set("k", entry, {})
+    # The first hit plans the copy (`copy_plan`), once: a store does not, as
+    # most entries are never read.
+    assert backend.get("k")[1] == entry
     walked: list[int] = []
     real = _plain_data._tree_walk
 
     def counting(*args):
-        for level, flat, types in real(*args):
+        for level, flat, *rest in real(*args):
             walked.append(len(flat))
-            yield level, flat, types
+            yield level, flat, *rest
 
     monkeypatch.setattr(_plain_data, "_tree_walk", counting)
     _meta, hit = backend.get("k")
