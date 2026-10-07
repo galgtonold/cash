@@ -457,7 +457,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @0145fcb5 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @c034de28 -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 
@@ -603,7 +603,7 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @fce69c82, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @112b2842 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @fb45e2ba, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @112b2842 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @098b9d7f, cash/_plain_data.py:identity_changed @a853a1cf -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, except those
@@ -807,7 +807,7 @@ See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/data_source.py:state_token_of @914de552 -->
+<!-- claim: cash/data_source.py:state_token_of @60e6073c -->
 **What happened.** Your `DataSource.state_token()` returned `True` or
 `False`.
 
@@ -881,7 +881,7 @@ such as `depends_on=[math.sqrt]`, will not change between runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @25ce0fda -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @379962b9 -->
 **What happened.** A `dynamic_depends_on=` resolver raised, or returned
 something that is not a `DataSource`, a list of them, or `None`. The call ran
 uncached, and so did any cached function that called it: its result depends
@@ -1423,7 +1423,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._replay_module_state @9bcf3cff -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._replay_module_state @c9baae65 -->
 **What happened.** You edited one of your modules, so cash reloaded it. A
 reload runs the module's top level again, which drops what cells set on it
 (`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash runs those
@@ -1697,7 +1697,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @e0b309b3 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @435bcd32 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.
@@ -1783,7 +1783,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/decorator/dynamic_sources.py:recorded_sources @221fe723 -->
+<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/decorator/dynamic_sources.py:recorded_sources @0042c6ac -->
 **What happened.** The function calls a cached function whose
 `dynamic_depends_on=` returned a `DataSource` that cannot be pickled. This
 function's entry keeps such sources so a lookup can ask them whether they
@@ -1794,7 +1794,7 @@ tier, it was returned but not cached.
 **Why it matters.** The next process recomputes this function (with no RAM
 tier, every call does); the cached function it calls is still served from its
 own entries. Nothing stale is served. A source that pickles does not warn: its
-copy is stored with the entry
+copy is kept in the cache, in the entry or beside it
 ([Cached functions that call it](tutorials/feature-guides/dynamic-dependencies.md#cached-functions-that-call-it)).
 
 **What to do.** Make the source picklable: keep no open connection, lock or
