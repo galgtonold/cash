@@ -5,11 +5,11 @@ and through ``Cash(cache_dir=...).cache`` (cash). Notebook scenarios run the
 same cells in a fresh in-process IPython shell with and without ``%cash_on``
 (see ``_speed_harness.Notebook``).
 
-Where the scenarios come from: the everyday decorator values; bug hunt 4's
-performance findings (a comprehension calling a function per element, cells
-building records, a module table read before every cell, seeded randomness,
-cost growing with the notebook's length); the slow cells of the JuNE
-workflow replays (file loops, model fits, pandas pipelines).
+Where the scenarios come from: the everyday decorator values; slowdowns
+found and fixed before (a comprehension calling a function per element,
+cells building records, a module table read before every cell, seeded
+randomness, cost growing with the notebook's length); the slow cells of the
+JuNE workflow replays (file loops, model fits, pandas pipelines).
 
 A scenario's sizes are the same in ``--quick`` and full runs, so their ratios
 compare; ``--quick`` only takes fewer samples.
