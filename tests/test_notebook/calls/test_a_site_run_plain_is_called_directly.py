@@ -86,6 +86,21 @@ def test_after_the_log_is_drained_calls_are_logged_again(call_cache):
     assert sum(e["calls"] for e in call_cache.drain_call_log()) == 5
 
 
+def test_calls_counted_before_the_next_statement_run_reach_the_log(call_cache):
+    """``resolve`` counts a plain call in a slot of its own; a statement run
+    starting over must not drop what it counted."""
+
+    def f(i):
+        return i * 2
+
+    assert _plain_after_guard(call_cache, f) is f
+    for i in range(7):
+        call_cache.resolve(f, 0)(i)
+    call_cache.set_sites([SITE])
+    events = call_cache.drain_call_log()
+    assert sum(e["calls"] for e in events) == N + 8
+
+
 def test_a_warning_from_a_plain_call_names_the_users_line(call_cache):
     def f(i):
         warnings.warn("careful", UserWarning, stacklevel=2)
