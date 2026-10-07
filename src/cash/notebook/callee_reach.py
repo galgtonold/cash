@@ -64,7 +64,7 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
     """
     if not code or not namespace:
         return _EMPTY
-    steps = _names_read(code)
+    steps = names_read(code)
     if not steps:
         return _EMPTY
     found = _Found(namespace)
@@ -79,7 +79,7 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None) -> Reach:
 
 
 @functools.lru_cache(maxsize=4096)
-def _names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """What :func:`reached_user_code` looks up for *code*, in the order its
     walk meets it: ``(name, ())`` for a name read, ``(root, attrs)`` for
     each ``root.a.b`` chain (``attrs`` innermost first); empty when *code*

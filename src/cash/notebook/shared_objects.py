@@ -47,7 +47,7 @@ from typing import Any
 __all__ = ["holds_part_of", "output_history", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
-_VALUE_TYPES: tuple[type, ...] = (
+VALUE_TYPES: tuple[type, ...] = (
     int,
     float,
     complex,
@@ -79,7 +79,7 @@ _VALUE_TYPES: tuple[type, ...] = (
 _CALLABLE_TYPES: tuple[type, ...] = (types.FunctionType, types.BuiltinFunctionType, types.MethodType)
 
 #: The commonest value types, by exact type: one set lookup tells a string or a
-#: datetime from a container where `isinstance` against `_VALUE_TYPES` walks the
+#: datetime from a container where `isinstance` against `VALUE_TYPES` walks the
 #: whole tuple (and its abstract classes), the cost of a walk over millions of
 #: leaves. A subclass or any other type still goes through `isinstance`.
 _EXACT_VALUE_TYPES: frozenset[type] = frozenset(
@@ -108,7 +108,7 @@ _CONTAINERS = (list, dict, set, tuple, frozenset)
 _IMMUTABLE_CONTAINERS = (tuple, frozenset)
 
 
-def _library_value_types() -> tuple[type, ...]:
+def library_value_types() -> tuple[type, ...]:
     """The value types of numpy and pandas, when they are already imported."""
     found: list[type] = []
     np = sys.modules.get("numpy")
@@ -138,8 +138,8 @@ def _bound_objects(value: Any) -> list[Any] | None:
     return [owner]
 
 
-def _is_value(value: Any, value_types: tuple[type, ...]) -> bool:
-    """Whether *value* has no identity a restore must keep (`_VALUE_TYPES`,
+def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
+    """Whether *value* has no identity a restore must keep (`VALUE_TYPES`,
     a function or method that carries nothing)."""
     if isinstance(value, value_types):
         return True
@@ -163,7 +163,7 @@ def _is_estimator_class(cls: type) -> bool:
     return known
 
 
-def _attributes_of(value: Any) -> dict[str, Any] | None:
+def attributes_of(value: Any) -> dict[str, Any] | None:
     """The attributes a restore copies with *value* and the caller can reach,
     for an object of the notebook's own classes, a ``SimpleNamespace``, a
     dataclass or an estimator; ``None`` for anything else (a leaf)."""
@@ -182,7 +182,7 @@ def _attributes_of(value: Any) -> dict[str, Any] | None:
     return own if type(own) is dict else None
 
 
-def _children(value: Any) -> Iterable[Any] | None:
+def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
     if isinstance(value, dict):
         return [*value.keys(), *value.values()]
@@ -195,7 +195,7 @@ def _children(value: Any) -> Iterable[Any] | None:
             return [value.cell_contents]
         except ValueError:
             return None
-    attrs = _attributes_of(value)
+    attrs = attributes_of(value)
     return None if attrs is None else list(attrs.values())
 
 
@@ -207,12 +207,12 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
     stack = [value]
     while stack:
         obj = stack.pop()
-        if _is_value(obj, value_types) or id(obj) in seen:
+        if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
         if not isinstance(obj, _IMMUTABLE_CONTAINERS):
             yield id(obj)
-        stack.extend(_children(obj) or ())
+        stack.extend(children_of(obj) or ())
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
@@ -225,7 +225,7 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     ``c['n'] = 5`` must reach through both names. Walked as `_walk` walks:
     the builtin containers and the attributes of the notebook's own objects.
     """
-    value_types = _VALUE_TYPES + _library_value_types()
+    value_types = VALUE_TYPES + library_value_types()
     own = set(_identities(value, value_types))
     if not own:
         return False
@@ -384,17 +384,17 @@ def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
     A deep copy keeps such a function as it is, still bound to the object of
     the run that stored it, while the holder variable is restored as a copy:
     stored together, the two would no longer be the same object."""
-    value_types = _VALUE_TYPES + _library_value_types()
+    value_types = VALUE_TYPES + library_value_types()
     seen: set[int] = set()
     stack = list(group.values())
     while stack:
         obj = stack.pop()
-        if _is_value(obj, value_types) or id(obj) in seen:
+        if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
         if isinstance(obj, (types.FunctionType, types.BuiltinFunctionType)):
             return True
-        stack.extend(_children(obj) or ())
+        stack.extend(children_of(obj) or ())
     return False
 
 
@@ -411,7 +411,7 @@ def _check_group(
     for, and -- with *user_ns* -- the variables of *user_ns* outside the
     group that hold them (`_find_holders`), None when one holder is not such
     a variable."""
-    value_types = _VALUE_TYPES + _library_value_types()
+    value_types = VALUE_TYPES + library_value_types()
     nodes, inbound, checked, owner = _walk(group, bindings, value_types, keep_identity)
     internal = _count_held(cash_held, nodes, inbound, value_types, named_held)
     named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
@@ -468,7 +468,7 @@ def _find_holders(
             if holder is user_ns:
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
-            if not (isinstance(holder, _CONTAINERS) or _attributes_of(holder) is not None):
+            if not (isinstance(holder, _CONTAINERS) or attributes_of(holder) is not None):
                 # A frame, a closure cell, a function, a module, a library's object.
                 return None
             seen.add(id(holder))
@@ -541,9 +541,9 @@ def _walk_held(
             continue
         seen.add(id(obj))
         out = edges.setdefault(id(obj), [])
-        for child in _children(obj) or ():
+        for child in children_of(obj) or ():
             ctype = type(child)
-            if ctype in exact or (ctype not in containers and _is_value(child, value_types)):
+            if ctype in exact or (ctype not in containers and is_value(child, value_types)):
                 continue
             ckey = id(child)
             if ckey in nodes:
@@ -553,7 +553,7 @@ def _walk_held(
             if ctype is tuple or ctype is frozenset:
                 for item in child:
                     itype = type(item)
-                    if itype not in exact and (itype in containers or not _is_value(item, value_types)):
+                    if itype not in exact and (itype in containers or not is_value(item, value_types)):
                         break
                 else:
                     # Nothing inside to count, and not a node (see `_walk`).
@@ -600,7 +600,7 @@ def _walk(
         if name not in identity and reached is None:
             reached = len(order)
         root = group[name]
-        if _is_value(root, value_types):
+        if is_value(root, value_types):
             continue
         key = id(root)
         inbound[key] = inbound.get(key, 0) + 1 + sum(1 for m in bindings if m.get(name) is root)
@@ -611,17 +611,17 @@ def _walk(
         order.append(key)
         stack = [root]
         while stack:
-            children = _children(stack.pop())
+            children = children_of(stack.pop())
             if not children:
                 continue
             for child in children:
                 ctype = type(child)
-                if ctype in exact or (ctype not in containers and _is_value(child, value_types)):
+                if ctype in exact or (ctype not in containers and is_value(child, value_types)):
                     continue
                 if ctype is tuple or ctype is frozenset:
                     for item in child:
                         itype = type(item)
-                        if itype not in exact and (itype in containers or not _is_value(item, value_types)):
+                        if itype not in exact and (itype in containers or not is_value(item, value_types)):
                             break
                     else:
                         # Holds nothing but values: no identity to count, and
@@ -646,7 +646,7 @@ def _walk(
         if isinstance(value, _IMMUTABLE_CONTAINERS):
             carries[ckey] = any(
                 type(c) not in exact
-                and (type(c) in containers or not _is_value(c, value_types))
+                and (type(c) in containers or not is_value(c, value_types))
                 and carries.get(id(c), id(c) in nodes)
                 for c in value
             )

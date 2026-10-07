@@ -23,13 +23,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .shared_objects import _VALUE_TYPES, _attributes_of, _children, _is_value, _library_value_types
+from .shared_objects import VALUE_TYPES, attributes_of, children_of, is_value, library_value_types
 
 __all__ = ["HolderPatch", "apply_patch", "holder_patches"]
 
 #: One step from a container to what it holds: ``("key", k)`` for a dict
 #: value, ``("item", i)`` for a list or tuple item, ``("attr", name)`` for an
-#: attribute of an object `_attributes_of` opens.
+#: attribute of an object `attributes_of` opens.
 Step = tuple[str, Any]
 Path = tuple[Step, ...]
 
@@ -51,17 +51,17 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
     if isinstance(value, dict):
         named, unnamed = [], []
         for k, v in value.items():
-            if _is_value(k, value_types):
+            if is_value(k, value_types):
                 named.append((("key", k), v))
             else:
                 unnamed += [k, v]
         return named, unnamed
     if isinstance(value, (list, tuple)):
         return [(("item", i), v) for i, v in enumerate(value)], []
-    attrs = _attributes_of(value)
+    attrs = attributes_of(value)
     if attrs is not None:
         return [(("attr", k), v) for k, v in attrs.items()], []
-    return [], list(_children(value) or ())
+    return [], list(children_of(value) or ())
 
 
 def _reachable(roots: list[Any], value_types: tuple[type, ...]) -> set[int]:
@@ -70,10 +70,10 @@ def _reachable(roots: list[Any], value_types: tuple[type, ...]) -> set[int]:
     stack = list(roots)
     while stack:
         obj = stack.pop()
-        if _is_value(obj, value_types) or id(obj) in seen:
+        if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
-        stack.extend(_children(obj) or ())
+        stack.extend(children_of(obj) or ())
     return seen
 
 
@@ -81,14 +81,14 @@ def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[in
     """A path from an output to each object of the outputs a step can name."""
     found: dict[int, tuple[str, Path]] = {}
     for name, root in outputs.items():
-        if _is_value(root, value_types) or id(root) in found:
+        if is_value(root, value_types) or id(root) in found:
             continue
         found[id(root)] = (name, ())
         stack: list[tuple[Any, Path]] = [(root, ())]
         while stack:
             obj, path = stack.pop()
             for step, child in _steps(obj, value_types)[0]:
-                if _is_value(child, value_types) or id(child) in found:
+                if is_value(child, value_types) or id(child) in found:
                     continue
                 found[id(child)] = (name, (*path, step))
                 stack.append((child, (*path, step)))
@@ -98,7 +98,7 @@ def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[in
 def holder_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) -> dict[str, HolderPatch] | None:
     """A `HolderPatch` for each of *holders*, or None when one of them holds
     an object of the outputs where a patch cannot put it back."""
-    value_types = _VALUE_TYPES + _library_value_types()
+    value_types = VALUE_TYPES + library_value_types()
     group = _paths(outputs, value_types)
     targets = _reachable(list(outputs.values()), value_types)
     patches: dict[str, HolderPatch] = {}
@@ -124,7 +124,7 @@ def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> lis
                 return None
             places.append((at, id(obj)))
             continue
-        if _is_value(obj, value_types) or id(obj) in seen:
+        if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
         named, unnamed = _steps(obj, value_types)

@@ -17,7 +17,7 @@ from cash.notebook import callee_reach
 
 
 def test_the_tree_is_walked_once_per_text(monkeypatch):
-    callee_reach._names_read.cache_clear()
+    callee_reach.names_read.cache_clear()
     walked: list[object] = []
     real = ast.walk
 
@@ -33,7 +33,7 @@ def test_the_tree_is_walked_once_per_text(monkeypatch):
 
 
 def test_what_a_name_is_bound_to_is_looked_up_each_time():
-    callee_reach._names_read.cache_clear()
+    callee_reach.names_read.cache_clear()
     ns: dict = {"__name__": "__main__"}
     code = "y = helper(1)"
     assert callee_reach.reached_user_code(code, ns).functions == ()
@@ -44,7 +44,7 @@ def test_what_a_name_is_bound_to_is_looked_up_each_time():
 
 
 def test_a_chain_through_a_module_is_followed():
-    callee_reach._names_read.cache_clear()
+    callee_reach.names_read.cache_clear()
     ns: dict = {"__name__": "__main__"}
     exec("def inner(v):\n    return v", ns)
     box = types.SimpleNamespace(inner=ns["inner"])

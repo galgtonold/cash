@@ -31,7 +31,7 @@ from typing import Any, NamedTuple
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
-from .callee_reach import _names_read, module_state_writes, reached_user_code
+from .callee_reach import names_read, module_state_writes, reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
     module_data_digest,
@@ -198,7 +198,7 @@ def _named_in(code: str, user_ns: Mapping[str, Any] | None, value: Any) -> bool:
     if not user_ns:
         return False
     try:
-        return any(user_ns.get(name) is value for name, _attrs in _names_read(code))
+        return any(user_ns.get(name) is value for name, _attrs in names_read(code))
     except Exception:  # noqa: BLE001 - when unsure, it may
         return True
 
