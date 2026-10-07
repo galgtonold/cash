@@ -187,6 +187,7 @@ class ControlStructureProcessor:
         positions = carrier_positions(carrier_candidates(reads, self.shell.user_ns), self.shell.user_ns)
 
         sp.begin_structure_cost()
+        state.structure_module_writes.clear()
         result = None
         try:
             with observe_writes() as written:

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from ...analysis.ast_util import called_names
 from ..call_key import changes_its_closure
-from ..callee_reach import module_state_names, module_state_writes
+from ..callee_reach import module_state_names, module_state_writes, state_holders
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
@@ -90,6 +90,7 @@ class MutationRouting:
         # outputs, not the module: after a restart the counter stayed at 0.
         # In a loop or branch body too, for the same reason as above.
         modules = module_state_writes(run.code, self.shell.user_ns)
+        run.state_modules = modules
         if modules:
             # The module is an output too, as a list is of `items.append(x)`:
             # its lineage moves with each statement that sets state on it, so
@@ -97,7 +98,8 @@ class MutationRouting:
             # from them (`module_state_names`). The loop or branch owns its
             # body's writes, as with any receiver.
             if not is_control_body(run.code):
-                run.outputs = run.outputs | module_state_names(run.code, self.shell.user_ns)
+                run.state_names = module_state_names(run.code, self.shell.user_ns)
+                run.outputs = run.outputs | run.state_names
             _skip(
                 run,
                 f"Sets state on module: {', '.join(sorted(modules))} (statement re-executes, so the module has it)",
@@ -248,6 +250,51 @@ class MutationRouting:
                 )
         self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
         self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
+
+
+    def note_module_state(self, run: StatementRun) -> None:
+        """Take in the local modules *run* was seen setting state on, and
+        record those it set state on for the simulation.
+
+        One the text did not say (``mylib.put("K", 5)`` doing ``globals()[name]
+        = v``, ``s.apply(5)`` doing ``global K`` in a method) is routed as
+        `route` routes one it says: the names holding the module are outputs,
+        the statement re-executes, and a reload of the module rebuilds it.
+        A loop or branch owns its body's, as with any receiver
+        (``update_lineage_after_execution``).
+        """
+        user_ns = self.shell.user_ns
+        observed = run.rebound_modules - run.state_modules
+        structure = is_control_body(run.code) or _is_structure(run.tree)
+        if observed:
+            names = state_holders(observed, run.code, user_ns)
+            if structure:
+                self.tracking_state.structure_module_writes.update(observed)
+            else:
+                run.outputs = run.outputs | names
+                run.state_names = run.state_names | names
+                produced = run.metrics.setdefault("evaluated_vars", [])
+                produced.extend(n for n in sorted(names) if n not in produced)
+            writers = self.tracking_state.module_state_writers
+            for module in observed:
+                listed = writers.setdefault(module, [])
+                if run.code in listed:
+                    listed.remove(run.code)
+                listed.append(run.code)
+            _skip(
+                run,
+                f"Seen setting state on module: {', '.join(sorted(observed))} "
+                "(statement re-executes, so the module has it)",
+            )
+        if not structure:
+            self._records.note_module_state(run.code, run.state_names, run.state_modules | observed)
+
+
+def _is_structure(tree: ast.Module | None) -> bool:
+    """Whether *tree* is one loop or branch, run as one unit."""
+    from ..control_structures.common import is_control_structure  # noqa: PLC0415 - imports this package
+
+    return tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0])
 
 
 def _skip(run: StatementRun, reason: str) -> None:

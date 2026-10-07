@@ -923,10 +923,15 @@ class MismatchClassifier:
         sim: SimulationResult,
         result: ClassificationResult,
         scan: _BackwardScan,
+        trace_inputs: set[str] | None = None,
     ) -> None:
-        """Schedule *stmt* for re-execution and cascade its unresolved inputs."""
+        """Schedule *stmt* for re-execution and cascade its unresolved inputs:
+        what its text reads, and the rest of *trace_inputs* (a local module it
+        changes in place without naming it)."""
         scan.run.append(i)
         stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
+        if trace_inputs:
+            stmt_inputs = [*stmt_inputs, *sorted(set(trace_inputs) - set(stmt_inputs))]
         # A callee's globals are inputs too, once the statement runs; the ones
         # missing from the kernel must be rebuilt first (absent_callee_globals).
         callee_names = self.callables.absent_callee_globals(set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules)
@@ -1008,7 +1013,7 @@ class MismatchClassifier:
                 scan.resolved.update(restored_vars)
             else:
                 self._cascade_failed_restore_inputs(
-                    i, stmt_code, outputs, needed_outputs, restored_vars, sim, result, scan
+                    i, stmt_code, outputs, needed_outputs, restored_vars, sim, result, scan, entry.inputs
                 )
 
         return scan.run, restored_statements_info, total_restore_time

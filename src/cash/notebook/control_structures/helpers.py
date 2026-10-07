@@ -29,7 +29,7 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
-from ..callee_reach import module_state_names
+from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
 from .common import extract_target_names
 
@@ -277,8 +277,14 @@ def update_lineage_after_execution(
         lambda name: name in BUILTIN_NAMES and name not in lineage,
         lambda name: is_module_name(name, user_ns),
     )
-    # A local module the structure sets state on changes like any receiver.
-    mutated_vars |= module_state_names(code, user_ns, structure=True)
+    # A local module the structure sets state on changes like any receiver:
+    # one its text says, or one its body was seen setting state on. Recorded
+    # for the simulation, which cannot run it (``module_state_outputs``).
+    state = statement_processor.tracking_state
+    seen = frozenset(state.structure_module_writes)
+    state_names = module_state_names(code, user_ns, structure=True) | state_holders(seen, code, user_ns)
+    mutated_vars |= state_names
+    statement_processor.note_module_state(code, state_names, module_state_writes(code, user_ns) | seen)
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)

@@ -27,9 +27,18 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
-from ..value_types import is_runtime_machinery
+from ..value_types import IMMUTABLE_PRIMS, is_runtime_machinery
 
-__all__ = ["Reach", "module_state_names", "module_state_writes", "reached_user_code"]
+__all__ = [
+    "Reach",
+    "module_globals",
+    "module_holders",
+    "module_state_names",
+    "module_state_writes",
+    "reached_user_code",
+    "rebound_modules",
+    "state_holders",
+]
 
 
 class Reach(NamedTuple):
@@ -229,11 +238,11 @@ def _function_body(fn: types.FunctionType) -> list[ast.stmt]:
 
 
 def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, structure: bool = False) -> frozenset[str]:
-    """The names holding a local module *code* sets state on
-    (`module_state_writes`): ``mylib`` for ``mylib.K = k``,
-    ``mylib.cfg["a"] = v``, ``mylib.CACHE.append(x)`` or ``mylib.set_k(k)``.
-    The ones *code* names it by; when it names it by none (``set_k(k)``
-    imported from it), every name the namespace holds it by.
+    """The names that see the state of a local module *code* sets state on
+    (`module_state_writes`, `module_holders`): ``mylib`` for ``mylib.K =
+    k``, ``mylib.cfg["a"] = v``, ``mylib.CACHE.append(x)`` or
+    ``mylib.set_k(k)``, under every name the namespace holds it by, and
+    ``from_k`` taken from it by ``from mylib import from_k``.
 
     The module is a value of the notebook that ``import mylib`` made and
     these statements change in place, so each of them is one of its
@@ -262,18 +271,115 @@ def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, struct
     modules = module_state_writes(code, namespace)
     if not modules:
         return frozenset()
+    return state_holders(modules, code, namespace)
+
+
+def state_holders(modules: Iterable[str], code: str, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """The names of *namespace* through which a statement *code* that sets
+    state on the local *modules* changes what the notebook sees
+    (`module_holders`). *code* is kept for the callers' symmetry."""
+    del code
     names: set[str] = set()
     for module in modules:
         value = sys.modules.get(module)
-        if value is None:
-            continue
-        bound = {
-            name
-            for name, held in list(namespace.items())
-            if held is value and (name == module or not name.startswith("_"))
-        }
-        names |= (bound & mentioned) or bound
+        if isinstance(value, types.ModuleType):
+            names |= module_holders(value, namespace)
     return frozenset(names)
+
+
+def module_holders(module: types.ModuleType, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """The names of *namespace* that see the state of *module*: the module
+    itself under any name, and what ``from mylib import ...`` took from it
+    that reads or is that state -- a function or class defined in it
+    (``from_k`` reads ``K``) and a mutable object it holds (``CFG``).
+
+    A statement that sets state on the module changes each of them, as
+    ``items.append(x)`` changes every name holding ``items``: a cell reading
+    ``from_k(2)`` depends on ``set_k(5)`` above it as surely as one reading
+    ``mylib.from_k(2)``. ``from mylib import K`` took a copy: setting
+    ``mylib.K`` later leaves it as it was, so it is none of them.
+    """
+    own = vars(module)
+    data_ids = {
+        id(value)
+        for value in list(own.values())
+        if not isinstance(value, (types.ModuleType, type, *IMMUTABLE_PRIMS, tuple, frozenset))
+        and not inspect.isroutine(value)
+    }
+    names: set[str] = set()
+    for name, held in list(namespace.items()):
+        if held is module:
+            if name == module.__name__ or not name.startswith("_"):
+                names.add(name)
+        elif name.startswith("_"):
+            continue
+        elif isinstance(held, types.FunctionType):
+            if held.__globals__ is own:
+                names.add(name)
+        elif isinstance(held, type):
+            if getattr(held, "__module__", None) == module.__name__:
+                names.add(name)
+        elif id(held) in data_ids:
+            names.add(name)
+    return frozenset(names)
+
+
+def module_globals(code: str, namespace: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """What the globals of each local module *code* reaches hold before it
+    runs, to tell after it which of them it rebound (`rebound_modules`).
+
+    ``module_state_writes`` reads a write in the text: ``global K`` in a
+    function, ``CFG["k"] = v``. One it cannot read -- ``globals()[name] =
+    v``, ``setattr(sys.modules[__name__], ...)``, ``global K`` in a method
+    of an instance's class -- is seen by running it. Empty for an import or
+    a reload, which put the module's own top level in place, and for a
+    statement that reaches no local module.
+    """
+    if not code or not namespace:
+        return {}
+    tree = parse_cached(code)
+    if tree is None or "get_ipython()" in code:
+        return {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return {}
+        if isinstance(node, ast.Call) and _call_name(node.func) == "reload":
+            return {}
+    try:
+        modules = reached_user_code(code, namespace).modules
+    except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for name in modules:
+        module = sys.modules.get(name)
+        if isinstance(module, types.ModuleType) and vars(module) is not namespace:
+            found[name] = dict(vars(module))
+    return found
+
+
+def _call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+_MISSING = object()
+
+
+def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
+    """The modules of *before* (`module_globals`) whose globals now hold
+    another object than they did, or one more or fewer."""
+    changed = set()
+    for name, held in before.items():
+        module = sys.modules.get(name)
+        if not isinstance(module, types.ModuleType):
+            continue
+        now = vars(module)
+        if len(now) != len(held) or any(now.get(key, _MISSING) is not value for key, value in held.items()):
+            changed.add(name)
+    return frozenset(changed)
 
 
 def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) -> set[str]:

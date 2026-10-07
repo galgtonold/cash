@@ -270,8 +270,44 @@ class StatementLineage:
         if not is_control_body(stmt_code):
             # A statement that sets state on a local module changes the
             # module, as the runtime routes it (``MutationRouting.route``).
-            outputs |= module_state_names(stmt_code, self.shell.user_ns)
+            outputs |= self.module_state_outputs(stmt_code)
         return effects, inputs, outputs
+
+    def module_state_outputs(self, stmt_code: str) -> frozenset[str]:
+        """The names that see the state of a local module *stmt_code* sets
+        state on, as the runtime routed them when it last ran it
+        (`recorded_module_state`); else what its text says now
+        (``module_state_names``)."""
+        recorded = self.recorded_module_state(stmt_code)
+        if recorded is not None:
+            return recorded[0]
+        return module_state_names(stmt_code, self.shell.user_ns)
+
+    def recorded_module_state(self, stmt_code: str) -> tuple[frozenset[str], frozenset[str]] | None:
+        """``(names, modules)`` of the local modules *stmt_code* set state on
+        when it last ran: this session's record, else an earlier kernel's,
+        kept in ``module_state_outputs`` once read (the runtime overwrites it
+        when the statement runs again); None when neither has one.
+
+        The text alone cannot say it where the module is not loaded (after a
+        restart ``mylib.configure(5)`` reads as a call of a module function),
+        nor where only running it showed it (``globals()[name] = v``); and
+        it names the holders the namespace had then, not the ones it has
+        now, as the runtime's outputs did."""
+        source_hash = statement_source_hash(stmt_code)
+        known = self.tracking_state.module_state_outputs
+        recorded = known.get(source_hash)
+        if recorded is not None:
+            return recorded
+        recorded = self.probe.module_state(source_hash) if self.probe.cash_instance else None
+        if recorded is not None:
+            known.setdefault(source_hash, recorded)
+            if recorded[1] and not recorded[0]:
+                # No name of the notebook saw the module: nothing rebuilds it
+                # (``UpstreamChecker`` reports it while the statement has not
+                # run in this kernel).
+                self.tracking_state.unheld_module_state.setdefault(source_hash, (stmt_code, recorded[1]))
+        return recorded
 
     def is_unbound_builtin(self, name: str, bound: Mapping[str, str] | None = None) -> bool:
         """``unbound_builtin`` against the kernel's lineages."""

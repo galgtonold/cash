@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from ..control_markers import strip_markers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashWarning
+from .callee_reach import module_holders
 from .lineage_formula import imported_from, module_source_component, read_module_source_hash
 from .upstream.mismatch_classifier import import_only
 
@@ -249,12 +250,12 @@ class ModuleInvalidator:
         check rebuilds the module from them, as it rebuilds a variable: in
         notebook order, each with the inputs it had, restored from the cache
         or rebuilt from their own producers, a generator put back where the
-        statement drew from it. Its names are made required inputs of that
-        check, whatever the cell reads.
+        statement drew from it. Its names (``callee_reach.module_holders``:
+        the module, and what ``from mylib import ...`` took from it) are made
+        required inputs of that check, whatever the cell reads.
 
-        A module no name of the notebook holds (only ``from mylib import
-        set_k``) is no variable to rebuild, and what was set on it is
-        reported instead.
+        A module no name of the notebook sees is no variable to rebuild, and
+        what was set on it is reported instead.
         """
         state = processor.tracking_state
         user_ns = self._shell.user_ns
@@ -263,7 +264,7 @@ class ModuleInvalidator:
             module = sys.modules.get(mod_name)
             if not writers or module is None:
                 continue
-            names = {name for name in self._names_bound_to(mod_name) if user_ns.get(name) is module}
+            names = module_holders(module, user_ns)
             if names:
                 state.module_state_rebuilds.update(names)
                 continue
@@ -272,7 +273,7 @@ class ModuleInvalidator:
                 "NOTEBOOK-RELOAD-STATE",
                 f"reloading the edited module {mod_name!r} dropped the state cells set on it "
                 f"(`{_first_line(writers[-1])}`), and cash cannot rebuild it: no name the notebook holds is "
-                "the module",
+                "the module or something taken from it",
                 f"import the module itself (`import {mod_name}`) in a cell above them, or run them again.",
             )
 

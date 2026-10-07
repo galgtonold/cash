@@ -216,17 +216,58 @@ def test_a_setting_imported_from_the_module_is_rebuilt(cash_magics, mock_shell, 
     assert mock_shell.user_ns["z"] == (15, {})
 
 
-def test_a_module_no_name_holds_is_reported(cash_magics, mock_shell, helper_module):
-    """Only ``from helper import ...``: no variable of the notebook is the
-    module, so nothing rebuilds what was set on it, and cash says so."""
+def test_a_module_held_only_through_what_was_imported_from_it_is_rebuilt(cash_magics, mock_shell, helper_module):
+    """Only ``from helper import ...``: no name of the notebook is the
+    module, but ``compute`` reads its state and ``set_scale`` changes it, so
+    they are the names the state is rebuilt through."""
     name, path = helper_module
-    cells = [f"from {name} import set_scale, compute", "set_scale(5)", "z = compute(3)"]
+    cells = [f"from {name} import set_scale, compute", "k = 5", "set_scale(k)", "k = 9", "z = compute(3)"]
     _run_all(cash_magics, cells)
 
     _edit(path, HELPER.format(n=2))
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert "NOTEBOOK-RELOAD-STATE" not in _codes(caught)
+    assert sys.modules[name].SCALE == 5
+    assert mock_shell.user_ns["z"] == (15, {})
+
+
+def test_a_setting_only_running_it_shows_is_rebuilt(cash_magics, mock_shell, helper_module):
+    """``setattr(sys.modules[__name__], ...)`` in a module function: no text
+    says it sets state, but running it was seen rebinding the module's
+    global, so it is a setting like the others."""
+    name, path = helper_module
+    text = HELPER + "def put(attr, v):\n    import sys\n    setattr(sys.modules[__name__], attr, v)\n"
+    path.write_text(text.format(n=1), encoding="utf-8")
+    cells = [f"import {name}", f"{name}.put('SCALE', 5)", f"z = {name}.compute(3)"]
+    _run_all(cash_magics, cells)
+    assert mock_shell.user_ns["z"] == (15, {})
+
+    _edit(path, text.format(n=2))
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert sys.modules[name].SCALE == 5
+    assert mock_shell.user_ns["z"] == (15, {})
+
+
+def test_a_module_no_name_sees_is_reported(cash_magics, mock_shell, helper_module, tmp_path):
+    """Set through another module: no name of the notebook sees the module,
+    so nothing rebuilds what was set on it, and cash says so."""
+    name, path = helper_module
+    outer = f"{name}_outer"
+    (tmp_path / f"{outer}.py").write_text(f"import {name}\n", encoding="utf-8")
+    cells = [f"import {outer}", f"{outer}.{name}.set_scale(5)", f"z = {outer}.{name}.compute(3)"]
+    try:
+        _run_all(cash_magics, cells)
+
+        _edit(path, HELPER.format(n=2))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            run_cash_cell(cash_magics, cells[-1], cells=cells)
+    finally:
+        sys.modules.pop(outer, None)
 
     assert "NOTEBOOK-RELOAD-STATE" in _codes(caught)
 

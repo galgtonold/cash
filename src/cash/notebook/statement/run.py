@@ -110,6 +110,14 @@ class StatementRun:
     bound_before: dict[str, int] = field(default_factory=dict)
     #: Whether the entry the lookup found under ``cache_key`` stores holders.
     entry_holders: bool = False
+    #: The local modules the text says the statement sets state on
+    #: (``module_state_writes``), and the names holding them it has for
+    #: outputs (``module_state_names``).
+    state_modules: frozenset[str] = frozenset()
+    state_names: frozenset[str] = frozenset()
+    #: The local modules running it was seen rebinding a global of
+    #: (``callee_reach.rebound_modules``).
+    rebound_modules: frozenset[str] = frozenset()
 
 
 @dataclass

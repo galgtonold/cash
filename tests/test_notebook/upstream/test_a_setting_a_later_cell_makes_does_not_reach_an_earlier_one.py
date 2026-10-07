@@ -124,8 +124,13 @@ def test_a_plain_run_all_keeps_the_earlier_value(cash_magics, mock_shell, lib, t
 
 def test_a_change_from_a_statement_outside_the_cells_is_still_seen(cash_magics, mock_shell, lib):
     """Watched as it runs, a statement no cell holds (a console, a debugger)
-    still changes the value from outside: the reader runs again with it."""
+    still changes the value from outside: the reader runs again with it.
+
+    Without the setting below the reader: ``vars(lib)['K'] = 7`` sets state
+    on the module as ``lib.K = 7`` does, and the reader is then rebuilt with
+    the module as the cells above it left it."""
     cells = [cell.format(lib=lib) for cell in CASES["module_data_through_vars"]]
+    cells[3] = "w = 1"
     _run_all(cash_magics, cells)
     run_cash_cell(cash_magics, f"setattr(__import__('{lib}'), 'K', 9)", cells=cells)
     run_cash_cell(cash_magics, cells[-1], cells=cells)
