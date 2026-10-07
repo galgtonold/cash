@@ -74,7 +74,11 @@ class ControlSimulation:
         # runtime's ``update_lineage_after_execution`` moves it; but it is
         # not trusted in memory as a loop's accumulator is: a reload drops
         # its state, which only its producers put back.
-        return mutated_vars | module_state_names(ast.unparse(node), user_ns, structure=True)
+        code = ast.unparse(node)
+        recorded = self.statements.recorded_module_state(code)
+        if recorded is not None:
+            return mutated_vars | recorded[0]
+        return mutated_vars | module_state_names(code, user_ns, structure=True)
 
     def _bump_mutated(
         self,

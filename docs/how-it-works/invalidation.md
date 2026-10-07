@@ -46,8 +46,15 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       place, and the next cell you run rebuilds it from them as it
       rebuilds any variable: in notebook order, each with the inputs it had
       (the `k` it read, even if a later cell rebound `k`; a draw from the
-      generator state it drew from). When no name in the notebook holds the
-      module, or cash cannot find the notebook, it warns instead
+      generator state it drew from). After a kernel restart a cell run on
+      its own rebuilds it the same way. A setting is one whose code says so
+      (`global K` in a function it calls) or one seen setting it when it
+      ran (`globals()[name] = v`); cash keeps which statements those are for
+      the next kernel. What `from mylib import ...` took from the module
+      (`from_k`, `CFG`) sees its state too, so a cell reading `from_k(2)`
+      is rebuilt with the settings above it. When no name in the notebook
+      sees the module (it is set through another module), or cash cannot
+      find the notebook, it warns instead
       ([`NOTEBOOK-RELOAD-STATE`](../warnings.md#notebook-reload-state)).
     - **A global that a called function reads**, even one bound below the
       statement.
@@ -150,7 +157,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @0842955b, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @df9cdf2c -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @faf9d2b8, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @df9cdf2c -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would

@@ -191,6 +191,31 @@ class TrackingState:
     # W: StatementProcessor. R: ModuleInvalidator.
     module_state_writers: dict[str, list[str]] = field(default_factory=dict)
 
+    # Statement source hash (``statement_source_hash``) -> (the names holding
+    # a local module, the modules) the statement set state on when it last
+    # ran: what ``module_state_writes`` read in its text, and what running it
+    # was seen to rebind (``callee_reach.rebound_modules``). The simulation
+    # reads it where it cannot tell itself -- after a restart the module is
+    # not loaded, and ``mylib.configure(5)`` reads as a module call -- and
+    # takes those names for outputs of the statement, as the runtime did.
+    # Kept for a later kernel too (``module_state_key``).
+    # W: MutationRouting, control structures; StatementLineage (read back
+    # after a restart). R: StatementLineage, ControlSimulation, UpstreamChecker.
+    module_state_outputs: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
+
+    # Statement source hash -> (statement, modules) of an earlier kernel's
+    # record of a statement that set state on local modules no name of the
+    # notebook sees (``helper2.helper.set_k(5)``): the simulation cannot
+    # rebuild that state. W: StatementLineage. R/emptied: UpstreamChecker,
+    # which reports each one not run in this kernel.
+    unheld_module_state: dict[str, tuple[str, frozenset[str]]] = field(default_factory=dict)
+
+    # The local modules the body statements of the top-level loop or branch
+    # running now were seen rebinding globals of: the structure's, as the
+    # simulation sees it. W: MutationRouting. R: update_lineage_after_execution.
+    # Emptied when a top-level structure starts.
+    structure_module_writes: set[str] = field(default_factory=set)
+
     # The names of reloaded modules whose state the next upstream check
     # rebuilds: required inputs of that check, whatever the cell reads.
     # W: ModuleInvalidator. R/emptied: UpstreamChecker.

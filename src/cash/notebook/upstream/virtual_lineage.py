@@ -597,6 +597,13 @@ class VirtualLineage:
         self._update_stale_file_deps(inputs, outputs, files_stale, sim.vars_with_stale_files)
 
         if outputs:
+            # A statement that sets state on a local module changes it in
+            # place, so it reads it, as `items.append(x)` reads `items`, even
+            # where its text does not name it (`set_k(5)` imported from it):
+            # a rebuild runs the import before it.
+            inputs = set(inputs) | (outputs & self.statements.module_state_outputs(stmt_code))
+
+        if outputs:
             produced_lineages = {out: virtual_lineage[out] for out in outputs if out in virtual_lineage}
             sim.trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale))
             if lookup_time > 0:

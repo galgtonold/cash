@@ -1322,7 +1322,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a magic bound is kept, though the magic would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
-| [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload dropped state cells set on a module, and cash cannot rebuild it |
+| [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
@@ -1423,15 +1423,18 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/module_invalidator.py:ModuleInvalidator._schedule_state_rebuild @b2849090, cash/notebook/upstream/checker.py:_warn_state_not_rebuilt @a1d9ad27 -->
-**What happened.** You edited one of your modules, so cash reloaded it. A
-reload runs the module's top level again, which drops what cells set on it
-(`mylib.K = 7`, `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`). cash rebuilds
-that state at the next cell you run, from the statements that set it, as it
-rebuilds a variable. Here it cannot: no name in the notebook holds the module
-(the cells only did `from mylib import set_k`), or cash does not know the
+<!-- claim: cash/notebook/module_invalidator.py:ModuleInvalidator._schedule_state_rebuild @c5b71672, cash/notebook/upstream/checker.py:_warn_state_not_rebuilt @a1d9ad27, cash/notebook/upstream/checker.py:_warn_unheld_state @93fa96ae -->
+**What happened.** You edited one of your modules, so cash reloaded it, or
+you restarted the kernel. Either way the module holds its file's values, not
+what cells set on it (`mylib.K = 7`, `mylib.CONFIG["k"] = 7`,
+`mylib.set_k(7)`). cash rebuilds that state at the next cell you run, from
+the statements that set it, as it rebuilds a variable. Here it cannot: no
+name in the notebook sees the module, neither the module itself nor
+something imported from it (the cells set it through another module:
+`outer.mylib.set_k(7)`), or, after a reload, cash does not know the
 notebook's cells ([NOTEBOOK-NOT-FOUND](#notebook-not-found)) or where the
-cell you ran is among them. The message names the module.
+cell you ran is among them. The message names the module, and after a
+restart the statement.
 
 **Why it matters.** The module holds the file's values for what those
 statements set, not the ones the notebook set, until they run again.

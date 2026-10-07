@@ -15,6 +15,7 @@ from ...diagnostics import warn_diagnostic
 from ...exceptions import AmbiguousCellError, CashWarning, UpstreamStateError
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
+from ..cache_key import statement_source_hash
 from ..server_discovery import (
     get_notebook_cells,
     get_notebook_cells_with_ids,
@@ -316,6 +317,8 @@ class UpstreamChecker:
         )
         if rebuilds and not self._simulated:
             _warn_state_not_rebuilt(rebuilds, self.shell.user_ns)
+        if self.tracking_state.unheld_module_state:
+            _warn_unheld_state(self.tracking_state)
 
         return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
 
@@ -730,4 +733,24 @@ def _warn_state_not_rebuilt(names: set[str], user_ns: dict[str, Any]) -> None:
             f"reloading the edited module {module!r} dropped the state cells set on it, and cash cannot "
             "rebuild it: it does not know the notebook's cells, or where this cell is among them",
             "run the cells that set it again.",
+        )
+
+
+def _warn_unheld_state(state: TrackingState) -> None:
+    """Report each statement an earlier kernel ran that set state on a local
+    module no name of the notebook sees, and that has not run in this one:
+    nothing rebuilds that state, and a cell reading it would compute on the
+    file's values (``TrackingState.unheld_module_state``)."""
+    ran = {statement_source_hash(code) for codes in state.module_state_writers.values() for code in codes}
+    for source_hash, (code, modules) in list(state.unheld_module_state.items()):
+        del state.unheld_module_state[source_hash]
+        if source_hash in ran:
+            continue
+        first = strip_markers(code).strip().splitlines()[0] if strip_markers(code).strip() else code
+        warn_diagnostic(
+            CashWarning,
+            "NOTEBOOK-RELOAD-STATE",
+            f"`{first}` set state on the module {', '.join(sorted(modules))!s} in an earlier kernel, and cash "
+            "cannot rebuild it in this one: no name the notebook holds is the module or something taken from it",
+            "run that cell again, or import the module itself in a cell above it.",
         )

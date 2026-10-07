@@ -64,6 +64,7 @@ from cash.notebook.call_refs import (
 )
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
+from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import (
     capture_reachable_carrier_states,
     capture_rng_state,
@@ -789,6 +790,7 @@ class CallUnit:
         # "recorded for free" behaviour holds.
         rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
         arg_hashes_before = hash_args(call.args, call.kwargs)
+        module_before = _module_globals(call.fn)
         started = _perf_counter()
         call_tracker = FileAccessTracker(
             getattr(call.fn, "__globals__", None),
@@ -802,7 +804,9 @@ class CallUnit:
             self._running -= 1
         elapsed = _perf_counter() - started
         stored = False
-        if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before):
+        if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before) or _rebound_unwatched(
+            call, module_before
+        ):
             self._entries.refuse(call.key)
         elif self._worth_storing(call, result, elapsed):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
@@ -1129,3 +1133,38 @@ class CallCache:
             return fn
         self._wrappers[cache_key] = (fn, wrapper)
         return wrapper
+
+
+def _module_globals(fn) -> dict[str, Any] | None:
+    """What the globals of the local module *fn* is defined in hold before
+    it runs, for `_rebound_unwatched`; None for a function of the notebook
+    or of a library."""
+    namespace = getattr(fn, "__globals__", None)
+    module = sys.modules.get(namespace.get("__name__")) if isinstance(namespace, dict) else None
+    if not isinstance(module, types.ModuleType) or vars(module) is not namespace:
+        return None
+    try:
+        local = is_local_module(module)
+    except (TypeError, AttributeError):
+        return None
+    return dict(namespace) if local else None
+
+
+def _rebound_unwatched(call: _Call, before: Mapping[str, Any] | None) -> bool:
+    """Whether the call rebound a global of its module that the entry does
+    not capture (``globals()[name] = v``, ``setattr(sys.modules[__name__],
+    ...)``): a hit would return the result and leave the module as it was,
+    so the site is refused, as for a draw or a changed argument. The
+    globals its code says it writes (``mutated_globals``) are captured and
+    put back on a hit."""
+    if before is None:
+        return False
+    now = call.fn.__globals__
+    watched = set(call.mutated_globals)
+    for name in now.keys() | before.keys():
+        if name not in watched and now.get(name, _ABSENT) is not before.get(name, _ABSENT):
+            return True
+    return False
+
+
+_ABSENT = object()

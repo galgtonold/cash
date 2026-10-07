@@ -17,7 +17,13 @@ from typing import Any
 
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from .._protocols import CashInstanceProtocol
-from ..cache_key import carrier_advances_key, control_outcome_key, import_bindings_key, mutation_verdict_key
+from ..cache_key import (
+    carrier_advances_key,
+    control_outcome_key,
+    import_bindings_key,
+    module_state_key,
+    mutation_verdict_key,
+)
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
 from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
 
@@ -42,11 +48,14 @@ class CacheProbe:
         self._import_bindings_memo: dict[str, dict[str, dict]] = {}
         #: :meth:`carrier_advances` answers by statement; cleared by :meth:`reset`.
         self._carrier_advances_memo: dict[str, frozenset[str] | None] = {}
+        #: :meth:`module_state` answers by statement; cleared by :meth:`reset`.
+        self._module_state_memo: dict[str, tuple[frozenset[str], frozenset[str]] | None] = {}
 
     def reset(self) -> None:
         """Forget the memoized import bindings and generator draws."""
         self._import_bindings_memo.clear()
         self._carrier_advances_memo.clear()
+        self._module_state_memo.clear()
 
     def backend(self):
         """The cache backend the simulation probes, or None without a Cash."""
@@ -115,6 +124,27 @@ class CacheProbe:
         if not record or not record.get("mutation_verdict"):
             return None
         return set(record.get("receivers") or ())
+
+    def module_state(self, source_hash: str) -> tuple[frozenset[str], frozenset[str]] | None:
+        """``(names, modules)`` of the local modules a statement set state on
+        when an earlier kernel ran it, or None when nothing was recorded. See
+        ``module_state_key``. Memoized until :meth:`reset`, as
+        :meth:`carrier_advances`."""
+        memo = self._module_state_memo
+        if source_hash in memo:
+            return memo[source_hash]
+        found = None
+        record = self.record(module_state_key(source_hash))
+        if record and record.get("module_state"):
+            try:
+                found = (
+                    frozenset(str(name) for name in record.get("names") or ()),
+                    frozenset(str(name) for name in record.get("modules") or ()),
+                )
+            except TypeError:
+                found = None
+        memo[source_hash] = found
+        return found
 
     def carrier_advances(self, source_hash: str) -> frozenset[str] | None:
         """The generators a statement drew from when an earlier kernel ran it,

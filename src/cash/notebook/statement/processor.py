@@ -82,7 +82,7 @@ from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, moved_carrier_names
-from ..callee_reach import module_state_writes
+from ..callee_reach import module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
 from ..magic_effects import is_magic_statement, magic_base, magic_effects, magic_output_lineage, simulation_cell
@@ -314,6 +314,11 @@ class StatementProcessor:
     def user_written_paths(self, paths) -> frozenset[str]:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
+
+    def note_module_state(self, code: str, names, modules) -> None:
+        """Record the local *modules*, held by *names*, the loop or branch
+        *code* set state on (``StatementRecords.note_module_state``)."""
+        self._records.note_module_state(code, names, modules)
 
     def _advance_carriers(self, source_hash: str, names: frozenset[str] | set[str] | None, key: str, code: str) -> None:
         """``advance_carriers`` for the statement *code*, keyed *key*, and the
@@ -786,6 +791,13 @@ class StatementProcessor:
             if is_control_body(run.code)
             else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
         )
+        # What the globals of the local modules it reaches hold, to see one
+        # it sets state on that its text does not say (`note_module_state`).
+        try:
+            held = module_globals(run.code, self.shell.user_ns)
+        except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+            logger.debug("%s could not watch the modules %r reaches", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            held = {}
         try:
             with (
                 self.watching_reads(run.code),
@@ -810,6 +822,9 @@ class StatementProcessor:
             execution.result = error_result(e)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        if held:
+            run.rebound_modules = rebound_modules(held)
+            del held
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
@@ -1064,6 +1079,7 @@ class StatementProcessor:
         revealed (an observed mutation, an uncacheable value).
         """
         self._mutation_routing.observe(run)
+        self._mutation_routing.note_module_state(run)
         if run.carriers_advanced is not None:
             # A generator the statement rebinds or was seen changing in place
             # is an output, with an output's lineage.

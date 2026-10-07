@@ -129,6 +129,18 @@ def mutation_verdict_key(source_hash: str) -> str:
     return "mutverdict:" + source_hash
 
 
+def module_state_key(source_hash: str) -> str:
+    """Backend key for the local modules a statement set state on when it last ran.
+
+    ``TrackingState.module_state_outputs`` holds it for the session. After a
+    restart the simulation meets ``mylib.configure(5)`` with ``mylib`` not
+    loaded: it reads as a call of a module function, which changes nothing,
+    so ``mylib`` kept the import's lineage, and a cell reading it ran on the
+    file's ``K`` where the notebook had set another.
+    """
+    return "modstate:" + source_hash
+
+
 def carrier_advances_key(source_hash: str) -> str:
     """Backend key for which generators a statement drew from when it last ran.
 

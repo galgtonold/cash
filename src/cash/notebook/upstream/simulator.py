@@ -765,7 +765,10 @@ class NotebookSimulator:
                 externally_tainted,
             )
 
-        sim.vars_derived_from_loops = loop_derived_vars(sim.vars_mutated_by_loops, sim.trace)
+        # A module a loop sets state on is never trusted in memory: a reload
+        # drops that state, which only its producers put back
+        # (``ControlSimulation.collect_mutations``).
+        sim.vars_derived_from_loops = loop_derived_vars(sim.vars_mutated_by_loops, sim.trace) - sim.virtual_modules
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.

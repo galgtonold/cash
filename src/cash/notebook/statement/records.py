@@ -15,6 +15,7 @@ import logging
 import marshal
 import os
 import types
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from cash.analysis.code_analyzer import CodeAnalyzer
@@ -25,9 +26,11 @@ from cash.notebook.cache_key import (
     called_function_globals,
     carrier_advances_key,
     import_bindings_key,
+    module_state_key,
     mutation_verdict_key,
     note_read_provenance_written,
     read_provenance_key,
+    statement_source_hash,
     write_provenance_key,
 )
 from cash.notebook.carrier_history import FIGURE_KINDS, carrier_history_fingerprint
@@ -68,6 +71,7 @@ class StatementRecords:
         self._import_bindings_written: dict[str, dict[str, dict[str, Any]]] = {}
         self._mutation_verdicts_written: dict[str, list[str]] = {}
         self._carrier_advances_written: dict[str, list[str]] = {}
+        self._module_state_written: dict[str, tuple[list[str], list[str]]] = {}
         self._read_provenance_written: dict[str, list[str]] = {}
 
     def begin_cell(self) -> None:
@@ -212,6 +216,38 @@ class StatementRecords:
             written[source_hash] = verdict
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s mutation-verdict persistence failed", _LOG_PROCESSOR)
+
+    def note_module_state(self, code: str, names: Iterable[str], modules: Iterable[str]) -> None:
+        """Record that the statement *code* set state on the local *modules*,
+        held by *names*, when it ran now (``TrackingState.module_state_outputs``),
+        and keep it for a later kernel (``module_state_key``).
+
+        A statement that set none clears a record it had: it is written only
+        when one was known. Best-effort: without the record the simulation
+        after a restart reads only what the text says.
+        """
+        source_hash = statement_source_hash(code)
+        record = (frozenset(names), frozenset(modules))
+        known = self.tracking_state.module_state_outputs
+        had = known.get(source_hash)
+        if not record[1] and not (had and had[1]):
+            return
+        known[source_hash] = record
+        persisted = (sorted(record[0]), sorted(record[1]))
+        written = self._module_state_written
+        if written.get(source_hash) == persisted:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            backend.set_metadata_only(
+                module_state_key(source_hash),
+                {"module_state": True, "names": persisted[0], "modules": persisted[1], "ttl": None},
+            )
+            written[source_hash] = persisted
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s module-state persistence failed", _LOG_PROCESSOR)
 
     def persist_carrier_advances(self, source_hash: str, names: frozenset[str] | set[str] | None) -> None:
         """Record, across restarts, which generators this statement drew from.
