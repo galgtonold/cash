@@ -300,13 +300,16 @@ def input_lineage(
 _ENVIRONMENT_MARKERS = ("environ", "getenv", "getcwd")
 
 
-def statement_environment_reads(code: str, user_ns: Mapping[str, Any] | None = None) -> set[tuple[str, str]]:
+def statement_environment_reads(
+    code: str, user_ns: Mapping[str, Any] | None = None, reach: Reach | None = None
+) -> set[tuple[str, str]]:
     """The environment reads whose value a key can fold
     (`cash.effects.environment_input`): ``os.getenv("NAME")``,
     ``os.environ["NAME"]``, ``os.getcwd()``, written in *code* or in a
-    function of the user's it calls (:func:`callee_environment_reads`).
+    function of the user's it calls (:func:`callee_environment_reads`;
+    *reach* as there).
     """
-    return _written_environment_reads(code, user_ns) | callee_environment_reads(code, user_ns)
+    return _written_environment_reads(code, user_ns) | callee_environment_reads(code, user_ns, reach)
 
 
 def _written_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> set[tuple[str, str]]:
