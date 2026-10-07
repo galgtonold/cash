@@ -30,6 +30,9 @@ def test_a_ratio_up_in_every_round_is_a_regression():
 def test_a_round_that_disagrees_is_not_a_regression():
     v = _verdicts([_run(x=2.0), _run(x=2.0), _run(x=2.0)], [_run(x=3.0), _run(x=1.9), _run(x=3.0)])["x"]
     assert v.change > 1.2 and v.verdict == "same"
+    # Up in both rounds, but one round by only 1%: noise.
+    v = _verdicts([_run(x=1.0), _run(x=1.0)], [_run(x=1.01), _run(x=1.54)])["x"]
+    assert v.change > 1.2 and v.verdict == "same"
 
 
 def test_small_moves_and_improvements():

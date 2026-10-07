@@ -8,7 +8,8 @@ sides alike. Per scenario and round, the change is B's ratio over A's ratio
 from the two adjacent runs; the verdict uses the median over rounds.
 
 A scenario is a REGRESSION when B's ratio is more than ``--threshold`` (20%)
-above A's and every round agrees; IMPROVED for the mirror case; BROKEN when
+above A's (median over rounds) and every round has it at least half that
+much above; IMPROVED for the mirror case; BROKEN when
 the scenario raised on B but not on A. Exit code 1 when anything regressed or
 broke, 2 on a usage or run error, else 0.
 
@@ -141,9 +142,11 @@ def compare(runs_a: list[dict], runs_b: list[dict], threshold: float) -> list[Ve
         per_round = [b / a for a, b in zip(ra, rb) if a > 0]
         change = statistics.median(per_round) if per_round else float("nan")
         verdict = "same"
-        if per_round and change > 1 + threshold and all(c > 1 for c in per_round):
+        # Every round must agree by at least half the threshold: one round
+        # at 1.01 and one at 1.54 is noise around a median of 1.28.
+        if per_round and change > 1 + threshold and min(per_round) > 1 + threshold / 2:
             verdict = "regression"
-        elif per_round and change < 1 / (1 + threshold) and all(c < 1 for c in per_round):
+        elif per_round and change < 1 / (1 + threshold) and max(per_round) < 1 / (1 + threshold / 2):
             verdict = "improved"
         notes = sorted({n for rows in a_rows + b_rows for n in rows[name].get("notes", [])})
         out.append(
