@@ -241,10 +241,10 @@ def remove_orphan_temp_files(cache_dir: str) -> int:
     a process killed in between leaves it behind, up to an entry's size, and
     nothing else counts or evicts it. One written on this machine by a process
     that no longer runs goes now; any other once untouched for
-    `ORPHAN_TEMP_AGE`. Returns how many were removed.
+    `ORPHAN_TEMP_AGE`. Returns how many were removed. psutil is imported
+    only when there is a pid to ask: most caches hold no temp file, and a
+    script that caches a call must not pay for the import.
     """
-    import psutil
-
     host = _host_tag()
     removed = 0
     now = time.time()
@@ -257,13 +257,19 @@ def remove_orphan_temp_files(cache_dir: str) -> int:
         owner = name[len(".tmp-") : -len(".part")].partition("-")[0]
         tag, _, pid = owner.partition(".")
         try:
-            dead = tag == host and pid.isdigit() and not psutil.pid_exists(int(pid))
+            dead = tag == host and pid.isdigit() and not _pid_exists(int(pid))
             if dead or now - os.stat(path).st_mtime > ORPHAN_TEMP_AGE:
                 os.remove(path)
                 removed += 1
         except OSError:
             continue  # renamed into place or removed meanwhile
     return removed
+
+
+def _pid_exists(pid: int) -> bool:
+    import psutil
+
+    return psutil.pid_exists(pid)
 
 
 def write_all(fd: int, data: bytes) -> None:
