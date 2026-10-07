@@ -182,12 +182,15 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @eb78fa7b, cash/notebook/callee_reach.py:module_state_writes @2477eca8 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @e213e156, cash/notebook/callee_reach.py:module_state_writes @2477eca8 -->
 The same for a statement that sets state on one of your modules
 (`metrics.increment(5)` adding to a counter `metrics.py` keeps, itself or
 through a helper, or `mylib.K = slow()`): it runs every time, so the module
 holds after a restart, or after an edit of its file, what a top-to-bottom run
-leaves in it. A slow call inside
+leaves in it. A setting whose code does not say it (`globals()[name] = v`,
+`global K` in a method of one of your classes) is seen when it runs, in the
+modules the statement reaches, and counts the same from then on, in a later
+kernel too. A slow call inside
 an assignment (`n = metrics.increment(5)`) is still served from the cache; a
 cell that is only the call runs it.
 
