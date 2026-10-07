@@ -541,7 +541,10 @@ def _walk_held(
             continue
         seen.add(id(obj))
         out = edges.setdefault(id(obj), [])
-        for child in children_of(obj) or ():
+        children = children_of(obj)
+        if not children or exact.issuperset(map(type, children)):
+            continue  # nothing but values, asked at C speed (see `_walk`)
+        for child in children:
             ctype = type(child)
             if ctype in exact or (ctype not in containers and is_value(child, value_types)):
                 continue
@@ -612,7 +615,10 @@ def _walk(
         stack = [root]
         while stack:
             children = children_of(stack.pop())
-            if not children:
+            # Nothing but values, by exact type: asked at C speed, where the
+            # loop below takes a Python step per item -- 35 ms of storing a
+            # list of 200,000 ints.
+            if not children or exact.issuperset(map(type, children)):
                 continue
             for child in children:
                 ctype = type(child)

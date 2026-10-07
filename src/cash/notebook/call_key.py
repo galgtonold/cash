@@ -218,10 +218,15 @@ def holds_a_closure_with_state(value) -> bool:
         if isinstance(item, (tuple, list, set, frozenset, dict)):
             if id(item) in seen:
                 continue
+            children = item.values() if isinstance(item, dict) else item
+            # Only atoms, by exact type: asked at C speed, where the loop
+            # below took a Python step per item (22 ms for 200,000 ints).
+            if atoms.issuperset(map(type, children)):
+                continue
             # A container holding only atoms (a million small tuples of a
             # record list) has nothing to look into and is not remembered.
             pushed = False
-            for child in item.values() if isinstance(item, dict) else item:
+            for child in children:
                 ctype = type(child)
                 if ctype in atoms:
                     continue
