@@ -28,6 +28,7 @@ from cash.backends.file_backend import FileBackend
 from cash.exceptions import CashWarning
 from cash.notebook.cache_key import statement_source_hash
 from tests._cell_driver import run_cash_cell
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 LIB = (
     "K = 2\n"
@@ -38,6 +39,7 @@ LIB = (
     "def from_k(n):\n    return K * n\n"
     "def from_cfg(n):\n    return CFG['k'] * n\n"
     "class Settings:\n    def apply(self, k):\n        global K\n        K = k\n"
+    f"def slow_put(name, v):\n    import time\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    globals()[name] = v\n"
 )
 
 
@@ -174,4 +176,23 @@ def test_a_setter_that_ran_in_this_kernel_is_not_reported(cash_magics, clean_bac
             run_cash_cell(cash_magics, cell, cells=cells)
 
     assert "NOTEBOOK-RELOAD-STATE" not in _codes(caught)
+    assert cash_magics.shell.user_ns["x"] == 10
+
+
+def test_a_slow_call_setting_what_its_code_does_not_say_is_not_served(cash_magics, clean_backend, lib):
+    """``r = mylib.slow_put('K', 5)``: the call inside an assignment is
+    served from the cache, with the globals its code says it writes put
+    back. ``globals()[name] = v`` says none, so a hit returned the result
+    and left ``K`` as the file has it, in a Restart & Run All too. A call
+    seen rebinding a global its entry does not capture is not cached."""
+    cells = [f"import {lib}", f"r = {lib}.slow_put('K', 5)", f"x = {lib}.from_k(2)"]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["x"] == 10
+
+    _restart(cash_magics, lib)
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+
+    assert sys.modules[lib].K == 5
     assert cash_magics.shell.user_ns["x"] == 10
