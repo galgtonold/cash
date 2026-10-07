@@ -9,6 +9,7 @@ with every change made to it since, where plain Python builds a fresh one.
 
 from __future__ import annotations
 
+import pickle
 import threading
 import time
 
@@ -66,10 +67,19 @@ def test_a_second_call_builds_a_fresh_object(call_cache):
 
 def test_a_chain_too_deep_for_deepcopy_is_served_as_a_full_copy(call_cache):
     """Control: the RAM tier copies by a pickle round trip, which takes a
-    chain deepcopy cannot, so a hit is served -- a fresh copy, whole."""
+    chain deepcopy cannot, so a hit is served -- a fresh copy, whole.
+
+    Where this Python's stack is too small for pickle to walk the chain too
+    (3.14 on Windows), no copy can be made, so nothing is cached."""
     cached = _resolved(call_cache, build_chain)
     first = cached()
     second = cached()
+    try:
+        pickle.dumps(first)
+    except RecursionError:
+        assert [e["cache_hit"] for e in call_cache.drain_call_log()] == [False, False]
+        assert first is not second
+        return
     assert first is not second and first.next is not second.next
     length, node = 0, second
     while node is not None:
