@@ -29,7 +29,7 @@ reconstruct and these cases do not arise. Entries that also affect Run All say s
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @5476f000, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @14093389, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0 -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -395,10 +395,12 @@ reads its content, and if it changed, everything that read it runs again.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @95f20033, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @18708015, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
-when all three hold: more than about 50 iterations of known length, per-statement
-bookkeeping estimated above one second (about 8 ms per statement per iteration),
+when all three hold: more than about 50 iterations of known length (a loop
+inside the body counts each iteration ten times, as it usually runs about that
+often per pass), per-statement bookkeeping estimated above one second (about
+8 ms per statement per iteration, a statement in an inner loop ten times over),
 and no file write, move or delete written in the loop body. A loop that only
 reads files qualifies: the unit depends on every file and folder it read, so
 an edited, added or deleted file runs it again. A loop that appends to a list
