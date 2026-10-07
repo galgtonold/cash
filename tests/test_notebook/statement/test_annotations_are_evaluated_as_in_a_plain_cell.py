@@ -5,25 +5,40 @@ Cash compiles each statement itself, and ``compile`` inherits the
 ``x: Undefined = 1`` and ``def f(a: Undefined)`` ran without the NameError a
 plain cell raises, which made a replayed notebook diverge from its plain run.
 The notebook's own ``from __future__`` imports still apply to what follows.
+
+From Python 3.14 annotations are evaluated lazily (PEP 649), so a plain cell
+raises nothing for either; cash must then raise nothing too.
 """
 
 from __future__ import annotations
+
+import contextlib
 
 import pytest
 
 from tests._cell_driver import run_cash_cell
 
 
+def _as_a_plain_cell(source: str) -> contextlib.AbstractContextManager:
+    """What a plain cell does with *source*: raise its NameError, or not."""
+    try:
+        exec(compile(source, "<cell>", "exec", dont_inherit=True), {})
+    except NameError as exc:
+        return pytest.raises(NameError, match=str(exc.name))
+    return contextlib.nullcontext()
+
+
 def test_an_annotated_assignment_with_an_unknown_name_raises(cash_magics, mock_shell):
-    with pytest.raises(NameError, match="Undefined"):
+    with _as_a_plain_cell("y: Undefined = 3"):
         run_cash_cell(cash_magics, "y: Undefined = 3")
     assert mock_shell.user_ns["y"] == 3, "the value is bound before the annotation is evaluated, as in plain Python"
 
 
 def test_a_function_annotation_with_an_unknown_name_raises(cash_magics, mock_shell):
-    with pytest.raises(NameError, match="Nope"):
-        run_cash_cell(cash_magics, "def f(a: Nope):\n    return 1")
-    assert "f" not in mock_shell.user_ns
+    source = "def f(a: Nope):\n    return 1"
+    with _as_a_plain_cell(source) as raised:
+        run_cash_cell(cash_magics, source)
+    assert ("f" in mock_shell.user_ns) == (raised is None)
 
 
 @pytest.fixture
