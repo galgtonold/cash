@@ -252,9 +252,10 @@ class _Found:
         else:
             if label is not None and _is_data(value):
                 self.data.setdefault(label, value)
-            if value is not None and not inspect.isroutine(value):
+            cls = type(value)
+            if value is not None and cls not in _FOREIGN_C_TYPES and not inspect.isroutine(value):
                 # An instance: its methods run when the statement calls them.
-                self._class(type(value))
+                self._class(cls)
 
     def _wrapped(self, value: Any) -> None:
         """The function *value* wraps (``functools.wraps``' ``__wrapped__``)."""
@@ -295,6 +296,13 @@ class _Found:
         home = _loaded(getattr(cls, "__module__", None))
         if home is not None and _is_local(home):
             return True
+        if _is_c_type(cls):
+            # No ``class`` statement made it, so no cell's function is its
+            # member. Asked of every instance a statement reads (an int, an
+            # array): walking ``vars(np.ndarray)`` for each, for every cell
+            # above, grew a cell at the end of a 400-cell notebook by 60 ms.
+            _FOREIGN_C_TYPES.add(cls)
+            return False
         return any(
             fn.__globals__ is self.namespace
             for member in list(vars(cls).values())
@@ -373,6 +381,22 @@ class _Found:
         # No root package: a library function is never the user's because
         # of the package it is in, only because it lives in their files.
         return fn.__globals__ is self.namespace or own_code_is_user(fn, None)
+
+
+#: C types of no local module: an instance of one leads nowhere (`_Found._class`
+#: takes only its ``__init__``, a slot wrapper), so it is not asked again.
+_FOREIGN_C_TYPES: set[type] = set()
+
+_HEAPTYPE = 1 << 9
+_IMMUTABLETYPE = 1 << 8
+
+
+def _is_c_type(cls: type) -> bool:
+    """Was *cls* made by C code rather than a ``class`` statement? A static
+    type, or a heap type an extension created immutable; Python cannot make
+    either, nor give one a method."""
+    flags = getattr(cls, "__flags__", 0)
+    return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE)
 
 
 def _class_member_functions(member: Any) -> Iterable[Any]:
