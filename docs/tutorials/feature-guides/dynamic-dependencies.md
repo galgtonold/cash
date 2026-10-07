@@ -50,17 +50,18 @@ load("labels")     # cache miss: different arguments
 load("features")   # cache miss: the version moved
 ```
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @25ce0fda, cash/data_source.py:DataSource.state_token @89498b3e -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @379962b9, cash/data_source.py:DataSource.state_token @89498b3e -->
 A resolver may return one `DataSource`, a list of them, or `None` (no dynamic
 dependency for this call). You can also pass a list of resolvers; their sources
-are pooled. The order of the sources does not matter.
+are pooled. The key takes the sources in the order they come back, so return
+them in a stable order: the same sources in another order miss once.
 
 ## Writing the token
 
 `state_token()` must return a value that **changes when the data changes**: a
 version, an ETag, a row count with a last-modified time, a digest.
 
-<!-- claim: cash/data_source.py:state_token_of @914de552 -->
+<!-- claim: cash/data_source.py:state_token_of @60e6073c -->
 - **Return a value, not a `bool`.** A flag like "is it fresh?" has two states
   and cannot tell one version from the next. cash warns if it sees a `bool`.
 - **Keep it cheap.** The resolver and the token run on every lookup, hits
@@ -69,7 +70,7 @@ version, an ETag, a row count with a last-modified time, a digest.
 The same class works in `depends_on=[...]` when the source is fixed; see
 [Custom data sources](../../api/data_sources.md#custom-data-sources).
 
-<!-- claim: cash/file_source.py:FileDataSource @dc27443c broad="the content-digest contract is a property of the whole class" -->
+<!-- claim: cash/file_source.py:FileDataSource @ec702e4c broad="the content-digest contract is a property of the whole class" -->
 `FileDataSource(path)` is the built-in source for a file. Its token is the
 file's **content digest**, the same check an automatically tracked read gets:
 a `touch` that leaves the bytes alone keeps the entry, and an edit recomputes
@@ -80,7 +81,7 @@ file stat, so an unchanged file costs one `stat` per lookup.
 
 ## Cached functions that call it
 
-<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @1b90c527, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @17334556, cash/decorator/dynamic_sources.py:held_sources @59e995f7 -->
+<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @9f602771, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @354b91a8, cash/decorator/dynamic_sources.py:held_sources @a009e761 -->
 A cached function that calls `load` depends on the same sources, though its
 own key never sees them. cash keeps them in its entry instead:
 
