@@ -41,6 +41,7 @@ from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_has
 from ..callee_reach import module_state_names
 from ..lineage_formula import (
     callable_source_component,
+    changed_module_environment,
     held_lineage,
     input_lineage,
     key_hidden_reads,
@@ -361,6 +362,7 @@ class StatementLineage:
         virtual_lineage: dict[str, str] | None = None,
         no_cache_values: dict[str, str] | None = None,
         recorded_reads: str | None = None,
+        virtual_modules: set[str] | None = None,
     ) -> dict[str, str]:
         """The lineage of each output of a simulated statement.
 
@@ -397,7 +399,7 @@ class StatementLineage:
                 file_hash_component,
                 func_component,
                 module_source_component(function_tracker, user_ns.get(out), out, stmt_code, tree),
-                environment,
+                changed_module_environment(out, user_ns.get(out), stmt_code, environment, virtual_modules or ()),
                 no_cache_value_component(no_cache_values, out),
             )
             for out in outputs
@@ -808,6 +810,7 @@ class StatementLineage:
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns
             ),
+            virtual_modules=virtual_modules,
         )
         _log_lineage_calc(stmt_code, source_hash, input_lineages_all, file_hash_component, lineage_by_out)
 

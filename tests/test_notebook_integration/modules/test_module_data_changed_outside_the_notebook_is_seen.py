@@ -33,6 +33,25 @@ def test_a_value_set_from_outside_with_a_setting_below(nb_runner, tmp_path):
     outside does, even when the notebook sets the same value elsewhere."""
     (tmp_path / "statelib.py").write_text(LIB.format(k=2), encoding="utf-8")
     nb_runner.create_notebook(
+        ["import statelib", "b = statelib.from_k(10)", "statelib.K = 7", "u = b + 1\nprint('U', u)"]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_cell(4)
+    assert nb_runner.peek("u") == "21", nb_runner.get_raw_output(4)
+
+    nb_runner.peek("setattr(__import__('statelib'), 'K', 5)")
+    nb_runner.run_cell(4)
+    assert nb_runner.peek("u") == "51", nb_runner.get_raw_output(4)
+
+
+def test_a_value_set_from_outside_over_a_setting_above(nb_runner, tmp_path):
+    """The reader runs again with the module as the cells above it leave it,
+    as a variable is rebuilt: ``statelib.K = 3`` above it runs again over the
+    value set from outside, and ``statelib.K = 7`` below it after it, as a
+    top-to-bottom run has them."""
+    (tmp_path / "statelib.py").write_text(LIB.format(k=2), encoding="utf-8")
+    nb_runner.create_notebook(
         ["import statelib\nstatelib.K = 3", "b = statelib.from_k(10)", "statelib.K = 7", "u = b + 1\nprint('U', u)"]
     )
     nb_runner.start_kernel()
@@ -42,7 +61,8 @@ def test_a_value_set_from_outside_with_a_setting_below(nb_runner, tmp_path):
 
     nb_runner.peek("setattr(__import__('statelib'), 'K', 5)")
     nb_runner.run_cell(4)
-    assert nb_runner.peek("u") == "51", nb_runner.get_raw_output(4)
+    assert nb_runner.peek("u") == "31", nb_runner.get_raw_output(4)
+    assert nb_runner.peek("statelib.K") == "7"
 
 
 def test_the_value_edited_in_the_file(nb_runner, tmp_path):

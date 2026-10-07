@@ -42,3 +42,25 @@ def test_each_change_runs_once(cash_magics, mock_shell, lib, first, second, expe
 
     assert (sys.modules[lib].LOG, sys.modules[lib].CONFIG) == expected
     assert mock_shell.user_ns["z"] == expected
+
+
+@pytest.mark.parametrize("setter", ["{m}.K = 7", "{m}.CONFIG['k'] = 7", "{m}.set_k(7)"])
+def test_a_setting_below_a_reader_leaves_it_alone(cash_magics, mock_shell, tmp_path, monkeypatch, setter):
+    """The setting moves the module's lineage, and the simulation keyed the
+    statements below it with the lineage the module ended on, not the one it
+    had there: the reader above it looked changed, and ran again with 7."""
+    name = f"_below_{os.getpid()}_{id(tmp_path)}"
+    (tmp_path / f"{name}.py").write_text(
+        "K = 2\nCONFIG = {'k': 2}\ndef set_k(v):\n    global K\n    K = v\ndef from_k(x):\n    return x * K * CONFIG['k']\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [f"import {name}", f"b = {name}.from_k(10)", setter.format(m=name), "u = b + 1"]
+    try:
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        run_cash_cell(cash_magics, cells[-1], cells=cells)
+    finally:
+        sys.modules.pop(name, None)
+
+    assert mock_shell.user_ns["u"] == 41

@@ -35,6 +35,7 @@ from ...tracking.module_symbols import static_attribute_reads
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
+    changed_module_environment,
     input_lineage,
     lineage_hidden_reads,
     module_source_component,
@@ -201,7 +202,7 @@ class StatementLineageBuilder:
                 file_hash_component,
                 callable_source_component(self.function_tracker, inputs, user_ns),
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
-                environment,
+                changed_module_environment(var_name, value, code, environment),
                 self._no_cache_value(value_digests, var_name, value) if no_cache else "",
             )
 

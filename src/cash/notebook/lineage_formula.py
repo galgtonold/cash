@@ -23,6 +23,7 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
+from ..analysis.ast_util import parse_cached
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
 from ..effects import environment_component, environment_input
@@ -80,6 +81,42 @@ def is_module_like(var_name: str, val: object, virtual_modules: Iterable[str]) -
     except (AttributeError, TypeError) as exc:
         logger.debug("[CACHE_KEY] Failed to check module/callable type for '%s': %s", var_name, exc)
     return False
+
+
+def bound_names(code: str) -> set[str] | None:
+    """The names *code* binds: assignment targets and import aliases; None
+    when it does not parse."""
+    tree = parse_cached(code)
+    if tree is None:
+        return None
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+    return bound
+
+
+def changed_module_environment(
+    name: str, value: Any, code: str, environment: str, virtual_modules: Iterable[str] = ()
+) -> str:
+    """*environment* (``recorded_reads_lineage_component``) for output
+    *name*, or nothing when *name* is a module the statement changes in
+    place (``mylib.K = 7``, ``mylib.set_k(7)``) rather than binds.
+
+    Such a statement reads the data it changes (``mylib.CONFIG`` before
+    ``mylib.CONFIG["k"] = 7``), which the run before left as it pleased: the
+    module's lineage would then differ between two runs of the same
+    notebook, and every reader of the module with it. Its lineage records
+    which statements changed it and from what inputs, for a rebuild after a
+    reload; what the module's data holds, its readers key on themselves.
+    Both engines ask here.
+    """
+    if not (isinstance(value, types.ModuleType) or (value is None and name in virtual_modules)):
+        return environment
+    bound = bound_names(code)
+    return environment if bound is None or name in bound else ""
 
 
 def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) -> str | None:
