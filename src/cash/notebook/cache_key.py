@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, LruMemo
+from cash.analysis.ast_util import parse_cached
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.randomness import rng_carrier_kind
@@ -559,8 +560,12 @@ def _collect_output_module_hashes(
     * ``from X import Y`` (non-callable)→ parse AST to find the source module
     """
     hashes: list[str] = []
+    bound = _bound_names(code)
     for out_var in sorted(outputs):
-        if out_var not in variable_lineage:
+        # Only a name the statement binds: ``mylib.K = 7`` or
+        # ``mylib.LOG.append(x)`` changes the module in place, and the
+        # runtime routes it into the outputs only after keying it.
+        if out_var not in variable_lineage or (bound is not None and out_var not in bound):
             continue
         val = user_ns.get(out_var)
         if isinstance(val, types.ModuleType):
@@ -582,6 +587,21 @@ def _collect_output_module_hashes(
             if entry:
                 hashes.append(entry)
     return hashes
+
+
+def _bound_names(code: str) -> set[str] | None:
+    """The names *code* binds: assignment targets and import aliases; None
+    when it does not parse."""
+    tree = parse_cached(code)
+    if tree is None:
+        return None
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+    return bound
 
 
 def _from_import_constant_hash(
