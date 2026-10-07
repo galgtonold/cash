@@ -665,6 +665,64 @@ def spine_copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
         return _spine_copy(value, memo)
 
 
+#: `copy_plan` follows a dict of at most this many keys, this near the top,
+#: into its values: a notebook entry's payload, its ``variables``.
+_PLAN_KEYS = 32
+_PLAN_DEPTH = 3
+#: How `copy_by_plan` copies a part: shared as it is (an immutable leaf, a
+#: tuple of immutables), a new list of the same items, a new dict per row,
+#: or `spine_copy`.
+_SHARE, _NEW_LIST, _ROWS, _SPINE = "share", "list", "rows", "spine"
+
+
+def copy_plan(value: Any, _depth: int = 0) -> Any:
+    """How to copy *value* -- made by `spine_copy`, so nothing in it is
+    reached twice, and private, so never written -- a part at a time, each
+    the fastest way it allows: `copy_by_plan`.
+
+    `spine_copy` asks of every hit whether each part is still JSON-like and
+    reached once, a pass over every leaf: for a notebook entry holding
+    300,000 record dicts that walk was 3x copying the rows. The answer for a
+    stored value cannot change, so it is found here, once.
+    """
+    kind = type(value)
+    if kind is dict and len(value) <= _PLAN_KEYS and _depth < _PLAN_DEPTH:
+        return {key: copy_plan(item, _depth + 1) for key, item in value.items()}
+    if kind in _COPY_LEAVES:
+        return _SHARE
+    if kind is tuple or kind is list:
+        if immutable_below(value):
+            return _SHARE if kind is tuple else _NEW_LIST
+        if (
+            kind is list
+            and value
+            and all(map(operator.is_, map(type, value), repeat(dict)))
+            and set(map(type, chain.from_iterable(map(dict.values, value)))) <= _COPY_LEAVES
+        ):
+            return _ROWS
+    return _SPINE
+
+
+def copy_by_plan(value: Any, plan: Any) -> Any:
+    """A copy of *value* made as *plan* (`copy_plan`) says, or None if a
+    part could not be copied that way."""
+    if type(plan) is dict:
+        copied = {}
+        for key, part in plan.items():
+            item = copy_by_plan(value[key], part)
+            if item is None and value[key] is not None:
+                return None
+            copied[key] = item
+        return copied
+    if plan is _SHARE:
+        return value
+    if plan is _NEW_LIST:
+        return list(value)
+    if plan is _ROWS:
+        return list(map(dict, value))
+    return spine_copy(value)
+
+
 def _tree_walk(value: Any, leaves: frozenset):
     """Yield ``(containers, flat, types)`` for each level of JSON-like
     *value* (exact dicts, lists and tuples over *leaves*): the containers at

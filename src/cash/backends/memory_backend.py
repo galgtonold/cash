@@ -94,6 +94,11 @@ class InMemoryBackend(CacheBackend):
         #: Decided once when the value is stored; the stored frames are private
         #: and alive as long as the entry, so the ids stay theirs.
         self._frame_cells: dict[str, dict[int, bool | None]] = {}
+        #: Per key, how a hit copies a dict stored through `spine_copy` --
+        #: a notebook entry, a JSON-like result -- part by part
+        #: (`_plain_data.copy_plan`). Decided once when it is stored: the
+        #: stored value is private and never written.
+        self._copy_plans: dict[str, Any] = {}
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -129,6 +134,7 @@ class InMemoryBackend(CacheBackend):
         known_cells: dict[int, bool] | None = None,
         record_cells: dict[int, bool] | None = None,
         by_reference: list[bool] | None = None,
+        by_spine: list[bool] | None = None,
     ) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
@@ -174,6 +180,8 @@ class InMemoryBackend(CacheBackend):
                 # step per container, where deepcopy took one per leaf.
                 copied = _plain_data.spine_copy(value)
                 if copied is not None:
+                    if by_spine is not None:
+                        by_spine.append(True)
                     return copied
             if value_type is dict:
                 # A notebook entry is dicts around the values, and carries the
@@ -493,12 +501,17 @@ class InMemoryBackend(CacheBackend):
             immutable_below = key in self._immutable_below
             dict_rows = key in self._dict_rows
             known_cells = self._frame_cells.get(key)
+            plan = self._copy_plans.get(key)
 
         if immutable_below:
             # Checked when it was stored; the stored value is private.
             return metadata, (list(value) if type(value) is list else value)
         if dict_rows:
             return metadata, list(map(dict, value))
+        if plan is not None:
+            copied = _plain_data.copy_by_plan(value, plan)
+            if copied is not None:
+                return metadata, copied
         return metadata, self._safe_deep_copy(value, key, known_cells=known_cells)
 
     def set(
@@ -534,6 +547,7 @@ class InMemoryBackend(CacheBackend):
             metadata["storage"] = [self.source_label]
 
         frame_cells: dict[int, bool | None] = {}
+        plan = None
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
@@ -548,13 +562,19 @@ class InMemoryBackend(CacheBackend):
             # cached -- the notebook re-executes what it cannot restore.
             required = bool((metadata or {}).get("copy_required"))
             fell_back: list[bool] = []
+            by_spine: list[bool] = []
             stored = self._safe_deep_copy(
                 value,
                 key,
                 required=required,
                 record_cells=frame_cells,
                 by_reference=fell_back,
+                by_spine=by_spine,
             )
+            if by_spine and type(stored) is dict:
+                # Nothing in it is reached twice: its parts can be copied
+                # each on its own, each the fastest way it allows.
+                plan = _plain_data.copy_plan(stored)
             if required and None in frame_cells.values():
                 # A frame whose object cells pickle cannot copy (a worker
                 # holding a lock) would share those cells with every hit.
@@ -593,6 +613,10 @@ class InMemoryBackend(CacheBackend):
                 self._frame_cells[key] = frame_cells
             else:
                 self._frame_cells.pop(key, None)
+            if plan is not None:
+                self._copy_plans[key] = plan
+            else:
+                self._copy_plans.pop(key, None)
             self._current_size_bytes += size
 
             # Check max_entries limit
@@ -614,6 +638,7 @@ class InMemoryBackend(CacheBackend):
         self._immutable_below.discard(key)
         self._dict_rows.discard(key)
         self._frame_cells.pop(key, None)
+        self._copy_plans.pop(key, None)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
         entry = self._store.pop(key, None)
@@ -630,6 +655,7 @@ class InMemoryBackend(CacheBackend):
             self._immutable_below.clear()
             self._dict_rows.clear()
             self._frame_cells.clear()
+            self._copy_plans.clear()
             self._gdsf_base.clear()
             self._seq_by_key.clear()
             self._current_size_bytes = 0

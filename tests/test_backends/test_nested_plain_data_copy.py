@@ -265,3 +265,54 @@ def test_a_list_of_ints_next_to_a_tuple_of_ints_is_copied_and_the_tuple_shared()
     assert copied["variables"]["c"] is not values
     assert copied["variables"]["m"][1][1][1] is not mixed[1][1][1]
     assert copied["rng_state"]["python"] is state
+
+
+def _records_entry() -> dict:
+    rows = [{"id": i, "user": "u", "amount": i * 0.5} for i in range(2000)]
+    return {
+        "variables": {"recs": rows, "pairs": [(i, "x") for i in range(50)], "tree": {"a": [1, [2, 3]]}},
+        "stdout": "",
+        "rng_state": {"python": (3, tuple(range(625)), None)},
+    }
+
+
+def test_a_hit_on_a_stored_entry_copies_its_parts_without_walking_it_again(monkeypatch):
+    """What a stored entry holds was checked when it was stored and cannot
+    change: a hit copies 300,000 record rows a dict at a time, without a
+    pass over every leaf asking whether it is still plain."""
+    backend = InMemoryBackend()
+    entry = _records_entry()
+    backend.set("k", entry, {})
+    walked: list[int] = []
+    real = _plain_data._tree_walk
+
+    def counting(*args):
+        for level, flat, types in real(*args):
+            walked.append(len(flat))
+            yield level, flat, types
+
+    monkeypatch.setattr(_plain_data, "_tree_walk", counting)
+    _meta, hit = backend.get("k")
+    assert hit == entry
+    # Only the small part that is neither rows, a list of immutables nor a
+    # leaf is walked: not the 6,000 values of the rows.
+    assert 0 < sum(walked) < 10
+    rows = hit["variables"]["recs"]
+    assert rows is not entry["variables"]["recs"] and rows[0] is not entry["variables"]["recs"][0]
+    rows[0]["amount"] = -1
+    hit["variables"]["pairs"].append(None)
+    hit["variables"]["tree"]["a"][1].append(4)
+    assert backend.get("k")[1] == entry
+    assert hit["rng_state"]["python"] is backend.get("k")[1]["rng_state"]["python"]
+
+
+def test_an_entry_two_names_share_a_row_of_keeps_sharing_it():
+    """A row both a list and a name hold is not copied part by part: the
+    two would come back as two dicts."""
+    entry = _records_entry()
+    entry["variables"]["first"] = entry["variables"]["recs"][0]
+    backend = InMemoryBackend()
+    backend.set("k", entry, {})
+    hit = backend.get("k")[1]
+    assert hit == entry
+    assert hit["variables"]["first"] is hit["variables"]["recs"][0]
