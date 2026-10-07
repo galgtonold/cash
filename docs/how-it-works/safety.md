@@ -170,7 +170,7 @@ cash spots side effects from the statement's source, without running it. So:
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
-<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @d70a1c80 -->
+<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `datetime.now()`), makes a
 fresh id (`uuid.uuid4()`) or asks for input (`input()`, `getpass.getpass()`)
 runs every time too. A statement that reads an environment variable by name

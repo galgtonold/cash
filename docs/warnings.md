@@ -457,7 +457,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @c034de28 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @4ae5d075 -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 
