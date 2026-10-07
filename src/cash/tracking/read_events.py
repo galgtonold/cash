@@ -113,6 +113,12 @@ def _on_open(args: tuple) -> None:
         if tracker is None:
             note_untracked_read(path, caller)
             return
+        if is_cash_internal(path):
+            # The cache's own lookups: each call a statement keys looks its
+            # entry up, and resolving and probing the path cost ~50 us of a
+            # ~2 us miss, 3 ms of the first 50 calls in `[f(i) for i in xs]`.
+            # The tracker drops these paths anyway, after resolving them.
+            return
         tracker.track_path(path)
         if "a" not in mode:
             # A file that was not there is an input too, and the docs say so --
