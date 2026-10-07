@@ -86,6 +86,9 @@ def read_code_text(path: str) -> str:
 
 #: `getsourcelines` answers: (path, mtime_ns, size, what) -> (lines, first line).
 _SOURCE_LINES: LruMemo[tuple, tuple[tuple[str, ...], int]] = LruMemo(CODE_OBJECTS)
+#: The same for code whose source ``linecache`` holds in memory (a notebook
+#: cell): (path, what) -> (the linecache entry read, lines, first line).
+_HELD_LINES: LruMemo[tuple, tuple[tuple, tuple[str, ...], int]] = LruMemo(CODE_OBJECTS)
 #: Where each class in a file starts, from one parse per file version:
 #: (path, mtime_ns, size) -> {qualname: 0-based line}. Few entries: one is
 #: needed while a file's classes are read, and each holds a whole file's map.
@@ -129,6 +132,10 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
     """
     obj = inspect.unwrap(obj)
     target = _source_target(obj)
+    if target is not None and target[0] == "code":
+        held = _held_source_lines(obj, target)
+        if held is not None:
+            return held
     version = settled_source_version(obj) if target is not None else None
     if version is None:
         return inspect.getsourcelines(obj)  # type: ignore[arg-type]
@@ -142,6 +149,37 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
         lines, first = inspect.getsourcelines(obj)  # type: ignore[arg-type]
     if source_version_unchanged(version):
         _SOURCE_LINES[key] = (tuple(lines), first)
+    return lines, first
+
+
+def _held_source_lines(obj: object, target: tuple) -> tuple[list[str], int] | None:
+    """`getsourcelines` for code whose file ``linecache`` holds in memory --
+    a notebook cell, ``exec`` source -- memoised on that entry; None for
+    code read from a file on disk, or not held at all.
+
+    Such an entry is replaced, never changed, when its source changes, and
+    ``inspect`` reads the lines from it and the first line from the code
+    alone: the same entry gives the same answer. Each read paid a failing
+    ``os.stat`` and re-tokenised the block, ~0.2 ms, and the upstream check
+    asks it of every cell's functions on every cell: 13 ms a cell by cell
+    300 of a notebook.
+    """
+    code = obj.__code__ if inspect.isfunction(obj) else (obj.__func__.__code__ if inspect.ismethod(obj) else obj)
+    if not inspect.iscode(code):
+        return None
+    path = code.co_filename
+    entry = linecache.cache.get(path)
+    if entry is None or len(entry) != 4 or entry[1] is not None:
+        return None
+    key = (path, target)
+    hit = _HELD_LINES.get(key)
+    if hit is not None and hit[0] is entry:
+        return list(hit[1]), hit[2]
+    lines, first = inspect.getsourcelines(obj)  # type: ignore[arg-type]
+    if linecache.cache.get(path) is entry:
+        # The entry itself is kept: an id compared after it was freed could
+        # be a new entry's.
+        _HELD_LINES[key] = (entry, tuple(lines), first)
     return lines, first
 
 

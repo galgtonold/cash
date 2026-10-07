@@ -182,3 +182,32 @@ def test_the_module_mutation_scan_is_memoised_per_file_version(tmp_path, monkeyp
     edited = time.time() - 30
     os.utime(path, (edited, edited))
     assert "COUNTER" not in mutable_globals.module_modified_globals(module)
+
+
+def _held_cell(name: str, source: str) -> dict:
+    """Compile *source* the way a notebook cell is: its lines held by
+    ``linecache`` under a name with no file behind it."""
+    linecache.cache[name] = (len(source), None, source.splitlines(True), name)
+    namespace: dict = {}
+    exec(compile(source, name, "exec"), namespace)
+    return namespace
+
+
+def test_a_cells_function_is_read_once_while_its_lines_are_held(monkeypatch):
+    name = "<cash-test-held-source>"
+    try:
+        fn = _held_cell(name, "def f(x):\n    return x + 1\n")["f"]
+        assert source_reading.getsource(fn) == "def f(x):\n    return x + 1\n"
+        calls = []
+        real = inspect.getsourcelines
+        monkeypatch.setattr(inspect, "getsourcelines", lambda obj: calls.append(obj) or real(obj))
+        assert source_reading.getsource(fn) == "def f(x):\n    return x + 1\n"
+        assert calls == []
+        # The cell run again with other text: a new entry, read again.
+        fn2 = _held_cell(name, "def f(x):\n    return x + 2\n")["f"]
+        assert source_reading.getsource(fn2) == "def f(x):\n    return x + 2\n"
+        # The old function's lines are the entry's now, as inspect answers too.
+        assert source_reading.getsource(fn) == "def f(x):\n    return x + 2\n"
+        assert len(calls) == 1
+    finally:
+        linecache.cache.pop(name, None)
