@@ -112,3 +112,63 @@ def test_a_warning_from_a_plain_call_names_the_users_line(call_cache):
         caught.clear()
         fn(1)  # this line: what the rewritten cell runs
     assert [w.filename for w in caught] == [__file__]
+
+
+def _run_rewritten(call_cache, source: str, ns: dict) -> int:
+    """Run *source* as the rewrite runs it; return how often it called ``resolve``."""
+    import ast
+
+    from cash.notebook.call_interception import wrap_eligible_calls
+
+    tree, sites = wrap_eligible_calls(ast.parse(source))
+    call_cache.set_sites(sites)
+    resolved = [0]
+
+    def counted(fn, index=0):
+        resolved[0] += 1
+        return call_cache.resolve(fn, index)
+
+    ns.update(__cash_call__=counted, __cash_plain__=call_cache.plain_callees, __cash_count__=call_cache.plain_counters)
+    exec(compile(tree, "<cell>", "exec"), ns)
+    return resolved[0]
+
+
+def test_the_rewritten_line_calls_a_plain_name_without_resolve(call_cache):
+    """``[f(i) for i in range(n)]``: once the site runs plain, its calls skip
+    ``resolve`` entirely (it cost 23 ms of 200,000 calls, where the plain
+    kernel took 30 ms for the whole cell), and every call is still counted."""
+
+    def f(i):
+        return i * 2
+
+    ns = {"f": f, "n": 5000}
+    resolved = _run_rewritten(call_cache, "d = [f(i) for i in range(n)]", ns)
+    assert ns["d"] == [i * 2 for i in range(5000)]
+    # The guarded calls, the timed plain ones, the one that switched the
+    # site, and `range`'s.
+    assert resolved <= cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES + 2
+    events = call_cache.drain_call_log()
+    assert sum(e["calls"] for e in events if e["call_source"] == "f(i)") == 5000
+
+
+def test_a_counted_call_reaches_the_log_after_the_next_statement_starts(call_cache):
+    def f(i):
+        return i * 2
+
+    ns = {"f": f, "n": 500}
+    _run_rewritten(call_cache, "d = [f(i) for i in range(n)]", ns)
+    _run_rewritten(call_cache, "e = 1 + f(2)", ns)
+    events = call_cache.drain_call_log()
+    assert sum(e["calls"] for e in events if e["call_source"] == "f(i)") == 500
+    assert call_cache.plain_callees[0] is not f, "a slot outlived its statement run"
+
+
+def test_after_the_log_is_drained_the_line_goes_through_resolve_again(call_cache):
+    def f(i):
+        return i * 2
+
+    ns = {"f": f, "n": 500}
+    _run_rewritten(call_cache, "d = [f(i) for i in range(n)]", ns)
+    call_cache.drain_call_log()
+    assert all(callee is not f for callee in call_cache.plain_callees)
+    assert call_cache.resolve(f, 0) is not f

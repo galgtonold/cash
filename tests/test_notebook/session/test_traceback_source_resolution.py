@@ -36,6 +36,18 @@ def test_register_cell_source_is_stable_and_resolvable():
     assert linecache.getline(a, 2).strip() == "return 1"
 
 
+def test_a_routed_call_is_shown_as_the_user_wrote_it():
+    """What runs routes each call through the cache; a traceback or a warning
+    quotes the user's own line."""
+    import ast
+
+    from cash.notebook.call_interception import wrap_eligible_calls
+
+    rewritten, _ = wrap_eligible_calls(ast.parse("d = [f(i) for i in range(n)] + [m.g(j)]"))
+    name = register_cell_source(ast.unparse(rewritten))
+    assert linecache.getline(name, 1).strip() == "d = [f(i) for i in range(n)] + [m.g(j)]"
+
+
 def test_register_cell_source_distinguishes_statements():
     """Different source -> different name, so line numbers can't collide."""
     a = register_cell_source("x = 1")

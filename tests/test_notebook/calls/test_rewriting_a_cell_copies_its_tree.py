@@ -44,7 +44,7 @@ def test_a_cell_with_nothing_to_wrap_comes_back_equal_and_as_a_new_tree():
 
 def test_the_rewritten_tree_compiles_and_runs_as_the_original_would():
     rewritten, _sites = wrap_eligible_calls(ast.parse(SOURCE))
-    namespace = {"score": lambda d: 1, "__cash_call__": lambda fn, index: fn}
+    namespace = {"score": lambda d: 1, "__cash_call__": lambda fn, index: fn, "__cash_plain__": [None] * len(_sites)}
 
     exec(compile(rewritten, "<cell>", "exec"), namespace)
 

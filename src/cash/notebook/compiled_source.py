@@ -27,6 +27,10 @@ CASH_FILENAME_PREFIX = "<cash-"
 #: neighbours, and a cycle would cost more than a constant.
 _HELPER = "__cash_call__"
 _USER_CALL = re.compile(r"__cash_call__\((.+?), \d+\)\(")
+#: A plain-name callee's spelling (``call_interception._routed``).
+_USER_NAME_CALL = re.compile(
+    r"\((\w+) if \1 is __cash_plain__\[\d+\] and __cash_count__\[\d+\]\(\) else __cash_call__\(\1, \d+\)\)\("
+)
 
 
 def register_cell_source(code: str) -> str:
@@ -46,7 +50,7 @@ def register_cell_source(code: str) -> str:
     # there. A pandas warning quoted that as the user's line; shown as
     # the user wrote it. What runs is ``code``, compiled by
     # the caller.
-    shown = _USER_CALL.sub(r"\1(", code) if _HELPER in code else code
+    shown = _USER_CALL.sub(r"\1(", _USER_NAME_CALL.sub(r"\1(", code)) if _HELPER in code else code
     linecache.cache[name] = (len(shown), None, shown.splitlines(True), name)
     return name
 

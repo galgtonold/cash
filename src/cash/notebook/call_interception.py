@@ -57,11 +57,21 @@ __all__ = [
     "wrap_eligible_calls",
     "CallSite",
     "HELPER_NAME",
+    "PLAIN_NAME",
+    "COUNT_NAME",
 ]
 
 #: Name bound in ``user_ns`` that resolves a callee to its cached counterpart.
 #: Dunder-prefixed so it cannot collide with a user's own names.
 HELPER_NAME = "__cash_call__"
+
+#: Names bound in ``user_ns`` to two lists, indexed like the sites: the
+#: callee a site now runs plain (``CallCache.resolve`` switches it), and a
+#: counter of the calls that skipped ``resolve`` for it. A plain-name callee
+#: checks them in the user's own line, at C speed, before calling ``resolve``:
+#: see `wrap_eligible_calls`.
+PLAIN_NAME = "__cash_plain__"
+COUNT_NAME = "__cash_count__"
 
 
 @dataclass(frozen=True)
@@ -381,14 +391,41 @@ def wrap_eligible_calls(
                     in_loop_unit=in_loop_unit,
                 )
             )
-            call.func = ast.Call(
-                func=ast.Name(id=HELPER_NAME, ctx=ast.Load()),
-                args=[call.func, ast.Constant(value=len(sites) - 1)],
-                keywords=[],
-            )
+            call.func = _routed(call.func, len(sites) - 1)
     if sites:
         ast.fix_missing_locations(new_tree)
     return new_tree, sites
+
+
+def _routed(func: ast.expr, index: int) -> ast.expr:
+    """*func* routed through ``resolve`` as site *index*.
+
+    A plain name is first compared with the callee the site runs plain::
+
+        (f if f is __cash_plain__[0] and __cash_count__[0]() else __cash_call__(f, 0))
+
+    Once the many-cheap-calls guard runs the site plain, its calls are the
+    user's own call plus a compare, a subscript and a C counter: no Python
+    frame of cash's. ``resolve`` cost ~0.12 us a call, 23 ms of the 0.03 s a
+    plain kernel takes for ``[f(i) for i in range(200_000)]``. Only a name:
+    reading it twice is reading it once, where an attribute or a call could
+    run user code twice.
+    """
+    routed = ast.Call(func=ast.Name(id=HELPER_NAME, ctx=ast.Load()), args=[func, ast.Constant(value=index)], keywords=[])
+    if not isinstance(func, ast.Name):
+        return routed
+
+    def slot(name: str) -> ast.Subscript:
+        return ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Constant(value=index), ctx=ast.Load())
+
+    plain = ast.BoolOp(
+        op=ast.And(),
+        values=[
+            ast.Compare(left=ast.Name(id=func.id, ctx=ast.Load()), ops=[ast.Is()], comparators=[slot(PLAIN_NAME)]),
+            ast.Call(func=slot(COUNT_NAME), args=[], keywords=[]),
+        ],
+    )
+    return ast.IfExp(test=plain, body=ast.Name(id=func.id, ctx=ast.Load()), orelse=routed)
 
 
 def _call_has_unpacking(call: ast.Call) -> bool:

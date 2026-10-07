@@ -17,14 +17,26 @@ decides whether the call is reached, exactly as before.
 """
 
 import ast
+import re
 
 from cash.notebook.call_interception import HELPER_NAME, CallSite, wrap_eligible_calls
+
+#: A plain-name callee is first compared with the callee its site runs plain
+#: (pinned in `test_a_name_callee_is_checked_against_its_plain_slot_first`);
+#: collapsed here so the other tests read the routing itself.
+_PLAIN_CHECK = re.compile(
+    r"\((\w+) if \1 is __cash_plain__\[(\d+)\] and __cash_count__\[\2\]\(\) else (__cash_call__\(\1, \2\))\)"
+)
+
+
+def _collapsed(text: str) -> str:
+    return _PLAIN_CHECK.sub(r"\3", text)
 
 
 def _rewrite(src: str) -> tuple[str, list[CallSite]]:
     tree = ast.parse(src)
     new_tree, sites = wrap_eligible_calls(tree)
-    return ast.unparse(new_tree), sites
+    return _collapsed(ast.unparse(new_tree)), sites
 
 
 class TestRewrite:
@@ -91,7 +103,18 @@ def test_rewrite_emits_site_index_and_table():
     assert sites[0].source == "compute(x)"
     assert sites[0].free_names == frozenset({"compute", "x"})
     assert sites[0].occurrence_index == 0
-    assert "__cash_call__(compute, 0)(x)" in ast.unparse(rewritten)
+    assert "__cash_call__(compute, 0)(x)" in _collapsed(ast.unparse(rewritten))
+
+
+def test_a_name_callee_is_checked_against_its_plain_slot_first():
+    """Once its site runs plain, a name is called from the user's line with no
+    cash frame between: a compare, a subscript and a C counter per call. An
+    attribute is read once, so it always goes through ``__cash_call__``."""
+    rewritten, _ = wrap_eligible_calls(ast.parse("out.append(compute(x) + m.predict(y))"))
+    assert ast.unparse(rewritten) == (
+        "out.append((compute if compute is __cash_plain__[0] and __cash_count__[0]() "
+        "else __cash_call__(compute, 0))(x) + __cash_call__(m.predict, 1)(y))"
+    )
 
 
 def test_identical_call_sites_get_distinct_occurrence_indices():
@@ -315,7 +338,7 @@ def test_selective_gate_wraps_only_the_accepted_call():
     """
     tree = ast.parse("out.append(compute(x) + other(y))")
     new_tree, sites = wrap_eligible_calls(tree, gate=lambda call: getattr(call.func, "id", None) == "compute")
-    out = ast.unparse(new_tree)
+    out = _collapsed(ast.unparse(new_tree))
     assert out == "out.append(__cash_call__(compute, 0)(x) + other(y))"
     assert len(sites) == 1
     assert sites[0].source == "compute(x)"

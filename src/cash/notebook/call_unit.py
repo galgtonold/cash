@@ -26,6 +26,7 @@ import ast
 import contextlib
 import dataclasses
 import functools
+import itertools
 import logging
 import pathlib as _pathlib
 import statistics
@@ -960,6 +961,11 @@ class CallUnit:
         return events
 
 
+#: What a site's `CallCache.plain_callees` slot holds while it does not run
+#: plain: no callee is this object.
+_NOT_PLAIN = object()
+
+
 class CallCache:
     """Resolves a callee to the thing that should actually be called.
 
@@ -1047,6 +1053,16 @@ class CallCache:
         self._plain_sites = self._call_unit.plain_sites
         #: The same by the index of this statement's site, emptied with it.
         self._plain_at: dict[int, list] = {}
+        #: Bound in ``user_ns`` (``call_interception.PLAIN_NAME`` and
+        #: ``COUNT_NAME``), indexed like the sites: the callee each site runs
+        #: plain, and a counter of the calls the rewritten line made to it
+        #: without calling `resolve`. Only ever grown, so an index a lambda
+        #: kept from an earlier statement still reads a slot.
+        self.plain_callees: list = []
+        self.plain_counters: list = []
+        #: Site index -> its `CallUnit.plain_sites` entry, for the sites whose
+        #: slots are set: their counts are moved there by `_fold_counters`.
+        self._counted_at: dict[int, list] = {}
 
     def begin_cell(self) -> None:
         self._call_unit.begin_cell()
@@ -1062,7 +1078,30 @@ class CallCache:
     def outermost_result(self):
         return self._call_unit.outermost_result()
 
+    def _run_direct(self, site_index: int, plain: list) -> None:
+        """Let the rewritten line call *plain*'s callee itself, counting each
+        call (see ``call_interception._routed``)."""
+        if site_index < len(self.plain_callees) and site_index not in self._counted_at:
+            self.plain_counters[site_index] = itertools.count(1).__next__
+            self.plain_callees[site_index] = plain[0]
+            self._counted_at[site_index] = plain
+
+    def _fold_counters(self) -> None:
+        """Move the calls the rewritten lines counted into their sites'
+        entries, and close the slots: the next call goes through `resolve`."""
+        for site_index, plain in self._counted_at.items():
+            self.plain_callees[site_index] = _NOT_PLAIN
+            # The counter starts at 1: its next value is the calls plus one.
+            plain[3] += self.plain_counters[site_index]() - 1
+            self.plain_counters[site_index] = None
+        self._counted_at.clear()
+
     def set_sites(self, sites: list[CallSite], plain_value_source: str | None = None) -> None:
+        self._fold_counters()
+        grow = len(sites) - len(self.plain_callees)
+        if grow > 0:
+            self.plain_callees.extend([_NOT_PLAIN] * grow)
+            self.plain_counters.extend([None] * grow)
         self._sites = sites
         self._plain_at.clear()
         # One call per statement run: each site's guard starts over.
@@ -1080,6 +1119,7 @@ class CallCache:
         ``drain_decorator_calls()`` or the badge, the ``@cache`` row and
         ``%cash_stats`` silently stop seeing intercepted calls.
         """
+        self._fold_counters()
         self._plain_at.clear()  # the unit empties `plain_sites`
         return self._call_unit.drain()
 
@@ -1112,6 +1152,7 @@ class CallCache:
                 self._plain_at[site_index] = plain
                 if plain[0] is fn:
                     plain[3] += 1
+                    self._run_direct(site_index, plain)
                     return fn
         if not interceptable(fn):
             return fn
