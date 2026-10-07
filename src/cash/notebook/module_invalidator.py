@@ -27,6 +27,9 @@ import sys
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from ..control_markers import strip_markers
+from ..diagnostics import warn_diagnostic
+from ..exceptions import CashWarning
 from .lineage_formula import imported_from, module_source_component, read_module_source_hash
 from .upstream.mismatch_classifier import import_only
 
@@ -49,6 +52,11 @@ def _defined_in_a_module(value: Any) -> bool:
     the module, which the propagation step re-runs.
     """
     return isinstance(value, type) or inspect.isroutine(value)
+
+
+def _first_line(code: str) -> str:
+    stripped = strip_markers(code).strip()
+    return stripped.splitlines()[0] if stripped else code
 
 
 class ModuleInvalidator:
@@ -97,6 +105,7 @@ class ModuleInvalidator:
 
         old_module_lineages = self._update_module_lineages(changed_modules, processor)
         self._clear_from_imported_tracking(changed_modules, processor)
+        self._schedule_state_rebuild(changed_modules, processor)
 
         if old_module_lineages:
             self._propagate_module_invalidation(
@@ -226,6 +235,46 @@ class ModuleInvalidator:
             if value is module and name != mod_name and not name.startswith("_")
         )
         return names
+
+    def _schedule_state_rebuild(self, changed_modules: dict[str, str], processor: StatementProcessor) -> None:
+        """Have the next upstream check rebuild the state cells set on each
+        reloaded module.
+
+        The reload ran the module's top level again: ``mylib.K = k``,
+        ``mylib.set_k(k)`` or ``mylib.CACHE.append(x)`` a cell ran is gone,
+        and the module holds what a bare import gives -- which is the lineage
+        step 1 gave its names. Each such statement is one of the module's
+        producers (``callee_reach.module_state_names``), so the simulation
+        of the cells above still ends on a lineage that has them, and the
+        check rebuilds the module from them, as it rebuilds a variable: in
+        notebook order, each with the inputs it had, restored from the cache
+        or rebuilt from their own producers, a generator put back where the
+        statement drew from it. Its names are made required inputs of that
+        check, whatever the cell reads.
+
+        A module no name of the notebook holds (only ``from mylib import
+        set_k``) is no variable to rebuild, and what was set on it is
+        reported instead.
+        """
+        state = processor.tracking_state
+        user_ns = self._shell.user_ns
+        for mod_name in changed_modules:
+            writers = state.module_state_writers.get(mod_name)
+            module = sys.modules.get(mod_name)
+            if not writers or module is None:
+                continue
+            names = {name for name in self._names_bound_to(mod_name) if user_ns.get(name) is module}
+            if names:
+                state.module_state_rebuilds.update(names)
+                continue
+            warn_diagnostic(
+                CashWarning,
+                "NOTEBOOK-RELOAD-STATE",
+                f"reloading the edited module {mod_name!r} dropped the state cells set on it "
+                f"(`{_first_line(writers[-1])}`), and cash cannot rebuild it: no name the notebook holds is "
+                "the module",
+                f"import the module itself (`import {mod_name}`) in a cell above them, or run them again.",
+            )
 
     # ------------------------------------------------------------------
     # Step 2 — clear execution tracking for from-imports

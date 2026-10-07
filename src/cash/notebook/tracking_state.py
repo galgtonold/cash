@@ -7,7 +7,6 @@ from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
 from cash.notebook.lineage_store import LineageStore
-from cash.notebook.module_state import ModuleStateWriter
 from cash.notebook.recorded_reads import ReadRecord
 
 __all__ = ["TrackingState"]
@@ -186,10 +185,16 @@ class TrackingState:
 
     # Local module name -> the statements that set state on it
     # (``callee_reach.module_state_writes``), in the order they last ran. A
-    # reload runs the module's top level again and drops that state; these
-    # put it back right after it, as the notebook left it (``module_state``).
-    # W: StatementProcessor. R: CellExecutor.
-    module_state_writers: dict[str, list[ModuleStateWriter]] = field(default_factory=dict)
+    # reload runs the module's top level again and drops that state; the
+    # upstream check rebuilds it from those of them the notebook holds, as
+    # it rebuilds a variable (``callee_reach.module_state_names``).
+    # W: StatementProcessor. R: ModuleInvalidator.
+    module_state_writers: dict[str, list[str]] = field(default_factory=dict)
+
+    # The names of reloaded modules whose state the next upstream check
+    # rebuilds: required inputs of that check, whatever the cell reads.
+    # W: ModuleInvalidator. R/emptied: UpstreamChecker.
+    module_state_rebuilds: set[str] = field(default_factory=set)
 
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind

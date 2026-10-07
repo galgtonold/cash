@@ -257,8 +257,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
         "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
-        "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded and a
-        # statement that set state on it raised when run again
+        "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded and cash
+        # cannot rebuild the state a cell set on it
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
         # -- RANDOM: a cached value that randomness makes non-reproducible ------

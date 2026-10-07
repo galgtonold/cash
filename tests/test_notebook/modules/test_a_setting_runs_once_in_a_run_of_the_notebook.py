@@ -30,8 +30,9 @@ def lib(tmp_path, monkeypatch):
     [
         ("{m}.LOG.append(v)", "{m}.LOG.append(v * 10)", ([1, 20], {})),
         ("{m}.CONFIG.update(a=v)", "{m}.LOG.extend([v, v])", ([2, 2], {"a": 1})),
+        ("for w in [v, v]:\n    {m}.LOG.append(w)", "{m}.CONFIG['a'] = v", ([1, 1], {"a": 2})),
     ],
-    ids=["append", "update_and_extend"],
+    ids=["append", "update_and_extend", "a_loop"],
 )
 def test_each_change_runs_once(cash_magics, mock_shell, lib, first, second, expected):
     cells = ["import {m}", "v = 1", first, "v = 2", second, "v = 3", "z = (list({m}.LOG), dict({m}.CONFIG))"]

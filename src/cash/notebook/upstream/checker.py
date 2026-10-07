@@ -11,7 +11,8 @@ from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...control_markers import strip_markers
-from ...exceptions import AmbiguousCellError, UpstreamStateError
+from ...diagnostics import warn_diagnostic
+from ...exceptions import AmbiguousCellError, CashWarning, UpstreamStateError
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from ..server_discovery import (
@@ -113,6 +114,9 @@ class UpstreamChecker:
         #: not hold and no cell id places, with the file's mtime then
         #: (``_unsaved_bindings``).
         self._unplaced_runs: list[tuple[frozenset[str], float | None]] = []
+        #: Whether the last check found the cell among the notebook's and
+        #: simulated the cells above it.
+        self._simulated = False
 
         #: Shared with the statement processor and the simulator: every
         #: tracking dict is read and written through it.
@@ -290,9 +294,15 @@ class UpstreamChecker:
         # moves without being named, as a generator named in the cell does: an
         # isolated re-run first puts it where a top-to-bottom run has it.
         required_inputs = required_inputs | reachable_generators(required_inputs, self.shell.user_ns)
+        # A reloaded module whose state cells set is rebuilt now, whatever the
+        # cell reads (``ModuleInvalidator._schedule_state_rebuild``).
+        rebuilds = {name for name in self.tracking_state.module_state_rebuilds if name in self.shell.user_ns}
+        self.tracking_state.module_state_rebuilds.clear()
+        required_inputs = required_inputs | rebuilds
 
         # Simulate the notebook statement by statement and compare the virtual
         # lineage with the in-memory state to find changed code.
+        self._simulated = False
         all_metrics, total_restore_time, total_execution_time = self._bring_up_to_date(
             cell_code,
             required_inputs,
@@ -304,6 +314,8 @@ class UpstreamChecker:
             control_structure_callback=control_structure_callback,
             cell_id=cell_id,
         )
+        if rebuilds and not self._simulated:
+            _warn_state_not_rebuilt(rebuilds, self.shell.user_ns)
 
         return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
 
@@ -644,6 +656,7 @@ class UpstreamChecker:
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
             self.vetter.vet(notebook_cells, cell_code, current_cell_idx, required_inputs)
+            self._simulated = True
 
             unsaved = self._unsaved_bindings(notebook_cells, notebook_path)
             self.simulator.restorer.guard = (lambda names: self._refuse_to_undo(unsaved, names)) if unsaved else None
@@ -705,3 +718,16 @@ class UpstreamChecker:
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("[UPSTREAM] Error in the upstream check: %s", e)
             raise UpstreamStateError(f"Failed to restore or simulate upstream state: {e}") from e
+
+
+def _warn_state_not_rebuilt(names: set[str], user_ns: dict[str, Any]) -> None:
+    """Report the reloaded modules whose state no simulation rebuilt: the
+    notebook's cells, or the cell's place among them, could not be found."""
+    for module in sorted({user_ns[name].__name__ for name in names if name in user_ns}):
+        warn_diagnostic(
+            CashWarning,
+            "NOTEBOOK-RELOAD-STATE",
+            f"reloading the edited module {module!r} dropped the state cells set on it, and cash cannot "
+            "rebuild it: it does not know the notebook's cells, or where this cell is among them",
+            "run the cells that set it again.",
+        )

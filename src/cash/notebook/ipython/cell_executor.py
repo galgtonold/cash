@@ -40,10 +40,8 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import io
-import sys
 import uuid
-from collections.abc import Awaitable, Callable, Generator, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -53,8 +51,6 @@ from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...diagnostics import warn_diagnostic
-from ...exceptions import CashWarning
 from ...remote_source import measured_validation as _measured_validation
 from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
@@ -509,7 +505,6 @@ class CellExecutor:
                     self._statement_processor,
                     per_module_changed_symbols,
                 )
-                self._replay_module_state(changed_modules)
 
                 notifications.append(module_reloaded_row(changed_modules))
                 for mod, path in changed_modules.items():
@@ -520,61 +515,6 @@ class CellExecutor:
             logger.debug("Failed to check/reload changed modules: %s", exc)
 
         return notifications
-
-    def _replay_module_state(self, changed_modules: Mapping[str, Any]) -> None:
-        """Put back the state the notebook's statements set on each reloaded module.
-
-        A reload runs the module's top level again: ``mylib.K = 7``, a
-        ``mylib.REGISTRY["a"] = ...`` or a ``mylib.set_k(7)`` a cell made is
-        gone, and the cells that made them are not run again -- the notebook
-        computed on the file's defaults, which neither a top-to-bottom run
-        nor the kernel before the edit had. In the order they last ran,
-        uncached and with their output dropped, each runs again when what it
-        reads holds what it held then; one that only binds module attributes
-        has the values it left set back when it would read something else
-        (``mylib.K = k`` with ``k`` rebound since, a draw from a generator
-        the draw moved on). Any other, or one that raises, is reported
-        (``NOTEBOOK-RELOAD-STATE``) and the rest still run.
-        """
-        state = self._statement_processor.tracking_state
-        writers = state.module_state_writers
-        done: set[str] = set()
-        for module in changed_modules:
-            for writer in list(writers.get(module, ())):
-                code = writer.code
-                if code in done:
-                    continue
-                done.add(code)
-                first_line = code.strip().splitlines()[0] if code.strip() else code
-                lineage = state.variable_lineage
-                unchanged = all(lineage.get(name) == held for name, held in writer.input_lineages.items())
-                if not unchanged and writer.left is not None:
-                    for (owner, attr), value in writer.left.items():
-                        if owner in sys.modules:
-                            setattr(sys.modules[owner], attr, value)
-                    continue
-                if not unchanged:
-                    writers[module].remove(writer)
-                    warn_diagnostic(
-                        CashWarning,
-                        "NOTEBOOK-RELOAD-STATE",
-                        f"reloading the edited module {module!r} dropped what `{first_line}` set on it, "
-                        "and what it reads changed since it ran, so it is not run again",
-                        "run the cell that sets it again.",
-                    )
-                    continue
-                try:
-                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                        exec(compile(code, "<cash: module state>", "exec", dont_inherit=True), self.shell.user_ns)  # noqa: S102 - replays the user's own statement
-                except Exception as exc:  # noqa: BLE001 - arbitrary user code
-                    writers[module].remove(writer)
-                    warn_diagnostic(
-                        CashWarning,
-                        "NOTEBOOK-RELOAD-STATE",
-                        f"reloading the edited module {module!r} dropped what `{first_line}` set on it, "
-                        f"and running it again raised {type(exc).__name__}: {exc}",
-                        "run the cell that sets it again.",
-                    )
 
     def _raise_failed_reload(
         self,

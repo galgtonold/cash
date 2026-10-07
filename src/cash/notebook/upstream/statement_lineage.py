@@ -38,6 +38,7 @@ from ...tracking.randomness import (
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
+from ..callee_reach import module_state_names
 from ..lineage_formula import (
     callable_source_component,
     held_lineage,
@@ -265,6 +266,10 @@ class StatementLineage:
         if tree is not None:
             outputs |= self._mutation_receivers(stmt_code, tree, virtual_modules)
             outputs |= effects.arg_mutations
+        if not is_control_body(stmt_code):
+            # A statement that sets state on a local module changes the
+            # module, as the runtime routes it (``MutationRouting.route``).
+            outputs |= module_state_names(stmt_code, self.shell.user_ns)
         return effects, inputs, outputs
 
     def is_unbound_builtin(self, name: str, bound: Mapping[str, str] | None = None) -> bool:

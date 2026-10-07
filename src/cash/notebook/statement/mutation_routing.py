@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from ...analysis.ast_util import called_names
 from ..call_key import changes_its_closure
-from ..callee_reach import module_state_writes
+from ..callee_reach import module_state_names, module_state_writes
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
@@ -91,6 +91,13 @@ class MutationRouting:
         # In a loop or branch body too, for the same reason as above.
         modules = module_state_writes(run.code, self.shell.user_ns)
         if modules:
+            # The module is an output too, as a list is of `items.append(x)`:
+            # its lineage moves with each statement that sets state on it, so
+            # once a reload drops that state the upstream check rebuilds it
+            # from them (`module_state_names`). The loop or branch owns its
+            # body's writes, as with any receiver.
+            if not is_control_body(run.code):
+                run.outputs = run.outputs | module_state_names(run.code, self.shell.user_ns)
             _skip(
                 run,
                 f"Sets state on module: {', '.join(sorted(modules))} (statement re-executes, so the module has it)",

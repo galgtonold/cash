@@ -16,6 +16,7 @@ import functools
 import inspect
 import sqlite3
 import sys
+import textwrap
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
@@ -28,7 +29,7 @@ from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
 from ..value_types import is_runtime_machinery
 
-__all__ = ["Reach", "module_state_writes", "reached_user_code"]
+__all__ = ["Reach", "module_state_names", "module_state_writes", "reached_user_code"]
 
 
 class Reach(NamedTuple):
@@ -147,9 +148,11 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     ``mylib.K = 7``, ``mylib.CONFIG["k"] = 7``, ``mylib.K += 1``,
     ``del mylib.K``, ``setattr(mylib, "K", 7)``, ``mylib.REGISTRY.update(...)``
     and a call of a module function that changes the module's globals
-    (``mylib.set_k(7)``, or ``set_k(7)`` imported from it). A reload runs the
-    module's top level again and drops all of these; the notebook's cells
-    that made them are what puts them back.
+    (``mylib.set_k(7)``, or ``set_k(7)`` imported from it), or of a notebook
+    function whose body does any of these. A reload runs the module's top
+    level again and drops all of these; the notebook's cells that made them
+    are what puts them back. A ``def`` sets nothing: its body runs when the
+    function is called.
     """
     if not code or not namespace:
         return frozenset()
@@ -157,6 +160,16 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     if tree is None:
         return frozenset()
     found: set[str] = set()
+    _state_writes(tree.body, namespace, found, set())
+    return frozenset(found)
+
+
+def _state_writes(
+    statements: Iterable[ast.AST], namespace: Mapping[str, Any], found: set[str], followed: set[int]
+) -> None:
+    """Add to *found* the local modules *statements* set state on, run
+    with *namespace* as their globals; *followed* are the notebook functions
+    already walked."""
 
     def rooted(node: ast.expr) -> None:
         """Add the local module the store target *node* sets something on."""
@@ -170,7 +183,15 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
             if isinstance(module, types.ModuleType) and _is_local(module):
                 found.add(module.__name__)
 
-    for node in ast.walk(tree):
+    pending = list(statements)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            # What runs at definition: the decorators and the defaults.
+            pending.extend(getattr(node, "decorator_list", ()))
+            pending.extend(d for d in (*node.args.defaults, *node.args.kw_defaults) if d is not None)
+            continue
+        pending.extend(ast.iter_child_nodes(node))
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
             targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
             for target in targets:
@@ -188,7 +209,71 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
             callee = _called(func, namespace)
             if isinstance(callee, types.FunctionType):
                 found |= _modules_changed_by(callee, namespace)
-    return frozenset(found)
+                if callee.__globals__ is namespace and id(callee) not in followed:
+                    followed.add(id(callee))
+                    _state_writes(_function_body(callee), namespace, found, followed)
+
+
+def _function_body(fn: types.FunctionType) -> list[ast.stmt]:
+    """The statements of *fn*'s body, from its source; none when it has none."""
+    try:
+        tree = parse_cached(textwrap.dedent(inspect.getsource(fn)))
+    except SOURCE_RETRIEVAL_ERRORS:
+        return []
+    if tree is None:
+        return []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return list(node.body)
+    return []
+
+
+def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, structure: bool = False) -> frozenset[str]:
+    """The names holding a local module *code* sets state on
+    (`module_state_writes`): ``mylib`` for ``mylib.K = k``,
+    ``mylib.cfg["a"] = v``, ``mylib.CACHE.append(x)`` or ``mylib.set_k(k)``.
+    The ones *code* names it by; when it names it by none (``set_k(k)``
+    imported from it), every name the namespace holds it by.
+
+    The module is a value of the notebook that ``import mylib`` made and
+    these statements change in place, so each of them is one of its
+    producers: its lineage moves with them, as a list's moves with
+    ``items.append(x)``. A reload of the edited module puts back the
+    import's state only, and the upstream check rebuilds the rest from these
+    producers, the way it rebuilds any variable.
+
+    A loop or branch is answered for as a whole only with *structure*: it
+    changes the module as it changes a list it appends to, through the
+    names its body changes (``control_structure_mutations``), so both
+    engines ask from there, never as of a plain statement.
+    """
+    if not code or not namespace:
+        return frozenset()
+    if not structure:
+        from .control_structures.common import is_control_structure  # noqa: PLC0415 - imports this module
+
+        tree = parse_cached(code)
+        if tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0]):
+            return frozenset()
+    mentioned = {root for root, _ in names_read(code)}
+    # Only a module, or a function that may call into one, can lead there.
+    if not any(isinstance(namespace.get(root), (types.ModuleType, types.FunctionType, type)) for root in mentioned):
+        return frozenset()
+    modules = module_state_writes(code, namespace)
+    if not modules:
+        return frozenset()
+    names: set[str] = set()
+    for module in modules:
+        value = sys.modules.get(module)
+        if value is None:
+            continue
+        bound = {
+            name
+            for name, held in list(namespace.items())
+            if held is value and (name == module or not name.startswith("_"))
+        }
+        names |= (bound & mentioned) or bound
+    return frozenset(names)
 
 
 def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) -> set[str]:

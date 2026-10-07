@@ -18,6 +18,7 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...source_norm import exact_source_digest
 from ..cache_key import statement_source_hash
+from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
 from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
@@ -69,7 +70,11 @@ class ControlSimulation:
             lambda name: is_module_name(name, user_ns, virtual_modules),
         )
         vars_mutated_by_loops.update(mutated_vars)
-        return mutated_vars
+        # A local module the structure sets state on moves on too, as the
+        # runtime's ``update_lineage_after_execution`` moves it; but it is
+        # not trusted in memory as a loop's accumulator is: a reload drops
+        # its state, which only its producers put back.
+        return mutated_vars | module_state_names(ast.unparse(node), user_ns, structure=True)
 
     def _bump_mutated(
         self,
