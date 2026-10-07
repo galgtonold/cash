@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @fce69c82, cash/decorator/store.py:ResultStore.store @e0b309b3, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @fb45e2ba, cash/decorator/store.py:ResultStore.store @435bcd32, cash/decorator/store.py:ResultStore.restore_identity @f99feaea -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -400,7 +400,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @fce69c82 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @fb45e2ba -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.
@@ -490,7 +490,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @0e5f2f74 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @6a50fa96 -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key

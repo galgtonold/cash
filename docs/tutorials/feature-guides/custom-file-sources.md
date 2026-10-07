@@ -107,7 +107,7 @@ A URL (`s3://…`, `https://…`) is **not** a file here. It is treated as a loc
 path that does not exist, so the entry never notices the object changing. Use
 `RemoteFileDataSource` for remote data (below).
 
-<!-- claim: cash/file_source.py:FileDataSource @dc27443c broad="the content-digest contract is a property of the whole class" -->
+<!-- claim: cash/file_source.py:FileDataSource @ec702e4c broad="the content-digest contract is a property of the whole class" -->
 !!! note "`file_depends_on=` or `FileDataSource`?"
     `FileDataSource(path)` is the `DataSource` for `depends_on=` and
     `dynamic_depends_on=`. It puts the file's **content digest** in the key,

@@ -33,7 +33,7 @@ first try.
 
 === "Notebook"
 
-    <!-- claim: cash/notebook/badge_renderer/view_builder.py:_bug_report_url @79a186f6 -->
+    <!-- claim: cash/notebook/badge_renderer/view_builder.py:_bug_report_url @83c876f0 -->
     Open the badge's panel: it ends with a **Report incorrect caching**
     link. The link opens a new issue filled in with the badge's rows, the
     source of the notebook's cells, your cash and Python versions and the
