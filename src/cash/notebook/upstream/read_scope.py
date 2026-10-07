@@ -21,7 +21,7 @@ from ...analysis.namespace_effects import (
 )
 from .._protocols import ShellProtocol
 from .._trace import trace_event
-from ..cache_key import read_provenance_key
+from ..cache_key import read_provenance_key, read_provenance_writes
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 
@@ -75,11 +75,29 @@ class ReadScope:
         self.shell = shell
         self.tracking_state = tracking_state
         self.probe = probe
+        #: Statements the backend holds no read record for, as of the
+        #: `read_provenance_writes` count in `_unrecorded_as_of`. Asked of
+        #: every ``def``'s callers above the cell on every cell: a backend
+        #: lookup each, 58 a cell near cell 300 of a long notebook.
+        self._unrecorded: set[str] = set()
+        self._unrecorded_as_of = read_provenance_writes()
 
     def _persisted_reads(self, code: str) -> set[str] | None:
-        """Files *code* read when it last ran, from the backend, or ``None``."""
+        """Files *code* read when it last ran, from the backend, or ``None``.
+
+        A statement with no record is remembered until this process writes
+        one. A record another process writes meanwhile is not seen: the
+        read set then stays unknown, which re-fires writers, never skips one.
+        """
+        writes = read_provenance_writes()
+        if writes != self._unrecorded_as_of:
+            self._unrecorded.clear()
+            self._unrecorded_as_of = writes
+        if code in self._unrecorded:
+            return None
         record = self.probe.record(read_provenance_key(code))
         if not record or not record.get("read_provenance"):
+            self._unrecorded.add(code)
             return None
         return set(record.get("paths") or ())
 

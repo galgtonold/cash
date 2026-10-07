@@ -39,7 +39,9 @@ __all__ = [
     "control_outcome_key",
     "statement_source_hash",
     "write_provenance_key",
+    "note_read_provenance_written",
     "read_provenance_key",
+    "read_provenance_writes",
 ]
 
 
@@ -82,6 +84,22 @@ def read_provenance_key(code: str) -> str:
     writer, dragging in the expensive producers of their payloads.
     """
     return "readprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+#: How many read-provenance records this process has written: a reader that
+#: remembers which statements have none asks again once it moves.
+_read_provenance_writes = 0
+
+
+def note_read_provenance_written() -> None:
+    """A read-provenance record was just written (`read_provenance_key`)."""
+    global _read_provenance_writes
+    _read_provenance_writes += 1
+
+
+def read_provenance_writes() -> int:
+    """How many read-provenance records this process has written."""
+    return _read_provenance_writes
 
 
 def import_bindings_key(code: str) -> str:

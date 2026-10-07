@@ -26,6 +26,7 @@ from cash.notebook.cache_key import (
     carrier_advances_key,
     import_bindings_key,
     mutation_verdict_key,
+    note_read_provenance_written,
     read_provenance_key,
     write_provenance_key,
 )
@@ -260,6 +261,7 @@ class StatementRecords:
                 {"read_provenance": True, "paths": paths, "code": code, "ttl": None},
             )
             written[code] = paths
+            note_read_provenance_written()
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s read-provenance persistence failed", _LOG_PROCESSOR)
 
