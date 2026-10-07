@@ -1,9 +1,8 @@
 """An intercepted call whose result cannot be copied is not served by
 reference.
 
-The RAM tier keeps a value it cannot deep-copy -- one holding a lock or a
-connection, a chain of objects too deep for deepcopy -- as the object
-itself, unless the entry requires a copy. The call cache did not ask, so
+The RAM tier keeps a value it cannot copy -- one holding a lock or a
+connection -- as the object itself, unless the entry requires a copy. The call cache did not ask, so
 ``st = build()`` run again handed back the very object of the first run,
 with every change made to it since, where plain Python builds a fresh one.
 """
@@ -51,12 +50,29 @@ def build_chain():
     return head
 
 
-@pytest.mark.parametrize("build", [build_store, build_chain], ids=["a lock", "a deep chain"])
-def test_a_second_call_builds_a_fresh_object(call_cache, build):
+def _resolved(call_cache, build):
     call_cache.set_sites([CallSite(source="build()", free_names=frozenset({build.__name__}), occurrence_index=0)])
-    cached = call_cache.resolve(build)
+    return call_cache.resolve(build)
+
+
+def test_a_second_call_builds_a_fresh_object(call_cache):
+    cached = _resolved(call_cache, build_store)
     first = cached()
     second = cached()
     third = cached()
     assert first is not second and second is not third
     assert not any(e["cache_hit"] for e in call_cache.drain_call_log())
+
+
+def test_a_chain_too_deep_for_deepcopy_is_served_as_a_full_copy(call_cache):
+    """Control: the RAM tier copies by a pickle round trip, which takes a
+    chain deepcopy cannot, so a hit is served -- a fresh copy, whole."""
+    cached = _resolved(call_cache, build_chain)
+    first = cached()
+    second = cached()
+    assert first is not second and first.next is not second.next
+    length, node = 0, second
+    while node is not None:
+        length, node = length + 1, node.next
+    assert length == 3000
+    assert [e["cache_hit"] for e in call_cache.drain_call_log()] == [False, True]
