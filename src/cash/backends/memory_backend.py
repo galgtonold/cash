@@ -35,6 +35,10 @@ __all__ = ["InMemoryBackend"]
 _PREMADE_ITEMS_MAX = 64
 
 
+#: `InMemoryBackend._copy_plans` value for an entry the first hit plans.
+_PLAN_ON_FIRST_HIT = object()
+
+
 class InMemoryBackend(CacheBackend):
     """Entries held in this process's memory, gone when the process ends.
 
@@ -96,7 +100,7 @@ class InMemoryBackend(CacheBackend):
         self._frame_cells: dict[str, dict[int, bool | None]] = {}
         #: Per key, how a hit copies a dict stored through `spine_copy` --
         #: a notebook entry, a JSON-like result -- part by part
-        #: (`_plain_data.copy_plan`). Decided once when it is stored: the
+        #: (`_plain_data.copy_plan`). Decided once, by the first hit: the
         #: stored value is private and never written.
         self._copy_plans: dict[str, Any] = {}
         #: GreedyDual-Size-Frequency state for the byte cap (see
@@ -135,6 +139,7 @@ class InMemoryBackend(CacheBackend):
         record_cells: dict[int, bool] | None = None,
         by_reference: list[bool] | None = None,
         by_spine: list[bool] | None = None,
+        walk: list | None = None,
     ) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
@@ -158,6 +163,8 @@ class InMemoryBackend(CacheBackend):
         A polars frame is not a pandas one: it has no ``copy()``, and
         ``deepcopy`` of it is a ``clone()``, which shares its immutable
         buffers and so costs about a millisecond whatever its size.
+
+        *walk* is `_plain_data.tree_walk` of *value*, when the caller has it.
         """
         try:
             value_type = type(value)
@@ -178,7 +185,7 @@ class InMemoryBackend(CacheBackend):
             if value_type is dict or value_type is list or value_type is tuple:
                 # JSON-like data -- an index, records, a dict of lists: one
                 # step per container, where deepcopy took one per leaf.
-                copied = _plain_data.spine_copy(value)
+                copied = _plain_data.spine_copy(value, walk=walk)
                 if copied is not None:
                     if by_spine is not None:
                         by_spine.append(True)
@@ -508,6 +515,12 @@ class InMemoryBackend(CacheBackend):
             return metadata, (list(value) if type(value) is list else value)
         if dict_rows:
             return metadata, list(map(dict, value))
+        if plan is _PLAN_ON_FIRST_HIT:
+            plan = _plain_data.copy_plan(value)
+            with self._lock:
+                entry = self._store.get(key)
+                if entry is not None and entry[1] is value:
+                    self._copy_plans[key] = plan
         if plan is not None:
             copied = _plain_data.copy_by_plan(value, plan)
             if copied is not None:
@@ -524,8 +537,13 @@ class InMemoryBackend(CacheBackend):
         # separate walks were most of promoting two million parsed rows here.
         plain = _plain_data.profile(value)
         dict_rows_size = None if plain is not None else _plain_data.dict_rows_profile(value)
+        # JSON-like data -- a notebook entry's payload -- is walked once, for
+        # its size and then its copy: a walk is a pass over every leaf.
+        walk = None if plain is not None or dict_rows_size is not None else _plain_data.tree_walk(value)
         if dict_rows_size is not None:
             size = dict_rows_size
+        elif walk is not None:
+            size = _plain_data.tree_size(value, walk)
         elif plain is None:
             size = memory_footprint(value)
         else:
@@ -570,11 +588,15 @@ class InMemoryBackend(CacheBackend):
                 record_cells=frame_cells,
                 by_reference=fell_back,
                 by_spine=by_spine,
+                walk=walk,
             )
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
-                # each on its own, each the fastest way it allows.
-                plan = _plain_data.copy_plan(stored)
+                # each on its own, each the fastest way it allows. Planned
+                # by the first hit: the plan walks every leaf again (3 ms of
+                # a 200,000-int list's 15 ms store), and most entries are
+                # never read.
+                plan = _PLAN_ON_FIRST_HIT
             if required and None in frame_cells.values():
                 # A frame whose object cells pickle cannot copy (a worker
                 # holding a lock) would share those cells with every hit.

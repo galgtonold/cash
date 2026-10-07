@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import functools
 import gc
 import operator
 import pickle
@@ -488,10 +489,19 @@ def _level_size(flat: list) -> int:
     n = len(flat)
     if n <= SIZE_EXACT_UP_TO:
         return sum(map(sys.getsizeof, flat))
-    # With replacement: `choices` draws a float per pick, where `sample`
-    # draws bits until one falls in range, 2-3x slower (10 ms at 200,000).
-    picks = random.Random(n).choices(range(n), k=SIZE_SAMPLE)
-    return sum(map(sys.getsizeof, map(flat.__getitem__, picks))) * n // SIZE_SAMPLE
+    return sum(map(sys.getsizeof, map(flat.__getitem__, _picks(n)))) * n // SIZE_SAMPLE
+
+
+@functools.lru_cache(maxsize=16)
+def _picks(n: int) -> tuple[int, ...]:
+    """The positions `_level_size` samples a level of *n* items at.
+
+    Kept: drawing them was 2.5 ms of the 3.5 ms a 200,000-item level took,
+    and storing one value sizes its levels more than once. With replacement:
+    `choices` draws a float per pick, where `sample` draws bits until one
+    falls in range, 2-3x slower (10 ms at 200,000).
+    """
+    return tuple(random.Random(n).choices(range(n), k=SIZE_SAMPLE))
 
 
 def profile(value: Any) -> tuple[int, bool, list[set]] | None:
@@ -631,7 +641,7 @@ def _put_at(target: list, mask: list[bool], values) -> None:
     deque(map(target.__setitem__, compress(range(len(target)), mask), values), maxlen=0)
 
 
-def spine_copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
+def spine_copy(value: Any, memo: dict[int, Any] | None = None, walk: list | None = None) -> Any:
     """A copy of nested plain data, or of JSON-like data (exact dicts, lists
     and tuples over immutable leaves), that rebuilds only what can be written
     into.
@@ -658,11 +668,13 @@ def spine_copy(value: Any, memo: dict[int, Any] | None = None) -> Any:
     names in one stored entry still comes back as one object; and gives up
     when a list or dict in *value* is already there -- copied for another
     name, which must keep sharing it.
+
+    *walk* is `tree_walk` of *value*, when the caller has it.
     """
     if type(value) not in TREE_NODES:
         return None
     with _gc_paused():
-        return _spine_copy(value, memo)
+        return _spine_copy(value, memo, walk)
 
 
 #: `copy_plan` follows a dict of at most this many keys, this near the top,
@@ -724,12 +736,12 @@ def copy_by_plan(value: Any, plan: Any) -> Any:
 
 
 def _tree_walk(value: Any, leaves: frozenset):
-    """Yield ``(containers, flat, types)`` for each level of JSON-like
-    *value* (exact dicts, lists and tuples over *leaves*): the containers at
-    the level, what they hold in their order (a dict's values), and the
-    exact types of that. Stops after a level of leaves; raises `_NotPlain`
-    on anything else, a dict key that is not a leaf, or more than
-    `MAX_LEVELS` levels (or a cycle).
+    """Yield ``(containers, flat, types, key types)`` for each level of
+    JSON-like *value* (exact dicts, lists and tuples over *leaves*): the
+    containers at the level, what they hold in their order (a dict's
+    values), the exact types of that, and of the level's dict keys. Stops
+    after a level of leaves; raises `_NotPlain` on anything else, a dict key
+    that is not a leaf, or more than `MAX_LEVELS` levels (or a cycle).
 
     `tree_levels` without the order: its flat puts the lists' items before
     the dicts' values, where a copy needs each container's items together.
@@ -737,6 +749,7 @@ def _tree_walk(value: Any, leaves: frozenset):
     level = [value]
     for _ in range(MAX_LEVELS):
         kinds = set(map(type, level))
+        key_types: set = set()
         if dict in kinds:
             if len(kinds) == 1:
                 dicts, held = level, map(dict.values, level)
@@ -745,7 +758,8 @@ def _tree_walk(value: Any, leaves: frozenset):
                 dicts = list(compress(level, is_dict))
                 held = list(level)
                 _put_at(held, is_dict, map(dict.values, dicts))
-            if not set(map(type, chain.from_iterable(dicts))) <= leaves:
+            key_types = set(map(type, chain.from_iterable(dicts)))
+            if not key_types <= leaves:
                 raise _NotPlain
             flat = list(chain.from_iterable(held))
         else:
@@ -753,25 +767,36 @@ def _tree_walk(value: Any, leaves: frozenset):
         types = set(map(type, flat))
         if not types <= leaves | _NODES:
             raise _NotPlain
-        yield level, flat, types
+        yield level, flat, types, key_types
         if types.isdisjoint(_NODES):
             return
         level = flat if types <= _NODES else list(compress(flat, map(_NODES.__contains__, map(type, flat))))
     raise _NotPlain
 
 
-def tree_size(value: Any) -> int | None:
-    """`profile`'s size for JSON-like data (`_tree_walk`): every container,
-    key and leaf ``sys.getsizeof``-summed a level at a time; None for
-    anything else."""
+def tree_walk(value: Any) -> list | None:
+    """The levels of JSON-like *value* over any leaf (`_tree_walk`), or None
+    for anything else: walked once for both `tree_size` and `spine_copy`
+    when a value is sized and then copied, each walk a pass over every leaf."""
     if type(value) not in TREE_NODES:
         return None
-    total = sys.getsizeof(value)
-    leaves = frozenset(LEAF_TYPES + fake_clock()[0])
     try:
         with _gc_paused():  # a dict's values view per dict, see `_gc_paused`
-            levels = list(_tree_walk(value, leaves))
-        for level, flat, _types in levels:
+            return list(_tree_walk(value, frozenset(LEAF_TYPES + fake_clock()[0])))
+    except (_NotPlain, TypeError):
+        return None
+
+
+def tree_size(value: Any, walk: list | None = None) -> int | None:
+    """`profile`'s size for JSON-like data (`_tree_walk`): every container,
+    key and leaf ``sys.getsizeof``-summed a level at a time; None for
+    anything else. *walk* is `tree_walk` of *value*, when the caller has it."""
+    levels = tree_walk(value) if walk is None else walk
+    if levels is None:
+        return None
+    total = sys.getsizeof(value)
+    try:
+        for level, flat, _types, _key_types in levels:
             dicts = list(compress(level, _of_kind(level, dict))) if dict in set(map(type, level)) else ()
             if dicts:
                 total += _level_size(list(chain.from_iterable(dicts)))
@@ -781,13 +806,23 @@ def tree_size(value: Any) -> int | None:
     return total
 
 
-def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None) -> Any:
+def _copy_levels(walk: list):
+    """*walk*'s levels while they hold only what a copy may share (`_COPY_LEAVES`),
+    as `_tree_walk` over those leaves would yield them."""
+    for level, flat, types, key_types in walk:
+        if not (types <= _COPY_LEAVES | _NODES and key_types <= _COPY_LEAVES):
+            raise _NotPlain
+        yield level, flat, types, key_types
+
+
+def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None, walk: list | None = None) -> Any:
     # `nodes[k]`: the containers at level k; `flats[k]`: what they hold.
     nodes: list[list] = []
     flats: list[list] = []
     frozen: list[bool] = []
     try:
-        for level, flat, types in _tree_walk(value, _COPY_LEAVES):
+        levels = _tree_walk(value, _COPY_LEAVES) if walk is None else _copy_levels(walk)
+        for level, flat, types, _key_types in levels:
             nodes.append(level)
             flats.append(flat)
             # Tuples over tuples and immutables, and so the levels below

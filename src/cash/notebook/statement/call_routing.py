@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
-from cash.notebook.call_interception import HELPER_NAME, wrap_eligible_calls
+from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, wrap_eligible_calls
 from cash.notebook.call_refs import with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
 from cash.tracking.file_tracker import tracking_seconds
@@ -459,6 +459,8 @@ class CallRouting:
             call_cache.set_sites(sites, plain_value_source=plain[0] if plain else None)
             self._calls_wrapped_for = code
             self.shell.user_ns[HELPER_NAME] = call_cache.resolve
+            self.shell.user_ns[PLAIN_NAME] = call_cache.plain_callees
+            self.shell.user_ns[COUNT_NAME] = call_cache.plain_counters
             return new_code, rewritten
         except (SyntaxError, ValueError, TypeError, AttributeError):
             logger.debug("%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR)

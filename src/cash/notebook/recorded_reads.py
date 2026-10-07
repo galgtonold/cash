@@ -110,8 +110,10 @@ def read_parts(code: str, user_ns: Mapping[str, Any] | None) -> ReadParts:
     """What the environment reads and the module data in *code* hold now."""
     if not code or not user_ns:
         return ReadParts()
-    env = tuple(environment_digests(statement_environment_reads(code, user_ns)))
-    mod = tuple(module_data_digests(reached_user_code(code, user_ns)))
+    # One reach for both: a keyed call builds this for every call.
+    reach = reached_user_code(code, user_ns)
+    env = tuple(environment_digests(statement_environment_reads(code, user_ns, reach)))
+    mod = tuple(module_data_digests(reach))
     return ReadParts(env, mod)
 
 
