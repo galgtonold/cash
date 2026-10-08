@@ -196,9 +196,11 @@ The statement changes an object made in an earlier cell (`out.append(...)`,
 `d[k] = v`, `df.sort_values(inplace=True)`) instead of producing a new value.
 There is nothing to restore that would repeat the change, so the statement runs
 every time and cash marks everything downstream as changed. The same holds for a
-bare call that changes its argument and returns nothing, such as
-`sc.pp.calculate_qc_metrics(adata, inplace=True)`: cash compares the arguments
-before and after, and runs the call every time from then on.
+bare call that changes its argument, such as
+`sc.pp.calculate_qc_metrics(adata, inplace=True)`, and for a function of your
+own that changes its argument and returns a result, such as
+`summary = add_features(df)`: cash compares the arguments before and after,
+and runs the call every time from then on.
 
 **Fix:** assign a new value instead: `out = [f(e) for e in items]`,
 `df = df.sort_values(...)`. For estimators, see

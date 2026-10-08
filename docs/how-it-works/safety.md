@@ -103,7 +103,7 @@ again. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5435d3b3, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @745e10a2, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @745e10a2, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @5d967cc1 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
@@ -126,7 +126,12 @@ A method call has no assignment target, so cash classifies its object:
   the object of a call whose result is kept (`history = net.fit(X)`) the first
   time the statement runs, unless cash knows its methods: a builtin container,
   a frame, an array or a random generator. One that cannot be fingerprinted
-  counts as changed.
+  counts as changed. A variable handed to a function of your own (one defined
+  in the notebook or in a module of your project) is fingerprinted wherever
+  the call is: `summary = add_features(df)`, `r = work(s.d)` (the whole of `s`),
+  `rs = [work(d) for d in ds]` (all of `ds`). There one that cannot be
+  fingerprinted, such as a database connection, does not count as changed. A
+  library function whose result is kept (`m = np.mean(arr)`) is not watched.
 
 A changed object gets a new lineage from the statement, so everything
 downstream of it misses, and the statement itself is not cached. Restoring it

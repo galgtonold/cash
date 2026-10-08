@@ -15,13 +15,13 @@ from cash.analysis.aliases import aliased_sources, bare_alias_targets
 from cash.analysis.cacheability import StatementAnalysis, analyze_statement
 from cash.analysis.callee_effects import (
     callee_global_mutations,
+    call_arg_targets,
     function_arg_mutations,
     mutating_partials,
     params_mutated_in_function,
     partial_arg_mutations,
     reduce_free_mutations,
     source_global_mutations,
-    standalone_call_arg_targets,
     stateful_closure_vars,
     stateful_self_functions,
 )
@@ -1121,36 +1121,49 @@ class TestParamsMutatedInFunction:
         assert self._params("def f(*, d):\n    d.append(1)") == {"d"}
 
 
-class TestStandaloneCallArgTargets:
-    """``standalone_call_arg_targets`` extracts top-level bare-Expr Name-calls and
-    their positional/keyword variable arguments."""
+class TestCallArgTargets:
+    """``call_arg_targets`` extracts the Name-calls of a statement, bare or
+    not, and the variables each positional/keyword argument hands over."""
 
     @staticmethod
     def _targets(code):
-        return standalone_call_arg_targets(ast.parse(code))
+        return call_arg_targets(ast.parse(code))
 
     def test_single_positional(self):
-        assert self._targets("f(data)") == frozenset({("f", ("data",), ())})
+        assert self._targets("f(data)") == frozenset({("f", (frozenset({"data"}),), ())})
 
     def test_multiple_positional(self):
-        assert self._targets("f(a, b)") == frozenset({("f", ("a", "b"), ())})
+        assert self._targets("f(a, b)") == frozenset({("f", (frozenset({"a"}), frozenset({"b"})), ())})
 
     def test_keyword_arg(self):
-        assert self._targets("f(x=data)") == frozenset({("f", (), (("x", "data"),))})
+        assert self._targets("f(x=data)") == frozenset({("f", (), (("x", frozenset({"data"})),))})
 
-    def test_non_name_arg_is_none(self):
-        assert self._targets("f(a, [1, 2])") == frozenset({("f", ("a", None), ())})
+    def test_non_name_arg_hands_over_nothing(self):
+        assert self._targets("f(a, [1, 2])") == frozenset({("f", (frozenset({"a"}), frozenset()), ())})
 
-    def test_starred_arg_is_none(self):
-        assert self._targets("f(*args)") == frozenset({("f", (None,), ())})
+    def test_no_position_is_known_after_a_starred_arg(self):
+        assert self._targets("f(*args, b)") == frozenset({("f", (), ())})
 
     def test_method_call_excluded(self):
         # obj.method(x) is handled by the method-receiver path, not here.
         assert self._targets("obj.method(data)") == frozenset()
 
-    def test_captured_result_excluded(self):
-        # r = f(data) is not a bare Expr -> excluded (pure calls capture results).
-        assert self._targets("r = f(data)") == frozenset()
+    def test_a_kept_result_is_included(self):
+        assert self._targets("r = f(data)") == frozenset({("f", (frozenset({"data"}),), ())})
+
+    def test_a_part_of_a_variable_hands_over_the_variable(self):
+        assert self._targets("r = f(s.d, t['k'])") == frozenset({("f", (frozenset({"s"}), frozenset({"t"})), ())})
+
+    def test_a_comprehension_target_hands_over_what_it_iterates(self):
+        assert self._targets("rs = [f(d) for i, d in enumerate(ds)]") == frozenset(
+            {("f", (frozenset({"ds"}),), ()), ("enumerate", (frozenset({"ds"}),), ())}
+        )
+
+    def test_a_deferred_call_is_excluded(self):
+        assert self._targets("g = lambda: f(data)") == frozenset()
+
+    def test_a_loop_body_is_left_to_the_loop(self):
+        assert self._targets("for d in ds:\n    f(d)") == frozenset()
 
 
 class TestFunctionArgMutations:
@@ -1187,8 +1200,21 @@ class TestFunctionArgMutations:
     def test_unknown_function_excluded(self):
         assert self._muts("mystery(data)") == frozenset()
 
-    def test_captured_result_excluded(self):
-        assert self._muts("r = append_one(data)") == frozenset()
+    def test_a_kept_result_still_mutates(self):
+        # `r = append_one(data)` changes `data` as much as the bare call does.
+        assert self._muts("r = append_one(data)") == {"data"}
+
+    def test_a_nested_call_mutates(self):
+        assert self._muts("print(bump(cfg))") == {"cfg"}
+
+    def test_a_comprehension_mutates_what_it_iterates(self):
+        assert self._muts("rs = [bump(d) for d in configs]") == {"configs"}
+
+    def test_an_attribute_argument_mutates_its_holder(self):
+        assert self._muts("r = bump(state.cfg)") == {"state"}
+
+    def test_a_pure_call_whose_result_is_kept_mutates_nothing(self):
+        assert self._muts("y = pure(x)") == frozenset()
 
 
 class TestInterproceduralArgMutations:

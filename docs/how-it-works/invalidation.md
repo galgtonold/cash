@@ -193,7 +193,7 @@ on disk.
 
 ### Mutation bumps the receiver's lineage
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5435d3b3 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f -->
 `items.append(x)` assigns nothing, but it changes `items`. When cash decides a
 method call changed its receiver, the receiver gets a new lineage from that
 statement, so everything built from it downstream misses. How cash decides

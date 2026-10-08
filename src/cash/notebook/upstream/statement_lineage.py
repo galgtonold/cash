@@ -28,7 +28,7 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import bare_call_argument_names, bare_call_arguments
+from ...analysis.namespace_effects import call_argument_names, call_arguments
 from ..consumables import watched_call_receivers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
@@ -222,15 +222,15 @@ class StatementLineage:
         def load_verdict() -> set[str] | None:
             return self._mutation_verdict(statement_source_hash(stmt_code))
 
-        # Bare-call arguments: the live ones the runtime watches, and, after a
+        # Call arguments: the live ones the runtime watches, and, after a
         # restart, the ones not live yet, whose recorded verdict is all there
         # is to go on (`heapq.heapify(xs)` must replay before `xs[0]`).
         # Likewise the receivers of a method call whose result is bound
         # (`history = net.fit(X)`), which the runtime fingerprints too.
         arguments = (
-            bare_call_arguments(tree, user_ns)
+            call_arguments(tree, user_ns)
             | watched_call_receivers(tree, user_ns)
-            | {n for n in bare_call_argument_names(tree) | captured_call_receiver_names(tree) if n not in user_ns}
+            | {n for n in call_argument_names(tree) | captured_call_receiver_names(tree) if n not in user_ns}
         )
         classes = classify_receivers(
             tree, user_ns, load_verdict, arguments=arguments, virtual_modules=virtual_modules or ()

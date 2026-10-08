@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from cash.analysis.cacheability_decision import receiver_is_identity_coupled
 from cash.analysis.mutation_effects import classify_receivers, drawn_on_arguments
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
-from cash.analysis.namespace_effects import bare_call_arguments, fits_its_receiver, is_estimator
+from cash.analysis.namespace_effects import bare_call_arguments, call_arguments, fits_its_receiver, is_estimator
 from cash.mutation_fingerprint import mutation_fingerprint
 from cash.notebook.consumables import watched_call_receivers
 from cash.notebook.restored_var import hashed_by_lineage
@@ -142,9 +142,8 @@ class MutationClassifier:
         * ``record_verdict`` — True when this statement's verdict is being learned.
         """
         verdict = self.tracking_state.mutation_verdicts.get(source_hash)
-        classes = classify_receivers(
-            tree, self.shell.user_ns, lambda: verdict, arguments=self._bare_call_arguments(tree, outputs)
-        )
+        arguments, kept_only = self._call_arguments(tree, outputs)
+        classes = classify_receivers(tree, self.shell.user_ns, lambda: verdict, arguments=arguments)
         pre_route = set(classes.mutated)
         observe: set[str] = set()
         assumed: set[str] = set()
@@ -157,6 +156,7 @@ class MutationClassifier:
                 assumed.add(base)
                 pre_route.add(base)
         # An object handed to a bare call (`im.add_qc(df)`, `sc.tl.leiden(hv)`)
+        # or to a function of the user's (`summary = add_features(df)`)
         # gets a full before/after fingerprint (`mutation_fingerprint`).
         # The result is learned into the verdict, so neither the next run nor
         # the simulation asks again: `print(df)` is learned as reading only.
@@ -164,6 +164,11 @@ class MutationClassifier:
         for name in classes.unknown_args:
             fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
             if fingerprint is None:
+                if name in kept_only:
+                    # `rows = fetch(conn)`: a handle that cannot be pickled
+                    # is not assumed changed by a call whose result is kept,
+                    # or every such statement would run every time.
+                    continue
                 assumed.add(name)
                 pre_route.add(name)
             else:
@@ -173,14 +178,17 @@ class MutationClassifier:
         record_verdict = verdict is None and bool(observe or assumed or snapshots)
         return pre_route - outputs, observe, assumed, record_verdict
 
-    def _bare_call_arguments(self, tree: ast.Module | None, outputs: set[str]) -> set[str]:
-        """The names to fingerprint around the statement: the arguments of a
-        bare call (``namespace_effects.bare_call_arguments``) and the
-        receivers of a method call whose result is bound
+    def _call_arguments(self, tree: ast.Module | None, outputs: set[str]) -> tuple[set[str], set[str]]:
+        """``(names, kept_only)``: the names to fingerprint around the
+        statement -- what its calls are handed (``namespace_effects.call_arguments``)
+        and the receivers of a method call whose result is bound
         (``consumables.watched_call_receivers``), both shared with the
-        simulation."""
+        simulation -- and those among them only a call whose result is kept
+        is handed (``r = work(st)``)."""
         user_ns = self.shell.user_ns
-        return set(bare_call_arguments(tree, user_ns) | watched_call_receivers(tree, user_ns)) - outputs
+        watched = watched_call_receivers(tree, user_ns)
+        names = set(call_arguments(tree, user_ns) | watched) - outputs
+        return names, names - bare_call_arguments(tree, user_ns) - watched
 
     def estimator_fit_receivers(
         self,
