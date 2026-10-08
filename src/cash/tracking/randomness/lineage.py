@@ -1,14 +1,17 @@
 """RNG state as lineage: virtual variables, seed epochs and seed cells.
 
-A seed WRITES a hidden variable per module and a draw READS it, through the
-ordinary variable-lineage machinery, so a re-seed re-keys every draw below it.
+A seed WRITES a hidden variable per module and a draw READS it and moves it
+on, through the ordinary variable-lineage machinery, so a re-seed, or a change
+in the draws above, re-keys every draw below it.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import secrets
 import sys
+import textwrap
 from collections.abc import Iterable, Mapping
 
 from ...source_norm import exact_source_digest
@@ -34,6 +37,9 @@ from .detect import get_drawing_rng_modules, get_seeding_rng_modules
 # means teaching these three functions about it, nothing more.
 
 
+_RNG_VAR_PREFIX = "__cash_rng__"
+
+
 def rng_virtual_var(module: str) -> str:
     """Name of the virtual lineage variable modelling *module*'s global RNG state.
 
@@ -41,7 +47,7 @@ def rng_virtual_var(module: str) -> str:
     it exists only as a key in the lineage dict, so it cannot collide with a
     user variable or be mistaken for one.
     """
-    return f"__cash_rng__{module}"
+    return f"{_RNG_VAR_PREFIX}{module}"
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +233,47 @@ def hidden_lineage_reads(code: str) -> set[str]:
 def hidden_lineage_writes(code: str) -> set[str]:
     """Virtual variables a statement PRODUCES: a ``seed()`` defines its RNG state."""
     return {rng_virtual_var(m) for m in get_seeding_rng_modules(code)}
+
+
+def drawn_rng_vars(reads: Iterable[str], code: str, lineage: Mapping[str, str]) -> set[str]:
+    """The RNG variables among *reads* that the statement *code* moves on.
+
+    A draw consumes the stream it reads, so the variable stands somewhere else
+    after it: one with a lineage (a seeded stream) takes a new one
+    (:func:`advanced_rng_lineage`). An unseeded stream has none and keeps
+    none (the freeze contract), and a statement that also seeds a module
+    leaves that module's variable to the seed (``hidden_lineage_writes``).
+    """
+    rng_reads = {var for var in reads if var.startswith(_RNG_VAR_PREFIX)}
+    if not rng_reads or _only_defines(code):
+        return set()
+    rng_reads -= hidden_lineage_writes(code)
+    return {var for var in rng_reads if lineage.get(var) is not None}
+
+
+def _only_defines(code: str) -> bool:
+    """Whether *code* is a ``def`` or ``class`` statement: a draw in its body
+    happens when it is called, not when it is defined."""
+    try:
+        body = ast.parse(textwrap.dedent(code)).body
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    return len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+
+
+def advanced_rng_lineage(statement_key: str, var: str) -> str:
+    """Lineage of RNG variable *var* after the statement keyed *statement_key*
+    drew from it.
+
+    Chained, like :func:`advanced_carrier_lineage`: the key folds in the
+    variable's lineage before the draw, along with the statement's source and
+    inputs, so the lineage after it stands for the seed plus every draw since.
+    A draw above that takes more or fewer numbers, a draw cell inserted,
+    removed or moved, all give every draw below another key. Both engines
+    call this with the same key, so the simulation reaches the runtime's
+    lineage.
+    """
+    return hashlib.sha256(f"rng-draw:{statement_key}:{var}".encode()).hexdigest()
 
 
 def entropy_write_lineage() -> str:

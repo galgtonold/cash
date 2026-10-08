@@ -40,7 +40,14 @@ from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...source_norm import exact_source_digest
-from ...tracking.randomness import capture_rng_state, carrier_positions, rng_carrier_kind, rng_modules_changed
+from ...tracking.randomness import (
+    capture_rng_state,
+    carrier_positions,
+    hidden_lineage_writes,
+    rng_carrier_kind,
+    rng_modules_changed,
+    rng_virtual_var,
+)
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
 from ..callee_reach import reached_user_code
@@ -200,12 +207,22 @@ class ControlStructureProcessor:
                     )
                 except Exception:  # never let bookkeeping break the user's loop
                     logger.debug("[CONTROL] generator advance failed", exc_info=True)
+            try:
+                sp.advance_rng_of_a_structure(code, before)
+            except Exception:  # never let bookkeeping break the user's loop
+                logger.debug("[CONTROL] RNG advance failed", exc_info=True)
             succeeded = result is not None and result.success
             changed = {v for v, h in lineage.items() if before.get(v) != h} | set(writes) if succeeded else set()
             sp.end_structure_cost(reads, changed, succeeded)
         if result.success:
             self._record_writes(code, reads, written)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
+            # Where a draw left an RNG variable depends on the seed above,
+            # which the entry lineages do not hold: the simulation moves it on
+            # itself, from the structure's key. Only what a seed in the body
+            # set is the structure's own.
+            for var in _drawn_rng_vars_left(left, code):
+                del left[var]
             # A file the body read changes nothing above, so the entry lineages
             # cannot see it: keep the files behind what it left, and their state.
             files: set[str] = set()
@@ -569,3 +586,14 @@ class ControlStructureProcessor:
             cached_iterations=1 if metrics.get("status") == CacheStatus.RESTORED else 0,
             computed_iterations=1 if metrics.get("status") == CacheStatus.COMPUTED else 0,
         )
+
+
+def _drawn_rng_vars_left(left: dict[str, str], code: str) -> list[str]:
+    """The RNG variables in *left* that structure *code* moved by drawing,
+    not by a seed of its own."""
+    try:
+        seeded = hidden_lineage_writes(code)
+    except (SyntaxError, ValueError, AttributeError, RecursionError):
+        seeded = set()
+    prefix = rng_virtual_var("")
+    return [var for var in left if var.startswith(prefix) and var not in seeded]

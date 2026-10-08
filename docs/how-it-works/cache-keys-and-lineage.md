@@ -156,9 +156,12 @@ are not among them, and each has its own part of the key.
 <!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609 -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
-therefore gets a hidden lineage variable: a `seed()` call writes it and a draw
-reads it. A re-seed changes the draw's key and the lineage of everything built
-from it.
+therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
+reads it and moves it on, to a lineage made from the draw's own key. A re-seed
+changes the draw's key and the lineage of everything built from it, and so
+does a change in the draws above it: a cell that draws 5 numbers instead of 3,
+or a draw cell inserted, removed or moved. A draw from a stream no seed set
+leaves the variable unset, so an unseeded draw stays frozen.
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @5e1b5264 -->
 A draw inside a function the statement calls (`X = make_data(1000)`) names no
