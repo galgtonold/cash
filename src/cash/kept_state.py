@@ -67,11 +67,15 @@ class _KeepDict(dict):
     def __missing__(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
-        reducer = copyreg.dispatch_table.get(t)
-        if reducer is None:
-            if self._keyed and chooses_its_state(t):
-                reducer = functools.partial(_reduce_for_key, protocol=self._protocol)
-            elif _drops_dict(t):
+        registered = copyreg.dispatch_table.get(t)
+        if self._keyed and (chooses_its_state(t) or (registered is not None and _is_users_class(t))):
+            # A user's class whose state its own reduce -- or one registered
+            # with ``copyreg.pickle`` -- decides: key it with what it leaves out.
+            reducer = functools.partial(_reduce_for_key, protocol=self._protocol, registered=registered)
+        elif registered is not None:
+            reducer = registered
+        else:
+            if _drops_dict(t):
                 reducer = functools.partial(_reduce_with_dict, protocol=self._protocol)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
@@ -163,10 +167,17 @@ _STATE_METHODS = ("__getstate__", "__reduce__", "__reduce_ex__")
 _CHOOSES_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-def _reduce_for_key(obj: Any, protocol: int) -> Any:
-    """*obj*'s own reduce, with the instance attributes its state leaves out
+def _is_users_class(t: type) -> bool:
+    from .install_paths import is_user_code_module
+
+    return is_user_code_module(sys.modules.get(t.__module__))
+
+
+def _reduce_for_key(obj: Any, protocol: int, registered: Any = None) -> Any:
+    """*obj*'s own reduce (or the one *registered* for its type with
+    ``copyreg.pickle``), with the instance attributes its state leaves out
     beside it (`chooses_its_state`). Only hashed, never loaded."""
-    reduced = obj.__reduce_ex__(protocol)
+    reduced = obj.__reduce_ex__(protocol) if registered is None else registered(obj)
     if isinstance(reduced, str):
         return reduced
     rebuild, args, *rest = reduced
@@ -178,22 +189,28 @@ def _reduce_for_key(obj: Any, protocol: int) -> Any:
 
 
 def left_out_attrs(obj: Any, state: Any) -> dict:
-    """The attributes in *obj*'s ``__dict__`` that *state*, what its reduce
-    saves, does not hold by name.
+    """The attributes of *obj* -- in its ``__dict__`` or its ``__slots__``
+    -- that *state*, what its reduce saves, does not hold: by name, or
+    under their name with another value (a ``__getstate__`` that saves a
+    portable default in place of the live setting).
 
     One that cannot be pickled (a lock or a connection the class leaves out
     for that reason) is given as its type: its content is nothing pickle can
     read.
     """
-    attrs = getattr(obj, "__dict__", None)
+    attrs = _instance_attrs(obj)
     if not attrs:
         return {}
+    saved: dict = {}
     if isinstance(state, tuple) and len(state) == 2 and isinstance(state[1], dict):
-        state = state[0]  # (dict, slots)
-    saved = state if isinstance(state, dict) else {}
+        if isinstance(state[0], dict):
+            saved.update(state[0])
+        saved.update(state[1])  # (dict, slots)
+    elif isinstance(state, dict):
+        saved = state
     left_out = {}
     for name, value in attrs.items():
-        if name in saved:
+        if name in saved and _same(saved[name], value):
             continue
         try:
             dumps(value, keyed=True)
@@ -201,6 +218,41 @@ def left_out_attrs(obj: Any, state: Any) -> dict:
             value = ("__cash_unpicklable__", f"{type(value).__module__}.{type(value).__qualname__}")
         left_out[name] = value
     return left_out
+
+
+def _instance_attrs(obj: Any) -> dict:
+    """*obj*'s ``__dict__`` and the ``__slots__`` it has set."""
+    attrs = dict(getattr(obj, "__dict__", None) or ())
+    for klass in type(obj).__mro__:
+        slots = klass.__dict__.get("__slots__")
+        if not slots:
+            continue
+        for name in (slots,) if isinstance(slots, str) else slots:
+            if name in ("__dict__", "__weakref__"):
+                continue
+            if name.startswith("__") and not name.endswith("__"):
+                name = f"_{klass.__name__.lstrip('_')}{name}"  # name-mangled slot
+            if name in attrs:
+                continue
+            try:
+                attrs[name] = getattr(obj, name)
+            except AttributeError:  # a slot never set
+                continue
+    return attrs
+
+
+def _same(saved: Any, value: Any) -> bool:
+    """Is *saved*, the state's value under an attribute's name, the
+    attribute's own *value*? Of one type and equal; when equality gives no
+    plain answer (an array), the attribute is keyed beside the state."""
+    if saved is value:
+        return True
+    if type(saved) is not type(value):
+        return False
+    try:
+        return bool(saved == value)
+    except Exception:  # noqa: BLE001 - an ambiguous or failing comparison
+        return False
 
 
 def restore_with_dict(obj: Any, packed: tuple) -> None:
