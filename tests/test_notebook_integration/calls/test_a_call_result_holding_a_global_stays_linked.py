@@ -29,11 +29,21 @@ CASES = {
         {"get_data()['rows']": "[1, 2, 3]", "d is get_data()": "True"},
     ),
     "item-of-a-global": (
-        ["MODELS = [{'w': 0}, {'w': 0}]", "def best():\n    time.sleep(0.3)\n    return MODELS[1]", "m = best()", "m['w'] = 9"],
+        [
+            "MODELS = [{'w': 0}, {'w': 0}]",
+            "def best():\n    time.sleep(0.3)\n    return MODELS[1]",
+            "m = best()",
+            "m['w'] = 9",
+        ],
         {"MODELS": "[{'w': 0}, {'w': 9}]", "m is MODELS[1]": "True"},
     ),
     "class-attribute": (
-        ["class Config:\n    items = []", "def items():\n    time.sleep(0.3)\n    return Config.items", "it = items()", "it.append('x')"],
+        [
+            "class Config:\n    items = []",
+            "def items():\n    time.sleep(0.3)\n    return Config.items",
+            "it = items()",
+            "it.append('x')",
+        ],
         {"Config.items": "['x']"},
     ),
     "bound-method": (

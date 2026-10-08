@@ -57,7 +57,9 @@ def grid():
 
 
 def _hits(call_cache, fn, *args):
-    call_cache.set_sites([CallSite(source=f"{fn.__name__}(x)", free_names=frozenset({fn.__name__}), occurrence_index=0)])
+    call_cache.set_sites(
+        [CallSite(source=f"{fn.__name__}(x)", free_names=frozenset({fn.__name__}), occurrence_index=0)]
+    )
     cached = call_cache.resolve(fn)
     results = [cached(*args), cached(*args)]
     return results, [e["cache_hit"] for e in call_cache.drain_call_log()]

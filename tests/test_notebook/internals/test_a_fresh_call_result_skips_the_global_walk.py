@@ -35,7 +35,9 @@ def _walks(tmp_path, monkeypatch, fn):
     real = call_entries.reached_objects
     monkeypatch.setattr(call_entries, "reached_objects", lambda f: walked.append(f) or real(f))
     call_cache = make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
-    call_cache.set_sites([CallSite(source=f"{fn.__name__}(i)", free_names=frozenset({fn.__name__}), occurrence_index=0)])
+    call_cache.set_sites(
+        [CallSite(source=f"{fn.__name__}(i)", free_names=frozenset({fn.__name__}), occurrence_index=0)]
+    )
     call_cache.resolve(fn)(1)
     return walked
 
