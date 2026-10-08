@@ -28,7 +28,7 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
-from ..value_types import IMMUTABLE_PRIMS, is_runtime_machinery
+from ..value_types import IMMUTABLE_PRIMS, INTERPRETER_MANAGED_GLOBALS, is_runtime_machinery
 
 __all__ = [
     "Reach",
@@ -363,6 +363,9 @@ def module_globals(code: str, namespace: Mapping[str, Any] | None) -> dict[str, 
     return found
 
 
+_ABSENT = object()
+
+
 def _call_name(func: ast.expr) -> str | None:
     if isinstance(func, ast.Name):
         return func.id
@@ -382,7 +385,10 @@ def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
         now = vars(module)
         # By identity, at C speed: *held* keeps every object it saw alive,
         # so an id cannot be reused for another one meanwhile.
-        if now.keys() != held.keys() or not all(map(operator.is_, now.values(), held.values())):
+        if (now.keys() != held.keys() or not all(map(operator.is_, now.values(), held.values()))) and any(
+            key not in INTERPRETER_MANAGED_GLOBALS and now.get(key, _ABSENT) is not held.get(key, _ABSENT)
+            for key in now.keys() | held.keys()
+        ):
             changed.add(name)
     return frozenset(changed)
 

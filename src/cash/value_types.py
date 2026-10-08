@@ -96,6 +96,14 @@ def writable_types() -> tuple[type, ...]:
 #: so a caller that can see the user's bindings checks them first.
 BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins)) | {"get_ipython", "__builtins__"}
 
+#: Module globals the interpreter itself adds or rebinds while the module's
+#: code runs, which are no state of the user's: ``warnings`` creates
+#: ``__warningregistry__`` on a module's first warning, reading
+#: ``module.__annotations__`` creates an empty one, and ``exec`` puts
+#: ``__builtins__`` in a namespace without one. A check of which module
+#: globals a statement or call rebound skips them.
+INTERPRETER_MANAGED_GLOBALS: frozenset[str] = frozenset({"__warningregistry__", "__annotations__", "__builtins__"})
+
 
 def mro_kind(value: Any, bases: Mapping[str, str], prefixes: tuple[str, ...]) -> str | None:
     """What *value* is, by the first class in its MRO named in *bases*.

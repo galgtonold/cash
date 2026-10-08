@@ -72,6 +72,7 @@ from cash.tracking.randomness import (
     carrier_states_changed,
     rng_modules_changed,
 )
+from cash.value_types import INTERPRETER_MANAGED_GLOBALS
 
 logger = logging.getLogger(__name__)
 
@@ -1303,7 +1304,7 @@ def _rebound_unwatched(call: _Call, before: Mapping[str, Any] | None) -> bool:
     if before is None:
         return False
     now = call.fn.__globals__
-    watched = set(call.mutated_globals)
+    watched = set(call.mutated_globals) | INTERPRETER_MANAGED_GLOBALS
     for name in now.keys() | before.keys():
         if name not in watched and now.get(name, _ABSENT) is not before.get(name, _ABSENT):
             return True
