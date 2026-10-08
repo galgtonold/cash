@@ -740,7 +740,9 @@ class StatementProcessor:
         """Settle what executes: *run*'s code with eligible calls routed
         through the call cache."""
         code = run.code
-        run.exec_code, run.exec_tree = self._calls.code_and_tree_for_execution(code, run.tree, run.annotation)
+        run.exec_code, run.exec_tree = self._calls.code_and_tree_for_execution(
+            code, run.tree, run.annotation, key=run.cache_key
+        )
         # `code_and_tree_for_execution` returns a NEW string, never `code`
         # itself, only when it routed an eligible call through the call cache.
         # Compiling the pre-rewrite original text after that would run a version
