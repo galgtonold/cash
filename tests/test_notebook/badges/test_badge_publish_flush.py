@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("IPython")
 
-from cash.notebook.ipython import badges  # noqa: E402
+from cash.notebook.ipython import badges
 
 
 class _Publisher:
