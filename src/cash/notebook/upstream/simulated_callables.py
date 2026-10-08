@@ -56,6 +56,9 @@ class SimulatedCallables:
         #: source digest the runtime folds into a lineage (see
         #: ``register_imports``). Not in the key: it skips classes.
         self._imported_classes: dict[str, str] = {}
+        #: The text of each simulated ``def``, keyed as ``by_lineage``: what
+        #: a call of it seeds (``helper_seeded_modules``).
+        self._def_sources: dict[str, str] = {}
 
     def register_def(self, stmt_code: str, tree: ast.Module | None, virtual_lineage: Mapping[str, str]) -> None:
         """Remember a simulated ``def`` under its lineage (see ``VirtualCallable``).
@@ -83,9 +86,16 @@ class SimulatedCallables:
             return
         if len(self.by_lineage) >= self.MAX_CALLABLES:
             self.by_lineage.clear()
+            self._def_sources.clear()
         self.by_lineage[virtual_callable_key(lineage, node.name)] = VirtualCallable(
             source_identity_digest(stmt_code), code
         )
+        self._def_sources[virtual_callable_key(lineage, node.name)] = stmt_code
+
+    def def_source(self, name: str, virtual_lineage: Mapping[str, str]) -> str | None:
+        """The text of the simulated ``def`` *name* is bound to here, or None."""
+        lineage = virtual_lineage.get(name)
+        return self._def_sources.get(virtual_callable_key(lineage, name)) if lineage else None
 
     def register_imports(
         self, tree: ast.Module | None, virtual_lineage: Mapping[str, str], stmt_code: str = ""

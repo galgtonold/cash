@@ -161,7 +161,10 @@ reads it and moves it on, to a lineage made from the draw's own key. A re-seed
 changes the draw's key and the lineage of everything built from it, and so
 does a change in the draws above it: a cell that draws 5 numbers instead of 3,
 or a draw cell inserted, removed or moved. A draw from a stream no seed set
-leaves the variable unset, so an unseeded draw stays frozen.
+leaves the variable unset, so an unseeded draw stays frozen. A seed set
+through a function defined in the notebook (`set_seed(42)`, whose body calls
+`random.seed` and `np.random.seed`) writes the variables as the calls written
+out would.
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @5e1b5264 -->
 A draw inside a function the statement calls (`X = make_data(1000)`) names no

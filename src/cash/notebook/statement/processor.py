@@ -1357,7 +1357,7 @@ class StatementProcessor:
         (:meth:`_skip_a_newly_seen_draw`).
         """
         randomness = self._randomness
-        if not randomness.draw_newly_seen or hidden_lineage_writes(run.code):
+        if not randomness.draw_newly_seen or hidden_lineage_writes(run.code) or randomness.helper_seeds(run.code):
             return
         code = run.code
         try:

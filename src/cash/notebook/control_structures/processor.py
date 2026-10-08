@@ -50,7 +50,7 @@ from ...tracking.randomness import (
 )
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
-from ..callee_reach import reached_user_code
+from ..callee_reach import helper_seeded_modules, reached_user_code
 from ..lineage_formula import statement_environment_reads
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.file_deps import compute_file_hash_component
@@ -221,7 +221,7 @@ class ControlStructureProcessor:
             # which the entry lineages do not hold: the simulation moves it on
             # itself, from the structure's key. Only what a seed in the body
             # set is the structure's own.
-            for var in _drawn_rng_vars_left(left, code):
+            for var in _drawn_rng_vars_left(left, code, self.shell.user_ns):
                 del left[var]
             # A file the body read changes nothing above, so the entry lineages
             # cannot see it: keep the files behind what it left, and their state.
@@ -588,12 +588,12 @@ class ControlStructureProcessor:
         )
 
 
-def _drawn_rng_vars_left(left: dict[str, str], code: str) -> list[str]:
+def _drawn_rng_vars_left(left: dict[str, str], code: str, namespace) -> list[str]:
     """The RNG variables in *left* that structure *code* moved by drawing,
-    not by a seed of its own."""
+    not by a seed of its own (written out, or in a notebook function it calls)."""
     try:
-        seeded = hidden_lineage_writes(code)
-    except (SyntaxError, ValueError, AttributeError, RecursionError):
+        seeded = hidden_lineage_writes(code) | {rng_virtual_var(m) for m in helper_seeded_modules(code, namespace)}
+    except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
         seeded = set()
     prefix = rng_virtual_var("")
     return [var for var in left if var.startswith(prefix) and var not in seeded]

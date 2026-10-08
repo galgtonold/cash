@@ -37,11 +37,12 @@ from ...tracking.randomness import (
     drawn_rng_vars,
     hidden_lineage_writes,
     hidden_write_lineage,
+    rng_virtual_var,
 )
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
-from ..callee_reach import module_state_names
+from ..callee_reach import helper_seeded_modules, module_state_names
 from ..lineage_formula import (
     callable_source_component,
     changed_module_environment,
@@ -720,7 +721,7 @@ class StatementLineage:
             # RNG state is a hidden lineage variable: a draw reads it,
             # a seed produces it. Kept out of the plain ``inputs``.
             hidden_reads = key_hidden_reads(stmt_code, self.tracking_state)
-            hidden_writes = hidden_lineage_writes(stmt_code)
+            hidden_writes = hidden_lineage_writes(stmt_code) | self._helper_seed_writes(stmt_code, virtual_lineage)
 
             # A bare ``seed()`` carries no output, so it would return below before
             # recording its hidden variable. Compute its key (a seed is not a
@@ -773,6 +774,17 @@ class StatementLineage:
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.error("[UPSTREAM] Error simulating statement '%s...': %s", stmt_code[:20], e)
             raise
+
+    def _helper_seed_writes(self, stmt_code: str, virtual_lineage: Mapping[str, str]) -> set[str]:
+        """The RNG variables *stmt_code* writes by calling a notebook function
+        that seeds (``set_seed(42)``), as the runtime's ``record_seeds``."""
+        try:
+            modules = helper_seeded_modules(
+                stmt_code, self.shell.user_ns, lambda name: self.callables.def_source(name, virtual_lineage)
+            )
+        except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
+            return set()
+        return {rng_virtual_var(m) for m in modules}
 
     @staticmethod
     def _advance_rng(drawn: set[str], draw_key: str | None, virtual_lineage: dict[str, str]) -> None:
