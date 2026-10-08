@@ -208,6 +208,12 @@ not cached this way. Calls show on the badge tagged `[intercepted]`:
     compute() [intercepted]: 2/3 cached (0.402s)
 ```
 
+<!-- claim: cash/notebook/call_unit.py:_time_to_probe @62963b23 -->
+A call made many times in one statement, as in a comprehension, is watched as
+it goes. Once its first calls show that caching it costs far more than the
+call itself, or that none of its results is kept (each runs under
+`call_cost_floor_seconds`), the rest of that statement's calls run plain.
+
 The statement around a cached call is then stored only for its own work; see
 [a statement around a cached call](cost-model.md#a-statement-around-a-cached-call).
 

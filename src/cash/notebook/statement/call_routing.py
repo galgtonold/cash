@@ -550,9 +550,20 @@ class CallRouting:
             self._call_cache_owner = cash_instance
         return self._call_cache
 
+    def _fold_plain_counts(self) -> None:
+        """Bring the plain-run calls the rewritten lines counted into the
+        unit's clocks before they are read."""
+        fold = getattr(self._call_cache, "fold_plain_counts", None)
+        if callable(fold):
+            try:
+                fold()
+            except Exception:  # noqa: BLE001 - a count is never worth an error
+                logger.debug("%s Failed to fold plain-run call counts", _LOG_PROCESSOR, exc_info=True)
+
     def cash_time_marks(self) -> CashMarks:
         """Cash's own clocks, read around a statement (see :meth:`price`)."""
 
+        self._fold_plain_counts()
         unit = self._call_cache.call_unit if self._call_cache is not None else None
         return CashMarks(
             tracking_seconds(),
@@ -581,6 +592,7 @@ class CallRouting:
         for a run a pairing measured 370 s slower.
         """
 
+        self._fold_plain_counts()
         unit = self._call_cache.call_unit if self._call_cache is not None else None
         same = unit is not None and unit is marks.unit
 
