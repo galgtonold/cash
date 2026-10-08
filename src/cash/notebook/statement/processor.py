@@ -20,6 +20,7 @@ from cash.exceptions import (
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
     CacheKeyContext,
+    CacheKeyResult,
     compute_cache_key,
     statement_source_hash,
 )
@@ -81,7 +82,7 @@ from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
-from ...tracking.randomness import carrier_positions, moved_carrier_names
+from ...tracking.randomness import carrier_positions, hidden_lineage_writes, moved_carrier_names, rng_virtual_var
 from ..callee_reach import module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
@@ -1094,6 +1095,7 @@ class StatementProcessor:
             logger.debug("%s Failed to auto-track local imports", _LOG_PROCESSOR)
         self._records.persist_import_bindings(run.code, run.tree)
 
+        self._key_a_newly_seen_draw(run)
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
             run.outputs,
@@ -1282,8 +1284,47 @@ class StatementProcessor:
             and not self._store.write_is_cheap(run.outputs, captured_vars, execution.store_cost)
         )
 
+    def _key_a_newly_seen_draw(self, run: StatementRun) -> None:
+        """Give *run* the key the next run builds when its execution revealed
+        a hidden draw from a seeded RNG module for the first time.
+
+        Its key was built without that module's RNG variable, which the next
+        run's key reads (``key_hidden_reads``), so storing the value under it
+        would only miss on the next run. The key is built again now with the
+        variable: it is the next run's key when everything the first key read
+        is as it was (that key, built again now, comes out the same) and the
+        statement spells no seed of its own (a seed moves the variable after
+        the key read it). Otherwise the write is skipped once
+        (:meth:`_skip_a_newly_seen_draw`).
+        """
+        randomness = self._randomness
+        if not randomness.draw_newly_seen or run.skip_cache or hidden_lineage_writes(run.code):
+            return
+        code = run.code
+        try:
+            effects = statement_effects(
+                code,
+                run.tree,
+                namespace=self.shell.user_ns,
+                resolve_source=self.resolve_live_function_source,
+                control_body=is_control_body(code),
+            )
+            inputs = set(effects.inputs) | key_hidden_reads(code, self.tracking_state)
+            learnt = {rng_virtual_var(module) for module in randomness.newly_seen_draws}
+            outputs = set(effects.outputs)
+            before = self._key(code, inputs - learnt, outputs, run.occurrence_index, record=False).cache_key
+            if before != run.cache_key:
+                return
+            run.cache_key = self._key(code, inputs, outputs, run.occurrence_index).cache_key
+        except Exception:  # noqa: BLE001 - the write is skipped once instead
+            logger.debug("%s Could not key %s with its hidden draw", _LOG_PROCESSOR, code[:80], exc_info=True)
+            return
+        run.metrics["cache_key"] = run.cache_key
+        randomness.draw_newly_seen = False
+
     def _skip_a_newly_seen_draw(self, run: StatementRun) -> None:
-        """Skip-cache *run* once when its execution revealed a hidden RNG draw.
+        """Skip-cache *run* once when its execution revealed a hidden RNG draw
+        and :meth:`_key_a_newly_seen_draw` could not key it as the next run will.
 
         Its key was built without its RNG variable. Writing it creates an
         entry that a later run rebuilds and matches forever: after a kernel
@@ -1498,20 +1539,7 @@ class StatementProcessor:
         key_inputs = inputs | key_hidden_reads(code, self.tracking_state)
 
         try:
-            cache_key, source_hash, _, _, _ = compute_cache_key(
-                code,
-                key_inputs,
-                ctx=CacheKeyContext(
-                    variable_lineage=self.tracking_state.variable_lineage,
-                    user_ns=self.shell.user_ns,
-                    function_tracker=self.function_tracker,
-                    compute_hash_fn=self.compute_hash,
-                    reads=self.tracking_state.reads,
-                    record_reads=True,
-                ),
-                outputs=outputs,
-                occurrence_index=occurrence_index,
-            )
+            cache_key, source_hash, _, _, _ = self._key(code, key_inputs, outputs, occurrence_index)
         except Exception as exc:
             raise CacheKeyComputationError(f"Failed to compute cache key for: {code[:80]!r}") from exc
 
@@ -1520,6 +1548,27 @@ class StatementProcessor:
 
         hash_time = _perf_counter() - t2
         return effects, source_hash, cache_key, analysis_time, hash_time
+
+    def _key(
+        self, code: str, key_inputs: set[str], outputs: set[str], occurrence_index: int, *, record: bool = True
+    ) -> CacheKeyResult:
+        """The runtime's key for *code* with *key_inputs*, read now. *record*
+        records what the environment reads in it held (``record_reads``);
+        without it nothing is recorded."""
+        return compute_cache_key(
+            code,
+            key_inputs,
+            ctx=CacheKeyContext(
+                variable_lineage=self.tracking_state.variable_lineage,
+                user_ns=self.shell.user_ns,
+                function_tracker=self.function_tracker,
+                compute_hash_fn=self.compute_hash,
+                reads=self.tracking_state.reads if record else None,
+                record_reads=record,
+            ),
+            outputs=outputs,
+            occurrence_index=occurrence_index,
+        )
 
     def _record_module_state_writes(self, code: str) -> None:
         """Note *code* as a statement that sets state on a local module, so a

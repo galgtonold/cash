@@ -71,6 +71,8 @@ class StatementRandomness:
         #: True when this statement's execution revealed a hidden RNG draw for
         #: the first time, meaning its cache key predates that knowledge.
         self.draw_newly_seen: bool = False
+        #: The modules this statement was first seen drawing from unseen.
+        self.newly_seen_draws: set[str] = set()
         # The current cell's accumulation, harvested by the cell executor for
         # the replay ledger.
         self._cell_changed: set[str] = set()
@@ -112,6 +114,7 @@ class StatementRandomness:
         """
         self.observed_draw = set()
         self.draw_newly_seen = False
+        self.newly_seen_draws = set()
         return capture_rng_state()
 
     def record_seeds(self, code: str, cache_key: str) -> None:
@@ -503,6 +506,7 @@ class StatementRandomness:
             # freeze-from-first-call contract.
             if hidden & set(self.seed_epochs):
                 self.draw_newly_seen = True
+            self.newly_seen_draws = hidden - known
         ledger[digest] = known | hidden
 
     def begin_cell(self) -> None:

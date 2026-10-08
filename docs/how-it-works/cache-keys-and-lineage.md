@@ -160,6 +160,14 @@ therefore gets a hidden lineage variable: a `seed()` call writes it and a draw
 reads it. A re-seed changes the draw's key and the lineage of everything built
 from it.
 
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @5e1b5264 -->
+A draw inside a function the statement calls (`X = make_data(1000)`) names no
+module. The first run sees the seeded stream move, and from then on the
+statement's key reads that module's variable too. The value is stored under
+that key on the run that saw the draw, so the next Run All restores it. When
+that key cannot be built yet (an input changed while the statement ran, or the
+statement also seeds), the value is not stored on that run.
+
 **Globals that called functions read.** `r = a(3)` names `a`, not the globals
 `a` reads when it runs. cash follows the called functions' global names and
 adds `name:lineage` for each. A name that no longer exists counts as
