@@ -41,8 +41,13 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       as a cell imports it, and cash reloads it in the kernel when you edit
       it. Editing one function in a module re-runs only what uses that
       function. A reload puts the file's values back for what cells set on
-      the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`).
-      cash treats the module as a variable those statements changed in
+      the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`;
+      the same through a name holding what the module holds, such as
+      `CONFIG["k"] = k` after `from mylib import CONFIG` or `cfg["k"] = k`
+      after `cfg = mylib.CONFIG`; a bare decorator such as `@mylib.register`;
+      an import of a module of yours that registers itself into it; a method
+      of its class that stores on the class, such as `cls.k = k` or
+      `type(self).k = k`). cash treats the module as a variable those statements changed in
       place, and the next cell you run rebuilds it from them as it
       rebuilds any variable: in notebook order, each with the inputs it had
       (the `k` it read, even if a later cell rebound `k`; a draw from the
@@ -56,6 +61,13 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       sees the module (it is set through another module), or cash cannot
       find the notebook, it warns instead
       ([`NOTEBOOK-RELOAD-STATE`](../warnings.md#notebook-reload-state)).
+    - **The environment and the working directory, after a kernel
+      restart.** A restart puts the environment variables and the working
+      directory back as the kernel started with them. A statement above the
+      cell that changed them when it ran (`os.environ["MODE"] = "b"`,
+      `os.chdir(d)`, itself or in a function of yours it calls, defined in a
+      cell or a module) runs again before a cell you run on its own, in
+      notebook order. One you edited and have not run yet does not.
     - **A global that a called function reads**, even one bound below the
       statement.
     - **The data of a local module it reads**, directly or through the
@@ -157,7 +169,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @faf9d2b8, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @df9cdf2c -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @faf9d2b8, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @781c93f0 -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
@@ -171,7 +183,9 @@ the name has and warns ([A name a magic binds](../known-limitations.md#a-name-a-
 Only what the cell you run depends on is considered. A stale chart or export
 above it that it does not read stays as it is. A statement that writes a file
 counts as needed when something the cell depends on reads that file, even
-through a helper or a loop over a list of paths.
+through a helper or a loop over a list of paths. After a kernel restart, a
+statement above that changed the environment or the working directory when it
+ran runs again too, whatever the cell reads.
 
 ### Finding your notebook
 

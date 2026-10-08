@@ -182,7 +182,7 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @e213e156, cash/notebook/callee_reach.py:module_state_writes @2477eca8, cash/notebook/call_unit.py:_rebound_unwatched @13e82eb4 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @04ebb2d2, cash/notebook/call_unit.py:_rebound_unwatched @13e82eb4 -->
 The same for a statement that sets state on one of your modules
 (`metrics.increment(5)` adding to a counter `metrics.py` keeps, itself or
 through a helper, or `mylib.K = slow()`): it runs every time, so the module
