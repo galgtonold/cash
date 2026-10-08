@@ -11,6 +11,7 @@ import pickle
 import sys
 import threading
 import time
+import types
 from collections.abc import Callable
 from typing import Any
 
@@ -263,7 +264,7 @@ class InMemoryBackend(CacheBackend):
             copied = InMemoryBackend._copy_cells(frame, memo)
             if copied is None:
                 try:
-                    copied = pickle.loads(kept_state.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+                    copied = _round_trip(frame)
                 except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                     logger.debug("could not copy the cells of a %s", type(frame).__name__)
                     # Recorded as None: a store that must isolate its value
@@ -306,6 +307,11 @@ class InMemoryBackend(CacheBackend):
         """
         frames = _frame_types()
         ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+        #: Every object copied here, kept alive until the copy is done: *memo*
+        #: is keyed by ``id``, and an array or frame that a ``__getstate__``
+        #: builds for the pickle is freed once written, so the next one could
+        #: get its address and be handed the first one's copy.
+        alive: list[Any] = []
 
         def persistent_id(obj: Any) -> int | None:
             obj_type = type(obj)
@@ -316,31 +322,52 @@ class InMemoryBackend(CacheBackend):
                 return key
             if obj_type is ndarray and not obj.dtype.hasobject:
                 memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
+                alive.append(obj)
                 return key
             if frames and isinstance(obj, frames):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
                 else:
                     memo[key] = _copy_polars(obj)
+                alive.append(obj)
                 return key
             return None
 
-        try:
-            buffers: list[pickle.PickleBuffer] = []
-            stream = kept_state.dumps(
-                value,
-                pickle.HIGHEST_PROTOCOL,
-                buffer_callback=buffers.append,
-                persistent_id=persistent_id if memo or frames or ndarray else None,
-            )
-            unpickler = pickle.Unpickler(
-                io.BytesIO(stream),
-                buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
-            )
-            unpickler.persistent_load = memo.__getitem__
-            return unpickler.load()
-        except Exception:  # noqa: BLE001 - whatever pickle refuses, deepcopy may copy
-            logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
+        current_names: set[int] = set()
+
+        def renamed_id(obj: Any) -> int | None:
+            if isinstance(obj, _BY_NAME) and id(obj) not in current_names and id(obj) not in memo:
+                current = _named_now(obj)
+                if current is None:
+                    current_names.add(id(obj))  # pickled by its name, as it is
+                else:
+                    memo[id(obj)] = current
+            return persistent_id(obj)
+
+        # A class pickles by name, and only while its module still names
+        # that very class: once a notebook re-runs the cell defining it, a
+        # stored instance's class is the old one. A disk hit looks the class
+        # up by name and gets the new one; so does the second attempt here.
+        for hook in (persistent_id if memo or frames or ndarray else None, renamed_id):
+            try:
+                buffers: list[pickle.PickleBuffer] = []
+                stream = kept_state.dumps(
+                    value,
+                    pickle.HIGHEST_PROTOCOL,
+                    buffer_callback=buffers.append,
+                    persistent_id=hook,
+                )
+                unpickler = pickle.Unpickler(
+                    io.BytesIO(stream),
+                    buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
+                )
+                unpickler.persistent_load = memo.__getitem__
+                return unpickler.load()
+            except pickle.PicklingError:
+                logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
+            except Exception:  # noqa: BLE001 - whatever pickle refuses, deepcopy may copy
+                logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
+                break
         return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
 
     @staticmethod
@@ -916,6 +943,63 @@ _IMMUTABLE_CELLS = frozenset(
 
 #: Types `InMemoryBackend._deep_copy`'s pickler copies itself, without a look.
 _ATOMS = frozenset({str, int, float, bool, type(None), bytes, complex})
+
+
+#: What pickle stores as a reference by name, checked against what that name holds.
+_BY_NAME = (type, types.FunctionType)
+
+
+def _named_now(obj: Any) -> Any:
+    """The class or function *obj*'s module now names where *obj* was
+    defined, when that is another object of the same kind; else None.
+
+    What a pickle round trip from disk resolves the name to. A notebook cell
+    re-run defines a new class under the old name, and pickle refuses an
+    instance of the old one ("not the same object as __main__.Fit").
+    """
+    module = sys.modules.get(getattr(obj, "__module__", None) or "")
+    qualname = getattr(obj, "__qualname__", None)
+    if module is None or not isinstance(qualname, str) or "<locals>" in qualname:
+        return None
+    current: Any = module
+    for part in qualname.split("."):
+        current = getattr(current, part, None)
+        if current is None:
+            return None
+    if current is obj:
+        return None
+    if isinstance(obj, type) and isinstance(current, type):
+        return current
+    if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
+        return current
+    return None
+
+
+def _round_trip(value: Any) -> Any:
+    """*value* through pickle and back, a class its module has since
+    redefined replaced by the one it names now (`_named_now`)."""
+    try:
+        return pickle.loads(kept_state.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+    except pickle.PicklingError:
+        renamed: dict[int, Any] = {}
+        current_names: set[int] = set()
+
+        def renamed_id(obj: Any) -> int | None:
+            key = id(obj)
+            if key in renamed:
+                return key
+            if isinstance(obj, _BY_NAME) and key not in current_names:
+                current = _named_now(obj)
+                if current is not None:
+                    renamed[key] = current
+                    return key
+                current_names.add(key)
+            return None
+
+        stream = kept_state.dumps(value, pickle.HIGHEST_PROTOCOL, persistent_id=renamed_id)
+        unpickler = pickle.Unpickler(io.BytesIO(stream))
+        unpickler.persistent_load = renamed.__getitem__
+        return unpickler.load()
 
 
 def _copy_array(array: Any) -> Any:

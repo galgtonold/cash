@@ -18,6 +18,8 @@ import logging
 import pickle
 import random
 import sys
+import types
+import weakref
 from typing import Any
 
 from . import _plain_data
@@ -73,7 +75,18 @@ def _sampled_bytes(values: Any) -> int:
         sample = values
     else:
         sample = values[sorted(random.Random(n).sample(range(n), _OBJECT_SAMPLE))]
-    return 8 * n + int(sum(map(sys.getsizeof, sample)) / len(sample) * n)
+    if set(map(type, sample)) <= _FLAT_CELLS:
+        sampled = sum(map(sys.getsizeof, sample))
+    else:
+        # A list, a dict or an object in a cell holds more than its own
+        # header: counted through, or a column of nested records was a tenth
+        # of its size.
+        sampled = sum(memory_footprint(v) for v in sample)
+    return 8 * n + int(sampled / len(sample) * n)
+
+
+#: Cells whose ``sys.getsizeof`` is all they hold.
+_FLAT_CELLS = frozenset((str, int, float, bool, type(None), bytes, complex))
 
 
 def _column_bytes(col: Any) -> int:
@@ -273,6 +286,13 @@ def _data_size(obj: Any) -> int | None:
     if kind in CODELESS_PRIMS or kind in BUILTIN_CONTAINERS:
         return None
     type_name = kind.__name__
+    if type_name in ("DataFrame", "Series", "LazyFrame") and kind.__module__.startswith("polars"):
+        # Not a pandas frame: no block manager and no ``memory_usage``. Its
+        # Arrow buffers are what ``estimated_size`` counts.
+        try:
+            return int(obj.estimated_size())
+        except Exception:  # noqa: BLE001 - a LazyFrame or another version: does not say
+            return None
     if type_name in ("DataFrame", "Series"):
         size = pandas_nbytes(obj)
         if size is not None:
@@ -419,8 +439,113 @@ def memory_footprint(obj: Any, _seen: set[int] | None = None) -> int:
             size += sum(memory_footprint(v, seen) for v in obj.values())
             size += sum(memory_footprint(k, seen) for k in obj)
         elif isinstance(obj, (list, tuple, set, frozenset)):
-            size += sum(memory_footprint(i, seen) for i in obj)
+            sampled = _sampled_instances(obj, seen) if len(obj) > _plain_data.SIZE_EXACT_UP_TO else None
+            size += sum(memory_footprint(i, seen) for i in obj) if sampled is None else sampled
+        elif not isinstance(obj, _HELD_BY_NAME):
+            size += _attrs_footprint(obj, seen)
         return size
     except (TypeError, RecursionError, ValueError):
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
         return 0
+
+
+#: What a copy of a value refers to rather than holds: pickled by name.
+_HELD_BY_NAME = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+
+
+def _sampled_instances(items: Any, seen: set[int]) -> int | None:
+    """What a long run of instances of one class holds, from a sample of
+    them; None for anything else.
+
+    Counted one by one, through each one's attributes, a million small
+    records took 5 s of a store. An attribute object that several sampled
+    items share (a config, a lookup table) is counted once, not once per
+    item.
+    """
+    kinds = set(map(type, items))
+    if len(kinds) != 1:
+        return None
+    (cls,) = kinds
+    if cls in CODELESS_PRIMS or cls in BUILTIN_CONTAINERS or issubclass(cls, _HELD_BY_NAME):
+        return None
+    seq = items if isinstance(items, (list, tuple)) else list(items)
+    n = len(seq)
+    if _data_size(seq[0]) is not None:
+        return None
+    picks = [seq[i] for i in dict.fromkeys(_plain_data.sample_positions(n))]
+    held: dict[int, Any] = {}
+    shared: dict[int, Any] = {}
+    for item in picks:
+        for value in _attr_values(item):
+            if type(value) not in _FLAT_CELLS:
+                key = id(value)
+                if key in held:
+                    shared[key] = value
+                held[key] = value
+    local = set(seen)
+    local.update(shared)
+    per_item = sum(memory_footprint(item, local) for item in picks)
+    return per_item * n // len(picks) + sum(memory_footprint(v, seen) for v in shared.values())
+
+
+def _attr_values(obj: Any) -> list:
+    """The values in *obj*'s ``__dict__`` and ``__slots__``."""
+    attrs = getattr(obj, "__dict__", None)
+    values = list(attrs.values()) if type(attrs) is dict else []
+    for name in _slot_names(type(obj)):
+        value = getattr(obj, name, None)
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _attrs_footprint(obj: Any, seen: set[int]) -> int:
+    """What an instance holds in its ``__dict__`` and ``__slots__``.
+
+    A dataclass or a model holding arrays is its attributes: by its own
+    ``sys.getsizeof`` alone a 16 MB fit was 48 bytes, and the RAM tier's cap
+    never saw it. An attribute of a flat type (a number, a string) is summed
+    without a call per attribute: a list of a million records is that many
+    instances.
+    """
+    size = 0
+    attrs = getattr(obj, "__dict__", None)
+    if type(attrs) is dict and id(attrs) not in seen:
+        seen.add(id(attrs))
+        size += sys.getsizeof(attrs)
+        for value in attrs.values():
+            if type(value) in _FLAT_CELLS:
+                size += sys.getsizeof(value)
+            else:
+                size += memory_footprint(value, seen)
+    for name in _slot_names(type(obj)):
+        value = getattr(obj, name, None)
+        if value is not None:
+            size += sys.getsizeof(value) if type(value) in _FLAT_CELLS else memory_footprint(value, seen)
+    return size
+
+
+def _slot_names(cls: type) -> tuple[str, ...]:
+    """The ``__slots__`` names *cls* and its bases declare, remembered per class."""
+    try:
+        return _SLOTS[cls]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return ()
+    names: list[str] = []
+    for klass in cls.__mro__:
+        declared = klass.__dict__.get("__slots__", ())
+        if isinstance(declared, str):
+            declared = (declared,)
+        for name in declared:
+            if name in ("__dict__", "__weakref__"):
+                continue
+            if name.startswith("__") and not name.endswith("__"):
+                name = f"_{klass.__name__.lstrip('_')}{name}"  # as Python mangles it
+            names.append(name)
+    found = _SLOTS[cls] = tuple(names)
+    return found
+
+
+_SLOTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()

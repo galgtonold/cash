@@ -409,6 +409,7 @@ class CallEntries:
         function: str | None = None,
         plain_value: bool = False,
         code_module: str | None = None,
+        held_refs: list | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -490,6 +491,10 @@ class CallEntries:
                 if estimate is not None:
                     metadata[ESTIMATED_FIELD] = True
                 held = found
+        if held_refs:
+            # Where the sentinels the function names sit in the result
+            # (`held_sentinels`): plain lists of strings, as metadata must be.
+            metadata["held_refs"] = held_refs
         if stdout:
             metadata["stdout"] = stdout
         if stderr:

@@ -492,6 +492,12 @@ def _level_size(flat: list) -> int:
     return sum(map(sys.getsizeof, map(flat.__getitem__, _picks(n)))) * n // SIZE_SAMPLE
 
 
+def sample_positions(n: int) -> tuple[int, ...]:
+    """`SIZE_SAMPLE` positions in a sequence of *n* items, drawn with
+    replacement and seeded by *n* (`_picks`)."""
+    return _picks(n)
+
+
 @functools.lru_cache(maxsize=16)
 def _picks(n: int) -> tuple[int, ...]:
     """The positions `_level_size` samples a level of *n* items at.
