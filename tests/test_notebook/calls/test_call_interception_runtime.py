@@ -138,9 +138,9 @@ def test_wrapper_is_reused_for_the_same_function(call_cache):
 
 def test_two_sites_at_the_same_index_get_distinct_wrappers_and_keys(call_cache):
     """The exact shape that was broken: two different
-    statements resolving the SAME function at ``site_index=0`` (every
-    statement's own site list starts at 0) must not share a wrapper, because
-    each wrapper closes over its own ``CallSite`` and must key independently.
+    statements resolving the SAME function, each at its first site, must not
+    share a wrapper, because each wrapper closes over its own ``CallSite``
+    and must key independently.
     """
     calls = []
 
@@ -150,10 +150,10 @@ def test_two_sites_at_the_same_index_get_distinct_wrappers_and_keys(call_cache):
         return x + 1
 
     call_cache.set_sites([_site(source="compute(a)", names=("compute", "a"))])
-    wrapped_a = call_cache.resolve(compute, site_index=0)
+    wrapped_a = call_cache.resolve(compute)
 
     call_cache.set_sites([_site(source="compute(a + 100)", names=("compute", "a"))])
-    wrapped_b = call_cache.resolve(compute, site_index=0)
+    wrapped_b = call_cache.resolve(compute)
 
     assert wrapped_a is not wrapped_b, "two different call sites at the same index shared one wrapper"
     assert wrapped_a(5) == 6

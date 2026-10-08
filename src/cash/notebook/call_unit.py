@@ -57,7 +57,7 @@ from cash.notebook.call_effects import (
     unwrap_callee_globals,
 )
 from cash.notebook.call_entries import ONE_LOCAL, CallEntries, refs_beyond
-from cash.notebook.call_interception import CallSite, interceptable, names_read
+from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
 from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
@@ -280,6 +280,9 @@ class _SiteRun:
     plain_samples: list[float] = dataclasses.field(default_factory=list)
     decided: bool = False
     plain: bool = False
+    #: The median of the plain samples the site was decided on: what one of
+    #: its calls is counted as taking once it runs plain.
+    plain_s: float = 0.0
 
 
 #: Where warnings re-emitted for a cash frame are de-duplicated, per file.
@@ -410,7 +413,7 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
     # run; on the cached side the first call also builds what later keys
     # reuse.
     cached = statistics.median(run.spent)
-    plain = statistics.median(run.plain_samples)
+    plain = run.plain_s = statistics.median(run.plain_samples)
     keyed = statistics.median(run.keyed)
     # Too dear to cache, or a hit could not save a quarter of
     # the call: a hit pays the key and lookup, then the restore.
@@ -626,9 +629,15 @@ class CallUnit:
                 started = _perf_counter()
                 result = fn(*args, **kwargs)
                 _log_plain(_perf_counter() - started)
+                if site not in self.plain_sites:
+                    # Decided at the re-check, whose calls are not logged as
+                    # run plain: the record exists from this call on.
+                    record = self._plain_records.get((names[0], site.source, site.occurrence_index))
+                    if record is not None:
+                        self.plain_sites[site] = [fn, record, run.plain_s, 0]
                 self.last_returned = (None, id(result), site.source)
                 return result
-            if run.probing:
+            if run.probing and run.calls < _GUARD_AFTER_CALLS:
                 started = _perf_counter()
                 result = fn(*args, **kwargs)
                 took = _perf_counter() - started
@@ -638,7 +647,7 @@ class CallUnit:
                     _decide_site(run, site)
                     record = self._plain_records.get((names[0], site.source, site.occurrence_index)) if names else None
                     if run.plain and record is not None:
-                        self.plain_sites[site] = [fn, record, statistics.median(run.plain_samples), 0]
+                        self.plain_sites[site] = [fn, record, run.plain_s, 0]
                 self.last_returned = (None, id(result), site.source)
                 return result
             self._last_key_s = None
@@ -662,6 +671,21 @@ class CallUnit:
                 self._add_to_clocks(invocation, spent, tracking_seconds() - tracked if outside else None)
             run.calls += 1
             if run.decided:
+                return result
+            if run.probing:
+                # The re-check past `_GUARD_AFTER_CALLS`: its calls still go
+                # through the cache, and what each would cost to compute (its
+                # run time, or a hit's recorded cost) stands in for its plain
+                # time. Run plain, they were neither looked up nor stored,
+                # whatever they cost: in `[work(i) for i in range(60)]` the
+                # 51st to 55th calls ran again on every re-run, 0.6 s each.
+                run.plain_samples.append(compute if compute is not None else spent)
+                if invocation.hit:
+                    run.hits += 1
+                if invocation.stored:
+                    run.stored += 1
+                if len(run.plain_samples) >= _PLAIN_SAMPLES:
+                    _decide_site(run, site)
                 return result
             if len(run.spent) < _GUARD_AFTER_CALLS:
                 run.spent.append(spent)
@@ -1103,6 +1127,7 @@ class CallCache:
         loop_var_digests_provider: Callable[[], dict[str, str]],
         ttl_provider: Callable[[], int | None],
         persist_provider: Callable[[], bool],
+        slots: SiteSlots | None = None,
     ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
@@ -1143,9 +1168,16 @@ class CallCache:
         # agree exactly or the badge silently stops marking intercepted calls".
         # Call-unit events set ``intercepted=True`` at the source, so the two
         # can no longer drift.
-        #: The current cell's rewrite-time site table, set by the processor
-        #: right before execution via :meth:`set_sites`.
-        self._sites: list[CallSite] = []
+        #: The numbers the rewritten lines name their sites by (see
+        #: ``call_interception.SiteSlots``), and the sites by number. A lambda
+        #: or a generator expression runs its line in whatever statement calls
+        #: it: looked up in the statement's own table, its call was keyed as
+        #: that statement's site of the same index.
+        self._slots = slots if slots is not None else SiteSlots()
+        self._site_list: list[CallSite] = self._slots.sites
+        #: The number of the first site :meth:`set_sites` was handed last, for
+        #: a :meth:`resolve` that names none.
+        self._first_slot = 0
         self._call_unit = CallUnit(
             cash_instance,
             ctx_provider,
@@ -1160,10 +1192,11 @@ class CallCache:
         #: The same by the index of this statement's site, emptied with it.
         self._plain_at: dict[int, list] = {}
         #: Bound in ``user_ns`` (``call_interception.PLAIN_NAME`` and
-        #: ``COUNT_NAME``), indexed like the sites: the callee each site runs
+        #: ``COUNT_NAME``), indexed by site number: the callee each site runs
         #: plain, and a counter of the calls the rewritten line made to it
-        #: without calling `resolve`. Only ever grown, so an index a lambda
-        #: kept from an earlier statement still reads a slot.
+        #: without calling `resolve`. Only ever grown, to every number given
+        #: out, so a number a lambda kept from an earlier statement still
+        #: reads a slot.
         self.plain_callees: list = []
         self.plain_counters: list = []
         #: Site index -> its `CallUnit.plain_sites` entry, for the sites whose
@@ -1202,13 +1235,22 @@ class CallCache:
             self.plain_counters[site_index] = None
         self._counted_at.clear()
 
+    def slot_for(self, site: CallSite) -> int:
+        """The number the rewritten line names *site* by (``SiteSlots.slot_for``)."""
+        return self._slots.slot_for(site)
+
     def set_sites(self, sites: list[CallSite], plain_value_source: str | None = None) -> None:
+        """A statement whose calls are rewritten is about to run: *sites* are
+        numbered (if the rewrite has not already), and each site's guard
+        starts over."""
         self._fold_counters()
-        grow = len(sites) - len(self.plain_callees)
+        slot_for = self._slots.slot_for
+        slots = [slot_for(site) for site in sites]
+        self._first_slot = slots[0] if slots else 0
+        grow = len(self._site_list) - len(self.plain_callees)
         if grow > 0:
             self.plain_callees.extend([_NOT_PLAIN] * grow)
             self.plain_counters.extend([None] * grow)
-        self._sites = sites
         self._plain_at.clear()
         # One call per statement run: each site's guard starts over.
         self._call_unit.begin_statement()
@@ -1235,8 +1277,13 @@ class CallCache:
         self._plain_at.clear()  # the unit empties `plain_sites`
         return self._call_unit.drain()
 
-    def resolve(self, fn, site_index: int = 0):
-        """Return *fn* or a cached counterpart. Never raises."""
+    def resolve(self, fn, site_index: int | None = None):
+        """Return *fn* or a cached counterpart. Never raises.
+
+        *site_index* is the site's number (``SiteSlots``); none names the
+        first site of the statement :meth:`set_sites` was handed last."""
+        if site_index is None:
+            site_index = self._first_slot
         plain = self._plain_at.get(site_index)
         if plain is not None and plain[0] is fn:
             # The guard runs the rest of this site's calls plain: the
@@ -1249,11 +1296,10 @@ class CallCache:
             plain[3] += 1
             return fn
         try:
-            site = self._sites[site_index]
+            site = self._site_list[site_index]
         except (IndexError, TypeError):
-            # No site registered for this index: the rewrite never routes a
-            # call here without one, and a call with no site has nothing to
-            # be keyed on.
+            # No site under this number (a number from another numbering):
+            # a call with no site has nothing to be keyed on, so it runs plain.
             return fn
 
         if self._plain_sites:

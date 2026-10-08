@@ -120,7 +120,7 @@ def _run_rewritten(call_cache, source: str, ns: dict) -> int:
 
     from cash.notebook.call_interception import wrap_eligible_calls
 
-    tree, sites = wrap_eligible_calls(ast.parse(source))
+    tree, sites = wrap_eligible_calls(ast.parse(source), slot_for=call_cache.slot_for)
     call_cache.set_sites(sites)
     resolved = [0]
 
@@ -160,7 +160,7 @@ def test_a_counted_call_reaches_the_log_after_the_next_statement_starts(call_cac
     _run_rewritten(call_cache, "e = 1 + f(2)", ns)
     events = call_cache.drain_call_log()
     assert sum(e["calls"] for e in events if e["call_source"] == "f(i)") == 500
-    assert call_cache.plain_callees[0] is not f, "a slot outlived its statement run"
+    assert all(callee is not f for callee in call_cache.plain_callees), "a slot outlived its statement run"
 
 
 def test_after_the_log_is_drained_the_line_goes_through_resolve_again(call_cache):

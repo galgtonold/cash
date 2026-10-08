@@ -180,7 +180,7 @@ waives the whole block, as the comment would anywhere inside it.
 
 ### `# @cash:no-cache-calls` { #call-level-caching-default-and-cashno-cache-calls }
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @330452fa -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @6db32f13 -->
 cash also caches the expensive **calls inside** a statement, by default and with
 no directive. That is what keeps work cached where the statement itself cannot
 be: in `results.append(compute(x))` the append runs every time, but `compute(x)`
@@ -213,6 +213,8 @@ A call made many times in one statement, as in a comprehension, is watched as
 it goes. Once its first calls show that caching it costs far more than the
 call itself, or that none of its results is kept (each runs under
 `call_cost_floor_seconds`), the rest of that statement's calls run plain.
+Past 50 calls the verdict is checked again on the next few calls, which are
+still served from the cache and stored in it.
 
 The statement around a cached call is then stored only for its own work; see
 [a statement around a cached call](cost-model.md#a-statement-around-a-cached-call).

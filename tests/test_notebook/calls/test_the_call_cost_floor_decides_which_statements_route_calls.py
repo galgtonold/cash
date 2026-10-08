@@ -32,9 +32,9 @@ def test_a_zero_floor_keeps_routing_a_fast_statement(cash_magics, statement_proc
     assert _routes_calls(cash_magics, "y = bump(x)")
 
 
-def test_a_raised_floor_stops_routing_a_statement_below_it(cash_magics, cash_instance):
+def test_a_raised_floor_stops_routing_a_statement_below_it(cash_magics, statement_processor, cash_instance):
     cash_instance.config.call_cost_floor_seconds = 5.0
     run_cash_cell(cash_magics, "import time\ndef slow(v):\n    time.sleep(0.02)\n    return v + 1\nx = 1")
-    run_cash_cell(cash_magics, "y = slow(x)")
+    statement_processor._calls.learn_call_wrapping("y = slow(x)", 0.02, [])
 
     assert not _routes_calls(cash_magics, "y = slow(x)")

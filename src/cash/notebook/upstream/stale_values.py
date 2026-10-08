@@ -54,6 +54,9 @@ class StaleValueGuard:
         #: compared (`hashed_by_lineage`). Never a strong reference: holding
         #: the value would keep it alive and count as a second holder.
         self._started_from: dict[tuple[int, str], tuple[int, Any]] = {}
+        #: Function name -> the last cell checked that calls it (see
+        #: :meth:`_mark_stateful_funcs_broken`).
+        self._stateful_called_in: dict[str, int] = {}
         #: The cell the current check is for.
         self._cell_idx: int | None = None
         self._cells: list[str] | None = None
@@ -104,14 +107,7 @@ class StaleValueGuard:
 
         Builtins are skipped.
         """
-        # A called function that carries mutable state on its own object (a
-        # mutated mutable-default arg, a function-attribute counter) must have its
-        # ``def`` re-run to recreate fresh state — force its producer to re-run by
-        # marking it broken. On ``run_all`` the def re-runs to the same fresh
-        # object first, so this only adds a cheap redundant redefine (B).
-        for fn in effects.stateful_funcs:
-            if fn in self.shell.user_ns:
-                broken_vars.add(fn)
+        self._mark_stateful_funcs_broken(effects.stateful_funcs, broken_vars, current_cell_idx)
         self._cell_idx = current_cell_idx
         self._cells = notebook_cells
         if not required_inputs:
@@ -603,6 +599,30 @@ class StaleValueGuard:
             except TypeError:
                 ref = None
             self._started_from[(cell_idx, var_name)] = (id(value), ref)
+
+    def _mark_stateful_funcs_broken(
+        self, stateful_funcs: frozenset[str], broken_vars: set[str], current_cell_idx: int | None
+    ) -> None:
+        """Mark broken a called function that carries state on its own object
+        (a closure's cell, a mutated default argument, a function attribute)
+        when that state is ahead of this cell: so its producer re-runs and
+        hands the cell fresh state.
+
+        Ahead means this cell or one below it called the function last: an
+        isolated re-run would start from its own or a later cell's calls. A
+        call from a cell ABOVE is where this cell starts in plain Jupyter
+        too: ``log = make_log()``, then ``log('loaded')`` in one cell and
+        ``log('cleaned')`` in the next. Re-running the producer before each
+        cell handed every cell fresh state on a first Run All.
+        """
+        for fn in stateful_funcs:
+            if fn not in self.shell.user_ns:
+                continue
+            last = self._stateful_called_in.get(fn)
+            if current_cell_idx is None or (last is not None and last >= current_cell_idx):
+                broken_vars.add(fn)
+            if current_cell_idx is not None:
+                self._stateful_called_in[fn] = current_cell_idx
 
     @staticmethod
     def _lineage_invisible_writes(

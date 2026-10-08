@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
-from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, wrap_eligible_calls
+from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, SITE_SLOTS, wrap_eligible_calls
 from cash.notebook.call_refs import with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
 from cash.tracking.file_tracker import tracking_seconds
@@ -136,6 +136,10 @@ def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | Non
     return None
 
 
+#: How many "not worth routing" marks are kept (oldest dropped first).
+_NOT_WORTH_WRAPPING_MAX = 4096
+
+
 class CallRouting:
     """The call cache, and the per-statement state its call units read."""
 
@@ -203,9 +207,14 @@ class CallRouting:
         # :meth:`current_loop_var_digests_for_call_key` can never see a name's
         # digest outlive the scope that produced it.
         self._loop_var_digests: list[dict[str, str]] = []
-        # Statement code (context markers stripped) whose calls are not worth
-        # routing through the call cache -- see :meth:`code_and_tree_for_execution`.
-        self._calls_not_worth_wrapping: set[str] = set()
+        # Statement runs -- each a statement with its inputs: its cache key --
+        # whose calls are not worth routing through the call cache; see
+        # :meth:`code_and_tree_for_execution`. Insertion-ordered and capped
+        # (`_NOT_WORTH_WRAPPING_MAX`): a long loop adds one per iteration.
+        self._calls_not_worth_wrapping: dict[str, None] = {}
+        # ``(code, key)`` of the statement :meth:`code_and_tree_for_execution`
+        # was last asked about, for :meth:`learn_call_wrapping`.
+        self._wrapping_key: tuple[str, str] | None = None
         # Which statement's calls the call cache's "returned last" is about
         # (:meth:`plain_call_result`): set only when that statement's are wrapped.
         self._calls_wrapped_for: str | None = None
@@ -373,21 +382,39 @@ class CallRouting:
             logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
             return []
 
+    def _wrapping_mark(self, code: str, key: str | None) -> str:
+        """What the "not worth routing" mark of a run of *code* is kept under:
+        the statement's cache key, its source and the lineage of its inputs.
+
+        Not the statement's text alone. That is the same across a parameter
+        change (``run(cfg)`` with ``cfg`` set to a quick value, then back) and
+        across a loop's iterations, so one quick run stopped the next run --
+        a different one -- from even looking its calls up: a result the call
+        cache held was computed again. A run with the same inputs computes
+        what it did last time, so its own quick run still predicts it."""
+        return key if key else strip_markers(code)
+
     def learn_call_wrapping(self, code: str, wall_time: float, calls: list) -> None:
-        """Record whether *code*'s calls are worth the call cache next time."""
+        """Record whether *code*'s calls are worth the call cache the next
+        time the statement runs with the same inputs: a run that took the
+        floor, or was served a call, drops the mark."""
         try:
             floor = call_cost_floor_s(self._cash_instance())
             hit = any(isinstance(ev, dict) and ev.get("cache_hit") for ev in calls or ())
-            key = strip_markers(code)
+            asked = self._wrapping_key
+            mark = asked[1] if asked is not None and asked[0] == code else self._wrapping_mark(code, None)
+            marks = self._calls_not_worth_wrapping
             if wall_time < floor and not hit:
-                self._calls_not_worth_wrapping.add(key)
+                marks[mark] = None
+                if len(marks) > _NOT_WORTH_WRAPPING_MAX:
+                    del marks[next(iter(marks))]
             else:
-                self._calls_not_worth_wrapping.discard(key)
+                marks.pop(mark, None)
         except (TypeError, AttributeError):  # wrapping stays on, which is always safe
             logger.debug("Could not learn whether to route %r's calls", code, exc_info=True)
 
     def code_and_tree_for_execution(
-        self, code: str, tree: ast.Module | None, annotation: Any | None
+        self, code: str, tree: ast.Module | None, annotation: Any | None, key: str | None = None
     ) -> tuple[str, ast.Module | None]:
         """The ``(code, tree)`` to execute, with eligible calls routed via cache.
 
@@ -411,7 +438,13 @@ class CallRouting:
         Returns the inputs unchanged when opted out, when nothing is eligible,
         or on any failure: a caching optimisation must never be the reason a
         statement stops running.
+
+        *key* is the statement's cache key for this run (its source and the
+        lineage of its inputs), which the "not worth routing" mark is kept
+        under (see :meth:`_wrapping_mark`).
         """
+        mark = self._wrapping_mark(code, key)
+        self._wrapping_key = (code, mark)
         # Two things switch interception off: ``# @cash:no-cache-calls`` (the
         # targeted escape hatch) and ``# @cash:no-cache`` (which is an
         # instruction about the WHOLE statement — caching the expensive call
@@ -432,16 +465,21 @@ class CallRouting:
         # the call cost floor is never stored. So a statement that last ran
         # under that floor with no call HIT inside it has nothing worth routing
         # through the call cache, and rewriting it is pure overhead: a copy of
-        # its tree, an unparse and a gate per call, on every loop iteration --
-        # 1.7 of a 631-iteration loop's 9.5 s. Learned in
-        # `learn_call_wrapping`; a hit or a slow run clears it again.
-        if strip_markers(code) in self._calls_not_worth_wrapping:
+        # its tree, an unparse and a gate per call. Learned in
+        # `learn_call_wrapping` per run with the same inputs; a hit or a slow
+        # run clears it again.
+        if mark in self._calls_not_worth_wrapping:
             return code, tree
         try:
+            call_cache = self._call_cache_for(cash_instance)
             rewritten, sites = wrap_eligible_calls(
                 tree if tree is not None else ast.parse(code),
                 gate=self._call_site_gate(annotation),
                 namespace=self.shell.user_ns,
+                # Numbered for the process, not the statement: a lambda or a
+                # generator expression runs its line later, in another
+                # statement (see `SiteSlots`).
+                slot_for=call_cache.slot_for,
             )
             if not sites:
                 # Under default-on, "nothing here was eligible" is the
@@ -454,7 +492,6 @@ class CallRouting:
             # statement echo a value the user silenced.
             if code.rstrip().endswith(";"):
                 new_code += ";"
-            call_cache = self._call_cache_for(cash_instance)
             plain = _plain_call_assignment(code)
             call_cache.set_sites(sites, plain_value_source=plain[0] if plain else None)
             self._calls_wrapped_for = code
@@ -546,6 +583,7 @@ class CallRouting:
                 # `_depth_keyed_loop_scope`'s docstring.
                 loop_vars_provider=self.current_loop_vars_for_call_key,
                 loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
+                slots=SITE_SLOTS,
             )
             self._call_cache_owner = cash_instance
         return self._call_cache
