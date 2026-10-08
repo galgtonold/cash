@@ -23,6 +23,7 @@ from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe
 from ...core import Cash
 from ...tracking import io_watch
 from ...tracking.function_tracker import FunctionTracker
+from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
@@ -878,9 +879,23 @@ class CashMagics(Magics):
         processor = self._statement_processor
         before = processor.bindings()
         lineage_before = dict(self.tracking_state.variable_lineage)
+        # Where the random streams stand, so a draw it makes (``%time a =
+        # np.random.rand(2)``) is a position a later draw is rewound past.
+        rng_before = capture_rng_state()
         try:
             yield
         finally:
+            try:
+                rng_after = capture_rng_state()
+                self._cell_executor.record_cell_rng(
+                    raw_cell,
+                    rng_modules_changed(rng_before, rng_after),
+                    rng_before,
+                    rng_after,
+                    {var: h for var, h in lineage_before.items() if var.startswith(rng_virtual_var(""))},
+                )
+            except Exception:  # noqa: BLE001 - a later draw is then rewound as before
+                logger.debug("Recording the random streams around the cell failed", exc_info=True)
             processor.forget_rebound(before, lineage_before)
             try:
                 processor.record_magic_cell(raw_cell, lineage_before)

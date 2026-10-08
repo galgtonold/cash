@@ -28,6 +28,7 @@ from collections.abc import Callable, Mapping
 
 from ..analysis.code_analyzer import CodeAnalyzer, calls_ipython
 from ..analysis.mutations import KNOWN_PURE_METHODS
+from ..tracking.randomness import advanced_rng_lineage, get_drawing_rng_modules, rng_virtual_var
 
 __all__ = [
     "is_magic_statement",
@@ -143,6 +144,7 @@ def magic_effects(node: ast.stmt, is_module: Callable[[str], bool]) -> tuple[set
     inputs, outputs = CodeAnalyzer.analyze_code_block(ast.unparse(node))
     changed = set(outputs)
     read = set(inputs) - {"get_ipython"}
+    trees: list[ast.AST] = [node]
     for call in ast.walk(node):
         arg = _python_magic_arg(call)
         if arg is None:
@@ -150,11 +152,53 @@ def magic_effects(node: ast.stmt, is_module: Callable[[str], bool]) -> tuple[set
         inner = _python_argument(arg)
         if inner is None:
             continue
+        trees.append(inner)
         inner_inputs, inner_outputs = CodeAnalyzer.analyze_code_block(ast.unparse(inner))
         changed |= set(inner_outputs) | _changed_receivers(inner)
         read |= set(inner_inputs)
     changed = {name for name in changed if not is_module(name)}
-    return changed, read | changed
+    return changed, read | (changed - _only_bound(trees))
+
+
+def _only_bound(trees: list[ast.AST]) -> set[str]:
+    """The names *trees* only bind as a whole (``x = ...``, ``for x in``), never
+    read: the value the magic gives such a name does not depend on the one it
+    had. Counted as read, its lineage before the magic went into the magic's
+    base: none at run time on a first run, the one the run left in the
+    simulation, so the two never matched and the reader below re-ran the
+    magic (or warned it stale) on every Run All."""
+    stored: set[str] = set()
+    loaded: set[str] = set()
+    for tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AugAssign):
+                loaded.update(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+            elif isinstance(node, ast.Name):
+                (loaded if isinstance(node.ctx, ast.Load) else stored).add(node.id)
+    return stored - loaded
+
+
+def magic_rng_advances(node: ast.stmt, code: str, lineage: Mapping[str, str]) -> dict[str, str]:
+    """The lineage each seeded RNG variable takes after the magic statement
+    *node* (*code*) ran a draw (``%time a = np.random.rand(2)``), from the
+    variable's *lineage* before it: a draw moves the stream on, as a
+    statement's does (``advanced_rng_lineage``). Both engines call this."""
+    advances: dict[str, str] = {}
+    for call in ast.walk(node):
+        arg = _python_magic_arg(call)
+        inner = _python_argument(arg) if arg is not None else None
+        if inner is None:
+            continue
+        try:
+            modules = get_drawing_rng_modules(ast.unparse(inner))
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            continue
+        for module in modules:
+            var = rng_virtual_var(module)
+            before = advances.get(var, lineage.get(var))
+            if before:
+                advances[var] = advanced_rng_lineage(magic_base(code, {var: before}), var)
+    return advances
 
 
 def magic_base(code: str, read_lineages: Mapping[str, str | None]) -> str:

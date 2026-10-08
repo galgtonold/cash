@@ -79,6 +79,7 @@ class StatementRandomness:
         # the replay ledger.
         self._cell_changed: set[str] = set()
         self._cell_pre: dict | None = None
+        self._cell_pre_lineage: dict[str, str] = {}
         self._cell_post: dict | None = None
 
     def resume_live_stream(self, code: str) -> None:
@@ -475,6 +476,7 @@ class StatementRandomness:
             self.observed_draw = {m for m in changed if m in pre_rng}
             if self._cell_pre is None:
                 self._cell_pre = pre_rng
+                self._cell_pre_lineage = self.rng_lineages()
             self._cell_changed |= changed
             self._cell_post = post
             self._record_hidden_draws(code, self.observed_draw)
@@ -524,7 +526,19 @@ class StatementRandomness:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._cell_changed = set()
         self._cell_pre = None
+        self._cell_pre_lineage = {}
         self._cell_post = None
+
+    def rng_lineages(self) -> dict[str, str]:
+        """The lineage of each RNG variable, now: a draw moves it on, so the
+        lineages a recorded position goes with are taken where it was."""
+        prefix = rng_virtual_var("")
+        return {var: h for var, h in self.tracking_state.variable_lineage.items() if var.startswith(prefix)}
+
+    def cell_pre_lineage(self) -> dict[str, str]:
+        """The RNG variables' lineages where :meth:`cell_observation`'s
+        start position was taken."""
+        return dict(self._cell_pre_lineage)
 
     def cell_observation(self) -> tuple[set[str], dict | None, dict | None]:
         """What this cell's statements changed, and the positions either side.

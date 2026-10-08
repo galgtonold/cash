@@ -442,6 +442,20 @@ class CellExecutor:
             state.executed_cell_source_hashes.add(digest)
             state.failed_cells.pop(digest, None)
             changed, pre, post = self._statement_processor.cell_rng_observation()
+            self.record_cell_rng(raw_cell, changed, pre, post, self._statement_processor.cell_rng_lineage())
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            pass
+
+    def record_cell_rng(
+        self, raw_cell: str, changed: set[str], pre: dict | None, post: dict | None, pre_lineage: dict[str, str]
+    ) -> None:
+        """Record where the RNG streams the cell *raw_cell* changed stood
+        before (*pre*, with the RNG variables' lineages then, *pre_lineage*)
+        and after it (*post*), for a later rewind (``RngRewind``). Also for a
+        cell IPython ran on its own (``%time a = np.random.rand(2)``)."""
+        try:
+            state = self._statement_processor.tracking_state
+            digest = exact_source_digest(raw_cell)
             if changed and post is not None:
                 state.rng_post_states[digest] = post
                 state.observed_rng_cells[digest] = changed
@@ -456,9 +470,9 @@ class CellExecutor:
                     drawing = set(get_drawing_rng_modules(raw_cell)) | changed
                     state.rng_pre_states[digest] = (
                         pre,
-                        rng_lineage_fingerprint(state.variable_lineage, drawing),
+                        rng_lineage_fingerprint(pre_lineage, drawing),
                     )
-        except (AttributeError, TypeError):  # pragma: no cover - defensive
+        except (AttributeError, TypeError, SyntaxError, ValueError):  # pragma: no cover - defensive
             pass
 
     # ------------------------------------------------------------------

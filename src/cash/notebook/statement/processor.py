@@ -93,7 +93,15 @@ from ...tracking.randomness import (
 from ..callee_reach import module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
-from ..magic_effects import is_magic_statement, is_rerun_magic, magic_base, magic_effects, magic_output_lineage, simulation_cell
+from ..magic_effects import (
+    is_magic_statement,
+    is_rerun_magic,
+    magic_base,
+    magic_effects,
+    magic_output_lineage,
+    magic_rng_advances,
+    simulation_cell,
+)
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
@@ -386,8 +394,8 @@ class StatementProcessor:
         the draw, as the simulation's do. Not for a loop or branch body: the
         structure moves it as a whole (:meth:`advance_rng_of_a_structure`).
         """
-        if not run.cache_key or is_control_body(run.code):
-            return
+        if not run.cache_key or is_control_body(run.code) or run.magic_reads is not None:
+            return  # a magic statement's draw moves it in record_magic
         state = self.tracking_state
         try:
             drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)
@@ -425,6 +433,15 @@ class StatementProcessor:
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._randomness.begin_cell()
+
+    def cell_rng_lineage(self) -> dict[str, str]:
+        """The RNG variables' lineages where the cell's start position was taken
+        (see :meth:`StatementRandomness.cell_pre_lineage`)."""
+        return self._randomness.cell_pre_lineage()
+
+    def rng_lineages(self) -> dict[str, str]:
+        """The lineage of each RNG variable, now."""
+        return self._randomness.rng_lineages()
 
     def cell_rng_observation(self) -> tuple[set[str], dict | None, dict | None]:
         """What this cell's statements changed in the RNG streams, and the
@@ -1037,6 +1054,8 @@ class StatementProcessor:
         if digests:
             self.tracking_state.magic_values[base] = digests
             self.tracking_state.magic_generation += 1
+        for var, lineage in magic_rng_advances(node, code, self.tracking_state.variable_lineage).items():
+            self.tracking_state.lineage.record(var, lineage)
         return {name: magic_output_lineage(base, digest) for name, digest in digests.items()}
 
     def bindings(self) -> dict[str, int]:
