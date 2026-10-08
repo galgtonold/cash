@@ -31,6 +31,7 @@ from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import compute_hash, is_identity_fallback_hash
 from .callee_reach import Reach, reached_user_code
+from .held_code import held_code_digest
 
 logger = logging.getLogger(__name__)
 
@@ -374,9 +375,16 @@ UNHASHABLE = "unhashable:"
 
 
 def module_data_digest(label: str, value: Any) -> str:
-    """The digest of *value*, the module data at *label*."""
+    """The digest of *value*, the module data at *label*: its value hash,
+    with the code of the functions and of the user's objects it holds
+    (`held_code_digest`). The value hash pickles a function by its name, so
+    a registry holding a function edited since keyed as it did."""
     try:
-        return compute_hash(value)
+        digest = compute_hash(value)
+        code = held_code_digest(value)
+        if code:
+            digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
+        return digest
     except Exception:  # noqa: BLE001 - hashing arbitrary user data
         logger.debug("Could not hash module data %s", label, exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
