@@ -13,6 +13,7 @@ from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import consumed_input_names
 from .._trace import trace_event
+from ..cache_key import statement_source_hash
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
@@ -87,6 +88,7 @@ class ReexecutionPlanner:
         self.loop_rules = loop_rules
         self.unsaved_edits = unsaved_edits
         self.callables = callables
+        self.probe = probe
         #: The file-writer pass, with the memos it keeps.
         self.file_writers = FileWriterScheduler(shell, tracking_state, probe)
         #: Refuses figure saves whose figure would be written blank.
@@ -183,6 +185,8 @@ class ReexecutionPlanner:
             simulation_trace,
             restored_statements_info,
         )
+
+        stmts_to_run_indices = sorted(set(stmts_to_run_indices) | set(self.unrun_process_writers(simulation_trace)))
 
         # Again, now that the file-write passes are done: they PROMOTE restored
         # statements to re-execution (a restore validated before a scheduled
@@ -556,6 +560,41 @@ class ReexecutionPlanner:
             for q in range(p)
             if var in simulation_trace[q].outputs
         )
+
+    def unrun_process_writers(self, simulation_trace: list) -> list[int]:
+        """The statements above the cell that changed the process's
+        environment or working directory when they ran
+        (``callee_reach.process_state_writes``) and have not run in this
+        kernel.
+
+        A restart puts both back as the shell started the kernel, and they
+        are no variable a reader names: ``x = mylib.mode()`` reads
+        ``os.environ["MODE"]`` inside ``mode``, ``mylib.read("d.txt")`` reads
+        a path relative to the working directory. Run alone after a restart,
+        the cell got the shell's values where Restart & Run All gives the
+        notebook's. They run again, in notebook order, with their inputs.
+
+        Only a statement known to have run (in this kernel or, kept on
+        record, an earlier one): a setting edited and not run yet reaches no
+        reader, as without a restart.
+        """
+        state = self.tracking_state
+        if not simulation_trace or (not state.process_state_writers and self.probe.cash_instance is None):
+            return []
+        found: list[int] = []
+        for idx, entry in enumerate(simulation_trace):
+            source_hash = statement_source_hash(entry.stmt_code)
+            if source_hash in state.process_state_ran:
+                continue
+            kinds = state.process_state_writers.get(source_hash)
+            if kinds is None and self.probe.cash_instance is not None:
+                kinds = self.probe.process_state(source_hash)
+                if kinds:
+                    state.process_state_writers[source_hash] = kinds
+            if kinds:
+                found.append(idx)
+                trace_event("process_state_writer", stmt=entry.stmt_code[:80], kinds=sorted(kinds))
+        return found
 
     def complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
         """Every statement after a re-run producer of a variable that also

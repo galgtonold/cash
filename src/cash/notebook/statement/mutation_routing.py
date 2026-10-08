@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from ...analysis.ast_util import called_names
 from ..call_key import changes_its_closure
-from ..callee_reach import module_state_names, module_state_writes, state_holders
+from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
@@ -104,6 +104,14 @@ class MutationRouting:
                 run,
                 f"Sets state on module: {', '.join(sorted(modules))} (statement re-executes, so the module has it)",
             )
+        # The same for one that changes the process's environment or working
+        # directory, itself or in a function it calls (`setup()` doing
+        # `os.environ["MODE"] = "b"`): a hit would leave them as they are, and
+        # a restart's rebuild runs it again (`ReexecutionPlanner`).
+        run.process_state = process_state_writes(run.code, self.shell.user_ns)
+        if run.process_state:
+            what = " and ".join(_PROCESS_WORDS[kind] for kind in sorted(run.process_state))
+            _skip(run, f"Changes the {what} (statement re-executes, so the process has it)")
         # A draw inside a loop/branch body. Skip the CACHE without touching
         # ``outputs`` -- the statement must re-execute so the artists actually
         # land on the Axes, but bumping its lineage from a per-statement source
@@ -288,6 +296,11 @@ class MutationRouting:
             )
         if not structure:
             self._records.note_module_state(run.code, run.state_names, run.state_modules | observed)
+        if run.process_state:
+            self._records.note_process_state(run.code, run.process_state)
+
+
+_PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}
 
 
 def _is_structure(tree: ast.Module | None) -> bool:

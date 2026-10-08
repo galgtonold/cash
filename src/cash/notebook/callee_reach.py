@@ -15,6 +15,7 @@ import dis
 import functools
 import inspect
 import operator
+import os
 import sqlite3
 import sys
 import textwrap
@@ -25,18 +26,22 @@ from typing import Any, NamedTuple
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.mutations import MUTATING_METHODS
+from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
 from ..value_types import IMMUTABLE_PRIMS, is_runtime_machinery
 
 __all__ = [
+    "CWD",
+    "ENVIRON",
     "Reach",
     "module_globals",
     "module_holders",
     "module_state_names",
     "import_state_writes",
     "module_state_writes",
+    "process_state_writes",
     "reached_user_code",
     "rebound_modules",
     "state_holders",
@@ -186,12 +191,86 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     return frozenset(found)
 
 
+#: What a statement can change of the process the notebook runs in, which a
+#: kernel restart puts back as the shell started it: its environment
+#: variables, and its working directory.
+ENVIRON = "environ"
+CWD = "cwd"
+
+#: Methods of ``os.environ`` that change it.
+_ENVIRON_SETTING_METHODS = frozenset({"update", "pop", "popitem", "setdefault", "clear", "__setitem__", "__delitem__"})
+#: The functions that change the environment or the working directory, and
+#: how they are spelled where the namespace cannot say (after a restart).
+_PROCESS_SETTERS: tuple[tuple[Any, str], ...] = (
+    (os.chdir, CWD),
+    (getattr(os, "fchdir", None), CWD),
+    (os.putenv, ENVIRON),
+    (getattr(os, "unsetenv", None), ENVIRON),
+)
+_PROCESS_SPELLINGS = {"os.chdir": CWD, "os.fchdir": CWD, "os.putenv": ENVIRON, "os.unsetenv": ENVIRON}
+
+
+def process_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
+    """What of the process *code* changes: `ENVIRON` for ``os.environ["K"] =
+    v``, ``del os.environ["K"]``, ``os.environ.update(...)``, ``os.putenv``;
+    `CWD` for ``os.chdir(d)``. Written in it, or in a function it calls: a
+    notebook function is followed into its body (``setup()`` doing
+    ``os.environ["MODE"] = "b"``), and so is the user's module function and
+    the helpers it calls (``mylib.go(d)`` doing ``os.chdir(d)``), as for the
+    state of a module (`module_state_writes`).
+
+    A kernel restart puts both back as the shell started them; the
+    statements that changed them are what puts the notebook's values back.
+    """
+    if not code:
+        return frozenset()
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    process: set[str] = set()
+    _state_writes(tree.body, namespace or {}, set(), set(), process)
+    return frozenset(process)
+
+
+def _is_environ(expr: ast.expr, namespace: Mapping[str, Any]) -> bool:
+    """Whether *expr* is the process environment: ``os.environ``, an alias
+    of it, or (with nothing in the namespace to say) one spelled so."""
+    value, _ = _static_value(expr, namespace)
+    if value is not None:
+        return value is os.environ or value is getattr(os, "environb", None)
+    return dotted_name(expr) in ENVIRON_NAMES
+
+
+def _process_call(func: ast.expr, callee: Any, namespace: Mapping[str, Any]) -> str | None:
+    """`ENVIRON` or `CWD` when calling *func* (resolved to *callee*) changes
+    that of the process."""
+    if callee is not None:
+        for setter, kind in _PROCESS_SETTERS:
+            if setter is not None and callee is setter:
+                return kind
+    if isinstance(func, ast.Attribute) and func.attr in _ENVIRON_SETTING_METHODS and _is_environ(func.value, namespace):
+        return ENVIRON
+    return _PROCESS_SPELLINGS.get(dotted_name(func) or "") if callee is None else None
+
+
 def _state_writes(
-    statements: Iterable[ast.AST], namespace: Mapping[str, Any], found: set[str], followed: set[int]
+    statements: Iterable[ast.AST],
+    namespace: Mapping[str, Any],
+    found: set[str],
+    followed: set[int],
+    process: set[str] | None = None,
+    *,
+    follow: bool = True,
 ) -> None:
     """Add to *found* the local modules *statements* set state on, run
     with *namespace* as their globals; *followed* are the notebook functions
-    already walked."""
+    already walked. With *process*, add to it what of the process they
+    change (`process_state_writes`). Without *follow*, a call is judged by
+    what it calls, not followed into a body.
+
+    This is the one walk that follows a statement into the notebook
+    functions it calls: whatever else a statement's helpers can change is
+    looked for here, so the bodies are read once, the same way."""
 
     def rooted(node: ast.expr) -> None:
         """Add the local module the store target *node* sets something on:
@@ -218,14 +297,18 @@ def _state_writes(
         Python code of the user's runs (``CONFIG.update(...)``), the
         receiver when the method's name says it changes it."""
         callee, kind, receiver = _resolve_call(func, namespace)
+        if process is not None:
+            changed = _process_call(func, callee, namespace)
+            if changed is not None:
+                process.add(changed)
         users = isinstance(callee, types.FunctionType) and _is_users_function(callee, namespace)
-        if isinstance(callee, types.FunctionType):
-            found.update(_modules_changed_by(callee, namespace))
+        if isinstance(callee, types.FunctionType) and follow:
+            found.update(_modules_changed_by(callee, namespace, process))
             if users:
                 found.update(_class_state_written(callee, kind, receiver, namespace))
             if callee.__globals__ is namespace and id(callee) not in followed:
                 followed.add(id(callee))
-                _state_writes(_function_body(callee), namespace, found, followed)
+                _state_writes(_function_body(callee), namespace, found, followed, process)
         if node is None or users:
             return
         if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
@@ -257,6 +340,12 @@ def _state_writes(
                 for part in ast.walk(target):
                     if isinstance(part, ast.expr) and isinstance(getattr(part, "ctx", None), (ast.Store, ast.Del)):
                         rooted(part)
+                        if (
+                            process is not None
+                            and isinstance(part, ast.Subscript)
+                            and _is_environ(part.value, namespace)
+                        ):
+                            process.add(ENVIRON)
         elif isinstance(node, ast.Call):
             called(node.func, node)
 
@@ -684,12 +773,16 @@ def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
     return frozenset(changed)
 
 
-def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) -> set[str]:
+def _modules_changed_by(
+    fn: types.FunctionType, namespace: Mapping[str, Any], process: set[str] | None = None
+) -> set[str]:
     """The local modules whose globals calling *fn* changes: its own, or
     those of the helpers it calls, at any depth. ``mylib.add(5)`` calling
     ``_bump(5)``, which does ``global COUNT; COUNT += n``, changes ``mylib``
     as surely as a body that does it itself. A notebook function is followed
-    to the module functions it calls; its own writes are the notebook's."""
+    to the module functions it calls; its own writes are the notebook's.
+    With *process*, add to it what of the process each module function
+    reached changes (`process_state_writes`)."""
     found: set[str] = set()
     seen: set[int] = set()
     pending = [fn]
@@ -705,6 +798,8 @@ def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) ->
                 continue
             if _changed_globals(current.__code__):
                 found.add(home.__name__)
+            if process is not None:
+                process.update(_module_function_process_writes(current))
         for co in _code_objects(current.__code__):
             for name in _loaded_globals(co):
                 value = home_ns.get(name)
@@ -714,6 +809,17 @@ def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) ->
                     attrs = vars(value)
                     pending.extend(attrs[a] for a in co.co_names if isinstance(attrs.get(a), types.FunctionType))
     return found
+
+
+@functools.lru_cache(maxsize=4096)
+def _module_function_process_writes(fn: types.FunctionType) -> frozenset[str]:
+    """What of the process the body of the module function *fn* itself
+    changes (`process_state_writes`), its calls judged by what they call:
+    `_modules_changed_by` reaches its helpers. Once per function: asked for
+    every statement that calls it."""
+    process: set[str] = set()
+    _state_writes(_function_body(fn), fn.__globals__, set(), set(), process, follow=False)
+    return frozenset(process)
 
 
 class _Found:

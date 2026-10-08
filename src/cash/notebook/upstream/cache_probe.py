@@ -23,6 +23,7 @@ from ..cache_key import (
     import_bindings_key,
     module_state_key,
     mutation_verdict_key,
+    process_state_key,
 )
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
 from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
@@ -50,12 +51,14 @@ class CacheProbe:
         self._carrier_advances_memo: dict[str, frozenset[str] | None] = {}
         #: :meth:`module_state` answers by statement; cleared by :meth:`reset`.
         self._module_state_memo: dict[str, tuple[frozenset[str], frozenset[str]] | None] = {}
+        self._process_state_memo: dict[str, frozenset[str] | None] = {}
 
     def reset(self) -> None:
         """Forget the memoized import bindings and generator draws."""
         self._import_bindings_memo.clear()
         self._carrier_advances_memo.clear()
         self._module_state_memo.clear()
+        self._process_state_memo.clear()
 
     def backend(self):
         """The cache backend the simulation probes, or None without a Cash."""
@@ -141,6 +144,23 @@ class CacheProbe:
                     frozenset(str(name) for name in record.get("names") or ()),
                     frozenset(str(name) for name in record.get("modules") or ()),
                 )
+            except TypeError:
+                found = None
+        memo[source_hash] = found
+        return found
+
+    def process_state(self, source_hash: str) -> frozenset[str] | None:
+        """What of the process a statement changed when an earlier kernel ran
+        it, or None when nothing was recorded. See ``process_state_key``.
+        Memoized until :meth:`reset`, as :meth:`module_state`."""
+        memo = self._process_state_memo
+        if source_hash in memo:
+            return memo[source_hash]
+        found = None
+        record = self.record(process_state_key(source_hash))
+        if record and record.get("process_state"):
+            try:
+                found = frozenset(str(kind) for kind in record.get("kinds") or ())
             except TypeError:
                 found = None
         memo[source_hash] = found
