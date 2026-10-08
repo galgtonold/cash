@@ -65,11 +65,14 @@ class BadgePresenter:
         self._bug_report_context_cache: tuple[Any, dict] | None = None
 
     def start_cell(self, display_id: str) -> None:
-        """Open a cell's badge: RUNNING, under *display_id*, with the progress
-        throttle reset so the cell's first progress update is shown."""
+        """Open a cell's badge: RUNNING, under *display_id*. The throttle
+        counts it as a render: a cell whose statements finish within
+        :attr:`MIN_RENDER_INTERVAL` goes from RUNNING to its final badge with
+        no progress render between (each is ~2 ms of a trivial cell)."""
         self._last_render_time = 0.0
         if self.mode == "html":
             self.render([], display_id=display_id, status="RUNNING", update_existing=False)
+            self._last_render_time = time.time()
 
     def close(self, display_id: str, status: str = "DONE") -> None:
         """End a cell's badge with no rows, for a cell cash did not run."""
@@ -101,8 +104,8 @@ class BadgePresenter:
 
     def _throttle_allows(self) -> bool:
         """Whether a progress update may render now: at most one per
-        :attr:`MIN_RENDER_INTERVAL`, so fast statements do not flicker. The
-        first one after :meth:`start_cell` always may."""
+        :attr:`MIN_RENDER_INTERVAL`, so fast statements do not flicker,
+        the cell's RUNNING badge (:meth:`start_cell`) counted."""
         now = time.time()
         if now - self._last_render_time < self.MIN_RENDER_INTERVAL:
             return False
