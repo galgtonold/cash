@@ -172,3 +172,27 @@ def test_after_the_log_is_drained_the_line_goes_through_resolve_again(call_cache
     call_cache.drain_call_log()
     assert all(callee is not f for callee in call_cache.plain_callees)
     assert call_cache.resolve(f, 0) is not f
+
+
+def test_the_routing_of_plain_calls_is_cash_s_overhead(call_cache, monkeypatch):
+    """The compare and count the rewritten line adds to each plain call are
+    cash's time, not the statement's: left in, a million cheap calls computing
+    in 0.07 s measured past the 0.1 s floor for writing a value to disk."""
+    monkeypatch.setattr(cu, "routed_call_s", lambda: 1e-6)
+
+    def f(i):
+        return i * 2
+
+    unit = call_cache.call_unit
+    assert _plain_after_guard(call_cache, f) is f
+    call_cache.fold_plain_counts()
+    before = unit.overhead_s
+    for i in range(1000):
+        call_cache.resolve(f, 0)(i)
+    call_cache.fold_plain_counts()
+
+    assert unit.overhead_s - before == pytest.approx(1000 * 1e-6)
+
+
+def test_the_routing_is_measured_small():
+    assert 0.0 <= cu.routed_call_s() <= 1e-6

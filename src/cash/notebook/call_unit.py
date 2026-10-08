@@ -199,6 +199,38 @@ _OVERHEAD_FACTOR = 3.0
 _HIT_MUST_SAVE = 0.75
 
 
+@functools.cache
+def routed_call_s() -> float:
+    """Seconds the rewritten line adds to a call its site runs plain
+    (``call_interception._routed``: a compare, two subscripts and a
+    counter), measured once on this interpreter.
+
+    Left in the statement's time, it counted as the user's work: a
+    comprehension of a million cheap calls computing in 0.07 s measured
+    over 0.1 s, the floor past which its value is written to disk, and the
+    cell waited 0.1 s for a write the plain kernel's work would not have
+    earned. The least of a few runs, so a stall makes it smaller, never
+    larger.
+    """
+    calls = 2000
+    namespace = {"f": int, "P": [int], "C": [itertools.count(1).__next__], "r": range(calls)}
+    routed = compile("for _ in r:\n    (f if f is P[0] and C[0]() else None)(0)", "<routed>", "exec")
+    plain = compile("for _ in r:\n    f(0)", "<plain>", "exec")
+
+    def best(code) -> float:
+        times = []
+        for _ in range(3):
+            started = _perf_counter()
+            exec(code, namespace)
+            times.append(_perf_counter() - started)
+        return min(times)
+
+    try:
+        return min(max(0.0, (best(routed) - best(plain)) / calls), 1e-6)
+    except Exception:  # noqa: BLE001 - no measurement is no tax
+        return 0.0
+
+
 @dataclasses.dataclass
 class _Invocation:
     """One cached call under way, and the cached calls made inside it."""
@@ -1016,6 +1048,9 @@ class CallUnit:
                 record = entry[1]
                 record["calls"] += calls
                 record["execution_time"] += calls * entry[2]
+                # Cash's, not the user's: the statement leaves it out of
+                # what it cost (``statement_price``).
+                self.overhead_s += calls * routed_call_s()
 
     def drain(self) -> list[dict]:
         self._count_plain_calls()
@@ -1172,6 +1207,12 @@ class CallCache:
         # One call per statement run: each site's guard starts over.
         self._call_unit.begin_statement()
         self._call_unit.plain_value_source = plain_value_source
+
+    def fold_plain_counts(self) -> None:
+        """Count the calls the rewritten lines made to the sites run plain
+        into their records and the unit's overhead (see `_fold_counters`)."""
+        self._fold_counters()
+        self._call_unit._count_plain_calls()
 
     def drain_call_log(self) -> list[dict]:
         """Events :class:`~cash.notebook.call_unit.CallUnit` recorded since the
