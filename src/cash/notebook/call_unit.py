@@ -56,7 +56,7 @@ from cash.notebook.call_effects import (
     restore_globals,
     unwrap_callee_globals,
 )
-from cash.notebook.call_entries import CallEntries
+from cash.notebook.call_entries import ONE_LOCAL, CallEntries, refs_beyond
 from cash.notebook.call_interception import CallSite, interceptable, names_read
 from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests
 from cash.notebook.call_refs import (
@@ -895,12 +895,14 @@ class CallUnit:
         finally:
             self._running -= 1
         elapsed = _perf_counter() - started
+        # Read while `result` is this frame's only reference of its own.
+        result_held = refs_beyond(result) > ONE_LOCAL
         stored = False
         if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before) or _rebound_unwatched(
             call, module_before
         ):
             self._entries.refuse(call.key)
-        elif self._worth_storing(call, result, elapsed):
+        elif self._worth_storing(call, result, elapsed, result_held):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
         if stored:
             self._cached(
@@ -933,12 +935,12 @@ class CallUnit:
         # a hit would silently skip.
         return hash_args(call.args, call.kwargs) != arg_hashes_before
 
-    def _worth_storing(self, call: _Call, result, elapsed: float) -> bool:
+    def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True) -> bool:
         """Past the cost floor, safe to hand back as a copy, and cheaper to
         restore than to compute again."""
         return (
             elapsed >= self._cost_floor_s()
-            and self._entries.storable(result, call.args, call.kwargs, call.fn)
+            and self._entries.storable(result, call.args, call.kwargs, call.fn, result_held)
             and self._entries.restore_pays(result, elapsed)
         )
 

@@ -231,6 +231,20 @@ def view_bases(value: Any) -> list[int]:
     return found
 
 
+def holds_a_held_object(value: Any) -> bool:
+    """Whether an object *value* holds (not *value* itself) has a holder
+    outside *value*, by reference count, or *value* holds a numpy view (whose
+    base anything may hold). When neither, nothing in *value* below its root
+    can be part of another object, which spares `holds_part_of` a walk over
+    large sources."""
+    value_types = VALUE_TYPES + library_value_types()
+    nodes, inbound, checked, _owner = _walk({"": value}, [], value_types)
+    root = id(value)
+    if _excess(nodes, inbound, [key for key in checked if key != root]):
+        return True
+    return any(view_bases(obj) for obj in nodes.values())
+
+
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     """Whether *value* is or holds an object one of *sources* is or holds.
 

@@ -221,7 +221,7 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
-<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @8fd038a9, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @c8662e9b, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
 A call whose result is or holds an object the notebook can also reach is not
 cached: one of its arguments or an object inside one, a global the function
 names (`return MODELS[1]`, `return {'model': MODEL}`, a lazily built

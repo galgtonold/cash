@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import sys
 import time as _time
 import types
 import uuid
@@ -29,7 +30,7 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
-from cash.notebook.shared_objects import holds_part_of
+from cash.notebook.shared_objects import holds_a_held_object, holds_part_of
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
@@ -48,6 +49,23 @@ _REF_MIN_COMPUTE_S = 0.1
 _MAX_FUNCTIONS = 32
 
 _ABSENT = object()
+
+
+def refs_beyond(value: Any) -> int:
+    """How many references *value* has, as counted from a caller that holds
+    it in one local; compare with `ONE_LOCAL`. More means something else
+    holds it too (a global, a container, a memo)."""
+    return sys.getrefcount(value)
+
+
+def _one_local() -> int:
+    probe = object()
+    return refs_beyond(probe)
+
+
+#: `refs_beyond` of an object one local of the caller holds and nothing else.
+#: Measured, not assumed: it depends on the interpreter.
+ONE_LOCAL = _one_local()
 
 
 def _code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
@@ -210,7 +228,7 @@ class CallEntries:
             "[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain", key[:16], hit_cost, saved or 0.0
         )
 
-    def storable(self, result, args, kwargs, fn: Any = None) -> bool:
+    def storable(self, result, args, kwargs, fn: Any = None, root_held: bool = True) -> bool:
         """Refuse values whose *identity* is load-bearing.
 
         Three families, all of which the statement path already refuses in its
@@ -233,6 +251,11 @@ class CallEntries:
            hand back a copy, and writes through the result would no longer
            reach the global. The statement keeps them linked instead (the
            decorator warns ``CACHE-RESULT-SHARED`` for the same thing).
+           Those are walked only when something may hold part of the result:
+           *root_held* (the caller saw more references to *result* than its
+           own, `refs_beyond`) or an object inside it held from outside
+           (`holds_a_held_object`). A fresh result is neither, and the walk
+           over a large global the function merely reads is skipped.
 
            Not for a plain value. CPython shares one object for small ints
            and interned strings, so ``score(1, 10)`` returns the very ``10``
@@ -265,7 +288,7 @@ class CallEntries:
         """
         try:
             return (
-                not holds_part_of(result, (*args, *kwargs.values(), *(reached_objects(fn) if fn is not None else ())))
+                not holds_part_of(result, (*args, *kwargs.values(), *self._reached(result, fn, root_held)))
                 and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
@@ -273,6 +296,14 @@ class CallEntries:
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
+
+    @staticmethod
+    def _reached(result, fn: Any, root_held: bool) -> list[Any]:
+        """`reached_objects` of *fn*, or none when nothing can hold part of
+        *result* (see `storable`)."""
+        if fn is None or not (root_held or holds_a_held_object(result)):
+            return []
+        return reached_objects(fn)
 
     def lookup(self, key: str) -> tuple[bool, Any, float, dict]:
         """``(hit, value, recorded_execution_time, metadata)`` -- one backend read.
