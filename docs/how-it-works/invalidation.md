@@ -213,7 +213,9 @@ Three rules keep random draws right when you edit a seed:
 
 - **A seed is an input.** A `seed()` call sets a hidden lineage variable that
   every later draw from that module reads, so a re-seed changes the draw's key
-  and everything built from it.
+  and everything built from it. Each draw moves that variable on, so a change
+  in how many numbers a draw above takes, or in the order of the draws, changes
+  the keys of the draws below it too.
 - **A restored draw restores the generator.** A cached draw also stores the
   generator state it left behind, and restores it only while the same seed is
   in force.

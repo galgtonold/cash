@@ -20,7 +20,7 @@ import sqlite3
 import sys
 import textwrap
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple
 
 from ..analysis.ast_util import parse_cached
@@ -29,10 +29,12 @@ from ..analysis.mutations import MUTATING_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
+from ..tracking.randomness import get_seeding_rng_modules
 from ..value_types import IMMUTABLE_PRIMS, INTERPRETER_MANAGED_GLOBALS, is_runtime_machinery
 
 __all__ = [
     "Reach",
+    "helper_seeded_modules",
     "module_globals",
     "module_holders",
     "module_state_names",
@@ -235,6 +237,90 @@ def _state_writes(
                 if callee.__globals__ is namespace and id(callee) not in followed:
                     followed.add(id(callee))
                     _state_writes(_function_body(callee), namespace, found, followed)
+
+
+def helper_seeded_modules(
+    code: str,
+    namespace: Mapping[str, Any] | None,
+    def_source: Callable[[str], str | None] | None = None,
+) -> frozenset[str]:
+    """The RNG modules *code* seeds through a notebook function it calls.
+
+    ``set_seed(42)``, with ``def set_seed(s): random.seed(s);
+    np.random.seed(s)`` in a cell, seeds ``random`` and ``numpy.random`` as
+    surely as the two calls written out, so it writes their RNG variables as
+    they would. Followed: a call of a function defined in a cell (its globals
+    are *namespace*), and the notebook functions its body calls in turn. A
+    name not bound yet (the simulation after a restart reaches the call before
+    the kernel ran the ``def``) is looked up with *def_source*, which gives
+    the source of the ``def`` the simulation saw. A ``def`` seeds nothing: its
+    body runs when the function is called. Both engines call this with the
+    same statement text and the live namespace.
+    """
+    if not code or (not namespace and def_source is None):
+        return frozenset()
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    namespace = namespace or {}
+    found: set[str] = set()
+    followed: set[str] = set()
+    pending: list[ast.AST] = list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        name = node.func.id
+        if name in followed:
+            continue
+        followed.add(name)
+        source = _notebook_function_source(name, namespace, def_source)
+        if source is None:
+            continue
+        seeded, calls = _seeds_and_calls(source)
+        found |= seeded
+        pending.extend(ast.Call(func=ast.Name(id=called, ctx=ast.Load()), args=[], keywords=[]) for called in calls)
+    return frozenset(found)
+
+
+def _notebook_function_source(
+    name: str, namespace: Mapping[str, Any], def_source: Callable[[str], str | None] | None
+) -> str | None:
+    """The source of the notebook function *name*, or None when it is not one."""
+    fn = namespace.get(name)
+    if fn is None:
+        return def_source(name) if def_source is not None else None
+    if not isinstance(fn, types.FunctionType) or fn.__globals__ is not namespace:
+        return None
+    return _code_source(fn.__code__)
+
+
+@functools.lru_cache(maxsize=1024)
+def _code_source(code: types.CodeType) -> str | None:
+    """The source of the function whose code is *code*: a def run again
+    makes a new code object, so an edited one is read again."""
+    try:
+        return textwrap.dedent(inspect.getsource(code))
+    except SOURCE_RETRIEVAL_ERRORS:
+        return None
+
+
+@functools.lru_cache(maxsize=1024)
+def _seeds_and_calls(source: str) -> tuple[frozenset[str], tuple[str, ...]]:
+    """What the function defined by *source* seeds itself, and the plain
+    names it calls (the notebook functions among them are followed)."""
+    try:
+        seeded = frozenset(get_seeding_rng_modules(source))
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, AttributeError, RecursionError):
+        return frozenset(), ()
+    calls = sorted(
+        {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    )
+    return seeded, tuple(calls)
 
 
 def _function_body(fn: types.FunctionType) -> list[ast.stmt]:

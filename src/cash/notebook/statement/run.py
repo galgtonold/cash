@@ -74,6 +74,9 @@ class StatementRun:
     outputs: set[str] = field(default_factory=set)
     source_hash: str = ""
     cache_key: str = ""
+    #: The key the RNG streams it drew from move on from, when not
+    #: ``cache_key``: a draw first seen as it ran (``_key_a_newly_seen_draw``).
+    rng_advance_key: str = ""
     analysis: StatementAnalysis | None = None
     #: Receivers to content-observe after execution, receivers assumed
     #: mutated, and whether this run learns the statement's mutation verdict.

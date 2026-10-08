@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import types
+from collections import ChainMap
 from typing import TYPE_CHECKING
 
 from cash.control_markers import strip_markers
@@ -31,7 +32,15 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..callee_reach import reached_user_code
-from ..magic_effects import is_magic_statement, is_rerun_magic, magic_base, magic_effects, magic_output_lineage, simulation_cell
+from ..magic_effects import (
+    is_magic_statement,
+    is_rerun_magic,
+    magic_base,
+    magic_effects,
+    magic_output_lineage,
+    magic_rng_advances,
+    simulation_cell,
+)
 from ..recorded_reads import outside_changes, watched_module_data
 from ..run_memo import stats_this_run
 from ..tracking_state import TrackingState
@@ -268,6 +277,7 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
+
         def in_notebook(code: str) -> bool:
             self.statements.set_notebook_functions(notebook_cells)
             return self.statements.in_notebook(code)
@@ -533,6 +543,7 @@ class VirtualLineage:
             if not rerun:
                 self.tracking_state.magic_lineages.add(lineage)
             virtual_lineage[name] = lineage
+        virtual_lineage.update(magic_rng_advances(node, stmt_code, ChainMap(virtual_lineage, live)))
         if rerun and changed:
             # Python a rebuild runs again, as any statement: the planner
             # schedules it where what it binds or changes is needed.

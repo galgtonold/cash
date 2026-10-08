@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from cash.control_markers import strip_markers
@@ -31,6 +32,7 @@ from cash.tracking.randomness import (
 )
 
 from ...source_norm import exact_source_digest
+from ..callee_reach import helper_seeded_modules
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
@@ -77,6 +79,7 @@ class StatementRandomness:
         # the replay ledger.
         self._cell_changed: set[str] = set()
         self._cell_pre: dict | None = None
+        self._cell_pre_lineage: dict[str, str] = {}
         self._cell_post: dict | None = None
 
     def resume_live_stream(self, code: str) -> None:
@@ -134,12 +137,21 @@ class StatementRandomness:
         """
         entropy_modules = get_entropy_reseed_modules(code)
         entropy_vars = {rng_virtual_var(m) for m in entropy_modules}
-        for var in hidden_lineage_writes(code):
+        helper_seeds = self.helper_seeds(code)
+        for var in hidden_lineage_writes(code) | {rng_virtual_var(m) for m in helper_seeds}:
             self.tracking_state.lineage.record(
                 var, entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
             )
-        for module in get_seeding_rng_modules(code):
+        for module in get_seeding_rng_modules(code) | helper_seeds:
             self.seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
+
+    def helper_seeds(self, code: str) -> frozenset[str]:
+        """The RNG modules *code* seeds through a notebook function it calls
+        (``set_seed(42)``): a seed like one written out (``helper_seeded_modules``)."""
+        try:
+            return helper_seeded_modules(code, self.shell.user_ns)
+        except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
+            return frozenset()
 
     def warn_unseeded(self, code: str, allow_random: bool, *, skip_cache: bool = False) -> list:
         """Warn when *code* draws from an unseeded RNG.
@@ -464,6 +476,7 @@ class StatementRandomness:
             self.observed_draw = {m for m in changed if m in pre_rng}
             if self._cell_pre is None:
                 self._cell_pre = pre_rng
+                self._cell_pre_lineage = self.rng_lineages()
             self._cell_changed |= changed
             self._cell_post = post
             self._record_hidden_draws(code, self.observed_draw)
@@ -489,7 +502,7 @@ class StatementRandomness:
             visible = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        hidden = set(drew) - set(visible) - _bare_seeds(code)
+        hidden = set(drew) - set(visible) - _bare_seeds(code, self.helper_seeds)
         if not hidden:
             return
         digest = exact_source_digest(code)
@@ -513,7 +526,19 @@ class StatementRandomness:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._cell_changed = set()
         self._cell_pre = None
+        self._cell_pre_lineage = {}
         self._cell_post = None
+
+    def rng_lineages(self) -> dict[str, str]:
+        """The lineage of each RNG variable, now: a draw moves it on, so the
+        lineages a recorded position goes with are taken where it was."""
+        prefix = rng_virtual_var("")
+        return {var: h for var, h in self.tracking_state.variable_lineage.items() if var.startswith(prefix)}
+
+    def cell_pre_lineage(self) -> dict[str, str]:
+        """The RNG variables' lineages where :meth:`cell_observation`'s
+        start position was taken."""
+        return dict(self._cell_pre_lineage)
 
     def cell_observation(self) -> tuple[set[str], dict | None, dict | None]:
         """What this cell's statements changed, and the positions either side.
@@ -600,9 +625,10 @@ class StatementRandomness:
             logger.debug("%s Stale estimator-fit warning failed", _LOG_PROCESSOR)
 
 
-def _bare_seeds(code: str) -> set[str]:
+def _bare_seeds(code: str, helper_seeds: Callable[[str], frozenset[str]] | None = None) -> set[str]:
     """The modules *code* seeds when it is nothing but the seed call, its
-    arguments calling nothing: ``np.random.seed(42)``, ``random.seed(s)``.
+    arguments calling nothing: ``np.random.seed(42)``, ``random.seed(s)``,
+    or a notebook function that seeds (``set_seed(42)``, *helper_seeds*).
 
     Such a statement moves its module's stream, but to where the seed puts
     it, whatever the stream held before: that is no draw. Recorded as one,
@@ -623,6 +649,9 @@ def _bare_seeds(code: str) -> set[str]:
     if any(isinstance(node, ast.Call) for arg in arguments for node in ast.walk(arg)):
         return set()
     try:
-        return get_seeding_rng_modules(code)
+        seeded = set(get_seeding_rng_modules(code))
     except (SyntaxError, ValueError, AttributeError, RecursionError):
-        return set()
+        seeded = set()
+    if helper_seeds is not None:
+        seeded |= helper_seeds(code)
+    return seeded

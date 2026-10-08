@@ -23,6 +23,8 @@ from .detect import (
 )
 from .lineage import (
     advanced_carrier_lineage,
+    advanced_rng_lineage,
+    drawn_rng_vars,
     entropy_write_lineage,
     hidden_lineage_reads,
     hidden_lineage_writes,
@@ -59,6 +61,8 @@ from .state import (
 __all__ = [
     "CashRandomnessWarning",
     "advanced_carrier_lineage",
+    "advanced_rng_lineage",
+    "drawn_rng_vars",
     "RandomnessDetector",
     "capture_object_rng_states",
     "capture_argument_carrier_states",

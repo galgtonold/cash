@@ -82,11 +82,26 @@ from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
-from ...tracking.randomness import carrier_positions, hidden_lineage_writes, moved_carrier_names, rng_virtual_var
+from ...tracking.randomness import (
+    advanced_rng_lineage,
+    carrier_positions,
+    drawn_rng_vars,
+    hidden_lineage_writes,
+    moved_carrier_names,
+    rng_virtual_var,
+)
 from ..callee_reach import module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
-from ..magic_effects import is_magic_statement, is_rerun_magic, magic_base, magic_effects, magic_output_lineage, simulation_cell
+from ..magic_effects import (
+    is_magic_statement,
+    is_rerun_magic,
+    magic_base,
+    magic_effects,
+    magic_output_lineage,
+    magic_rng_advances,
+    simulation_cell,
+)
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
@@ -348,6 +363,48 @@ class StatementProcessor:
             key = "unkeyable:" + secrets.token_hex(16)
         self._advance_carriers(statement_source_hash(code), moved, key, code)
 
+    def advance_rng_of_a_structure(self, code: str, before: dict[str, str]) -> None:
+        """Move on the RNG variables a top-level loop or branch *code* drew from.
+
+        A body statement moves none (see :meth:`_advance_rng`), so the
+        structure does it as a whole, as the simulation sees it: one statement
+        keyed on its lineages at entry (*before*). A variable a seed in the
+        body or a statement run whole moved already keeps its lineage.
+        """
+        lineage = self.tracking_state.variable_lineage
+        drawn = drawn_rng_vars(key_hidden_reads(code, self.tracking_state), code, before)
+        drawn = {var for var in drawn if lineage.get(var) == before.get(var)}
+        if not drawn:
+            return
+        try:
+            key = self.key_as_one_statement(code, before)
+        except Exception:  # noqa: BLE001 - unkeyable: a lineage no statement shares
+            key = "unkeyable:" + secrets.token_hex(16)
+        for var in sorted(drawn):
+            self.tracking_state.lineage.record(var, advanced_rng_lineage(key, var))
+
+    def _advance_rng(self, run: StatementRun) -> None:
+        """Move on the RNG variables *run*'s statement drew from, once it ran
+        or was restored (a restore puts the stream where the run left it).
+
+        A seeded draw reads its module's RNG variable, and leaves it at a new
+        lineage derived from its own key (``advanced_rng_lineage``), so a
+        change in the number or order of draws above re-keys every draw below.
+        After the output lineages, which read the variable as it stood before
+        the draw, as the simulation's do. Not for a loop or branch body: the
+        structure moves it as a whole (:meth:`advance_rng_of_a_structure`).
+        """
+        if not run.cache_key or is_control_body(run.code) or run.magic_reads is not None:
+            return  # a magic statement's draw moves it in record_magic
+        state = self.tracking_state
+        try:
+            drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        key = run.rng_advance_key or run.cache_key
+        for var in sorted(drawn):
+            state.lineage.record(var, advanced_rng_lineage(key, var))
+
     def key_as_one_statement(self, code: str, lineages: dict[str, str]) -> str:
         """The key the upstream simulation gives *code* as one statement, with
         the variables at *lineages* (``StatementLineage._key``)."""
@@ -376,6 +433,15 @@ class StatementProcessor:
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._randomness.begin_cell()
+
+    def cell_rng_lineage(self) -> dict[str, str]:
+        """The RNG variables' lineages where the cell's start position was taken
+        (see :meth:`StatementRandomness.cell_pre_lineage`)."""
+        return self._randomness.cell_pre_lineage()
+
+    def rng_lineages(self) -> dict[str, str]:
+        """The lineage of each RNG variable, now."""
+        return self._randomness.rng_lineages()
 
     def cell_rng_observation(self) -> tuple[set[str], dict | None, dict | None]:
         """What this cell's statements changed in the RNG streams, and the
@@ -452,10 +518,14 @@ class StatementProcessor:
         )
         done = self._prepare(run)
         if done is not None:
+            self._advance_rng(run)
             return done
         with self._executing(run) as runner:
             runner.run()
-        return self._finish(run, runner.execution)
+        try:
+            return self._finish(run, runner.execution)
+        finally:
+            self._advance_rng(run)
 
     async def process_statement_async(
         self,
@@ -491,10 +561,14 @@ class StatementProcessor:
         )
         done = self._prepare(run)
         if done is not None:
+            self._advance_rng(run)
             return done
         with self._executing(run) as runner:
             await runner.run_async()
-        return self._finish(run, runner.execution)
+        try:
+            return self._finish(run, runner.execution)
+        finally:
+            self._advance_rng(run)
 
     def _prepare(self, run: StatementRun) -> ProcessResult | None:
         """Analyse, key and look up *run*'s statement, before it may execute.
@@ -720,7 +794,9 @@ class StatementProcessor:
         held = set((metadata.holders or {}) if metadata is not None else ())
         mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
         user_ns = self.shell.user_ns
-        names = {name for name in (run.outputs | held) - run.est_fit if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
+        names = {
+            name for name in (run.outputs | held) - run.est_fit if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER
+        }
         keep = (held | mutated) & names
         if not keep:
             return False
@@ -980,6 +1056,8 @@ class StatementProcessor:
         if digests:
             self.tracking_state.magic_values[base] = digests
             self.tracking_state.magic_generation += 1
+        for var, lineage in magic_rng_advances(node, code, self.tracking_state.variable_lineage).items():
+            self.tracking_state.lineage.record(var, lineage)
         return {name: magic_output_lineage(base, digest) for name, digest in digests.items()}
 
     def bindings(self) -> dict[str, int]:
@@ -1300,7 +1378,7 @@ class StatementProcessor:
         (:meth:`_skip_a_newly_seen_draw`).
         """
         randomness = self._randomness
-        if not randomness.draw_newly_seen or run.skip_cache or hidden_lineage_writes(run.code):
+        if not randomness.draw_newly_seen or hidden_lineage_writes(run.code) or randomness.helper_seeds(run.code):
             return
         code = run.code
         try:
@@ -1317,10 +1395,16 @@ class StatementProcessor:
             before = self._key(code, inputs - learnt, outputs, run.occurrence_index, record=False).cache_key
             if before != run.cache_key:
                 return
-            run.cache_key = self._key(code, inputs, outputs, run.occurrence_index).cache_key
+            next_key = self._key(code, inputs, outputs, run.occurrence_index, record=not run.skip_cache).cache_key
         except Exception:  # noqa: BLE001 - the write is skipped once instead
             logger.debug("%s Could not key %s with its hidden draw", _LOG_PROCESSOR, code[:80], exc_info=True)
             return
+        # The streams it drew from move on from the next run's key, as the
+        # simulation moves them (`_advance_rng`), stored or not.
+        run.rng_advance_key = next_key
+        if run.skip_cache:
+            return
+        run.cache_key = next_key
         run.metrics["cache_key"] = run.cache_key
         randomness.draw_newly_seen = False
 

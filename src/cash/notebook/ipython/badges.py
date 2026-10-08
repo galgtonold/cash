@@ -442,8 +442,7 @@ class BadgePresenter:
         in_history = getattr(hm, "input_hist_raw", None) if hm else None
         if in_history is None:
             in_history = getattr(self.shell, "user_ns", {}).get("In", [])
-        # Filter empty strings and the 'pass' pseudo-cells that cash injects,
-        # then deduplicate consecutive identical cells (from re-running).
+        # Filter empty strings and bare 'pass' cells, then deduplicate consecutive identical cells (from re-running).
         filtered: list[str] = []
         for c in in_history:
             if not c.strip() or c.strip() == "pass":

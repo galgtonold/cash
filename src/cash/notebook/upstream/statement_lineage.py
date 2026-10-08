@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import logging
 import types
+from collections import ChainMap
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -32,13 +33,16 @@ from ...analysis.namespace_effects import bare_call_argument_names, bare_call_ar
 from ..consumables import watched_call_receivers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
+    advanced_rng_lineage,
+    drawn_rng_vars,
     hidden_lineage_writes,
     hidden_write_lineage,
+    rng_virtual_var,
 )
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
-from ..callee_reach import module_state_names
+from ..callee_reach import helper_seeded_modules, module_state_names
 from ..lineage_formula import (
     callable_source_component,
     changed_module_environment,
@@ -584,9 +588,7 @@ class StatementLineage:
         recorded = self.tracking_state.variable_lineage
         return all(virtual_lineage.get(name, recorded.get(name)) == before for name, before in holders.items())
 
-    def _move_holders(
-        self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str]
-    ) -> set[str]:
+    def _move_holders(self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str]) -> set[str]:
         """Move on the lineage of each of *holders* from where it is now
         (``held_lineage``), as the runtime does; the names moved."""
         moved = set()
@@ -717,7 +719,7 @@ class StatementLineage:
             # RNG state is a hidden lineage variable: a draw reads it,
             # a seed produces it. Kept out of the plain ``inputs``.
             hidden_reads = key_hidden_reads(stmt_code, self.tracking_state)
-            hidden_writes = hidden_lineage_writes(stmt_code)
+            hidden_writes = hidden_lineage_writes(stmt_code) | self._helper_seed_writes(stmt_code, virtual_lineage)
 
             # A bare ``seed()`` carries no output, so it would return below before
             # recording its hidden variable. Compute its key (a seed is not a
@@ -733,15 +735,27 @@ class StatementLineage:
             # that half is runtime-only.
             outputs = outputs | effects.callee_globals
 
+            # The RNG streams it draws from move on once it ran, from its key
+            # with the lineages before it (`StatementProcessor._advance_rng`).
+            drawn = drawn_rng_vars(
+                hidden_reads, stmt_code, ChainMap(virtual_lineage, self.tracking_state.variable_lineage)
+            )
+            draw_key = (
+                self._key(stmt_code, inputs | hidden_reads, outputs, virtual_lineage, virtual_modules, occurrence_index)
+                if drawn and not is_control_body(stmt_code)
+                else None
+            )
+
             if not outputs:
                 # A bare call can still draw from a generator it is handed
                 # (`print(draw(0, rng))`), which moves the generator's lineage.
                 advanced = self._advance_carriers_without_outputs(
                     stmt_code, inputs, hidden_reads, virtual_lineage, virtual_modules, occurrence_index
                 )
+                self._advance_rng(drawn, draw_key, virtual_lineage)
                 return StatementOutcome(advanced, 0.0, False, {})
 
-            return self._apply_writes(
+            outcome = self._apply_writes(
                 stmt_code,
                 tree,
                 inputs,
@@ -753,9 +767,31 @@ class StatementLineage:
                 virtual_modules,
                 occurrence_index,
             )
+            self._advance_rng(drawn, draw_key, virtual_lineage)
+            return outcome
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.error("[UPSTREAM] Error simulating statement '%s...': %s", stmt_code[:20], e)
             raise
+
+    def _helper_seed_writes(self, stmt_code: str, virtual_lineage: Mapping[str, str]) -> set[str]:
+        """The RNG variables *stmt_code* writes by calling a notebook function
+        that seeds (``set_seed(42)``), as the runtime's ``record_seeds``."""
+        try:
+            modules = helper_seeded_modules(
+                stmt_code, self.shell.user_ns, lambda name: self.callables.def_source(name, virtual_lineage)
+            )
+        except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
+            return set()
+        return {rng_virtual_var(m) for m in modules}
+
+    @staticmethod
+    def _advance_rng(drawn: set[str], draw_key: str | None, virtual_lineage: dict[str, str]) -> None:
+        """Give each RNG variable in *drawn* the lineage the draw keyed
+        *draw_key* leaves it at (``advanced_rng_lineage``)."""
+        if draw_key is None:
+            return
+        for var in drawn:
+            virtual_lineage[var] = advanced_rng_lineage(draw_key, var)
 
     def _key(
         self,
