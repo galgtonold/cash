@@ -215,6 +215,8 @@ class _Invocation:
     #: a cached call made inside it.
     compute: float | None = None
     hit: bool = False
+    #: Whether the call's result went to the cache (see ``_SiteRun.stored``).
+    stored: bool = False
 
 
 @dataclasses.dataclass
@@ -231,6 +233,10 @@ class _SiteRun:
     keyed: list[float] = dataclasses.field(default_factory=list)
     computes: list[float] = dataclasses.field(default_factory=list)
     hits: int = 0
+    #: How many of them were stored. A site whose calls were neither served
+    #: nor stored -- each under the cost floor, or refused -- leaves nothing
+    #: in the cache for a later call to be served from: caching it is all cost.
+    stored: int = 0
     #: Whether the plain samples were taken after ``_GUARD_MIN_CALLS`` and
     #: found the site worth caching: it is judged again at
     #: ``_GUARD_AFTER_CALLS``.
@@ -374,7 +380,9 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
     keyed = statistics.median(run.keyed)
     # Too dear to cache, or a hit could not save a quarter of
     # the call: a hit pays the key and lookup, then the restore.
-    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain
+    run.plain = (
+        cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain or _nothing_to_serve(run)
+    )
     early = run.calls < _GUARD_AFTER_CALLS
     run.decided = run.plain or not early
     if not run.decided:
@@ -393,15 +401,24 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
     )
 
 
+def _nothing_to_serve(run: _SiteRun) -> bool:
+    """Whether none of *run*'s calls was served or stored: under the cost
+    floor (``call_cost_floor_s``) a miss is not kept, so a site of 1 ms calls
+    paid ~0.4 ms a call for a key and a lookup that could never be served,
+    +0.5 s over 1,000 calls."""
+    return not run.hits and not run.stored
+
+
 def _time_to_probe(run: _SiteRun) -> bool:
     """Whether *run*'s calls have shown enough to time a few plain.
 
     Past ``_GUARD_AFTER_CALLS`` calls, whenever they are cheap. Before that,
     from ``_GUARD_MIN_CALLS`` on, only when the evidence is already plain:
-    no hit, and caching a call costs more than the verdict's bar with the
-    call's own time under the cache -- never less than its plain time --
-    standing in for the plain time. A short comprehension of a cheap helper
-    pays a handful of keys instead of fifty."""
+    no hit, and either nothing stored (`_nothing_to_serve`) or caching a
+    call costs more than the verdict's bar with the call's own time under
+    the cache -- never less than its plain time -- standing in for the plain
+    time. A short comprehension of a cheap helper pays a handful of keys
+    instead of fifty."""
     if not run.computes:
         return False
     compute = statistics.median(run.computes)
@@ -412,7 +429,8 @@ def _time_to_probe(run: _SiteRun) -> bool:
     if run.judged_early or run.hits or run.calls < _GUARD_MIN_CALLS:
         return False
     return (
-        statistics.median(run.spent) > (1 + _OVERHEAD_FACTOR) * compute
+        _nothing_to_serve(run)
+        or statistics.median(run.spent) > (1 + _OVERHEAD_FACTOR) * compute
         or statistics.median(run.keyed) >= _HIT_MUST_SAVE * compute
     )
 
@@ -618,6 +636,8 @@ class CallUnit:
                     run.computes.append(compute)
             if invocation.hit:
                 run.hits += 1
+            if invocation.stored:
+                run.stored += 1
             if _time_to_probe(run):
                 run.probing = True
             return result
@@ -858,6 +878,8 @@ class CallUnit:
             )
         self._record(call.func_name, call.site, call.key, cache_hit=False, elapsed=elapsed, stored=stored)
         self._outcome(elapsed, hit=False)
+        if stored and self._invocations:
+            self._invocations[-1].stored = True
         return result
 
     @staticmethod

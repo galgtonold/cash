@@ -187,10 +187,10 @@ def test_a_stall_in_the_first_calls_does_not_decide(call_unit_harness, slow_look
 
 
 def test_an_early_verdict_to_cache_is_judged_again_later(call_unit_harness, slow_lookup, clock):
-    """The first calls look plain (0.1 ms of work behind a 2 ms lookup), but
-    the plain samples taken then are slow: the site stays cached, and is
-    timed again on fresh samples at ``_GUARD_AFTER_CALLS``, where it runs
-    plain."""
+    """The first calls look plain (0.1 ms of work behind a 2 ms lookup, each
+    stored with the cost floor off), but the plain samples taken then are
+    slow: the site stays cached, and is timed again on fresh samples at
+    ``_GUARD_AFTER_CALLS``, where it runs plain."""
     ran: list[int] = []
     note = ran.append
     first_samples = range(cu._GUARD_MIN_CALLS + 1, cu._GUARD_MIN_CALLS + cu._PLAIN_SAMPLES + 1)
@@ -201,6 +201,7 @@ def test_an_early_verdict_to_cache_is_judged_again_later(call_unit_harness, slow
         return v * 2
 
     unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+    unit._cash.config.call_cost_floor_seconds = 0.0
     wrapped = unit.wrap(work, SITE)
 
     assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
@@ -324,3 +325,45 @@ def test_a_row_whose_calls_were_served_says_what_they_saved():
     )
     row = next(line for line in out.splitlines() if "results[name]" in line)
     assert "saved 3.02s" in row, out
+
+
+def test_calls_the_cache_cannot_keep_run_plain(call_unit_harness, slow_lookup, clock):
+    """1 ms calls behind a 0.2 ms key and lookup: worth caching by cost, but
+    under the cost floor, so no miss is stored and nothing can be served.
+    1,000 of them paid ~0.4 ms each for keys no call could hit, +0.5 s. They
+    run plain after ``_GUARD_MIN_CALLS``."""
+    lookups = []
+    real = CallEntries.lookup
+
+    def cheap_lookup(self, key):
+        lookups.append(key)
+        clock.spend(0.0002)
+        return real(self, key)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(CallEntries, "lookup", cheap_lookup)
+
+        def work(v):
+            clock.spend(0.001)
+            return v * 2
+
+        unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+        wrapped = unit.wrap(work, SITE)
+        assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
+
+    assert len(lookups) == cu._GUARD_MIN_CALLS, len(lookups)
+
+
+def test_calls_the_cache_keeps_stay_cached(call_unit_harness, slow_lookup, clock):
+    """The same, over the cost floor: each miss is stored, a later run can be
+    served, and the site stays cached."""
+
+    def work(v):
+        clock.spend(0.01)
+        return v * 2
+
+    unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+    wrapped = unit.wrap(work, SITE)
+    assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
+
+    assert len(slow_lookup) == N - cu._PLAIN_SAMPLES
