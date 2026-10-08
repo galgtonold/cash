@@ -83,7 +83,7 @@ from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import carrier_positions, hidden_lineage_writes, moved_carrier_names, rng_virtual_var
-from ..callee_reach import module_globals, module_state_writes, rebound_modules
+from ..callee_reach import import_state_writes, module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
 from ..magic_effects import is_magic_statement, is_rerun_magic, magic_base, magic_effects, magic_output_lineage, simulation_cell
@@ -827,6 +827,14 @@ class StatementProcessor:
         if held:
             run.rebound_modules = rebound_modules(held)
             del held
+        elif execution.result is not None and execution.result.success:
+            # An import whose module's top level sets state on another local
+            # module (``import plugin`` doing ``@mylib.register``): seen once
+            # it ran and the module is loaded.
+            try:
+                run.rebound_modules = run.rebound_modules | import_state_writes(run.code, self.shell.user_ns)
+            except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+                logger.debug("%s could not read what %r's imports set", _LOG_PROCESSOR, run.code[:80], exc_info=True)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
