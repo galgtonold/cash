@@ -73,9 +73,10 @@ def test_a_comprehension_keys_a_bounded_number_of_calls(cash_magics):
         keyed[n], hashed[n] = keys.calls, h.bytes
         assert cash_magics.shell.user_ns[f"d{n}"][-1] == 2 * (n - 1)
 
-    # The guard keys 50 calls, times a few plain, then runs the site plain:
-    # no key per element (one each before the guard).
-    assert 0 < keyed[2_000] == keyed[8_000] <= 60, keyed
+    # The guard keys 5 calls, sees caching costs far more than they compute,
+    # times a few plain, then runs the site plain: no key per element (50
+    # before it decided on the first calls' evidence).
+    assert 0 < keyed[2_000] == keyed[8_000] <= 10, keyed
     # ~36 KB hashed today, the same for 4x the elements.
     assert hashed[8_000] <= 96 * KB and hashed[8_000] <= hashed[2_000] + 8 * KB, hashed
 

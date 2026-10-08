@@ -181,10 +181,14 @@ def call_cost_floor_s(cash: Any) -> float:
 
 
 #: The many-cheap-calls guard (``CallUnit._entry_for``), in the numbers
-#: ``for_handler`` uses to run a loop as one unit: past 50 calls in one
-#: statement run, calls cheaper than this are timed plain on a few samples, and
-#: the site runs plain for the rest of the run when caching a call costs more
-#: than ``_OVERHEAD_FACTOR`` times what the call computes.
+#: ``for_handler`` uses to run a loop as one unit: once the calls of a site in
+#: one statement run show that caching them costs more than
+#: ``_OVERHEAD_FACTOR`` times what they compute -- after ``_GUARD_MIN_CALLS``
+#: calls with no hit when that is plain, past ``_GUARD_AFTER_CALLS`` in any
+#: case -- calls cheaper than ``_GUARD_CHEAP_BELOW_S`` are timed plain on a
+#: few samples, and the site runs plain for the rest of the run when the
+#: samples agree.
+_GUARD_MIN_CALLS = 5
 _GUARD_AFTER_CALLS = 50
 _GUARD_CHEAP_BELOW_S = 0.05
 _PLAIN_SAMPLES = 5
@@ -218,12 +222,19 @@ class _SiteRun:
     """One call site's calls in the statement run under way."""
 
     calls: int = 0
-    total_s: float = 0.0
-    #: Of ``total_s``, what building the key and looking it up cost: all a
-    #: hit pays, so a call cheaper than it is never worth caching.
-    key_s: float = 0.0
-    computed: int = 0
-    compute_s: float = 0.0
+    #: Per call through the cache, up to ``_GUARD_AFTER_CALLS`` of them: the
+    #: seconds it took in all, what building its key and looking it up cost
+    #: (all a hit pays, so a call cheaper than that is never worth caching),
+    #: and what it computed (its run time on a miss, its recorded cost on a
+    #: hit). Medians, never means: one stall does not decide.
+    spent: list[float] = dataclasses.field(default_factory=list)
+    keyed: list[float] = dataclasses.field(default_factory=list)
+    computes: list[float] = dataclasses.field(default_factory=list)
+    hits: int = 0
+    #: Whether the plain samples were taken after ``_GUARD_MIN_CALLS`` and
+    #: found the site worth caching: it is judged again at
+    #: ``_GUARD_AFTER_CALLS``.
+    judged_early: bool = False
     probing: bool = False
     #: The calls run plain to time them, in seconds each.
     plain_samples: list[float] = dataclasses.field(default_factory=list)
@@ -353,19 +364,24 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
     """End *run*'s probe: from the timed plain samples and the cached calls
     before them, decide whether the rest of the site's calls run plain."""
     run.probing = False
-    cached = run.total_s / run.calls
-    # The median, not the mean: one sample stretched by a
-    # stall (the process descheduled, a garbage collection)
-    # lifted the mean of five over the bar, and the site
-    # stayed cached for the rest of the run. The cached side
-    # is averaged over _GUARD_AFTER_CALLS calls, where one
-    # stall weighs a tenth as much.
+    # Medians, not means: one sample stretched by a stall (the process
+    # descheduled, a garbage collection) lifted the mean of five plain
+    # samples over the bar, and the site stayed cached for the rest of the
+    # run; on the cached side the first call also builds what later keys
+    # reuse.
+    cached = statistics.median(run.spent)
     plain = statistics.median(run.plain_samples)
-    keyed = run.key_s / run.calls
+    keyed = statistics.median(run.keyed)
     # Too dear to cache, or a hit could not save a quarter of
     # the call: a hit pays the key and lookup, then the restore.
     run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain
-    run.decided = True
+    early = run.calls < _GUARD_AFTER_CALLS
+    run.decided = run.plain or not early
+    if not run.decided:
+        # Worth caching on the first few calls: judged again, on fresh
+        # samples, once the site has made ``_GUARD_AFTER_CALLS`` calls.
+        run.judged_early = True
+        run.plain_samples.clear()
     trace_event(
         "call_site_decided",
         source=site.source,
@@ -374,6 +390,30 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
         keyed_ms=round(keyed * 1000, 3),
         plain_ms=round(plain * 1000, 3),
         plain=run.plain,
+    )
+
+
+def _time_to_probe(run: _SiteRun) -> bool:
+    """Whether *run*'s calls have shown enough to time a few plain.
+
+    Past ``_GUARD_AFTER_CALLS`` calls, whenever they are cheap. Before that,
+    from ``_GUARD_MIN_CALLS`` on, only when the evidence is already plain:
+    no hit, and caching a call costs more than the verdict's bar with the
+    call's own time under the cache -- never less than its plain time --
+    standing in for the plain time. A short comprehension of a cheap helper
+    pays a handful of keys instead of fifty."""
+    if not run.computes:
+        return False
+    compute = statistics.median(run.computes)
+    if compute >= _GUARD_CHEAP_BELOW_S:
+        return False
+    if run.calls >= _GUARD_AFTER_CALLS:
+        return True
+    if run.judged_early or run.hits or run.calls < _GUARD_MIN_CALLS:
+        return False
+    return (
+        statistics.median(run.spent) > (1 + _OVERHEAD_FACTOR) * compute
+        or statistics.median(run.keyed) >= _HIT_MUST_SAVE * compute
     )
 
 
@@ -498,12 +538,13 @@ class CallUnit:
         ``[read_doc(p) for p in paths]`` -- 8.4 s became 71.6 s. A
         ``for`` loop has ``single_unit_policy.should_run_as_single_unit``
         for exactly this; a comprehension is one statement, so it is decided
-        here, by measurement, with the loop's own numbers: past
-        ``_GUARD_AFTER_CALLS`` calls in one statement run, if the calls are
-        cheap, a few are run plain and timed, and when caching a call costs
-        more than ``_OVERHEAD_FACTOR`` times what it computes the rest of
-        the statement's calls to this site run plain. Running plain is always
-        correct; it is only uncached.
+        here, by measurement, with the loop's own numbers: once the calls
+        show caching them costs more than ``_OVERHEAD_FACTOR`` times what they
+        compute (``_time_to_probe``: from ``_GUARD_MIN_CALLS`` calls with no
+        hit when that is plain, past ``_GUARD_AFTER_CALLS`` in any case), if
+        they are cheap, a few are run plain and timed, and when the samples
+        agree the rest of the statement's calls to this site run plain.
+        Running plain is always correct; it is only uncached.
         """
         names: list[str] = []
 
@@ -564,22 +605,20 @@ class CallUnit:
                 self._count_cached(self._invocations.pop())
             spent = _perf_counter() - started
             self.last_returned = (invoked_key, id(result), site.source)
-            run.total_s += spent
             compute = invocation.compute
             if compute is not None:
                 self._add_to_clocks(invocation, spent, tracking_seconds() - tracked if outside else None)
             run.calls += 1
-            if self._last_key_s is not None:
-                run.key_s += self._last_key_s
-            if compute is not None:
-                run.compute_s += compute
-                run.computed += 1
-            if (
-                not run.decided
-                and run.calls >= _GUARD_AFTER_CALLS
-                and run.computed
-                and run.compute_s / run.computed < _GUARD_CHEAP_BELOW_S
-            ):
+            if run.decided:
+                return result
+            if len(run.spent) < _GUARD_AFTER_CALLS:
+                run.spent.append(spent)
+                run.keyed.append(self._last_key_s or 0.0)
+                if compute is not None:
+                    run.computes.append(compute)
+            if invocation.hit:
+                run.hits += 1
+            if _time_to_probe(run):
                 run.probing = True
             return result
 
