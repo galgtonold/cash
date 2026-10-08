@@ -56,6 +56,8 @@ __all__ = [
     "eligible_call_nodes",
     "wrap_eligible_calls",
     "CallSite",
+    "SiteSlots",
+    "SITE_SLOTS",
     "HELPER_NAME",
     "PLAIN_NAME",
     "COUNT_NAME",
@@ -194,6 +196,41 @@ class CallSite:
             return value
 
 
+class SiteSlots:
+    """The number each call site is rewritten with, the same for as long as
+    the process lives.
+
+    The rewritten line names its site by number (``__cash_call__(f, 7)``),
+    and a lambda or a generator expression keeps that line: it runs when it
+    is called, which can be in a later statement. Numbered within the
+    statement, ``to_km = lambda m: convert(m, 'km')`` called from the next
+    cell was keyed against that cell's site 0 -- another call's source,
+    free names and argument positions -- and two different calls shared one
+    key. Numbered here, a site keeps its number however late its code runs.
+    Equal sites share a number: they key alike (see ``CallSite.__hash__``).
+    """
+
+    __slots__ = ("sites", "_slot_of")
+
+    def __init__(self) -> None:
+        #: Site by number; only ever grown.
+        self.sites: list[CallSite] = []
+        self._slot_of: dict[CallSite, int] = {}
+
+    def slot_for(self, site: CallSite) -> int:
+        """*site*'s number, given on first sight."""
+        slot = self._slot_of.get(site)
+        if slot is None:
+            slot = self._slot_of[site] = len(self.sites)
+            self.sites.append(site)
+        return slot
+
+
+#: The numbering the notebook rewrites with: one per process, so a call cache
+#: rebuilt by ``reset_session()`` still reads a lambda made before it.
+SITE_SLOTS = SiteSlots()
+
+
 def _copy_tree(node):
     """*node* and everything under it as new nodes, except the constants, which
     the copy shares with the original.
@@ -292,6 +329,7 @@ def wrap_eligible_calls(
     *,
     gate: Callable[[ast.Call], bool] | None = None,
     namespace=None,
+    slot_for: Callable[[CallSite], int] | None = None,
 ) -> tuple[ast.Module, list[CallSite]]:
     """Return ``(rewritten_copy, sites)``; *tree* is left untouched.
 
@@ -334,6 +372,10 @@ def wrap_eligible_calls(
     A gate with a ``local`` parameter is also handed the names an enclosing
     comprehension or lambda binds around the call: they have no lineage, and
     the key holds their values (``CallSite.local_arg_positions``).
+
+    *slot_for* numbers each site for the rewritten line (see
+    :class:`SiteSlots`); without it a site is numbered by its index in
+    *sites*.
     """
 
     try:
@@ -391,7 +433,7 @@ def wrap_eligible_calls(
                     in_loop_unit=in_loop_unit,
                 )
             )
-            call.func = _routed(call.func, len(sites) - 1)
+            call.func = _routed(call.func, slot_for(sites[-1]) if slot_for is not None else len(sites) - 1)
     if sites:
         ast.fix_missing_locations(new_tree)
     return new_tree, sites

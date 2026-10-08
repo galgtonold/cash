@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
-from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, wrap_eligible_calls
+from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, SITE_SLOTS, wrap_eligible_calls
 from cash.notebook.call_refs import with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
 from cash.tracking.file_tracker import tracking_seconds
@@ -438,10 +438,15 @@ class CallRouting:
         if strip_markers(code) in self._calls_not_worth_wrapping:
             return code, tree
         try:
+            call_cache = self._call_cache_for(cash_instance)
             rewritten, sites = wrap_eligible_calls(
                 tree if tree is not None else ast.parse(code),
                 gate=self._call_site_gate(annotation),
                 namespace=self.shell.user_ns,
+                # Numbered for the process, not the statement: a lambda or a
+                # generator expression runs its line later, in another
+                # statement (see `SiteSlots`).
+                slot_for=call_cache.slot_for,
             )
             if not sites:
                 # Under default-on, "nothing here was eligible" is the
@@ -454,7 +459,6 @@ class CallRouting:
             # statement echo a value the user silenced.
             if code.rstrip().endswith(";"):
                 new_code += ";"
-            call_cache = self._call_cache_for(cash_instance)
             plain = _plain_call_assignment(code)
             call_cache.set_sites(sites, plain_value_source=plain[0] if plain else None)
             self._calls_wrapped_for = code
@@ -546,6 +550,7 @@ class CallRouting:
                 # `_depth_keyed_loop_scope`'s docstring.
                 loop_vars_provider=self.current_loop_vars_for_call_key,
                 loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
+                slots=SITE_SLOTS,
             )
             self._call_cache_owner = cash_instance
         return self._call_cache
