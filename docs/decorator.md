@@ -263,6 +263,8 @@ changed. The second list is what cash does not see, and what to do about it.
       `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
       read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
       `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
+    - The **command line**: `sys.argv`, and an `argparse` parser's
+      `parse_args()` called without a list of its own.
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 
@@ -611,7 +613,7 @@ would skip or get wrong:
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
-| Reads an environment variable by literal name, or the working directory | Puts the value in the key. No warning |
+| Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
 
 Logging calls are not side effects for this purpose.

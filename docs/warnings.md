@@ -763,16 +763,17 @@ run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
 
-<!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
+<!-- claim: cash/effects.py:environment_input @cc5c0e0f, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @39516f3a -->
 <!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @300df3f0 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
 (`os.path.expandvars("$DATA_DIR/x")`, `os.path.expanduser`, `Path.home()`,
-`tempfile.gettempdir()`, `shutil.which`) and a read of the working directory
+`tempfile.gettempdir()`, `shutil.which`), a read of the working directory
 (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on
-a path that may be relative) are not reported: their values are folded into
+a path that may be relative) and a read of the command line (`sys.argv`, or
+`parser.parse_args()` with no list of its own) are not reported: their values are folded into
 the key. A
 reading that only goes into a log line is not reported either.
 
