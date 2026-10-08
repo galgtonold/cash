@@ -86,7 +86,7 @@ from ...tracking.randomness import carrier_positions, hidden_lineage_writes, mov
 from ..callee_reach import module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
-from ..magic_effects import is_magic_statement, magic_base, magic_effects, magic_output_lineage, simulation_cell
+from ..magic_effects import is_magic_statement, is_rerun_magic, magic_base, magic_effects, magic_output_lineage, simulation_cell
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
@@ -966,6 +966,7 @@ class StatementProcessor:
         """
         ns = self.shell.user_ns
         changed, _ = magic_effects(node, self._is_module)
+        rerun = is_rerun_magic(node)
         base = magic_base(code, reads)
         digests: dict[str, str] = {}
         for name in sorted(changed):
@@ -973,7 +974,8 @@ class StatementProcessor:
                 continue
             digests[name] = no_cache_value_digest(ns[name])
             lineage = magic_output_lineage(base, digests[name])
-            self.tracking_state.magic_lineages.add(lineage)
+            if not rerun:
+                self.tracking_state.magic_lineages.add(lineage)
             self.tracking_state.lineage.record(name, lineage, value=ns[name])
         if digests:
             self.tracking_state.magic_values[base] = digests

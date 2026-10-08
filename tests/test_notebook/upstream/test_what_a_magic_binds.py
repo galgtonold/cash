@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from cash.notebook.magic_effects import magic_cell_of, magic_effects, simulation_cell
+from cash.notebook.magic_effects import is_rerun_magic, magic_cell_of, magic_effects, simulation_cell
 
 
 def _effects(cell, modules=()):
@@ -61,3 +61,25 @@ def test_the_cell_of_the_magic_that_changed_a_name():
     cells = ["x = 1", "model = M(x)\n%time model.fit()", "y = 2"]
     assert magic_cell_of("model", cells) == (1, "%time model.fit()")
     assert magic_cell_of("x", cells) is None
+
+
+@pytest.mark.parametrize(
+    ("cell", "rerun"),
+    [
+        ("%time model.fit()", True),
+        ("t = %time f(x)", True),
+        ("%timeit -n1 -r1 lst.append(1)", True),
+        ("%prun -s cumulative f()", True),
+        ("files = !ls", False),
+        ("res = {}\nres['ls'] = !ls", False),
+        ("%sx ls", False),
+        ("%matplotlib inline", False),
+        ("%time !ls", False),
+        ("%time %time f()", False),
+        ("%time get_ipython().system('ls')", False),
+    ],
+)
+def test_only_a_magic_that_runs_python_is_run_again(cell, rerun):
+    """A rebuild runs `%time`, `%timeit` and `%prun` again, as a top-to-bottom
+    run does; a shell command or any other magic, never."""
+    assert is_rerun_magic(simulation_cell(cell)[1].body[-1]) is rerun

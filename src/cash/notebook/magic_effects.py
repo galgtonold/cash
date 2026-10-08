@@ -11,9 +11,12 @@ and the simulation reaches the same lineage from the digests the run left
 (``TrackingState.magic_values``), so a cell below finds them as it left them.
 
 Such a lineage marks a value the upstream check never rebuilds from the Python
-above it: that would drop what the magic did to it. When the simulation's
-lineage differs from the live one, something the magic read changed since it
-ran, and the check warns instead (``NOTEBOOK-MAGIC-STALE``).
+above it alone: that would drop what the magic did to it. A ``%time``,
+``%timeit`` or ``%prun`` line runs Python (:func:`is_rerun_magic`), so a
+rebuild runs it again after that Python, as a top-to-bottom run does. For any
+other magic, when the simulation's lineage differs from the live one,
+something the magic read changed since it ran, and the check warns instead
+(``NOTEBOOK-MAGIC-STALE``).
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from ..analysis.mutations import KNOWN_PURE_METHODS
 
 __all__ = [
     "is_magic_statement",
+    "is_rerun_magic",
     "magic_base",
     "magic_cell_of",
     "magic_effects",
@@ -46,13 +50,66 @@ def is_magic_statement(node: ast.stmt) -> bool:
     return isinstance(node, (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign)) and calls_ipython(node)
 
 
+def _python_magic_arg(call: ast.AST) -> str | None:
+    """The argument of *call* when it is a ``%time``/``%timeit``/``%prun``
+    line magic as IPython's transform writes it, else None."""
+    if (
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "run_line_magic"
+        and len(call.args) == 2
+        and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in call.args)
+        and call.args[0].value in _PYTHON_ARG_MAGICS
+    ):
+        return call.args[1].value
+    return None
+
+
+def is_rerun_magic(node: ast.stmt) -> bool:
+    """Whether the magic statement *node* runs nothing but Python cash can
+    read: ``%time``, ``%timeit`` and ``%prun`` lines whose statement is
+    Python with no magic or shell command of its own.
+
+    Such a statement does what its Python does, so a rebuild runs it again,
+    as a top-to-bottom run does. Any other magic or shell command is never
+    run for the user (``NOTEBOOK-MAGIC-STALE``).
+    """
+    found = False
+    for call in ast.walk(node):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Call)
+            and isinstance(call.func.value.func, ast.Name)
+            and call.func.value.func.id == "get_ipython"
+        ):
+            continue
+        arg = _python_magic_arg(call)
+        split = None if arg is None else _split_argument(arg)
+        # What comes before the statement must be options: `%time %time f()`
+        # parses as `f()` once its first word is dropped.
+        if split is None or calls_ipython(split[1]) or any(not w.startswith("-") for w in split[0][:1]):
+            return False
+        if any(w.startswith(("%", "!")) for w in split[0]):
+            return False
+        found = True
+    return found
+
+
 def _python_argument(arg: str) -> ast.Module | None:
     """The statement a ``%time``/``%timeit``/``%prun`` line runs: *arg* without
     the options before it."""
+    split = _split_argument(arg)
+    return None if split is None else split[1]
+
+
+def _split_argument(arg: str) -> tuple[list[str], ast.Module] | None:
+    """``(options, statement)``: the words of *arg* before the Python
+    statement it runs, and that statement; None when no tail is Python."""
     words = arg.split(" ")
     for start in range(len(words)):
         try:
-            return CodeAnalyzer.parse_cell(" ".join(words[start:]).strip())
+            return words[:start], CodeAnalyzer.parse_cell(" ".join(words[start:]).strip())
         except SyntaxError:
             continue
     return None
@@ -87,16 +144,10 @@ def magic_effects(node: ast.stmt, is_module: Callable[[str], bool]) -> tuple[set
     changed = set(outputs)
     read = set(inputs) - {"get_ipython"}
     for call in ast.walk(node):
-        if not (
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Attribute)
-            and call.func.attr == "run_line_magic"
-            and len(call.args) == 2
-            and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in call.args)
-            and call.args[0].value in _PYTHON_ARG_MAGICS
-        ):
+        arg = _python_magic_arg(call)
+        if arg is None:
             continue
-        inner = _python_argument(call.args[1].value)
+        inner = _python_argument(arg)
         if inner is None:
             continue
         inner_inputs, inner_outputs = CodeAnalyzer.analyze_code_block(ast.unparse(inner))

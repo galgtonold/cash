@@ -31,7 +31,7 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..callee_reach import reached_user_code
-from ..magic_effects import is_magic_statement, magic_base, magic_effects, magic_output_lineage, simulation_cell
+from ..magic_effects import is_magic_statement, is_rerun_magic, magic_base, magic_effects, magic_output_lineage, simulation_cell
 from ..recorded_reads import outside_changes, watched_module_data
 from ..run_memo import stats_this_run
 from ..tracking_state import TrackingState
@@ -517,17 +517,28 @@ class VirtualLineage:
         From the lineages it reads here and the digest of the value it left
         when it last ran with those: when what it reads differs from that
         run, no digest is found, and the lineage differs from the live one.
-        A magic is not keyed or rebuilt, so it leaves no trace entry.
+        A ``%time``/``%timeit``/``%prun`` line (``is_rerun_magic``) leaves a
+        trace entry, so a rebuild runs it again; any other magic is never
+        rebuilt and leaves none.
         """
         virtual_lineage = sim.virtual_lineage
         live = self.tracking_state.variable_lineage
         changed, read = magic_effects(node, sim.virtual_modules.__contains__)
-        base = magic_base(stmt_code, {name: virtual_lineage.get(name, live.get(name)) for name in read})
+        reads = {name: virtual_lineage.get(name, live.get(name)) for name in read}
+        base = magic_base(stmt_code, reads)
         digests = self.tracking_state.magic_values.get(base, {})
+        rerun = is_rerun_magic(node)
         for name in changed:
             lineage = magic_output_lineage(base, digests.get(name, "not run"))
-            self.tracking_state.magic_lineages.add(lineage)
+            if not rerun:
+                self.tracking_state.magic_lineages.add(lineage)
             virtual_lineage[name] = lineage
+        if rerun and changed:
+            # Python a rebuild runs again, as any statement: the planner
+            # schedules it where what it binds or changes is needed.
+            produced = {name: virtual_lineage[name] for name in changed}
+            input_hashes = {name: lineage for name, lineage in reads.items() if lineage is not None}
+            sim.trace.append(TraceEntry(stmt_code, set(changed), set(read), input_hashes, produced, False))
 
     def simulate_one_node(
         self,

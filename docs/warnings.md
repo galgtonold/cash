@@ -1320,7 +1320,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
-| [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a magic bound is kept, though the magic would bind it differently now |
+| [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
@@ -1382,23 +1382,24 @@ If it is not code, delete it or make it a markdown cell.
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
 <!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665 -->
-**What happened.** The cell reads a name that a line magic or a shell command
-above binds or changes (`%time df = clean(df)`, `files = !ls`,
-`%time model.fit()`), and that magic has not run since something it reads
-changed, or the name is not in memory at all (after a restart). The message
-names the variable and quotes the magic's line.
+**What happened.** The cell reads a name that a shell command or a line magic
+above binds or changes (`files = !ls`, `res["out"] = !cmd`, `%sx cmd`), and
+that command has not run since something it reads changed, or the name is not
+in memory at all (after a restart). The message names the variable and quotes
+the command's line. A `%time`, `%timeit` or `%prun` line is not one of them:
+it runs Python, and cash runs it again with the Python above it, as a run from
+the top does.
 
 **Why it matters.** cash rebuilds what a cell above would compute, but it never
-runs a magic or a shell command for you, and rebuilding the name from the
-Python before the magic would drop what the magic did (an untrained model, an
-uncleaned frame). So the cell runs on the value the name holds now, which is
-not the one a run from the top would give it; a name that is gone raises
-NameError.
+runs a shell command or any other magic for you, and rebuilding the name from
+the Python before it would drop what the command did. So the cell runs on the
+value the name holds now, which is not the one a run from the top would give
+it; a name that is gone raises NameError.
 
 **What to do.** Re-run the cell the message names, then this cell.
 
 **When it is safe to ignore.** When the change above does not affect what the
-magic computes.
+command computes.
 
 ### NOTEBOOK-NOT-FOUND {#notebook-not-found}
 

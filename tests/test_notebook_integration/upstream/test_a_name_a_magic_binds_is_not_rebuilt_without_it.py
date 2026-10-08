@@ -1,14 +1,17 @@
-"""A name a magic binds or changes is never rebuilt from the Python above it.
+"""A name a magic binds or changes is never rebuilt from the Python above it
+without the magic.
 
 The upstream check read a cell's Python with its magic lines deleted. A name
 that ``%time df = clean(df)`` or ``p = !cmd`` rebound, and what the cell
 computed from it, looked built by the code above the magic: on a plain first
 Run All the cell below re-ran ``df = load()`` and ``k = len(df)`` and saw the
-uncleaned ``df``. After an edit above ``model = M(k)\\n%time model.fit()``,
+uncleaned ``df``. After an edit above ``model = M(k)\n%time model.fit()``,
 the cell below got ``model = M(k)`` re-run without the fit: an untrained
 model, a state neither run gives. Now the magic's names keep a lineage of
-their own; when what the magic read has changed, cash keeps the value and
-warns (NOTEBOOK-MAGIC-STALE), as it does not re-run a magic.
+their own. A ``%time``, ``%timeit`` or ``%prun`` statement is Python, and a
+rebuild runs it again with the Python above it, as a top-to-bottom run does.
+Any other magic or shell command is never run for the user: when what it read
+has changed, cash keeps the value and warns (NOTEBOOK-MAGIC-STALE).
 """
 
 import pytest
@@ -61,7 +64,7 @@ def test_a_run_all_keeps_what_the_magic_bound(nb_runner):
         assert "NOTEBOOK-MAGIC-STALE" not in nb_runner.get_raw_output(8)
 
 
-def test_an_edit_above_keeps_the_value_and_warns(nb_runner):
+def test_an_edit_above_runs_the_time_magic_again(nb_runner):
     nb_runner.create_notebook([MODEL, "k = 3", "model = M(k)\n%time model.fit()", "print('pred', model.predict())"])
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -69,25 +72,73 @@ def test_an_edit_above_keeps_the_value_and_warns(nb_runner):
     nb_runner.set_cell_source(2, "k = 4")
     nb_runner.run_cells([2, 4])
     out = nb_runner.get_raw_output(4)
-    assert "pred ('trained', 3)" in out  # not an untrained model built from k = 4
+    assert "pred ('trained', 4)" in out  # what Restart & Run All prints
+    assert "NOTEBOOK-MAGIC-STALE" not in out
+
+    nb_runner.run_all()
+    assert "pred ('trained', 4)" in nb_runner.get_raw_output(4)
+    assert "NOTEBOOK-MAGIC-STALE" not in nb_runner.get_raw_output(4)
+
+
+def test_an_edit_above_runs_a_time_assignment_again(nb_runner):
+    nb_runner.create_notebook(
+        [
+            "raw = [3, 1, None]",
+            "df = list(raw)",
+            "%time df = sorted(x for x in df if x is not None)\nk = len(df)",
+            "print('A', df, k)",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _lines(nb_runner, 4) == ["A [1, 3] 2"]
+
+    nb_runner.set_cell_source(1, "raw = [5, 4, None, 1]")
+    nb_runner.run_cells([1, 4])
+    assert _lines(nb_runner, 4) == ["A [1, 4, 5] 3"]
+    assert "NOTEBOOK-MAGIC-STALE" not in nb_runner.get_raw_output(4)
+
+
+def test_an_edit_above_a_shell_command_keeps_the_value_and_warns(nb_runner):
+    nb_runner.create_notebook(["k = 3", "res = {'k': k}", "res['out'] = !echo hi", "print('res', res)"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    nb_runner.set_cell_source(1, "k = 4")
+    nb_runner.run_cells([1, 4])
+    out = nb_runner.get_raw_output(4)
+    assert "res {'k': 3, 'out': ['hi']}" in out  # as the plain kernel keeps it
     assert "NOTEBOOK-MAGIC-STALE" in out
     assert "re-run cell 3" in out
 
-    nb_runner.run_cells([3, 4])
+    nb_runner.run_cells([2, 3, 4])
     out = nb_runner.get_raw_output(4)
-    assert "pred ('trained', 4)" in out
+    assert "res {'k': 4, 'out': ['hi']}" in out
     assert "NOTEBOOK-MAGIC-STALE" not in out
 
 
-def test_after_a_restart_it_is_not_rebuilt_without_the_magic(nb_runner):
+def test_after_a_restart_the_time_magic_runs_again(nb_runner):
     nb_runner.create_notebook([MODEL, "k = 3", "model = M(k)\n%time model.fit()", "print('pred', model.predict())"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.restart()
     nb_runner._init_cash()
 
-    with pytest.raises(Exception):
-        nb_runner.run_cell(4)
+    nb_runner.run_cell(4)
     out = nb_runner.get_raw_output(4)
-    assert "UNTRAINED" not in out
+    assert "pred ('trained', 3)" in out
+    assert "NOTEBOOK-MAGIC-STALE" not in out
+
+
+def test_after_a_restart_a_shell_command_is_not_rebuilt_without_it(nb_runner):
+    nb_runner.create_notebook(["p = [0]", "p = !echo a b", "print('p', p)"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner._init_cash()
+
+    with pytest.raises(Exception):
+        nb_runner.run_cell(3)
+    out = nb_runner.get_raw_output(3)
+    assert "p [0]" not in out
     assert "NOTEBOOK-MAGIC-STALE" in out

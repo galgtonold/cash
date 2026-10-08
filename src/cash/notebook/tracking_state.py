@@ -162,9 +162,10 @@ class TrackingState:
 
     # magic_base -> {name: digest of the value} for each name a line magic or
     # shell command bound or changed on its last run (``magic_effects``), and
-    # every lineage such a name was given. The simulation reads the digests
-    # back to reach the same lineage; the upstream check never rebuilds a name
-    # holding one of those lineages from the Python above it.
+    # every lineage such a name was given by a magic a rebuild never runs
+    # (not ``is_rerun_magic``). The simulation reads the digests back to reach
+    # the same lineage; the upstream check never rebuilds a name holding one of
+    # those lineages from the Python above it.
     # W: StatementProcessor, VirtualLineage. R: VirtualLineage, MismatchClassifier.
     magic_values: dict[str, dict[str, str]] = field(default_factory=dict)
     magic_lineages: set[str] = field(default_factory=set)

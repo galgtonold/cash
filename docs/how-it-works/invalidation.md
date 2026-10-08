@@ -163,8 +163,9 @@ notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
 produce, and compares it with the lineage from the last real run. Statements
 whose lineage differs run again; a value that matches is used as it is, and one
-missing from memory is restored from the cache. A name a magic or a shell
-command binds is the exception: cash never runs a magic, so it keeps the value
+missing from memory is restored from the cache. A name a shell command or a
+magic binds is the exception: cash runs a `%time`, `%timeit` or `%prun` line
+again, since it runs Python, but never any other magic, so it keeps the value
 the name has and warns ([A name a magic binds](../known-limitations.md#a-name-a-magic-binds)).
 
 Only what the cell you run depends on is considered. A stale chart or export
