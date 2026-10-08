@@ -89,6 +89,8 @@ class ReexecutionPlanner:
         self.unsaved_edits = unsaved_edits
         self.callables = callables
         self.probe = probe
+        #: ``(trace, its length, the indices)`` `unrun_process_writers` last found.
+        self._process_writers_of: tuple[list, int, tuple[int, ...]] | None = None
         #: The file-writer pass, with the memos it keeps.
         self.file_writers = FileWriterScheduler(shell, tracking_state, probe)
         #: Refuses figure saves whose figure would be written blank.
@@ -581,6 +583,10 @@ class ReexecutionPlanner:
         state = self.tracking_state
         if not simulation_trace or (not state.process_state_writers and self.probe.cash_instance is None):
             return []
+        # Asked by the simulator and then by `plan` of the same trace.
+        last = self._process_writers_of
+        if last is not None and last[0] is simulation_trace and last[1] == len(simulation_trace):
+            return list(last[2])
         found: list[int] = []
         for idx, entry in enumerate(simulation_trace):
             source_hash = statement_source_hash(entry.stmt_code)
@@ -594,6 +600,7 @@ class ReexecutionPlanner:
             if kinds:
                 found.append(idx)
                 trace_event("process_state_writer", stmt=entry.stmt_code[:80], kinds=sorted(kinds))
+        self._process_writers_of = (simulation_trace, len(simulation_trace), tuple(found))
         return found
 
     def complete_later_producers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
