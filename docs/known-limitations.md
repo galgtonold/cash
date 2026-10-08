@@ -210,6 +210,7 @@ statements that read it, and cash answers as a plain kernel would, with what
 they read when they ran, not as a top-to-bottom run would. **Fix:** run the
 notebook, or the cells from the edited one down.
 
+<!-- claim: cash/notebook/recorded_reads.py:_HASHED_IN_PLACE_BELOW == 4194304, cash/notebook/recorded_reads.py:outside_changes @c51f572b -->
 A change made outside the notebook's cells (the shell or a launcher setting a
 variable, a console attached to the kernel, an edit of the module's file) is
 seen: running only the last cell rebuilds what was built on the old value. A
@@ -219,7 +220,14 @@ magic (`%env`, `%cd`) or by reloading the module. Your module's data is
 looked at for an outside change (hashed in full) only before a cell that
 reads it or uses something built from it, and around a statement only when
 the statement reaches the module or names the value itself; a cell that does
-neither runs without paying for it. A statement that changes the data in
+neither runs without paying for it. A big value (a few MB or more, such as
+a table the module loads) is hashed only before a cell that reads it: a cell
+that only uses what the reader built sees the value rebound
+(`mylib.TABLE = load()`), but not changed in place from outside
+(`mylib.TABLE[0] = 5` in a console). That cell answers what a plain kernel
+answers from what the reader built, and the next cell that reads the table
+sees the change. **Fix:** run the notebook, or the reader and the cells below
+it. A statement that changes the data in
 place through something else holding it (`holder["t"][0] = 5`, where
 `holder["t"] = mylib.TABLE` above) is not seen as the notebook's own: the
 change counts as made outside, so the cells after it run again rather than

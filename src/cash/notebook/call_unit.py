@@ -46,6 +46,7 @@ from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import (
+    ArgFingerprints,
     UNWRAP_FAILED,
     call_capturing_output,
     capture_globals,
@@ -555,14 +556,19 @@ class CallUnit:
         #: Emptied by :meth:`begin_cell`; holding the results that long keeps
         #: an ``id`` from being reused by another object meanwhile.
         self.held_results: dict[int, tuple[Any, str, str, int]] = {}
+        #: The hashes of the frames this cell's calls received, checked
+        #: rather than read again while unchanged; emptied by :meth:`begin_cell`.
+        self._fingerprints = ArgFingerprints()
 
     def _cost_floor_s(self) -> float:
         """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
         return call_cost_floor_s(self._cash)
 
     def begin_cell(self) -> None:
-        """A new cell: the results held for references are let go."""
+        """A new cell: the results held for references, and the frames
+        remembered for their hashes, are let go."""
         self.held_results.clear()
+        self._fingerprints.clear()
 
     def _hold(self, key: str, value: Any, digest: str | None, size: Any) -> None:
         if digest:
@@ -908,7 +914,7 @@ class CallUnit:
         # to the enclosing statement's tracker immediately, so the miss-path
         # "recorded for free" behaviour holds.
         rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
-        arg_hashes_before = hash_args(call.args, call.kwargs)
+        arg_hashes_before = hash_args(call.args, call.kwargs, self._fingerprints)
         module_before = _module_globals(call.fn)
         started = _perf_counter()
         call_tracker = FileAccessTracker(
@@ -943,8 +949,7 @@ class CallUnit:
             self._invocations[-1].stored = True
         return result
 
-    @staticmethod
-    def _did_what_a_hit_cannot(call: _Call, rng_before, arg_hashes_before: tuple) -> bool:
+    def _did_what_a_hit_cannot(self, call: _Call, rng_before, arg_hashes_before: tuple) -> bool:
         """Whether the call just run had an effect a hit would silently skip."""
         modules_before, carriers_before = rng_before
         if rng_modules_changed(modules_before, capture_rng_state()) or carrier_states_changed(carriers_before):
@@ -960,7 +965,7 @@ class CallUnit:
         # The identity check only catches `return arg` -- this
         # catches "mutated but returned a *different* object", which
         # a hit would silently skip.
-        return hash_args(call.args, call.kwargs) != arg_hashes_before
+        return hash_args(call.args, call.kwargs, self._fingerprints) != arg_hashes_before
 
     def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True) -> bool:
         """Past the cost floor, safe to hand back as a copy, and cheaper to

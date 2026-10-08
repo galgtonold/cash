@@ -77,3 +77,34 @@ def test_the_value_edited_in_the_file(nb_runner, tmp_path):
     os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
     nb_runner.run_cell(3)
     assert nb_runner.peek("u") == "41", nb_runner.get_raw_output(3)
+
+
+BIG_LIB = (
+    "import time\nimport numpy as np\nTABLE = np.full(1_000_000, {k}.0)\n"
+    "def from_k(x):\n    time.sleep(0.3)\n    return float(x * TABLE[0])\n"
+)
+
+
+def test_a_big_table_changed_in_place_is_seen_by_the_cell_that_reads_it(nb_runner, tmp_path):
+    """A table of 8 MB is not hashed before every cell that only uses what
+    its reader built (a 256 MB one cost 0.25 s a cell). A change made to it
+    in place from outside is seen by the next cell that reads it; the cells
+    below answer, until then, what a plain kernel answers. One rebinding it
+    is seen by every cell, as for a small value."""
+    (tmp_path / "statelib.py").write_text(BIG_LIB.format(k=2), encoding="utf-8")
+    nb_runner.create_notebook(["import statelib", "b = statelib.from_k(10)", "u = b + 1\nprint('U', u)"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_all()
+    assert nb_runner.peek("u") == "21.0"
+
+    nb_runner.peek("__import__('statelib').TABLE.__setitem__(0, 5.0)")
+    nb_runner.run_cell(3)
+    assert nb_runner.peek("u") == "21.0", "a plain kernel answers from the b it has"
+    nb_runner.run_cell(2)
+    nb_runner.run_cell(3)
+    assert nb_runner.peek("u") == "51.0", nb_runner.get_raw_output(3)
+
+    nb_runner.peek("setattr(__import__('statelib'), 'TABLE', __import__('numpy').full(1_000_000, 4.0))")
+    nb_runner.run_cell(3)
+    assert nb_runner.peek("u") == "41.0", nb_runner.get_raw_output(3)

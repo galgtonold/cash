@@ -194,43 +194,56 @@ def has_call_refs(payload: Any) -> bool:
 
 def resolve_call_refs(payload: Any, backend: Any) -> Any:
     """*payload* with its references read back from *backend*, or ``None`` when
-    one cannot be -- the statement is then a miss."""
+    one cannot be -- the statement is then a miss.
+
+    Nothing of cash's is left holding a value it read back. The values loaded
+    are bound to the statement's names; a dict of them kept alive past this
+    call (by recursive closures, a reference cycle that waits for the cyclic
+    collector) was "another container" to the share check of the next
+    statement, so ``df['a'] = feat(df)`` after a served ``df = load()`` was
+    refused on every run."""
     if not has_call_refs(payload):
         return payload
     loaded: dict[str, Any] = {}
-
-    def load(ref: CallRef):
-        if ref.key not in loaded:
-            try:
-                metadata, value = backend.get(ref.key)
-            except Exception as exc:
-                raise _Missing(ref.key) from exc
-            if not isinstance(metadata, dict) or metadata.get(DIGEST_FIELD) != ref.digest:
-                raise _Missing(ref.key)
-            loaded[ref.key] = value
-        return loaded[ref.key]
-
-    def swap(value, depth):
-        if isinstance(value, CallRef):
-            loaded_value = load(value)
-            item = getattr(value, "item", None)
-            if item is None:
-                return loaded_value
-            try:
-                return loaded_value[item]
-            except (TypeError, IndexError, KeyError) as exc:
-                raise _Missing(value.key) from exc
-        if depth <= 0:
-            return value
-        if type(value) is dict:
-            return {k: swap(v, depth - 1) for k, v in value.items()}
-        if type(value) in (list, tuple):
-            return type(value)(swap(v, depth - 1) for v in value)
-        return value
-
     try:
-        variables = {name: swap(value, _DEPTH) for name, value in payload["variables"].items()}
+        variables = {name: _swap_refs(value, _DEPTH, loaded, backend) for name, value in payload["variables"].items()}
     except _Missing as missing:
         logger.debug("call refs: entry %s is gone; the statement recomputes", missing)
         return None
+    finally:
+        loaded.clear()
     return {**payload, "variables": variables}
+
+
+def _load_ref(ref: CallRef, loaded: dict[str, Any], backend: Any) -> Any:
+    """The value of *ref*'s call entry, read once per key into *loaded*."""
+    if ref.key not in loaded:
+        try:
+            metadata, value = backend.get(ref.key)
+        except Exception as exc:
+            raise _Missing(ref.key) from exc
+        if not isinstance(metadata, dict) or metadata.get(DIGEST_FIELD) != ref.digest:
+            raise _Missing(ref.key)
+        loaded[ref.key] = value
+    return loaded[ref.key]
+
+
+def _swap_refs(value: Any, depth: int, loaded: dict[str, Any], backend: Any) -> Any:
+    """*value* with each :class:`CallRef` in it, down to *depth* levels of
+    plain dicts, lists and tuples, replaced by the value it refers to."""
+    if isinstance(value, CallRef):
+        loaded_value = _load_ref(value, loaded, backend)
+        item = getattr(value, "item", None)
+        if item is None:
+            return loaded_value
+        try:
+            return loaded_value[item]
+        except (TypeError, IndexError, KeyError) as exc:
+            raise _Missing(value.key) from exc
+    if depth <= 0:
+        return value
+    if type(value) is dict:
+        return {k: _swap_refs(v, depth - 1, loaded, backend) for k, v in value.items()}
+    if type(value) in (list, tuple):
+        return type(value)(_swap_refs(v, depth - 1, loaded, backend) for v in value)
+    return value

@@ -41,7 +41,7 @@ from ..magic_effects import (
     magic_rng_advances,
     simulation_cell,
 )
-from ..recorded_reads import outside_changes, watched_module_data
+from ..recorded_reads import REBOUND, one_reading, outside_changes, take_known_as_read, watched_module_data
 from ..run_memo import stats_this_run
 from ..tracking_state import TrackingState
 from ._types import (
@@ -224,16 +224,22 @@ class VirtualLineage:
         notebook_cells: list[str],
         required_inputs: set[str] | None,
         cell_code: str | None,
-    ) -> bool:
-        """Whether the cell about to run can be reached by watched module
-        data: it reads some itself, or a statement it derives an input from
-        does (the cached trace, read backwards from *required_inputs*, as
-        ``read_scope`` scopes file reads). Unknown inputs or cell: yes.
+    ) -> bool | str:
+        """How the cell about to run can be reached by watched module data,
+        as `outside_changes` takes it: ``True`` when it reads some itself,
+        `REBOUND` when a statement it derives an input from does (the cached
+        trace, read backwards from *required_inputs*, as ``read_scope``
+        scopes file reads), ``False`` when neither. Unknown inputs or cell:
+        ``True``.
 
         Checking that data for changes made outside the notebook hashes all
         of it, before every cell: once ``v = helpers.score(3)`` had read a
-        128 MB table, ``x = 1`` cost 350 ms. A cell no reader reaches cannot
-        be told anything by it, and leaves it to the next cell that can.
+        128 MB table, ``x = 1`` cost 350 ms, and every ``a = v + 1`` below
+        the reader 250 ms for a 256 MB one. A cell no reader reaches cannot
+        be told anything by it. One that derives from a reader sees the data
+        rebound, which costs nothing to tell; a change made to it in place is
+        left to a cell that reads it, as the cells in between answer what a
+        plain kernel answers from what the reader built.
         """
         labels = watched_module_data(self.tracking_state.reads)
         if not labels:
@@ -260,7 +266,7 @@ class VirtualLineage:
             for entry in reversed(cached.trace_segment):
                 if entry.outputs & needed:
                     if reads(entry.stmt_code):
-                        return True
+                        return REBOUND
                     needed |= entry.inputs
         return False
 
@@ -288,6 +294,10 @@ class VirtualLineage:
             # changed outside the notebook's cells: no cell's code says so, so
             # simulate them all again, as for a changed file.
             return first_changed_cell, cache_had_hash_mismatch
+        if module_data is not True:
+            # What this cell did not hash, the statements simulated below do
+            # not either.
+            take_known_as_read(self.tracking_state.reads)
         for idx in range(min(current_cell_idx, len(self.cache.entries))):
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = exact_source_digest(cell_code)
@@ -473,11 +483,15 @@ class VirtualLineage:
         the first one changed since the previous simulation. *required_inputs*
         and *cell_code* are the cell's (None: not known), see
         `_reaches_watched_module_data`."""
-        start = self.find_incremental_start(current_cell_idx, notebook_cells, required_inputs, cell_code)
-        sim = start.simulation
-        self.simulate_cells_pass1(
-            sim, start.first_changed_cell, current_cell_idx, notebook_cells, start.new_cache_entries
-        )
+        # No code of the notebook runs while it simulates: module data read
+        # by the look for outside changes and by the simulated keys is hashed
+        # once.
+        with one_reading():
+            start = self.find_incremental_start(current_cell_idx, notebook_cells, required_inputs, cell_code)
+            sim = start.simulation
+            self.simulate_cells_pass1(
+                sim, start.first_changed_cell, current_cell_idx, notebook_cells, start.new_cache_entries
+            )
         # True only for an EDIT to a cell the previous simulation saw: a cell
         # merely new to the cache (first run of cell 3 after cell 1) is not one.
         sim.upstream_has_modifications = start.had_prior_cache and start.cache_had_hash_mismatch

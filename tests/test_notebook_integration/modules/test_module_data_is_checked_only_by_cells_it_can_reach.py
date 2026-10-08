@@ -88,3 +88,31 @@ def test_a_statement_reaching_the_module_is_still_watched(nb_runner, tmp_path, c
         assert int(nb_runner.peek(HASHED)) >= before + 2, cell
     nb_runner.run_cell(7)
     assert nb_runner.peek("c") == "6"
+
+
+BIG_LIB = (
+    "import time\nimport numpy as np\nTABLE = np.full(1_000_000, 2.0)\n"
+    "def from_k(x):\n    time.sleep(0.3)\n    return float(x * TABLE[0])\n"
+)
+
+
+def test_a_cell_using_what_a_big_table_built_does_not_hash_it(nb_runner, tmp_path, counting):
+    """``a = v + 1`` below ``v = helpers.score(3)`` hashed the whole table it
+    read, 0.25 s a cell for 256 MB. The reader looks for an outside change;
+    the cells using what it built do not hash the table again."""
+    (tmp_path / "statelib.py").write_text(BIG_LIB, encoding="utf-8")
+    nb_runner.create_notebook(
+        ["import statelib", "b = statelib.from_k(10)", "u = b + 1", "w = u + b", "x = 1\nprint('W', w)"]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    counting()
+    nb_runner.run_all()
+    after_reader = None
+    for cell in range(1, 6):
+        nb_runner.run_cell(cell)
+        if cell == 2:
+            after_reader = int(nb_runner.peek(HASHED))
+    assert after_reader is not None and after_reader >= 1, "the reader looks"
+    assert int(nb_runner.peek(HASHED)) == after_reader, "a cell below the reader hashed the table"
+    assert nb_runner.peek("w") == "41.0"

@@ -24,18 +24,20 @@ from __future__ import annotations
 
 import sys
 import types
-from collections.abc import Callable, Iterable, Mapping
+import weakref
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
+from ..sizing import estimate_object_size
 from .callee_reach import names_read, module_state_writes, reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
     module_data_digest,
-    module_data_digests,
     module_data_parts_component,
     statement_environment_reads,
 )
@@ -46,10 +48,13 @@ __all__ = [
     "Write",
     "choose",
     "note_writes",
+    "REBOUND",
     "outside_changes",
     "watched_module_data",
     "read_parts",
+    "one_reading",
     "snapshot",
+    "take_known_as_read",
     "watch",
 ]
 
@@ -95,6 +100,11 @@ class ReadRecord:
     #: notebook left, was made outside the notebook's cells
     #: (:func:`outside_changes`).
     known: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: ``(kind, label)`` of module data -> the object its ``known`` digest
+    #: was taken of, by weak reference where it takes one: what tells a
+    #: value rebound since from one that may only have changed in place
+    #: (:func:`outside_changes`'s *module_data* ``"rebound"``).
+    objects: dict[tuple[str, str], Any] = field(default_factory=dict)
 
     def clear(self) -> None:
         """Forget every record, in place: the components hold this object
@@ -113,41 +123,167 @@ def read_parts(code: str, user_ns: Mapping[str, Any] | None) -> ReadParts:
     # One reach for both: a keyed call builds this for every call.
     reach = reached_user_code(code, user_ns)
     env = tuple(environment_digests(statement_environment_reads(code, user_ns, reach)))
-    mod = tuple(module_data_digests(reach))
+    mod = tuple((label, _data_digest(label, value)) for label, value in reach.data)
     return ReadParts(env, mod)
 
 
 def watch(parts: ReadParts, record: ReadRecord) -> None:
-    """Watch what *parts* read, as they read it."""
+    """Watch what *parts* read, as they read it: called right after
+    `read_parts`, with the module data still bound to the objects it
+    hashed."""
     for kind, pairs in ((_ENV, parts.env), (_MOD, parts.mod)):
         for label, digest in pairs:
             record.watched.add((kind, label))
             record.known[(kind, label)] = digest
+            if kind == _MOD:
+                present, value = _module_value(label)
+                if present:
+                    record.objects[(kind, label)] = _reference(value)
+
+
+#: The digests of module data taken inside `one_reading`, by the id of the
+#: object hashed: ``id -> (object, digest)``. Empty outside it.
+_READING: list[dict[int, tuple[Any, str]]] = []
+
+
+@contextmanager
+def one_reading() -> Iterator[None]:
+    """Hash each piece of module data at most once inside the block.
+
+    For a stretch where no code of the notebook runs -- the upstream
+    simulation: its look for outside changes and the keys of the statements
+    it simulates read the same table, and each read hashed all of it (three
+    times 0.25 s for a 256 MB one, in the cell after its reader). Outside
+    the block every read hashes again, as code may have changed the data in
+    place since."""
+    _READING.append(_READING[-1] if _READING else {})
+    try:
+        yield
+    finally:
+        _READING.pop()
+
+
+def take_known_as_read(record: ReadRecord) -> None:
+    """Inside `one_reading`: module data still bound to the object its
+    known digest was taken of reads as that digest, unhashed, unless it was
+    hashed in the block already.
+
+    For a cell that the data reaches only through what a reader built, or
+    not at all (`outside_changes` with *module_data* `REBOUND` or ``False``):
+    the statements the simulation keys again take the view the look for
+    outside changes took -- a change made in place to data it did not hash
+    is left to a cell that reads it -- rather than hash a table to find out
+    what that look chose not to."""
+    if not _READING:
+        return
+    memo = _READING[-1]
+    for key, reference in list(record.objects.items()):
+        known = record.known.get(key)
+        if key[0] != _MOD or known is None or known.startswith(UNHASHABLE):
+            continue
+        present, value = _module_value(key[1])
+        if present and _same_object(reference, value):
+            # Already hashed in the block (a small value the look for
+            # outside changes took): that digest stands.
+            memo.setdefault(id(value), (value, known))
+
+
+def _data_digest(label: str, value: Any) -> str:
+    """`module_data_digest` of *value*, taken once per object inside
+    `one_reading`."""
+    if not _READING:
+        return module_data_digest(label, value)
+    memo = _READING[-1]
+    held = memo.get(id(value))
+    if held is not None and held[0] is value:
+        return held[1]
+    digest = module_data_digest(label, value)
+    if not digest.startswith(UNHASHABLE):
+        # Held, so its id is not reused inside the block.
+        memo[id(value)] = (value, digest)
+    return digest
+
+
+#: `outside_changes`'s *module_data* for a caller that only derives from
+#: what read the data: a value rebound to another object is looked at, and
+#: a big one still the same object is not hashed (`_left_to_readers`).
+REBOUND = "rebound"
+
+#: Module data at least this big, by `estimate_object_size`, is not hashed
+#: to look for a change made to it in place before a cell that only derives
+#: from its reader: a 256 MB table cost 0.25 s before each such cell. Below
+#: it, hashing costs a few milliseconds and is still done.
+_HASHED_IN_PLACE_BELOW = 4 * 1024 * 1024
 
 
 def outside_changes(
-    record: ReadRecord, in_notebook: Callable[[str], bool] | None = None, *, module_data: bool = True
+    record: ReadRecord, in_notebook: Callable[[str], bool] | None = None, *, module_data: bool | str = True
 ) -> bool:
     """Whether a watched value changed since the runtime last read it,
     other than as a statement of the notebook left it, so outside the
     notebook's cells; and take the new values as known.
 
-    Without *module_data*, only the environment is looked at: the module
-    data is hashed in full to be compared (an 80 MB table: 0.2 s), so a
-    caller that cannot be reached by it leaves it out. What it holds stays
-    known as it was, so the next look at it still sees the change.
+    Module data is hashed in full to be compared (an 80 MB table: 0.2 s), so
+    a caller that cannot be reached by it passes *module_data* ``False`` and
+    leaves it out, and one that only derives from a statement that read it
+    passes `REBOUND`: a value of the module bound to another object since
+    its digest was taken (``mylib.K = 5``, ``mylib.TABLE = load()``) is
+    looked at, and so is a small one still bound to that object; a big one
+    is not hashed (`_left_to_readers`) -- a change made to it in place is
+    left to a cell that reads the data itself. What is not looked at stays
+    known as it was, so the next full look still sees the change.
     """
     changed = False
     for key in record.watched:
-        if key[0] == _MOD and not module_data:
-            continue
+        if key[0] == _MOD:
+            if not module_data:
+                continue
+            present, value = _module_value(key[1])
+            if module_data == REBOUND and present and _left_to_readers(record.objects.get(key), value):
+                continue
         digest = _current(*key)
         if record.known.get(key) != digest and not digest.startswith(UNHASHABLE):
             write = record.writes.get(f"{key[0]}:{key[1]}")
             ours = write is not None and write.digest == digest and in_notebook is not None and in_notebook(write.code)
             changed = changed or not ours
         record.known[key] = digest
+        if key[0] == _MOD:
+            if present:
+                record.objects[key] = _reference(value)
+            else:
+                record.objects.pop(key, None)
     return changed
+
+
+def _left_to_readers(reference: Any, value: Any) -> bool:
+    """Whether *value*, the module data now, is the object *reference*
+    (`_reference`) was taken of, and too big to hash for an in-place change
+    before a cell that does not read it (`_HASHED_IN_PLACE_BELOW`)."""
+    if not _same_object(reference, value) or _immutable(value):
+        return False
+    try:
+        return estimate_object_size(value) >= _HASHED_IN_PLACE_BELOW
+    except Exception:  # noqa: BLE001 - sizing arbitrary user data: hash it
+        return False
+
+
+def _reference(value: Any) -> Any:
+    """What `_same_object` asks of: a weak reference to *value*, or, for a
+    value that takes none (a list, a dict), a one-item tuple holding it --
+    kept alive, its id cannot be reused by another object."""
+    try:
+        return weakref.ref(value)
+    except TypeError:
+        return (value,)
+
+
+def _same_object(reference: Any, value: Any) -> bool:
+    """Whether *reference* (`_reference`) is to *value* itself."""
+    if reference is None:
+        return False
+    if isinstance(reference, tuple):
+        return reference[0] is value
+    return reference() is value
 
 
 def watched_module_data(record: ReadRecord) -> frozenset[str]:
@@ -258,7 +394,7 @@ def _current(kind: str, label: str) -> str:
     if not found:
         return "missing"
     if not _immutable(value):
-        return module_data_digest(label, value)
+        return _data_digest(label, value)
     # Watched around every statement: a constant the module still holds is
     # not hashed again. The value is held, so its id is not reused.
     held = _IMMUTABLE_DIGESTS.get(id(value))
