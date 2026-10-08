@@ -250,8 +250,9 @@ changed. The second list is what cash does not see, and what to do about it.
     - Another **cached function** it reaches, directly, through a helper or
       an import in the body, on any `Cash` instance, or passes on
       (`pool.map(inner, xs)`), with what that function reads.
-    - **Your class or function passed as an argument** or held in an argument
-      or global, also inside a library object (a transformer in an sklearn
+    - **Your class or function passed as an argument** or held in an argument,
+      a global, another module's table (`steps.STEPS`) or a class attribute,
+      also inside a library object (a transformer in an sklearn
       pipeline), and what that code reads, its environment reads included:
       a handler in a dispatch table, a step in a list (a `lambda` too), a
       property or dunder method of a settings object.

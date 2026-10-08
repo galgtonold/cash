@@ -15,6 +15,7 @@ from ..analysis.helper_bindings import resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
 from ..dependency_state import ledger_note
+from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .global_values import UNHASHABLE_GLOBAL_FIX
@@ -91,6 +92,8 @@ class GlobalsFold:
         self._classes = classes
         self._attrs = attrs
         classes.bind_reads_fold(self.fold_read_globals)
+        classes.bind_held_code(self.held_value_code_parts)
+        attrs.bind_held_code(self.held_value_code_parts)
         self._code = code
         self._registry = registry
         self._mutations = mutations
@@ -304,9 +307,19 @@ class GlobalsFold:
 
     def _held_code_parts(self, fold: _ReadsFold, name: str, v: Any) -> list[tuple[str, str]]:
         """Key parts for the user code the value *v* of global *name* holds,
-        which its pickle names only by reference."""
+        which its pickle names only by reference (`held_value_code_parts`)."""
+        return self.held_value_code_parts(name, v, fold.func_name, fold.drift_owner, fold.own_pkg)
+
+    def held_value_code_parts(
+        self, label: str, v: Any, func_name: str, owner_code: Any, own_pkg: str | None
+    ) -> list[tuple[str, str]]:
+        """Key parts for the user code the data value *v* holds -- a global,
+        a ``module.ATTR``, a class attribute -- which its pickle names only
+        by reference: the classes of the instances in it, the functions and
+        classes in it and what that code reads, its environment reads at
+        their current values. *owner_code* is the cached function's code,
+        for the drift guard."""
         parts: list[tuple[str, str]] = []
-        own_pkg = fold.own_pkg
         # A pre-built user-class INSTANCE (or a container of them) is only
         # value-hashed -- its class's method SOURCE is invisible to the
         # pickle. Fold the class-graph source too (memoized per class; see
@@ -314,7 +327,7 @@ class GlobalsFold:
         for item in iter_contained(v):
             if is_user_class(type(item), own_pkg):
                 for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
-                    parts.append((f"{name}#cls:{cname}", chash))
+                    parts.append((f"{label}#cls:{cname}", chash))
             elif isinstance(item, type) and is_user_class(item, own_pkg):
                 # The CLASS itself, not an instance of it: `TABLE = {"fast":
                 # impl.Fast}` pickles by reference, so editing `Fast.run`
@@ -322,17 +335,21 @@ class GlobalsFold:
                 # followed.
                 surface = self._code.code_surface_hash(item)
                 if surface is not None:
-                    parts.append((f"{name}#cls:{item.__qualname__}", surface))
+                    parts.append((f"{label}#cls:{item.__qualname__}", surface))
         # Code deeper in: an instance held in a tuple in a list, a
         # function an instance holds (`Runner(scale)`), a user transformer
         # inside a library pipeline. The pickle has them by name
         # only, and the one-level look above does not reach them; the
         # argument walk does, so a global goes through it too.
         if self.code_args is not None:
-            code_parts = self.code_args.carrier_parts(v, fold.func_name, owner_code=fold.drift_owner)
+            env: set = set()
+            code_parts = self.code_args.carrier_parts(v, func_name, owner_code=owner_code, env_entries=env)
             if code_parts:
                 digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
-                parts.append((f"{name}#code", digest))
+                parts.append((f"{label}#code", digest))
+            if env:
+                component = environment_component(env, note=lambda what, digest: ledger_note(("env", what), digest))
+                parts.append((f"{label}#env", hashlib.sha256(component.encode("utf-8")).hexdigest()))
         return parts
 
     def _default_parts(self, fold: _ReadsFold) -> list[tuple[str, str]]:

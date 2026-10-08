@@ -17,7 +17,7 @@ from ..analysis.helper_bindings import resolve_local_import
 from ..install_paths import is_user_module
 from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes
-from .key_values import iter_contained, stabilize_for_global_hash
+from .key_values import iter_contained, plain_data_kind, stabilize_for_global_hash
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
@@ -62,6 +62,12 @@ class ModuleAttrFold:
         self._reads = reads
         self._values = values
         self._classes = classes
+        #: `GlobalsFold.held_value_code_parts`, bound by `GlobalsFold`.
+        self._held_code: Callable[..., list[tuple[str, str]]] | None = None
+
+    def bind_held_code(self, held: Callable[..., list[tuple[str, str]]]) -> None:
+        """Set the fold of the code a data value holds (`GlobalsFold.held_value_code_parts`)."""
+        self._held_code = held
 
     def docstring_parts(self, code: Any, g: dict, own_pkg: str | None) -> list[tuple[str, str]]:
         """Key parts for the docstrings code that reads docstrings can reach.
@@ -260,6 +266,13 @@ class ModuleAttrFold:
         h = self._values.safe_global_hash(value, func_name, label)
         if h is not None:
             parts.append((label, h))
+            # A table or a list of functions read through its module or class
+            # (`steps.STEPS`, `steps.HANDLERS["x"]`, `Pipeline.DEFAULT_STEPS`):
+            # its pickle names the functions, and what they read -- a module
+            # constant, an environment variable -- is folded as for the same
+            # table read by name.
+            if self._held_code is not None and plain_data_kind(value) is None:
+                parts.extend(self._held_code(label, value, func_name, reader.owner_code, own_pkg))
         return parts
 
     def _held_class_parts(self, reader: _AttrReader, label: str, value: Any) -> list[tuple[str, str]]:
