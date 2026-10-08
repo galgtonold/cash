@@ -202,6 +202,12 @@ class StatementLineage:
             self.tracking_state.mutation_verdicts.setdefault(source_hash, verdict)
         return verdict
 
+    def recorded_mutations(self, stmt_code: str) -> set[str] | None:
+        """What the runtime recorded *stmt_code* changing in place when it
+        ran it (``mutation_verdicts``, else an earlier kernel's); None when it
+        recorded nothing."""
+        return self._mutation_verdict(statement_source_hash(stmt_code))
+
     def _mutation_receivers(
         self,
         stmt_code: str,

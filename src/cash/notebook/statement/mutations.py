@@ -21,7 +21,9 @@ from cash.analysis.mutation_effects import classify_receivers, drawn_on_argument
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from cash.analysis.namespace_effects import bare_call_arguments, call_arguments, fits_its_receiver, is_estimator
 from cash.mutation_fingerprint import mutation_fingerprint
+from cash.notebook.cache_key import statement_source_hash
 from cash.notebook.consumables import watched_call_receivers
+from cash.notebook.magic_effects import magic_call_arguments
 from cash.notebook.restored_var import hashed_by_lineage
 
 if TYPE_CHECKING:
@@ -189,6 +191,49 @@ class MutationClassifier:
         watched = watched_call_receivers(tree, user_ns)
         names = set(call_arguments(tree, user_ns) | watched) - outputs
         return names, names - bare_call_arguments(tree, user_ns) - watched
+
+    def magic_snapshots(self, node: ast.stmt, code: str) -> dict[str, str | None] | None:
+        """Before the magic statement *node* (*code*) runs: the fingerprint
+        of each name its ``%time``/``%timeit``/``%prun`` Python hands to a
+        call (``magic_call_arguments``), for :meth:`note_magic_changes`.
+
+        ``%time train(model)`` changes ``model`` as much as ``train(model)``
+        does, and the plain statement is watched the same way. None when the
+        statement's verdict is already known (learned once per text, as for a
+        plain statement) or it hands nothing over. An argument of a bare call
+        that cannot be fingerprinted is kept as None: it counts as changed.
+        """
+        if statement_source_hash(code) in self.tracking_state.mutation_verdicts:
+            return None
+        watched, bare = magic_call_arguments(node, self.shell.user_ns)
+        snapshots: dict[str, str | None] = {}
+        for name in watched:
+            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
+            if fingerprint is None and name not in bare:
+                continue
+            snapshots[name] = fingerprint
+        return snapshots or None
+
+    def note_magic_changes(self, code: str, snapshots: dict[str, str | None] | None) -> set[str] | None:
+        """After the magic statement *code* ran: the names it changed among
+        those :meth:`magic_snapshots` fingerprinted, recorded as its verdict
+        (``mutation_verdicts``, which the simulation reads back); None when
+        nothing was watched."""
+        if snapshots is None:
+            return None
+        user_ns = self.shell.user_ns
+        changed = {
+            name
+            for name, before in snapshots.items()
+            if before is None or name not in user_ns or mutation_fingerprint(user_ns[name]) != before
+        }
+        self.tracking_state.mutation_verdicts[statement_source_hash(code)] = changed
+        return changed
+
+    def magic_changed_arguments(self, code: str) -> set[str]:
+        """The names the magic statement *code* was seen changing through a
+        call's argument (:meth:`note_magic_changes`)."""
+        return set(self.tracking_state.mutation_verdicts.get(statement_source_hash(code), ()))
 
     def estimator_fit_receivers(
         self,

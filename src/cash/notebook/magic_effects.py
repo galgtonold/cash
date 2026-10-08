@@ -25,14 +25,17 @@ import ast
 import functools
 import hashlib
 from collections.abc import Callable, Mapping
+from typing import Any
 
 from ..analysis.code_analyzer import CodeAnalyzer, calls_ipython
 from ..analysis.mutations import KNOWN_PURE_METHODS
+from ..analysis.namespace_effects import bare_call_arguments, call_arguments
 
 __all__ = [
     "is_magic_statement",
     "is_rerun_magic",
     "magic_base",
+    "magic_call_arguments",
     "magic_cell_of",
     "magic_effects",
     "magic_output_lineage",
@@ -155,6 +158,30 @@ def magic_effects(node: ast.stmt, is_module: Callable[[str], bool]) -> tuple[set
         read |= set(inner_inputs)
     changed = {name for name in changed if not is_module(name)}
     return changed, read | changed
+
+
+def magic_call_arguments(node: ast.stmt, user_ns: Mapping[str, Any]) -> tuple[frozenset[str], frozenset[str]]:
+    """``(watched, bare)``: the names the Python statement of a ``%time``,
+    ``%timeit`` or ``%prun`` line in *node* hands to a call that could change
+    them in place, as a plain statement's are watched
+    (``namespace_effects.call_arguments``), and those among them a bare call
+    is handed.
+
+    ``%time train(model)`` changes ``model`` as much as ``train(model)``
+    does, but no method is called on it, so it is no receiver
+    (:func:`magic_effects`). The runtime fingerprints these around the magic
+    and records the ones it changed (``MutationClassifier.magic_snapshots``).
+    """
+    watched: set[str] = set()
+    bare: set[str] = set()
+    for call in ast.walk(node):
+        arg = _python_magic_arg(call)
+        inner = None if arg is None else _python_argument(arg)
+        if inner is None:
+            continue
+        watched |= call_arguments(inner, user_ns)
+        bare |= bare_call_arguments(inner, user_ns)
+    return frozenset(watched), frozenset(bare & watched)
 
 
 def magic_base(code: str, read_lineages: Mapping[str, str | None]) -> str:

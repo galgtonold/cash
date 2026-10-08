@@ -96,6 +96,10 @@ class StatementRun:
     #: For a magic statement (``is_magic_statement``): the lineage of each
     #: name it reads, before it ran (``magic_effects``).
     magic_reads: dict[str, str | None] | None = None
+    #: For a ``%time``/``%timeit``/``%prun`` statement: the fingerprint of
+    #: each name its Python hands to a call, before it ran
+    #: (``MutationClassifier.magic_snapshots``); None when nothing is watched.
+    magic_snapshots: dict[str, str | None] | None = None
     #: The variables that hold an output's object too, stored and restored
     #: with the outputs as one graph, each with its lineage before the
     #: statement (``StatementCacheMetadata.holders``).

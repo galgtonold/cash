@@ -524,6 +524,13 @@ class VirtualLineage:
         virtual_lineage = sim.virtual_lineage
         live = self.tracking_state.variable_lineage
         changed, read = magic_effects(node, sim.virtual_modules.__contains__)
+        # And what the runtime saw it change through a call's argument
+        # (`%time train(model)`, ``MutationClassifier.note_magic_changes``).
+        changed |= {
+            name
+            for name in self.statements.recorded_mutations(stmt_code) or ()
+            if name not in sim.virtual_modules and name in read
+        }
         reads = {name: virtual_lineage.get(name, live.get(name)) for name in read}
         base = magic_base(stmt_code, reads)
         digests = self.tracking_state.magic_values.get(base, {})
