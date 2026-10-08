@@ -94,7 +94,7 @@ own key never sees them. cash keeps them in its entry instead:
   A source that pickles to more than 4 kB (one that carries data) is
   stored once, beside the entries, and each caller's entry names it.
 
-<!-- claim: cash/decorator/dynamic_sources.py:Resolution @9cd04e3d , cash/decorator/dynamic_sources.py:entry_resolutions @725d4d04 -->
+<!-- claim: cash/decorator/dynamic_sources.py:Resolution @9cd04e3d broad="the kept resolver call, its pickling and its asking again are the class as a whole", cash/decorator/dynamic_sources.py:entry_resolutions @725d4d04 -->
 The resolver is asked again too, with the arguments `load` was called with,
 on every lookup of the caller and in every process: a resolver that hands
 out a new source object after a catalog refresh, or names another file,

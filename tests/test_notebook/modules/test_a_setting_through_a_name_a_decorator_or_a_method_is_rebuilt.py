@@ -153,7 +153,7 @@ def test_an_import_whose_module_registers_itself_is_kept_as_a_setting_of_the_mod
     """``import plugin`` where ``plugin.py`` does ``@mylib.register``: the
     import is one of the statements a restart's rebuild of ``mylib`` runs,
     kept for a later kernel as any setting is."""
-    from cash.notebook.cache_key import module_state_key, statement_source_hash  # noqa: PLC0415
+    from cash.notebook.cache_key import module_state_key, statement_source_hash  # noqa: PLC0415 - only this test needs the keys
 
     name, _ = lib
     cells = [f"import {name}", f"import {name}_plugin", f"x = {name}.names()"]

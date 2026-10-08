@@ -37,16 +37,16 @@ def test_the_feature_column_is_served_on_later_run_alls_and_after_a_restart(nb_r
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "A [0.0, 3.0, 6.0] 100000" in nb_runner.get_output(5)
-    assert log.read_text() == "f"
+    assert log.read_text(encoding="utf-8") == "f"
 
     nb_runner.run_all()
     nb_runner.run_all()
     assert "A [0.0, 3.0, 6.0] 100000" in nb_runner.get_output(5)
     assert "holds an object another variable" not in nb_runner.get_output(4), nb_runner.get_output(4)
-    assert log.read_text() == "f", f"feat ran {len(log.read_text())} times"
+    assert log.read_text(encoding="utf-8") == "f", f"feat ran {len(log.read_text(encoding="utf-8"))} times"
 
     nb_runner.restart()
     nb_runner._inject_notebook_path()
     nb_runner.run_all()
     assert "A [0.0, 3.0, 6.0] 100000" in nb_runner.get_output(5)
-    assert log.read_text() == "f", f"feat ran {len(log.read_text())} times with the restart"
+    assert log.read_text(encoding="utf-8") == "f", f"feat ran {len(log.read_text(encoding="utf-8"))} times with the restart"

@@ -47,7 +47,7 @@ def test_feat_runs_once_over_three_run_alls(cash_magics, mock_shell, clean_backe
         assert list(mock_shell.user_ns["df"].a[:3]) == [0.0, 3.0, 6.0]
     finally:
         os.close(fd)
-    assert log.read_text() == "f", f"feat ran {len(log.read_text())} times over three Run Alls"
+    assert log.read_text(encoding="utf-8") == "f", f"feat ran {len(log.read_text(encoding="utf-8"))} times over three Run Alls"
 
 
 class _Backend:

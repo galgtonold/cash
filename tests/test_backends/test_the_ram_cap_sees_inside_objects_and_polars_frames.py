@@ -60,11 +60,11 @@ def test_a_polars_frame_is_counted_by_its_data():
 def test_the_cap_evicts_objects_and_polars_frames_like_arrays(kind):
     if kind == "polars":
         pl = pytest.importorskip("polars")
-        make = lambda a: pl.DataFrame({"x": a})  # noqa: E731
+        make = lambda a: pl.DataFrame({"x": a})  # noqa: E731 - one-line factories, one per kind
     elif kind == "object":
-        make = lambda a: _Fit(a, float(a[0]))  # noqa: E731
+        make = lambda a: _Fit(a, float(a[0]))  # noqa: E731 - one-line factories, one per kind
     else:
-        make = lambda a: a  # noqa: E731
+        make = lambda a: a  # noqa: E731 - one-line factories, one per kind
     assert _kept(make) <= 4
 
 
