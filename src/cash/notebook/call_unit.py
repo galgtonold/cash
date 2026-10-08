@@ -938,7 +938,7 @@ class CallUnit:
         restore than to compute again."""
         return (
             elapsed >= self._cost_floor_s()
-            and self._entries.storable(result, call.args, call.kwargs)
+            and self._entries.storable(result, call.args, call.kwargs, call.fn)
             and self._entries.restore_pays(result, elapsed)
         )
 
