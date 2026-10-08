@@ -255,9 +255,14 @@ changed. The second list is what cash does not see, and what to do about it.
     - Another **cached function** it reaches, directly, through a helper or
       an import in the body, on any `Cash` instance, or passes on
       (`pool.map(inner, xs)`), with what that function reads.
-    - **Your class or function passed as an argument** or held in an argument
-      or global, also inside a library object (a transformer in an sklearn
-      pipeline), and what that code reads.
+    - **Your class or function passed as an argument** or held in an argument,
+      a global, another module's table (`steps.STEPS`) or a class attribute,
+      also inside a library object (a transformer in an sklearn
+      pipeline), and what that code reads, its environment reads included:
+      a handler in a dispatch table, a step in a list (a `lambda` too), a
+      property or dunder method of a settings object. A table of plain
+      functions is keyed once per version of it: a hit on a table of 1000
+      handlers costs about 3 ms, not a re-analysis of each handler.
     - A **file** read by a
       [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked),
       by content, or declared with `file_depends_on=`. Also a file it looked
@@ -268,6 +273,8 @@ changed. The second list is what cash does not see, and what to do about it.
       `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
       read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
       `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
+    - The **command line**: `sys.argv`, and an `argparse` parser's
+      `parse_args()` called without a list of its own.
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 
@@ -495,7 +502,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @6a50fa96 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3720afe5 -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key
@@ -616,7 +623,7 @@ would skip or get wrong:
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
-| Reads an environment variable by literal name, or the working directory | Puts the value in the key. No warning |
+| Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
 
 Logging calls are not side effects for this purpose.

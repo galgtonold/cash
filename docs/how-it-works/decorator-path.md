@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @6a50fa96, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3720afe5, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -84,12 +84,15 @@ Each argument is fingerprinted by the first rule that applies:
 6. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type.
 
-<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @5fdaf2b9 -->
-A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`
-leaves instance attributes out of what it pickles (a precision, a device, a
-lock) is keyed with those attributes too, since its methods may still read
-them. One that cannot be pickled, such as a lock, is keyed by its type. A
-library's class is keyed by what it pickles.
+<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @30a7a59c -->
+A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
+or a reducer registered for it with `copyreg.pickle`, leaves instance
+attributes out of what it pickles (a precision, a device, a lock) is keyed
+with those attributes too, since its methods may still read them. That holds
+for attributes in `__slots__` and for one saved under its name with another
+value (a portable default in place of the live setting). One that cannot be
+pickled, such as a lock, is keyed by its type. A library's class is keyed by
+what it pickles.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
@@ -127,7 +130,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @6a50fa96, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3720afe5, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound

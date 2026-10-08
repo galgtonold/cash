@@ -762,17 +762,23 @@ run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 `.items()`, `dict(os.environ)`). A helper whose body only returns one of
 these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
+The same read in code the call runs without naming it is reported too, naming
+that code: a function held in a table or a list (`HANDLERS["stamp"](x)`),
+passed as an argument, and a property or dunder method (`settings.stamp`,
+`settings["KEY"]`, `with settings as mode:`) of an object the function reads
+or is given.
 
-<!-- claim: cash/effects.py:environment_input @4d5f0466, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
+<!-- claim: cash/effects.py:environment_input @cc5c0e0f, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @39516f3a -->
 <!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @300df3f0 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you
 (`os.path.expandvars("$DATA_DIR/x")`, `os.path.expanduser`, `Path.home()`,
-`tempfile.gettempdir()`, `shutil.which`) and a read of the working directory
+`tempfile.gettempdir()`, `shutil.which`), a read of the working directory
 (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)` or `Path(p).resolve()` on
-a path that may be relative) are not reported: their values are folded into
+a path that may be relative) and a read of the command line (`sys.argv`, or
+`parser.parse_args()` with no list of its own) are not reported: their values are folded into
 the key. A
 reading that only goes into a log line is not reported either.
 
@@ -900,7 +906,7 @@ no longer changes, remove `dynamic_depends_on=`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @75c92654 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @34d65ca5 -->
 **What happened.** An object you passed to a cached function carries code, and
 that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,
@@ -1787,7 +1793,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/decorator/dynamic_sources.py:recorded_sources @0042c6ac -->
+<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/decorator/dynamic_sources.py:recorded_sources @d682f3a6 -->
 **What happened.** The function calls a cached function whose
 `dynamic_depends_on=` returned a `DataSource` that cannot be pickled. This
 function's entry keeps such sources so a lookup can ask them whether they
