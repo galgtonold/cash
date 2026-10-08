@@ -105,6 +105,55 @@ def class_surface_functions(cls: type) -> list[types.FunctionType]:
     return [f for f in found if not (id(f) in seen or seen.add(id(f)))]
 
 
+#: Dunder methods that build, copy, pickle or change an instance: what an
+#: instance runs when it is USED -- an operator, ``[]``, ``in``, ``with``,
+#: ``format`` -- is every other one (`implicit_access_functions`).
+_NOT_USE_DUNDERS = frozenset(
+    {
+        "__init__",
+        "__new__",
+        "__init_subclass__",
+        "__set_name__",
+        "__class_getitem__",
+        "__post_init__",
+        "__setattr__",
+        "__delattr__",
+        "__setitem__",
+        "__delitem__",
+        "__del__",
+        "__getstate__",
+        "__setstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__copy__",
+        "__deepcopy__",
+    }
+)
+
+
+def implicit_access_functions(cls: type) -> list[types.FunctionType]:
+    """The functions an instance of *cls* runs without a call the code spells
+    out: property and ``cached_property`` getters, and the dunder methods
+    an operator, a subscript, ``in``, ``with``, ``str()`` or ``format()``
+    runs. Its own and every user base's."""
+    found: list[types.FunctionType] = []
+    for base in _user_bases(cls):
+        for name, member in vars(base).items():
+            if isinstance(member, property):
+                found.extend(_function_layers(member.fget))
+            elif hasattr(member, "attrname") and isinstance(getattr(member, "func", None), types.FunctionType):
+                found.extend(_function_layers(member.func))  # functools.cached_property
+            elif name.startswith("__") and name.endswith("__") and name not in _NOT_USE_DUNDERS:
+                if isinstance(member, (staticmethod, classmethod)):
+                    member = member.__func__
+                if isinstance(member, types.FunctionType):
+                    found.extend(_function_layers(member))
+    seen: set[int] = set()
+    return [f for f in found if not (id(f) in seen or seen.add(id(f)))]
+
+
 def _is_class_machinery(name: str) -> bool:
     """A class-body name the class machinery owns (``__module__``,
     ``__slots__``, ``_abc_impl``...), never data the user reads."""

@@ -423,7 +423,7 @@ class GlobalsFold:
         Raises `KeyBuildFailed` when the helpers cannot be found.
         """
         try:
-            report = get_analyzer().analyze(fn)
+            report = get_analyzer().analyze_reached(fn)
         except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
             report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({type(e).__name__}: {e})")
         if report.unwalkable:

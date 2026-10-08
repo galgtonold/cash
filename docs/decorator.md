@@ -252,7 +252,9 @@ changed. The second list is what cash does not see, and what to do about it.
       (`pool.map(inner, xs)`), with what that function reads.
     - **Your class or function passed as an argument** or held in an argument
       or global, also inside a library object (a transformer in an sklearn
-      pipeline), and what that code reads.
+      pipeline), and what that code reads, its environment reads included:
+      a handler in a dispatch table, a step in a list (a `lambda` too), a
+      property or dunder method of a settings object.
     - A **file** read by a
       [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked),
       by content, or declared with `file_depends_on=`. Also a file it looked

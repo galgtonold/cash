@@ -99,7 +99,7 @@ class GlobalValues:
         if not own_code_is_user(fn, getattr(fn, "__module__", None)):
             return own
         try:
-            report = get_analyzer().analyze(fn)
+            report = get_analyzer().analyze_reached(fn)
         except (OSError, TypeError, SyntaxError, RecursionError):
             return own
         if not report.helper_source_hashes:

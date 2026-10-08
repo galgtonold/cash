@@ -50,6 +50,30 @@ class PurityAnalyzer:
         # memo key -> (report, the function it was built from); see `analyze`
         self._cache: LruMemo[str, tuple[PurityReport, Any]] = LruMemo(PURITY_REPORTS)
         self._cache_lock = threading.Lock()
+        #: function -> (its code, its report), for `analyze_reached`.
+        self._reached: weakref.WeakKeyDictionary[Any, tuple[Any, PurityReport]] = weakref.WeakKeyDictionary()
+
+    def analyze_reached(self, func: Callable[..., Any]) -> PurityReport:
+        """`analyze` for a function that reaches a call as data: held in a
+        table or a list, passed as an argument, or run by an object the call
+        is given (a property, a dunder method).
+
+        Asked on every call that reaches it, so memoised per function object
+        while it runs the same code and calls the same helpers, as its code
+        digest is (`CodeSurface.code_surface_hash`): not in the shared memo
+        of `PURITY_REPORTS` entries, which a table of more functions than
+        that emptied on every call, and without reading its source again.
+        An entry goes with its function."""
+        target = getattr(func, "__func__", func)
+        if not isinstance(target, types.FunctionType):
+            return self.analyze(func)
+        entry = self._reached.get(target)
+        if entry is not None and entry[0] is target.__code__ and not bindings_changed(entry[1]):
+            return entry[1]
+        report = self.analyze(target)
+        if not report.unwalkable:
+            self._reached[target] = (target.__code__, report)
+        return report
 
     def analyze(self, func: Callable[..., Any]) -> PurityReport:
         """Return a :class:`PurityReport` for *func*.

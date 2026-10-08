@@ -762,6 +762,11 @@ run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 `.items()`, `dict(os.environ)`). A helper whose body only returns one of
 these reads is reported where it is called, however it is called: `now()`,
 `clocks.now()`, `Clock.now()` or `self.stamp()`.
+The same read in code the call runs without naming it is reported too, naming
+that code: a function held in a table or a list (`HANDLERS["stamp"](x)`),
+passed as an argument, and a property or dunder method (`settings.stamp`,
+`settings["KEY"]`, `with settings as mode:`) of an object the function reads
+or is given.
 
 <!-- claim: cash/effects.py:environment_input @cc5c0e0f, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @0398e851 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @39516f3a -->
@@ -901,7 +906,7 @@ no longer changes, remove `dynamic_depends_on=`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @75c92654 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @34d65ca5 -->
 **What happened.** An object you passed to a cached function carries code, and
 that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,

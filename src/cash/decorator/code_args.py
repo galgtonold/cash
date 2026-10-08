@@ -14,16 +14,18 @@ from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import get_analyzer
-from ..analysis.purity_report import ISSUE_UNTRACKABLE_DEP
+from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP
 from ..code_digest import unwrap_partials
 from ..content_hashers import builtin_family_of, held_objects
+from ..dependency_state import ledger_note
 from ..diagnostics import log_diagnostic, warn_diagnostic
+from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_code_module
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
-from .class_data import class_surface_functions
+from .class_data import class_surface_functions, implicit_access_functions
 from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
@@ -178,7 +180,7 @@ class CodeArgs:
                 continue
             self._warned_untrackable_carrier.add(mark)
             try:
-                issues = [i for i in get_analyzer().analyze(fn).issues if i.kind == ISSUE_UNTRACKABLE_DEP]
+                issues = [i for i in get_analyzer().analyze_reached(fn).issues if i.kind == ISSUE_UNTRACKABLE_DEP]
             except Exception:  # noqa: BLE001 - never break a call
                 continue
             if not issues:
@@ -581,9 +583,14 @@ class CodeArgs:
         param: str | None = None,
         seen_carriers: set[int] | None = None,
         owner_code: Any = None,
+        env_entries: set | None = None,
     ) -> list[str]:
         """Key parts for the user code *value* carries: each carrier's code and
         what that code reads. One walk for an argument and a data global.
+
+        What that code reads from the environment (`PurityReport.environment_reads`)
+        is added to *env_entries* when given, for the caller to fold at its
+        current values; without it, it is one part of the list.
 
         *seen_carriers* dedups across several values of one call:
         `f(a, b, c)` with three instances of one class reaches `is_opaque` +
@@ -595,6 +602,7 @@ class CodeArgs:
         if seen_carriers is None:
             seen_carriers = set()
         parts: list[str] = []
+        env: set = set() if env_entries is None else env_entries
         # A clock test double's date is the date, not code (`fake_clock`).
         fake_dates = _plain_data.fake_clock()[0]
         for carrier in self.iter_code_carriers(value):
@@ -621,7 +629,9 @@ class CodeArgs:
                 # through the folds the cached function's own reads use.
                 if is_user_code_carrier(carrier):
                     parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
+                    env |= self._carrier_environment_reads(carrier)
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)
+                    self._warn_ambient_in_carrier_once(carrier, func_name, param)
             elif is_user_code_carrier(carrier):
                 # User code we could not hash: a C-extension type, an
                 # exotic descriptor. We fall back to today's key, which means
@@ -629,7 +639,62 @@ class CodeArgs:
                 # the residue where cash genuinely cannot determine the
                 # answer, and silence is the danger.
                 self._warn_unhashable_code_once(carrier, func_name, param)
+        if env_entries is None and env:
+            component = environment_component(env, note=lambda label, digest: ledger_note(("env", label), digest))
+            parts.append(f"argenv:{component}")
         return parts
+
+    def _carrier_environment_reads(self, carrier: Any) -> set:
+        """The environment reads (`cash.effects.environment_input`) of the
+        code *carrier* runs: a function's and its helpers', every function
+        of a class's (`class_surface_functions`). A value-reached function
+        reading ``os.environ["MODE"]`` -- a handler in a dispatch table, a
+        property of a settings object -- kept the first value's result."""
+        found: set = set()
+        for fn in _carrier_functions(carrier, class_surface_functions):
+            try:
+                found |= get_analyzer().analyze_reached(fn).environment_reads
+            except Exception:  # noqa: BLE001 - the reads fold raises for what cannot be walked
+                continue
+        return found
+
+    def _warn_ambient_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
+        """KEY-AMBIENT-READ, once, for the clock or a fresh id read by code a
+        call runs without naming it: a function reached as data (a handler
+        in a table, a step in a list) or a property or dunder method of an
+        object the call is given or reads (`implicit_access_functions`).
+
+        Its result is frozen like the same read in the body, which warns;
+        an ordinary method of a class is left out, which the call may never
+        run."""
+        if _EXPLAINING.get():
+            return
+        for fn in _carrier_functions(carrier, implicit_access_functions):
+            mark = (id(fn.__code__), func_name, "ambient")
+            if mark in self._warned_untrackable_carrier:
+                continue
+            self._warned_untrackable_carrier.add(mark)
+            try:
+                ambient = [i for i in get_analyzer().analyze_reached(fn).issues if i.kind == ISSUE_AMBIENT_READ]
+            except Exception:  # noqa: BLE001 - never break a call
+                continue
+            if not ambient:
+                continue
+            from .purity_checks import format_issues_summary
+
+            where = f"the argument `{param}` of {func_name}" if param else f"a call of {func_name}"
+            what = (
+                f"{fn.__qualname__}, reached through {where}, reads ambient state (the clock, the "
+                f"environment, a fresh UUID). That value is not part of the cache key, so the first "
+                f"call's answer is what every later call gets back.\n{format_issues_summary(ambient)}"
+            )
+            fix = (
+                "pass the value in as an argument so it reaches the cache key. If freezing it is "
+                "what you want, say so with `# @cash:assume-safe` on that line, or `with "
+                "cash.assume_safe():` around it."
+            )
+            log_diagnostic(logger, "KEY-AMBIENT-READ", what, fix)
+            warn_diagnostic(CashImpurityWarning, "KEY-AMBIENT-READ", what, fix)
 
     def _carrier_read_global_parts(self, carrier: Any, func_name: str, owner_code: Any) -> list[str]:
         """Key parts for the data a code carrier's functions read: a
@@ -662,3 +727,13 @@ class CodeArgs:
             return []
         digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)
         return [f"argglobal:{getattr(fn, '__qualname__', '?')}:{digest}"] if digest else []
+
+
+def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:
+    """The user functions *carrier* runs: itself (under a partial or bound,
+    its function), or for a class those *of_class* lists."""
+    if isinstance(carrier, type):
+        return [fn for fn in of_class(carrier) if is_user_code_object(fn)]
+    fn = unwrap_partials(carrier)
+    fn = getattr(fn, "__func__", fn)
+    return [fn] if isinstance(fn, types.FunctionType) and is_user_code_object(fn) else []
