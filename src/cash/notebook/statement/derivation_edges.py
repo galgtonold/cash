@@ -37,6 +37,7 @@ from collections.abc import Iterable
 from typing import Any, Callable
 
 from ..shared_objects import (
+    _EXACT_CONTAINER_TYPES,
     _EXACT_VALUE_TYPES,
     VALUE_TYPES,
     _count_held,
@@ -99,25 +100,47 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
     """``(views, refholders)``: the numpy arrays with a ``.base`` and the
     pandas ref-holders that *value* is or holds."""
     value_types = VALUE_TYPES + library_value_types()
+    ndarray = np.ndarray if np is not None else ()
+    # By exact type, so a plain array in a list is asked without a push.
+    ndarray_type = np.ndarray if np is not None else None
     views: list[Any] = []
     refholders: list[Any] = []
     seen: set[int] = set()
     stack = [value]
+    exact = _EXACT_VALUE_TYPES
+    containers = _EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
-        if id(obj) in seen or is_value(obj, value_types):
+        if id(obj) in seen:
             continue
         seen.add(id(obj))
-        if np is not None and isinstance(obj, np.ndarray):
-            if obj.base is not None:
-                views.append(obj)
-            continue
-        if refholder_types and isinstance(obj, refholder_types):
-            refholders.append(obj)
-            continue
+        if type(obj) not in containers:
+            if isinstance(obj, ndarray):
+                if obj.base is not None:
+                    views.append(obj)
+                continue
+            if refholder_types and isinstance(obj, refholder_types):
+                refholders.append(obj)
+                continue
         children = children_of(obj)
-        if children and not _EXACT_VALUE_TYPES.issuperset(map(type, children)):
-            stack.extend(children)
+        # Nothing but values, by exact type: asked at C speed (as `_walk` does).
+        if not children or exact.issuperset(map(type, children)):
+            continue
+        for child in children:
+            ctype = type(child)
+            if ctype in containers:
+                # A record of plain values (`{'a': 1, 'b': 'x'}`) holds no
+                # view: skipped here, not pushed, for a list of millions.
+                items = child.values() if ctype is dict else child
+                if exact.issuperset(map(type, items)) and (ctype is not dict or exact.issuperset(map(type, child))):
+                    continue
+                stack.append(child)
+            elif ctype is ndarray_type:
+                if child.base is not None and id(child) not in seen:
+                    seen.add(id(child))
+                    views.append(child)
+            elif ctype not in exact and not is_value(child, value_types):
+                stack.append(child)
     return views, refholders
 
 
