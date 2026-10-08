@@ -306,6 +306,11 @@ class InMemoryBackend(CacheBackend):
         """
         frames = _frame_types()
         ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+        #: Every object copied here, kept alive until the copy is done: *memo*
+        #: is keyed by ``id``, and an array or frame that a ``__getstate__``
+        #: builds for the pickle is freed once written, so the next one could
+        #: get its address and be handed the first one's copy.
+        alive: list[Any] = []
 
         def persistent_id(obj: Any) -> int | None:
             obj_type = type(obj)
@@ -316,12 +321,14 @@ class InMemoryBackend(CacheBackend):
                 return key
             if obj_type is ndarray and not obj.dtype.hasobject:
                 memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
+                alive.append(obj)
                 return key
             if frames and isinstance(obj, frames):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
                 else:
                     memo[key] = _copy_polars(obj)
+                alive.append(obj)
                 return key
             return None
 
