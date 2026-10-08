@@ -26,6 +26,7 @@ from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
+from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
@@ -203,6 +204,11 @@ def holds_a_closure_with_state(value) -> bool:
     [counter]}}`` was served; a seen set now ends a container that holds
     itself.
     """
+    if _plain_data.is_tree(value):
+        # JSON-like data holds no function: answered a level at a time at C
+        # speed, where the walk below takes a Python step per container --
+        # seconds for a million parsed records.
+        return False
     stack = [value]
     seen: set[int] = set()
     atoms = _EXACT_ATOMS

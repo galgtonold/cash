@@ -44,6 +44,8 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from cash import _plain_data
+
 __all__ = ["holds_part_of", "output_history", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
@@ -97,6 +99,9 @@ _EXACT_VALUE_TYPES: frozenset[type] = frozenset(
         datetime.timedelta,
     }
 )
+
+#: The leaves of a tree `_walk` asks about as one object (`_plain_data.held_only_by_parents`).
+_TREE_LEAVES: tuple[type, ...] = tuple(_EXACT_VALUE_TYPES)
 
 #: The builtin containers by exact type: never a value type, so no `isinstance`.
 _EXACT_CONTAINER_TYPES: frozenset[type] = frozenset({list, dict, set, tuple, frozenset})
@@ -715,6 +720,12 @@ def _walk(
         nodes[key] = root
         owner[key] = name
         order.append(key)
+        if _plain_data.held_only_by_parents(root, _TREE_LEAVES):
+            # Records as a parser returns them: no container below the root
+            # has a holder besides its parent, read a level at a time at C
+            # speed. Only the root's own count is left to compare; walked one
+            # container at a time, a million records took seconds.
+            continue
         stack = [root]
         while stack:
             children = children_of(stack.pop())

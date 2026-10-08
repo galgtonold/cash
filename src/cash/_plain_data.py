@@ -215,6 +215,35 @@ def is_tree(value: Any, leaves: tuple | None = None) -> bool:
     return True
 
 
+def held_only_by_parents(value: Any, leaves: tuple) -> bool:
+    """Is *value* an exact list or dict of JSON-like data over *leaves*
+    (`tree_levels`) whose every dict, list and tuple below it is referenced
+    by its parent alone, and once?
+
+    Then nothing outside *value* reaches into it: a check for other holders
+    asks *value*'s own count and nothing below it. Read at C speed, a level
+    at a time, the way `sharing` reads a level: an item its parent holds
+    once has `_unshared_refs` references while the level's flat list holds
+    it too. A tuple held elsewhere counts as well, even one of leaves only
+    -- the answer can only err towards False, and the caller then walks.
+    """
+    if type(value) not in (list, dict):
+        return False
+    try:
+        for flat, types in tree_levels(value, leaves):
+            if types.isdisjoint(_NODES):
+                continue
+            if types <= _NODES:
+                items, extra = flat, 0
+            else:
+                items, extra = list(compress(flat, map(_NODES.__contains__, map(type, flat)))), 1
+            if max(map(sys.getrefcount, items)) > _unshared_refs() + extra:
+                return False
+    except (_NotPlain, TypeError):
+        return False
+    return True
+
+
 #: What a tree nests in (`tree_levels`): exact dicts, lists and tuples.
 TREE_NODES = (dict, list, tuple)
 _NODES = frozenset(TREE_NODES)
@@ -243,8 +272,9 @@ def tree_levels(value: Any, leaves: tuple | None = None):
             if len(kinds) == 1:
                 dicts, seqs = level, []
             else:
-                dicts = [c for c in level if type(c) is dict]
-                seqs = [c for c in level if type(c) is not dict]
+                is_dict = _of_kind(level, dict)
+                dicts = list(compress(level, is_dict))
+                seqs = list(compress(level, map(operator.not_, is_dict)))
             if not all(t in leaves for t in set(map(type, chain.from_iterable(dicts)))):
                 raise _NotPlain
             flat = list(chain.from_iterable(seqs))
@@ -257,7 +287,9 @@ def tree_levels(value: Any, leaves: tuple | None = None):
         yield flat, types
         if all(t in leaves for t in types):
             return
-        level = flat if all(t in TREE_NODES for t in types) else [x for x in flat if type(x) in TREE_NODES]
+        # The containers among leaves picked at C speed: a comprehension was
+        # a Python step per item, three million for a million records.
+        level = flat if all(t in TREE_NODES for t in types) else list(compress(flat, map(_NODES.__contains__, map(type, flat))))
     raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
 
 
