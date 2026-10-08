@@ -28,7 +28,7 @@ def test_a_shell_capture_read_below_does_not_warn(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
 
-    out = nb_runner.get_output(3)
+    out = nb_runner.get_raw_output(3)  # the warning is filtered from get_output
     assert "C ['a b']" in out
     assert "NOTEBOOK-MAGIC-STALE" not in out
 
