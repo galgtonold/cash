@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import dis
 import functools
+import importlib
 import inspect
 import operator
 import sqlite3
@@ -164,7 +165,8 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     ``del mylib.K``, ``setattr(mylib, "K", 7)``, ``mylib.REGISTRY.update(...)``
     and a call of a module function that changes the module's globals
     (``mylib.set_k(7)``, or ``set_k(7)`` imported from it), or of a notebook
-    function whose body does any of these. A reload runs the module's top
+    function whose body does any of these, and ``importlib.reload(mylib)``,
+    which sets every global anew. A reload runs the module's top
     level again and drops all of these; the notebook's cells that made them
     are what puts them back. A ``def`` sets nothing: its body runs when the
     function is called.
@@ -215,6 +217,12 @@ def _state_writes(
                         rooted(part)
         elif isinstance(node, ast.Call):
             func = node.func
+            if node.args and _called(func, namespace) is importlib.reload:
+                # A reload runs the module's top level again: every global it
+                # has is set anew, whatever the cells above set on it.
+                target = _called(node.args[0], namespace)
+                if isinstance(target, types.ModuleType) and _is_local(target):
+                    found.add(target.__name__)
             if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
                 target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
                 if isinstance(target, types.ModuleType) and _is_local(target):
