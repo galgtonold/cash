@@ -104,3 +104,20 @@ def test_a_container_wider_than_the_look_from_above_is_found_by_the_walk_up(refe
 
     assert set(holders) == {"wide"} and shared == set()
     assert referrer_calls
+
+
+def test_a_search_up_for_many_objects_gives_up_instead_of_walking_the_heap(referrer_calls, monkeypatch):
+    """``gc.get_referrers`` costs the heap times the objects asked about: a
+    record per session, all shared with a second variable, never finished.
+    Past `_MAX_REFERRER_TARGETS` the search gives up, so the statement is
+    refused (nothing stored) and no heap walk runs."""
+    monkeypatch.setattr(shared_objects, "_DOWN_NODES", 10)
+    sessions = [("user", [1.0, float(i)]) for i in range(shared_objects._MAX_REFERRER_TARGETS * 3)]
+    ns = {"logs": sessions}
+    ns["kept"] = [(name, actions) for name, actions in sessions]
+
+    holders, shared = _share(["kept"], ns)
+
+    assert holders == {}
+    assert shared == {"kept"}
+    assert referrer_calls == [], "the holder search walked the heap for every session"

@@ -733,6 +733,7 @@ class StatementProcessor:
                 f"a cache hit would not advance it, so the statement runs every time"
             )
             run.skip_cache = True
+            run.value_keyed_lineage = True
 
     def _lookup(
         self, run: StatementRun, analysis_time: float, hash_time: float
@@ -1234,7 +1235,7 @@ class StatementProcessor:
             accessed_files=execution.accessed_files,
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
-            no_cache=run.annotation is not None and run.annotation.no_cache,
+            no_cache=(run.annotation is not None and run.annotation.no_cache) or run.value_keyed_lineage,
         )
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.

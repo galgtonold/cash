@@ -488,6 +488,15 @@ def _find_holders(
     return _holders_from_referrers(targets, internal, user_ns, known)
 
 
+#: Most objects `_holders_from_referrers` looks the holders of at once.
+#: `gc.get_referrers` compares every reference of every tracked object with
+#: each object asked about, so the call costs the heap times their number: 87,573
+#: lists (a record per session, all shared with a second variable) did not
+#: finish in ten minutes, next to a statement that ran in 0.2 s. Past this
+#: the search gives up, which refuses the statement (nothing is stored; it
+#: runs as it always did).
+_MAX_REFERRER_TARGETS = 64
+
 #: How far `_holders_from_names` looks: containers deep, objects in all, and
 #: the largest container it reads. A holder past these is left to the search
 #: up `gc.get_referrers`.
@@ -594,6 +603,8 @@ def _holders_from_referrers(
     found: set[str] = set()
     level = targets
     for _depth in range(_MAX_DEPTH):
+        if len(level) > _MAX_REFERRER_TARGETS:
+            return None
         # Passed as one tuple, which the call hands on as it is: it is a
         # referrer too.
         args = tuple(level)
