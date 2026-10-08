@@ -134,7 +134,8 @@ def _changed_receivers(tree: ast.Module) -> set[str]:
 
 def magic_effects(node: ast.stmt, is_module: Callable[[str], bool]) -> tuple[set[str], set[str]]:
     """``(changed, read)``: the names the magic statement *node* binds or may
-    change, and every name it reads (the changed ones among them).
+    change, and every name it reads (among them the changed ones it does not
+    only bind, see `_only_bound`).
 
     The statement's own targets (``files = !ls``), and, for a line magic that
     runs a Python statement (``%time``, ``%timeit``, ``%prun``), what that

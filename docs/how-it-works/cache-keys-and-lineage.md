@@ -101,7 +101,7 @@ example `stmt:ffd3d255…`.
   itself, and the digest also goes into the lineage of what the statement
   assigns.
 
-<!-- claim: cash/notebook/upstream/simulated_callables.py:SimulatedCallables.register_def @37dee9bc -->
+<!-- claim: cash/notebook/upstream/simulated_callables.py:SimulatedCallables.register_def @448d76eb -->
 After a restart, cash computes these keys from the notebook's code before
 your `def` cells have run again, so a statement that calls a notebook
 function still hits.
@@ -153,7 +153,7 @@ d = c * 2      # lineage(d) folds in lineage(c)
 A statement's inputs come from the names it mentions. Two real dependencies
 are not among them, and each has its own part of the key.
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609 -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @e538facc, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
 therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
@@ -166,7 +166,7 @@ through a function defined in the notebook (`set_seed(42)`, whose body calls
 `random.seed` and `np.random.seed`) writes the variables as the calls written
 out would.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @5e1b5264 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @0ff7f4ba -->
 A draw inside a function the statement calls (`X = make_data(1000)`) names no
 module. The first run sees the seeded stream move, and from then on the
 statement's key reads that module's variable too. The value is stored under

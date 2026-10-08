@@ -588,9 +588,7 @@ class StatementLineage:
         recorded = self.tracking_state.variable_lineage
         return all(virtual_lineage.get(name, recorded.get(name)) == before for name, before in holders.items())
 
-    def _move_holders(
-        self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str]
-    ) -> set[str]:
+    def _move_holders(self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str]) -> set[str]:
         """Move on the lineage of each of *holders* from where it is now
         (``held_lineage``), as the runtime does; the names moved."""
         moved = set()

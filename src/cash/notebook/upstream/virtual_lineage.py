@@ -277,6 +277,7 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
+
         def in_notebook(code: str) -> bool:
             self.statements.set_notebook_functions(notebook_cells)
             return self.statements.in_notebook(code)

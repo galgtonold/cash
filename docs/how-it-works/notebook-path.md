@@ -29,7 +29,7 @@ flowchart TB
     R2 --> BD
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @e6d34517 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @4f3bd3f5 -->
 1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
    it was edited, cash works out from the notebook's code which statements
@@ -91,7 +91,7 @@ chain: each iteration depends only on its own item. See
 [call-level caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls)
 and [reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @75ed4110, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @95214586 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @75ed4110, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @8891589e -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,

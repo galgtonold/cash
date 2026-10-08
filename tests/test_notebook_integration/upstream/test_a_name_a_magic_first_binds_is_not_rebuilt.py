@@ -11,7 +11,9 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
-COUNT = "import os\ndef bump():\n    os.write(os.open('calls', os.O_WRONLY | os.O_APPEND | os.O_CREAT), b'c')\n    return 1"
+COUNT = (
+    "import os\ndef bump():\n    os.write(os.open('calls', os.O_WRONLY | os.O_APPEND | os.O_CREAT), b'c')\n    return 1"
+)
 
 
 def test_a_timed_line_runs_once_per_run_all(nb_runner):

@@ -794,7 +794,9 @@ class StatementProcessor:
         held = set((metadata.holders or {}) if metadata is not None else ())
         mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
         user_ns = self.shell.user_ns
-        names = {name for name in (run.outputs | held) - run.est_fit if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
+        names = {
+            name for name in (run.outputs | held) - run.est_fit if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER
+        }
         keep = (held | mutated) & names
         if not keep:
             return False
