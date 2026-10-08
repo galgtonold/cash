@@ -18,7 +18,7 @@ from .call_state import CAPTURE_WATCH
 from .closure_fold import iter_code_scopes
 from .global_reads import DOCSTRING_READS, MACHINERY_DUNDERS, bytecode_written_attrs
 from .global_values import UNHASHABLE_GLOBAL_FIX
-from .key_values import SYNC_TYPES, is_immutable_capture, stabilize_for_global_hash
+from .key_values import SYNC_TYPES, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
 from .user_code import is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
@@ -105,6 +105,55 @@ def class_surface_functions(cls: type) -> list[types.FunctionType]:
     return [f for f in found if not (id(f) in seen or seen.add(id(f)))]
 
 
+#: Dunder methods that build, copy, pickle or change an instance: what an
+#: instance runs when it is USED -- an operator, ``[]``, ``in``, ``with``,
+#: ``format`` -- is every other one (`implicit_access_functions`).
+_NOT_USE_DUNDERS = frozenset(
+    {
+        "__init__",
+        "__new__",
+        "__init_subclass__",
+        "__set_name__",
+        "__class_getitem__",
+        "__post_init__",
+        "__setattr__",
+        "__delattr__",
+        "__setitem__",
+        "__delitem__",
+        "__del__",
+        "__getstate__",
+        "__setstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__copy__",
+        "__deepcopy__",
+    }
+)
+
+
+def implicit_access_functions(cls: type) -> list[types.FunctionType]:
+    """The functions an instance of *cls* runs without a call the code spells
+    out: property and ``cached_property`` getters, and the dunder methods
+    an operator, a subscript, ``in``, ``with``, ``str()`` or ``format()``
+    runs. Its own and every user base's."""
+    found: list[types.FunctionType] = []
+    for base in _user_bases(cls):
+        for name, member in vars(base).items():
+            if isinstance(member, property):
+                found.extend(_function_layers(member.fget))
+            elif hasattr(member, "attrname") and isinstance(getattr(member, "func", None), types.FunctionType):
+                found.extend(_function_layers(member.func))  # functools.cached_property
+            elif name.startswith("__") and name.endswith("__") and name not in _NOT_USE_DUNDERS:
+                if isinstance(member, (staticmethod, classmethod)):
+                    member = member.__func__
+                if isinstance(member, types.FunctionType):
+                    found.extend(_function_layers(member))
+    seen: set[int] = set()
+    return [f for f in found if not (id(f) in seen or seen.add(id(f)))]
+
+
 def _is_class_machinery(name: str) -> bool:
     """A class-body name the class machinery owns (``__module__``,
     ``__slots__``, ``_abc_impl``...), never data the user reads."""
@@ -166,6 +215,8 @@ class ClassDataFold:
         #: (`GlobalsFold.fold_read_globals`), which a class's functions go
         #: through; bound by `GlobalsFold`, which is built after this.
         self._fold_reads: Callable[..., str] | None = None
+        #: `GlobalsFold.held_value_code_parts`, bound by `GlobalsFold`.
+        self._held_code: Callable[..., list[tuple[str, str]]] | None = None
         # class -> (its surface functions, the names their code reads); see
         # `class_parts`. A redefined class is a new key.
         self._class_code_cache: LruMemo[type, tuple[tuple, frozenset]] = LruMemo(CODE_OBJECTS)
@@ -178,6 +229,10 @@ class ClassDataFold:
     def bind_reads_fold(self, fold: Callable[..., str]) -> None:
         """Set the fold the globals a class's functions read go through."""
         self._fold_reads = fold
+
+    def bind_held_code(self, held: Callable[..., list[tuple[str, str]]]) -> None:
+        """Set the fold of the code a data value holds (`GlobalsFold.held_value_code_parts`)."""
+        self._held_code = held
 
     def class_parts(
         self,
@@ -244,6 +299,29 @@ class ClassDataFold:
         if unhashable:
             self._warn_unhashable_class_data(func_name, unhashable, read_names, reader)
         parts.extend(self._function_read_parts(functions, excluded, label, func_name, owner_code, seen))
+        parts.extend(self._held_code_parts(cls, label, func_name, owner_code, learned))
+        return parts
+
+    def _held_code_parts(
+        self, cls: type, label: str, func_name: str, owner_code: Any, learned: frozenset
+    ) -> list[tuple[str, str]]:
+        """Key parts for the code a class attribute holds as data: a list of
+        step functions (``DEFAULT_STEPS = [scale]``), a registry of
+        classes. Their pickle names them, so what they read -- ``x * RATE``
+        -- is folded here (`GlobalsFold.held_value_code_parts`)."""
+        if self._held_code is None:
+            return []
+        parts: list[tuple[str, str]] = []
+        own_pkg = own_package(cls)
+        for item_label, value in self._class_data_items(cls):
+            member = f"{label}:{item_label}"
+            if member in learned or plain_data_kind(value) is not None:
+                continue
+            if isinstance(value, (type, types.ModuleType)) or (
+                callable(value) and not isinstance(value, (dict, list, tuple, set, frozenset))
+            ):
+                continue  # code itself: its class surface keys it
+            parts.extend(self._held_code(member, value, func_name, owner_code, own_pkg))
         return parts
 
     def _held_data_parts(self, cls: type, label: str, learned: frozenset) -> tuple[list[tuple[str, str]], list[str]]:

@@ -38,6 +38,7 @@ from ..effects import (
     dotted_name,
     environ_membership,
     environment_input,
+    reads_argv,
 )
 from ..purity import KNOWN_PURE_BUILTINS
 from .ambient_reads import ambient_call, clock_helper_of
@@ -263,7 +264,17 @@ class PurityVisitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load):
             self.read_names[node.id] = None
+            self._argv_read(node)
         self.generic_visit(node)
+
+    def _argv_read(self, node: ast.AST) -> bool:
+        """``sys.argv`` (or ``argv`` from ``from sys import argv``): the
+        command line, an input the key folds (`cash.effects.reads_argv`)."""
+        if not reads_argv(node, self._namespace):
+            return False
+        if DECORATOR_POLICY[EffectKind.ENVIRONMENT] is Action.CACHE_AS_INPUT and id(node) not in self._log_only:
+            self.environment_reads.add(("argv", ""))
+        return True
 
     def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Name):
@@ -310,6 +321,7 @@ class PurityVisitor(ast.NodeVisitor):
             return
         if isinstance(node.ctx, ast.Load) and isinstance(node.value, (ast.Name, ast.Attribute)):
             self.read_attributes.append(node)
+        self._argv_read(node)
         if dotted_name(node.value) in STDIN_NAMES:
             # `sys.stdin.read()` is judged as a call; `.isatty()` reads nothing.
             self._stdin_attributes.add(id(node.value))

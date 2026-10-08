@@ -54,9 +54,8 @@ from .class_data import CLASSES_FOLDED
 from .closure_fold import EVERY_PARAMETER, defaults_of
 from .dynamic_sources import (
     Resolution,
-    asked_again_here,
     dynamic_sources_fresh,
-    held_resolutions,
+    entry_resolutions,
     held_sources,
     recorded_sources,
 )
@@ -171,17 +170,15 @@ def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
 
 
 def _resolution_of(
-    func_name: str, resolvers: Any, args: tuple, kwargs: dict, sources: list[tuple[Any, str]]
+    spec: CachedFunction, resolvers: Any, args: tuple, kwargs: dict, sources: list[tuple[Any, str]]
 ) -> dict[tuple, Resolution]:
     """The resolver call that just resolved to *sources*, keyed so that the
     same call met again in one block is held once (`Resolution`)."""
+    func_name = spec.name
     expected = [(source.get_id(), token) for source, token in sources]
-
-    def redo() -> list[tuple[str, str]]:
-        now: list[tuple[Any, str]] = []
-        resolve_dynamic_dependencies(func_name, resolvers, args, kwargs, now)
-        return [(source.get_id(), token) for source, token in now]
-
+    func = spec.func
+    module, qualname = getattr(func, "__module__", None), getattr(func, "__qualname__", "")
+    owner = (module, qualname) if module and "<locals>" not in qualname else None
     key = (
         func_name,
         id(resolvers),
@@ -189,7 +186,7 @@ def _resolution_of(
         tuple((k, id(v)) for k, v in kwargs.items()),
         tuple(expected),
     )
-    return {key: Resolution(redo, expected)}
+    return {key: Resolution(func_name, resolvers, args, kwargs, expected, owner)}
 
 
 def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -481,7 +478,7 @@ class KeyBuilder:
                 raise
             if spec.dynamic_depends_on and not _EXPLAINING.get():
                 pass_dynamic_sources_up(
-                    dynamic_sources, _resolution_of(func_name, spec.dynamic_depends_on, args, kwargs, dynamic_sources)
+                    dynamic_sources, _resolution_of(spec, spec.dynamic_depends_on, args, kwargs, dynamic_sources)
                 )
             failure: list = []
             if keyed is normalized_args:
@@ -701,7 +698,7 @@ class CallRunner:
             propagate_file_deps_to_active_tracker(metadata, func_name)
             # And the sources its callees resolved, which the verdict just
             # found unchanged: the enclosing call depends on them too.
-            if metadata.dynamic_sources or asked_again_here(cache_key):
+            if metadata.dynamic_sources or metadata.dynamic_resolvers:
                 held = (
                     held_sources(cache_key, metadata.dynamic_sources, self._stored_source)
                     if metadata.dynamic_sources
@@ -710,7 +707,7 @@ class CallRunner:
                 if held is not None:
                     pass_dynamic_sources_up(
                         [(source, record["token"]) for source, record in zip(held, metadata.dynamic_sources or [])],
-                        held_resolutions(cache_key),
+                        entry_resolutions(cache_key, metadata.dynamic_resolvers, self._stored_source),
                     )
             # Re-attach the lineage hash to the restored value. It's a plain
             # attribute that doesn't survive pickling, so a value restored
@@ -758,8 +755,8 @@ class CallRunner:
             return MissReason(MissKind.TTL, f"the entry is {age:.1f}s old and ttl={ttl}s")
         if not self._files.auto_file_deps_fresh(metadata, quiet=quiet):
             return MissReason(MissKind.FILE, describe_stale_files(metadata))
-        if (metadata.dynamic_sources or asked_again_here(cache_key)) and not dynamic_sources_fresh(
-            cache_key, metadata.dynamic_sources or [], self._stored_source
+        if (metadata.dynamic_sources or metadata.dynamic_resolvers) and not dynamic_sources_fresh(
+            cache_key, metadata.dynamic_sources or [], self._stored_source, metadata.dynamic_resolvers
         ):
             return MissReason(
                 MissKind.DYNAMIC,

@@ -277,6 +277,14 @@ class HelperWalk:
             return
 
         func_def = None if entry.hash_only else _find_first_function_def(tree)
+        if func_def is None and not entry.hash_only and _is_lambda(func):
+            # A lambda's source is the statement it sits in: its body is
+            # audited as the function it is (`_lambda_as_def`), so
+            # `STEPS = [lambda x: x + os.environ["MODE"]]` keys MODE as
+            # the same read in a def does.
+            func_def = _lambda_as_def(func, tree)
+            if func_def is not None:
+                self._queue_bytecode_refs(entry)
         if func_def is None:
             # Followed for the cache key, not audited. Either a hash-only
             # entry, where reporting every ``self.x = x`` in an ordinary
@@ -797,6 +805,49 @@ def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssu
         dataclasses.replace(issue, line=issue.line + first - 1 if issue.line else 0, filename=filename)
         for issue in issues
     ]
+
+
+def _is_lambda(func: Any) -> bool:
+    return isinstance(func, types.FunctionType) and func.__code__.co_name == "<lambda>"
+
+
+def _lambda_as_def(func: types.FunctionType, tree: ast.AST) -> ast.FunctionDef | None:
+    """The ``lambda`` in *tree* (the statement *func*'s source is) that is
+    *func*, as the ``def`` it stands for: its arguments, and ``return`` its
+    body. Found by where its code's instructions sit; None when no lambda
+    in the statement holds them all."""
+    code = func.__code__
+    try:
+        first = getsourcelines(func)[1]
+    except SOURCE_RETRIEVAL_ERRORS:
+        return None
+    offset = first - 1
+    spots = [
+        (line - offset, col)
+        for line, _, col, end_col in code.co_positions()
+        # Not the RESUME the code starts with, which sits at column 0.
+        if line is not None and col is not None and end_col is not None and end_col > col
+    ]
+    best = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Lambda) or node.end_lineno is None or node.end_col_offset is None:
+            continue
+        start, end = (node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset)
+        if spots and all(start <= spot <= end for spot in spots):
+            if best is None or (start >= (best.lineno, best.col_offset)):
+                best = node  # the innermost lambda that holds them
+    if best is None:
+        return None
+    func_def = ast.FunctionDef(
+        name="<lambda>",
+        args=best.args,
+        body=[ast.copy_location(ast.Return(value=best.body), best.body)],
+        decorator_list=[],
+        returns=None,
+        type_comment=None,
+        type_params=[],
+    )
+    return ast.fix_missing_locations(ast.copy_location(func_def, best))
 
 
 def _find_first_function_def(tree: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:

@@ -19,6 +19,9 @@ __all__ = [
     "ARGUMENTS",
     "CODE_OBJECTS",
     "COMPILED_MODULES",
+    "DYNAMIC_RESOLUTIONS",
+    "DYNAMIC_RESOLUTION_BYTES",
+    "DYNAMIC_SOURCE_ENTRIES",
     "FILE_DIGESTS",
     "FRAMES",
     "FROZEN_RESULTS",
@@ -34,6 +37,7 @@ __all__ = [
     "RESULT_TYPES",
     "SOURCE_FILES",
     "STATEMENTS",
+    "TABLES",
     "STATE_LEDGERS",
     "USER_CALLEES",
     "LruMemo",
@@ -157,6 +161,23 @@ PURITY_REPORTS = 500
 #: One compiled module per source file compared with the code it loaded; each
 #: holds the file's whole tree of code objects.
 COMPILED_MODULES = 256
+
+#: One set of ``dynamic_depends_on=`` source objects per caller entry this
+#: process stored or read; the objects are asked for their tokens on a hit.
+DYNAMIC_SOURCE_ENTRIES = 1024
+
+#: One set of resolver calls per caller entry, each holding its call's
+#: arguments; or one unpickled resolver call. A dropped one is read back
+#: from the entry.
+DYNAMIC_RESOLUTIONS = 256
+
+#: The pickled size of the resolver calls' arguments kept at most: a
+#: service passing arrays through a loader keeps the latest few.
+DYNAMIC_RESOLUTION_BYTES = 64 << 20
+
+#: One snapshot per table of functions a cached function reads, with what
+#: was built from it (`decorator.code_tables.CodeTable`).
+TABLES = 256
 
 #: One revalidation token per remote URL.
 REMOTE_URLS = 1024

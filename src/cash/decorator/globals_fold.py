@@ -14,9 +14,13 @@ from typing import TYPE_CHECKING, Any
 from ..analysis.helper_bindings import resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
-from ..dependency_state import ledger_note
+from .._memo import TABLES, LruMemo
+from ..analysis.helper_code import own_code_is_user, qualname_of
+from ..dependency_state import STATE_LEDGER, ledger_note
+from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
+from .code_tables import CodeTable
 from .global_values import UNHASHABLE_GLOBAL_FIX
 from .key_values import (
     carried_payload,
@@ -66,6 +70,79 @@ class _ReadsFold:
     classes: list[type] = field(default_factory=list)
 
 
+@dataclass
+class _HeldTable:
+    """What `GlobalsFold.held_value_code_parts` built for a table of plain
+    functions, and what building it left behind -- the drift guard's watch,
+    the ledger, the functions folded this key build -- to be left again when
+    the snapshot still holds."""
+
+    table: CodeTable
+    owner_code: Any
+    learned: frozenset
+    parts: tuple
+    env: frozenset
+    watch: dict
+    ledger: dict
+    folded: dict
+    #: The digest of *parts* when there is no environment read, once taken
+    #: (`GlobalsFold.captured_code_digest`).
+    digest: str | None = None
+
+
+@dataclass
+class _Taken:
+    """The state of a key build before a table's parts are built."""
+
+    watch: dict | None
+    ledger: dict | None
+    folded: dict | None
+
+    @classmethod
+    def before(cls, folded: dict | None) -> _Taken:
+        watch, ledger = CAPTURE_WATCH.get(), STATE_LEDGER.get()
+        return cls(
+            None if watch is None else dict(watch),
+            None if ledger is None else dict(ledger),
+            None if folded is None else dict(folded),
+        )
+
+    def after(
+        self, table: CodeTable, owner_code: Any, learned: Any, parts: list, env: set, folded: dict | None
+    ) -> _HeldTable:
+        return _HeldTable(
+            table,
+            owner_code,
+            frozenset(learned),
+            tuple(parts),
+            frozenset(env),
+            _added(self.watch, CAPTURE_WATCH.get()),
+            _added(self.ledger, STATE_LEDGER.get()),
+            _added(self.folded, folded),
+        )
+
+
+def _added(before: dict | None, now: dict | None) -> dict:
+    """What *now* holds that *before* did not hold the same."""
+    if now is None:
+        return {}
+    if before is None:
+        return dict(now)
+    return {k: v for k, v in now.items() if k not in before or before[k] is not v}
+
+
+def _replay(entry: _HeldTable, folded: dict | None) -> None:
+    """Leave behind what building *entry* left: its watch, ledger and folds."""
+    watch = CAPTURE_WATCH.get()
+    if watch is not None and entry.watch:
+        watch.update(entry.watch)
+    ledger = STATE_LEDGER.get()
+    if ledger is not None and entry.ledger:
+        ledger.update(entry.ledger)
+    if folded is not None and entry.folded:
+        folded.update(entry.folded)
+
+
 class GlobalsFold:
     """The module data a function reads, and the functions it reaches read,
     folded into the state segment: the cached function's own globals, its
@@ -91,10 +168,15 @@ class GlobalsFold:
         self._classes = classes
         self._attrs = attrs
         classes.bind_reads_fold(self.fold_read_globals)
+        classes.bind_held_code(self.held_value_code_parts)
+        attrs.bind_held_code(self.held_value_code_parts)
         self._code = code
         self._registry = registry
         self._mutations = mutations
         self._notices = notices
+        #: (label, function, owner code, id(value)) -> what a table of plain
+        #: functions held as data made of the key last time (`held_value_code_parts`).
+        self._held_tables: LruMemo[tuple, _HeldTable] = LruMemo(TABLES)
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
@@ -207,7 +289,7 @@ class GlobalsFold:
         pending = CAPTURE_WATCH.get()
         if pending is not None:
             pending.update(fold.watch)
-        parts.extend(self._attrs.local_binding_parts(func))
+        parts.extend(self._attrs.local_binding_parts(func, func_name, drift_owner))
         if code is not None and self._reads.reads_docstrings(code):
             parts.extend(self._attrs.docstring_parts(code, g, fold.own_pkg))
         parts.extend(self._default_parts(fold))
@@ -304,9 +386,120 @@ class GlobalsFold:
 
     def _held_code_parts(self, fold: _ReadsFold, name: str, v: Any) -> list[tuple[str, str]]:
         """Key parts for the user code the value *v* of global *name* holds,
-        which its pickle names only by reference."""
+        which its pickle names only by reference (`held_value_code_parts`)."""
+        return self.held_value_code_parts(name, v, fold.func_name, fold.drift_owner, fold.own_pkg)
+
+    def held_value_code_parts(
+        self, label: str, v: Any, func_name: str, owner_code: Any, own_pkg: str | None
+    ) -> list[tuple[str, str]]:
+        """Key parts for the user code the data value *v* holds -- a global,
+        a ``module.ATTR``, a class attribute -- which its pickle names only
+        by reference: the classes of the instances in it, the functions and
+        classes in it and what that code reads, its environment reads at
+        their current values. *owner_code* is the cached function's code,
+        for the drift guard."""
+        parts, env, _entry = self._held_parts(
+            ("global", label, func_name, id(owner_code), id(v)),
+            v,
+            owner_code,
+            lambda env: self._held_code_parts_now(label, v, func_name, owner_code, own_pkg, env),
+        )
+        if env:
+            component = environment_component(env, note=lambda what, digest: ledger_note(("env", what), digest))
+            parts.append((f"{label}#env", hashlib.sha256(component.encode("utf-8")).hexdigest()))
+        return parts
+
+    def captured_code_digest(self, name: str, v: Any, func_name: str, owner_code: Any) -> str | None:
+        """The digest of the user code a captured container *v* holds and of
+        what that code reads, environment reads at their current values
+        (`CodeArgs.carrier_parts`); None when it holds none. Kept per version
+        of a table of plain functions, as `held_value_code_parts`."""
+        if self.code_args is None:
+            return None
+        code_args = self.code_args
+        memo_key = ("closure", name, func_name, id(owner_code), id(v))
+        parts, env, entry = self._held_parts(
+            memo_key,
+            v,
+            owner_code,
+            lambda env: code_args.carrier_parts(v, func_name, owner_code=owner_code, env_entries=env),
+        )
+        if env:
+            component = environment_component(env, note=lambda what, digest: ledger_note(("env", what), digest))
+            parts.append(f"argenv:{component}")
+        if not parts:
+            return None
+        # The join of 1000 functions' parts is hashed once per version.
+        if not env and entry is not None and entry.digest is not None:
+            return entry.digest
+        digest = hashlib.sha256(":".join(sorted(set(parts))).encode("utf-8")).hexdigest()
+        if not env and entry is not None:
+            entry.digest = digest
+        return digest
+
+    def _held_parts(
+        self, memo_key: tuple, v: Any, owner_code: Any, build: Callable[[set], list]
+    ) -> tuple[list, set, _HeldTable | None]:
+        """*build*'s parts for *v*, the environment reads it found and the
+        memo entry that stands for them, if any: from the memo while *v*'s
+        `CodeTable` snapshot holds. The environment is read at its current
+        values by the caller, never kept."""
+        entry = self._held_tables.get(memo_key)
+        folded = READS_FOLDED.get()
+        if entry is not None and self._table_entry_holds(entry, v, owner_code, folded):
+            _replay(entry, folded)
+            return list(entry.parts), set(entry.env), entry
+        table = self._held_table(v, owner_code, folded)
+        before = _Taken.before(folded) if table is not None else None
+        env: set = set()
+        parts = build(env)
+        if table is None or before is None:
+            self._held_tables.pop(memo_key, None)
+            return parts, env, None
+        entry = before.after(table, owner_code, self._mutations.of(owner_code, "global"), parts, env, folded)
+        self._held_tables[memo_key] = entry
+        return parts, env, entry
+
+    def _held_table(self, v: Any, owner_code: Any, folded: dict | None) -> CodeTable | None:
+        """A `CodeTable` snapshot of *v* that can stand for what its code
+        parts are built from, or None to build them on every call: the
+        functions call no helper and read only what the snapshot checks,
+        and none of them was folded earlier in this key build (which
+        changes what folding them adds)."""
+        table = CodeTable.of(v)
+        if table is None or not table.with_names():
+            return None
+        for fn in table.functions:
+            if folded is not None and (id(fn), id(owner_code), ()) in folded:
+                return None
+            if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+                continue
+            try:
+                report = get_analyzer().analyze_reached(fn)
+            except Exception:  # noqa: BLE001 - built on every call instead
+                return None
+            if (
+                report.unwalkable
+                or report.unkeyable
+                or set(report.helper_source_hashes) - {qualname_of(fn)}
+                or report.helper_bindings
+                or report.helper_objects
+                or report.cached_callees
+            ):
+                return None
+        return table
+
+    def _table_entry_holds(self, entry: _HeldTable, v: Any, owner_code: Any, folded: dict | None) -> bool:
+        if entry.owner_code is not owner_code or not entry.table.holds(v):
+            return False
+        if self._mutations.of(owner_code, "global") != entry.learned:
+            return False
+        return folded is None or not any((id(fn), id(owner_code), ()) in folded for fn in entry.table.functions)
+
+    def _held_code_parts_now(
+        self, label: str, v: Any, func_name: str, owner_code: Any, own_pkg: str | None, env: set
+    ) -> list[tuple[str, str]]:
         parts: list[tuple[str, str]] = []
-        own_pkg = fold.own_pkg
         # A pre-built user-class INSTANCE (or a container of them) is only
         # value-hashed -- its class's method SOURCE is invisible to the
         # pickle. Fold the class-graph source too (memoized per class; see
@@ -314,7 +507,7 @@ class GlobalsFold:
         for item in iter_contained(v):
             if is_user_class(type(item), own_pkg):
                 for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
-                    parts.append((f"{name}#cls:{cname}", chash))
+                    parts.append((f"{label}#cls:{cname}", chash))
             elif isinstance(item, type) and is_user_class(item, own_pkg):
                 # The CLASS itself, not an instance of it: `TABLE = {"fast":
                 # impl.Fast}` pickles by reference, so editing `Fast.run`
@@ -322,17 +515,17 @@ class GlobalsFold:
                 # followed.
                 surface = self._code.code_surface_hash(item)
                 if surface is not None:
-                    parts.append((f"{name}#cls:{item.__qualname__}", surface))
+                    parts.append((f"{label}#cls:{item.__qualname__}", surface))
         # Code deeper in: an instance held in a tuple in a list, a
         # function an instance holds (`Runner(scale)`), a user transformer
         # inside a library pipeline. The pickle has them by name
         # only, and the one-level look above does not reach them; the
         # argument walk does, so a global goes through it too.
         if self.code_args is not None:
-            code_parts = self.code_args.carrier_parts(v, fold.func_name, owner_code=fold.drift_owner)
+            code_parts = self.code_args.carrier_parts(v, func_name, owner_code=owner_code, env_entries=env)
             if code_parts:
                 digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
-                parts.append((f"{name}#code", digest))
+                parts.append((f"{label}#code", digest))
         return parts
 
     def _default_parts(self, fold: _ReadsFold) -> list[tuple[str, str]]:
@@ -423,7 +616,7 @@ class GlobalsFold:
         Raises `KeyBuildFailed` when the helpers cannot be found.
         """
         try:
-            report = get_analyzer().analyze(fn)
+            report = get_analyzer().analyze_reached(fn)
         except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
             report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({type(e).__name__}: {e})")
         if report.unwalkable:

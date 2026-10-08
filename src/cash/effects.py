@@ -44,6 +44,7 @@ from typing import Any, NamedTuple
 
 __all__ = [
     "CLOCK_WHEN_ARG_CALLS",
+    "ARGV_PARSER_METHODS",
     "ENVIRON_KEYED_METHODS",
     "ENVIRON_NAMES",
     "METHOD_VERBS",
@@ -61,6 +62,7 @@ __all__ = [
     "environment_parts_component",
     "environment_input",
     "is_open_write_mode",
+    "reads_argv",
     "writes_to_console",
 ]
 
@@ -397,6 +399,11 @@ ENVIRON_NAMES: frozenset[str] = frozenset({"os.environ", "environ", "os.environb
 #: to a reader (``json.load(sys.stdin)``), it is read like ``input()``.
 STDIN_NAMES: frozenset[str] = frozenset({"sys.stdin", "sys.stdin.buffer"})
 
+#: ``argparse`` parser methods that read ``sys.argv`` when no list is given.
+ARGV_PARSER_METHODS: frozenset[str] = frozenset(
+    {"parse_args", "parse_known_args", "parse_intermixed_args", "parse_known_intermixed_args"}
+)
+
 #: Methods of the environment that change it (a side effect, not a read of
 #: it) or read one named variable (folded like a subscript).
 ENVIRON_KEYED_METHODS: frozenset[str] = frozenset(
@@ -652,6 +659,8 @@ def environment_input(
     counts as written out: ``os.environ.get(ENV_NAME)``.
     """
     constants = namespace if resolve_constants else None
+    if reads_argv(node, namespace):
+        return ("argv", "")
     if is_environ_read(node):
         return _env_entry(node.slice, constants)  # type: ignore[attr-defined]
     if environ_membership(node) is not None:
@@ -674,6 +683,26 @@ def environment_input(
         return _env_entry(_literal_arg(node, 0, "key"), constants)
     name = _variable_name(_literal_arg(node, 0, "path"))
     return (helper[0], name) if name is not None else None
+
+
+def reads_argv(node: ast.AST, namespace: Mapping[str, Any] | None = None) -> bool:
+    """Does *node* read the command line? ``sys.argv`` (``argv`` after
+    ``from sys import argv``, ``_sys.argv`` after ``import sys as _sys``),
+    or an ``argparse`` parser's ``parse_args()`` given no list of its own.
+
+    The command line is the script's twin of the environment: ``python
+    app.py 4`` after ``python app.py 0`` is another input, folded into the
+    key as ``("argv", "")``."""
+    if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load) and node.attr == "argv":
+        if dotted_name(node) == "sys.argv":
+            return True
+        base = node.value
+        return isinstance(base, ast.Name) and namespace is not None and namespace.get(base.id) is sys
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+        return namespace is not None and node.id != "sys" and namespace.get(node.id) is sys.argv
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ARGV_PARSER_METHODS:
+        return not node.args and not any(kw.arg in ("args", None) for kw in node.keywords)
+    return False
 
 
 def _env_entry(node: ast.AST | None, constants: Mapping[str, Any] | None) -> EnvironmentInput | None:
@@ -701,6 +730,7 @@ _ENVIRONMENT_LABELS = {
     "tempdir": "the temporary directory",
     "user": "the login name",
     "env_global": "the environment variable {name}",
+    "argv": "the command line",
 }
 
 
@@ -728,6 +758,8 @@ def _environment_value(kind: str, name: str) -> str | None:
         import getpass
 
         return getpass.getuser()
+    if kind == "argv":
+        return repr(sys.argv)
     if kind == "env_global":
         module, _, constant = name.partition(":")
         variable = getattr(sys.modules.get(module), constant, None)

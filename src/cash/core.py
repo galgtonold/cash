@@ -407,6 +407,7 @@ class Cash:
         )
         self._code_args = CodeArgs(self._code, self._globals, self._values, self._classes, self._frozen, self._args)
         self._closures.code_args = self._code_args
+        self._closures.held_code = self._globals.captured_code_digest
         self._rng = RngWatch(self._registry, self._backend_slot, self._notices)
         self._files = FileDeps(self._registry, self._notices)
         self._purity = PurityChecks(

@@ -263,6 +263,9 @@ class Wrappers:
         # reload) reaches the caller's key.
         stats_wrapper._cash_state = lambda: self._keys.callee_state(cf)
         stats_wrapper._cash_effective_ttl = lambda: self._registry.effective_ttl(func_name, cf.ttl)
+        # Its resolvers, for a resolver call pickled by reference to this
+        # function (`dynamic_sources.Resolution`): a lambda does not pickle.
+        stats_wrapper._cash_dynamic_depends_on = cf.dynamic_depends_on
         expose_script_function(func, stats_wrapper)
         cf.wrapper = stats_wrapper
 

@@ -81,7 +81,7 @@ file stat, so an unchanged file costs one `stat` per lookup.
 
 ## Cached functions that call it
 
-<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @9f602771, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @354b91a8, cash/decorator/dynamic_sources.py:held_sources @a009e761 -->
+<!-- claim: cash/decorator/file_deps.py:pass_dynamic_sources_up @9f602771, cash/decorator/dynamic_sources.py:dynamic_sources_fresh @d071cce5, cash/decorator/dynamic_sources.py:held_sources @a009e761 -->
 A cached function that calls `load` depends on the same sources, though its
 own key never sees them. cash keeps them in its entry instead:
 
@@ -94,12 +94,20 @@ own key never sees them. cash keeps them in its entry instead:
   A source that pickles to more than 4 kB (one that carries data) is
   stored once, beside the entries, and each caller's entry names it.
 
-In the process that wrote the entry, the source object itself is asked, and
-so is the resolver, with the arguments `load` was called with: a resolver
-that hands out a new source object after a catalog refresh, or names another
-file, recomputes the caller even when the old object still gives its old
-token. That process holds those arguments for as long as it holds the entry.
-A later process asks the copy pickled with the entry, so **`state_token()` must
+<!-- claim: cash/decorator/dynamic_sources.py:Resolution @9cd04e3d , cash/decorator/dynamic_sources.py:entry_resolutions @725d4d04 -->
+The resolver is asked again too, with the arguments `load` was called with,
+on every lookup of the caller and in every process: a resolver that hands
+out a new source object after a catalog refresh, or names another file,
+recomputes the caller even when the old object still gives its old token.
+The call is kept in the caller's entry, pickled (a resolver that does not
+pickle, such as a `lambda`, by the name of the cached function it is
+declared on), and comes back from a process pool's workers with their
+sources. A call whose arguments pickle to more than 4 kB (an array, a frame)
+is not copied into the cache: the process that made it keeps it, up to
+64 MB of such arguments, the most recent first; past that, or in another
+process, its caller recomputes.
+In the process that wrote the entry, the source object itself is asked; a
+later process asks the copy pickled with the entry, so **`state_token()` must
 read the version from where it lives** (the catalog, the database, the
 server), not from an attribute the object set when it was made, as
 `DatasetVersion` above does.

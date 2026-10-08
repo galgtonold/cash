@@ -524,6 +524,7 @@ class ResultStore:
                 # The non-file sources its cached callees resolved, with their
                 # tokens: a lookup asks them again (`dynamic_sources_fresh`).
                 dynamic_sources=(dynamic.records or None) if dynamic is not None else None,
+                dynamic_resolvers=(dynamic.resolver_records or None) if dynamic is not None else None,
                 process_local=True if dynamic is not None and not dynamic.picklable else None,
                 **(request.manifest or {}),
             )
