@@ -168,8 +168,9 @@ def test_a_stall_in_the_first_calls_does_not_decide(call_unit_harness, slow_look
     """A call worth caching -- 10 ms of work behind a 2 ms lookup -- whose
     first call stalls for 300 ms. The mean of the first five calls through
     the cache is over four times their work; their median is not, and the
-    site is not judged until ``_GUARD_AFTER_CALLS``, where the plain samples
-    keep it cached."""
+    site is not judged until ``_GUARD_AFTER_CALLS``, where the samples keep
+    it cached. Those samples are still looked up (see
+    ``test_the_calls_of_the_re_check_are_still_looked_up_and_stored``)."""
     ran: list[int] = []
     note = ran.append
 
@@ -183,14 +184,15 @@ def test_a_stall_in_the_first_calls_does_not_decide(call_unit_harness, slow_look
 
     assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
 
-    assert len(slow_lookup) == N - cu._PLAIN_SAMPLES, "a stall ran a call worth caching plain"
+    assert len(slow_lookup) == N, "a stall ran a call worth caching plain"
 
 
 def test_an_early_verdict_to_cache_is_judged_again_later(call_unit_harness, slow_lookup, clock):
     """The first calls look plain (0.1 ms of work behind a 2 ms lookup, each
     stored with the cost floor off), but the plain samples taken then are
     slow: the site stays cached, and is timed again on fresh samples at
-    ``_GUARD_AFTER_CALLS``, where it runs plain."""
+    ``_GUARD_AFTER_CALLS`` -- calls still looked up -- after which it runs
+    plain."""
     ran: list[int] = []
     note = ran.append
     first_samples = range(cu._GUARD_MIN_CALLS + 1, cu._GUARD_MIN_CALLS + cu._PLAIN_SAMPLES + 1)
@@ -206,7 +208,9 @@ def test_an_early_verdict_to_cache_is_judged_again_later(call_unit_harness, slow
 
     assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
 
-    assert len(slow_lookup) == cu._GUARD_AFTER_CALLS
+    assert len(slow_lookup) == cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES
+    # Its later calls can skip the wrapper (``CallCache.resolve``).
+    assert SITE in unit.plain_sites
 
 
 def test_every_call_is_counted_including_the_plain_ones(call_unit_harness, slow_lookup):
@@ -366,4 +370,29 @@ def test_calls_the_cache_keeps_stay_cached(call_unit_harness, slow_lookup, clock
     wrapped = unit.wrap(work, SITE)
     assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
 
-    assert len(slow_lookup) == N - cu._PLAIN_SAMPLES
+    assert len(slow_lookup) == N
+
+
+def test_the_calls_of_the_re_check_are_still_looked_up_and_stored(call_unit_harness, slow_lookup, clock):
+    """The re-check at ``_GUARD_AFTER_CALLS`` used to run its sample calls
+    plain -- neither looked up nor stored, whatever they cost -- so the 51st to
+    55th calls of ``[work(i) for i in range(60)]``, 0.6 s each, ran again on
+    every re-run while the other calls were served. They go through the cache
+    now, and a second run of the statement serves every call."""
+    slow = range(cu._GUARD_AFTER_CALLS, cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES)
+
+    def work(v):
+        clock.spend(0.6 if v in slow else 0.01)
+        return v * 2
+
+    unit = call_unit_harness(lineage={"work": "w"}, user_ns={})
+    wrapped = unit.wrap(work, SITE)
+    assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
+    unit.drain()
+
+    unit.begin_statement()
+    assert [wrapped(i) for i in range(N)] == [i * 2 for i in range(N)]
+    events = unit.drain()
+    served = sum(e["calls"] for e in events if e["cache_hit"])
+    computed = sorted({e["call_source"] for e in events if not e["cache_hit"]})
+    assert served == N, f"{N - served} calls ran again on a re-run ({computed})"

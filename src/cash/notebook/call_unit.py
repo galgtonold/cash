@@ -278,6 +278,9 @@ class _SiteRun:
     plain_samples: list[float] = dataclasses.field(default_factory=list)
     decided: bool = False
     plain: bool = False
+    #: The median of the plain samples the site was decided on: what one of
+    #: its calls is counted as taking once it runs plain.
+    plain_s: float = 0.0
 
 
 #: Where warnings re-emitted for a cash frame are de-duplicated, per file.
@@ -408,7 +411,7 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
     # run; on the cached side the first call also builds what later keys
     # reuse.
     cached = statistics.median(run.spent)
-    plain = statistics.median(run.plain_samples)
+    plain = run.plain_s = statistics.median(run.plain_samples)
     keyed = statistics.median(run.keyed)
     # Too dear to cache, or a hit could not save a quarter of
     # the call: a hit pays the key and lookup, then the restore.
@@ -624,9 +627,15 @@ class CallUnit:
                 started = _perf_counter()
                 result = fn(*args, **kwargs)
                 _log_plain(_perf_counter() - started)
+                if site not in self.plain_sites:
+                    # Decided at the re-check, whose calls are not logged as
+                    # run plain: the record exists from this call on.
+                    record = self._plain_records.get((names[0], site.source, site.occurrence_index))
+                    if record is not None:
+                        self.plain_sites[site] = [fn, record, run.plain_s, 0]
                 self.last_returned = (None, id(result), site.source)
                 return result
-            if run.probing:
+            if run.probing and run.calls < _GUARD_AFTER_CALLS:
                 started = _perf_counter()
                 result = fn(*args, **kwargs)
                 took = _perf_counter() - started
@@ -636,7 +645,7 @@ class CallUnit:
                     _decide_site(run, site)
                     record = self._plain_records.get((names[0], site.source, site.occurrence_index)) if names else None
                     if run.plain and record is not None:
-                        self.plain_sites[site] = [fn, record, statistics.median(run.plain_samples), 0]
+                        self.plain_sites[site] = [fn, record, run.plain_s, 0]
                 self.last_returned = (None, id(result), site.source)
                 return result
             self._last_key_s = None
@@ -660,6 +669,21 @@ class CallUnit:
                 self._add_to_clocks(invocation, spent, tracking_seconds() - tracked if outside else None)
             run.calls += 1
             if run.decided:
+                return result
+            if run.probing:
+                # The re-check past `_GUARD_AFTER_CALLS`: its calls still go
+                # through the cache, and what each would cost to compute (its
+                # run time, or a hit's recorded cost) stands in for its plain
+                # time. Run plain, they were neither looked up nor stored,
+                # whatever they cost: in `[work(i) for i in range(60)]` the
+                # 51st to 55th calls ran again on every re-run, 0.6 s each.
+                run.plain_samples.append(compute if compute is not None else spent)
+                if invocation.hit:
+                    run.hits += 1
+                if invocation.stored:
+                    run.stored += 1
+                if len(run.plain_samples) >= _PLAIN_SAMPLES:
+                    _decide_site(run, site)
                 return result
             if len(run.spent) < _GUARD_AFTER_CALLS:
                 run.spent.append(spent)
