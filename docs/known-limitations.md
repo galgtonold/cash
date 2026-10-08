@@ -182,10 +182,10 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @e213e156, cash/notebook/callee_reach.py:module_state_writes @2477eca8, cash/notebook/call_unit.py:_rebound_unwatched @13e82eb4 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @e213e156, cash/notebook/callee_reach.py:module_state_writes @6b53397b, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 The same for a statement that sets state on one of your modules
 (`metrics.increment(5)` adding to a counter `metrics.py` keeps, itself or
-through a helper, or `mylib.K = slow()`): it runs every time, so the module
+through a helper, `mylib.K = slow()`, or `importlib.reload(mylib)`): it runs every time, so the module
 holds after a restart, or after an edit of its file, what a top-to-bottom run
 leaves in it. A setting whose code does not say it (`globals()[name] = v`,
 `global K` in a method of one of your classes) is seen when it runs, in the
@@ -193,8 +193,9 @@ modules the statement reaches, and counts the same from then on, in a later
 kernel too. A slow call inside
 an assignment (`n = metrics.increment(5)`) is still served from the cache,
 with the globals its code says it writes put back; one seen rebinding a global
-its code does not say it writes runs every time. A cell that is only the call
-runs it.
+its code does not say it writes runs every time; what the interpreter itself
+adds to the module (the registry the first warning it emits creates) is no
+setting. A cell that is only the call runs it.
 
 ### A setting on your module or the environment, run out of order
 

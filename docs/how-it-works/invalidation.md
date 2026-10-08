@@ -38,9 +38,12 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       input changed ([below](#lineage-propagation)).
     - **A function or local module it calls.** An imported module of yours
       (outside the standard library and `site-packages`) is tracked as soon
-      as a cell imports it, and cash reloads it in the kernel when you edit
-      it. Editing one function in a module re-runs only what uses that
-      function. A reload puts the file's values back for what cells set on
+      as a cell imports it (a cell that also loads an extension, such as
+      `%load_ext autoreload` / `import mylib`, included), and cash reloads it
+      in the kernel when you edit it. With `%autoreload` on, its reloads run
+      before the cell, as in a plain kernel, and a module it reloads (one
+      `%aimport` loaded too) counts as edited. Editing one function in a
+      module re-runs only what uses that function. A reload puts the file's values back for what cells set on
       the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`).
       cash treats the module as a variable those statements changed in
       place, and the next cell you run rebuilds it from them as it
@@ -62,8 +65,11 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       module's functions and their helpers, a decorated function's body
       and the methods of your classes (`model.predict(2)`): `mylib.K = 7`,
       `mylib.CONFIG["k"] = 7` or `mylib.set_k(7)` in a cell above re-runs
-      `mylib.from_k(10)`. A global that a function the statement calls
-      changes itself (a counter) is left out, so the statement still caches.
+      `mylib.from_k(10)`. A function or an object of your class kept in that
+      data (`mylib.REG["a"] = a`, `mylib.set_handler(H())`) counts by its
+      code too, so editing its body re-runs the reader. A global that a
+      function the statement calls changes itself (a counter) is left out,
+      so the statement still caches.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
