@@ -41,7 +41,7 @@ from .callee_effects import (
     stateful_closure_vars,
     stateful_self_functions,
 )
-from .code_analyzer import CodeAnalyzer, parse_cell_source
+from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
@@ -407,6 +407,10 @@ def _branch_mutations(
             pass  # nothing the analysis can see; the rules below still apply
         mutated.update(selfref_reassignment_targets(stmt))
         mutated.update(_bare_call_receivers(stmt, is_module))
+        # `%time acc.append(x)` in the body changes `acc` as the plain line does.
+        inner = magic_python(ast.Module(body=[stmt], type_ignores=[])).body[1:]
+        if inner:
+            mutated |= _branch_mutations(inner, targets, is_builtin, is_module)
     # ``os.remove(f)`` reads as ``list.remove`` on ``os``; a module's lineage
     # is its code, which no call through it changes.
     return {v for v in mutated if not is_builtin(v) and not is_module(v)} - targets

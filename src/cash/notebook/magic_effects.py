@@ -28,6 +28,8 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..analysis.code_analyzer import CodeAnalyzer, calls_ipython
+from ..analysis.code_analyzer import python_magic_argument as _python_magic_arg
+from ..analysis.code_analyzer import split_magic_argument as _split_argument
 from ..analysis.mutations import KNOWN_PURE_METHODS
 from ..analysis.namespace_effects import bare_call_arguments, call_arguments
 
@@ -42,30 +44,12 @@ __all__ = [
     "simulation_cell",
 ]
 
-#: Line magics whose argument is a Python statement run in the user's namespace.
-_PYTHON_ARG_MAGICS = frozenset({"time", "timeit", "prun"})
-
 
 def is_magic_statement(node: ast.stmt) -> bool:
     """Whether *node*, a statement as IPython's transform writes it, runs a magic
     or a shell command itself (``get_ipython().run_line_magic(...)``,
     ``x = get_ipython().getoutput(...)``), not inside a block or a definition."""
     return isinstance(node, (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign)) and calls_ipython(node)
-
-
-def _python_magic_arg(call: ast.AST) -> str | None:
-    """The argument of *call* when it is a ``%time``/``%timeit``/``%prun``
-    line magic as IPython's transform writes it, else None."""
-    if (
-        isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Attribute)
-        and call.func.attr == "run_line_magic"
-        and len(call.args) == 2
-        and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in call.args)
-        and call.args[0].value in _PYTHON_ARG_MAGICS
-    ):
-        return call.args[1].value
-    return None
 
 
 def is_rerun_magic(node: ast.stmt) -> bool:
@@ -104,18 +88,6 @@ def _python_argument(arg: str) -> ast.Module | None:
     the options before it."""
     split = _split_argument(arg)
     return None if split is None else split[1]
-
-
-def _split_argument(arg: str) -> tuple[list[str], ast.Module] | None:
-    """``(options, statement)``: the words of *arg* before the Python
-    statement it runs, and that statement; None when no tail is Python."""
-    words = arg.split(" ")
-    for start in range(len(words)):
-        try:
-            return words[:start], CodeAnalyzer.parse_cell(" ".join(words[start:]).strip())
-        except SyntaxError:
-            continue
-    return None
 
 
 def _changed_receivers(tree: ast.Module) -> set[str]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import copy
 import functools
 import importlib
 import inspect
@@ -35,6 +36,9 @@ __all__ = [
     "CodeAnalyzer",
     "calls_ipython",
     "clean_cell_source",
+    "magic_python",
+    "python_magic_argument",
+    "split_magic_argument",
     "expr_has_trailing_semicolon",
     "parse_cell_source",
     "splitlines_like_the_parser",
@@ -839,6 +843,9 @@ class CodeAnalyzer:
         if tree is None:
             clean_code = CodeAnalyzer.strip_magics(code)
             tree = CodeAnalyzer.parse_cell(clean_code)  # tolerate top-level await
+        if "run_line_magic" in code:
+            # What a `%time` line's Python reads and binds, in a loop body too.
+            tree = magic_python(tree)
 
         visitor = _FlowVisitor()
         visitor.visit(tree)
@@ -987,6 +994,94 @@ def calls_ipython(tree: ast.AST) -> bool:
         ):
             return True
     return False
+
+
+#: Line magics whose argument is a Python statement run in the user's namespace.
+PYTHON_ARG_MAGICS = frozenset({"time", "timeit", "prun"})
+
+
+def python_magic_argument(call: ast.AST) -> str | None:
+    """The argument of *call* when it is a ``%time``/``%timeit``/``%prun``
+    line magic as IPython's transform writes it, else None."""
+    if (
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "run_line_magic"
+        and len(call.args) == 2
+        and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in call.args)
+        and call.args[0].value in PYTHON_ARG_MAGICS
+    ):
+        return call.args[1].value
+    return None
+
+
+def split_magic_argument(arg: str) -> tuple[list[str], ast.Module] | None:
+    """``(options, statement)``: the words of *arg* before the Python
+    statement it runs, and that statement; None when no tail is Python."""
+    words = arg.split(" ")
+    for start in range(len(words)):
+        try:
+            return words[:start], CodeAnalyzer.parse_cell(" ".join(words[start:]).strip())
+        except SyntaxError:
+            continue
+    return None
+
+
+def magic_python(tree: ast.Module) -> ast.Module:
+    """*tree* with the Python statement of each ``%time``, ``%timeit`` and
+    ``%prun`` line read in after the line: ``for i in r: %time
+    acc.append(i * k)`` reads ``acc`` and ``k`` and changes ``acc``, as the
+    plain loop does. *tree* itself is left as it is; without such a line it
+    is what comes back."""
+    if not any(python_magic_argument(node) is not None for node in ast.walk(tree)):
+        return tree
+    return _MagicPythonSplicer().visit(copy.deepcopy(tree))
+
+
+class _MagicPythonSplicer(ast.NodeTransformer):
+    """See :func:`magic_python`."""
+
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, list) and value and all(isinstance(v, ast.stmt) for v in value):
+                spliced: list[ast.stmt] = []
+                for stmt in value:
+                    spliced.append(self.visit(stmt))
+                    if not isinstance(stmt, _COMPOUND_STATEMENTS):
+                        spliced.extend(_magic_statements(stmt))
+                setattr(node, field, spliced)
+            elif isinstance(value, ast.AST):
+                self.visit(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        self.visit(item)
+        return node
+
+
+_COMPOUND_STATEMENTS = (
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.If,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+)
+
+
+def _magic_statements(stmt: ast.stmt) -> list[ast.stmt]:
+    """The Python statements the line magics in the simple statement *stmt* run."""
+    out: list[ast.stmt] = []
+    for node in ast.walk(stmt):
+        arg = python_magic_argument(node)
+        split = None if arg is None else split_magic_argument(arg)
+        if split is not None and not calls_ipython(split[1]):
+            out.extend(split[1].body)
+    return out
 
 
 #: A line that assigns the result of a magic or a shell command, as IPython's
