@@ -51,16 +51,24 @@ _MAX_FUNCTIONS = 32
 _ABSENT = object()
 
 
-def refs_beyond(value: Any) -> int:
-    """How many references *value* has, as counted from a caller that holds
-    it in one local; compare with `ONE_LOCAL`. More means something else
-    holds it too (a global, a container, a memo)."""
-    return sys.getrefcount(value)
+def refs_beyond(box: list) -> int:
+    """How many references the one item of *box* has, as counted from a
+    caller that holds it in one local and passes it as ``[value]``; compare
+    with `ONE_LOCAL`. More means something else holds it too (a global, a
+    container, a memo).
+
+    The value goes in a fresh list, not as the argument itself: from
+    Python 3.14 the compiler loads a local either as a borrowed reference
+    (which ``sys.getrefcount`` does not count) or as a new one, depending
+    on the code around the load (a name that may be unbound after a
+    ``try`` is loaded as a new reference). Taken out of the list by
+    subscript, the count is the same wherever the caller's load is."""
+    return sys.getrefcount(box[0])
 
 
 def _one_local() -> int:
     probe = object()
-    return refs_beyond(probe)
+    return refs_beyond([probe])
 
 
 #: `refs_beyond` of an object one local of the caller holds and nothing else.
