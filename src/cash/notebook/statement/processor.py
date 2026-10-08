@@ -777,7 +777,7 @@ class StatementProcessor:
         # statement would look worth storing.
         wall_time = 0.0
         if run.annotation is not None and run.annotation.no_cache:
-            self._randomness.resume_live_stream(code)
+            self._randomness.resume_live_stream(run.code)
         # Snapshot the global RNG streams around execution so a before/after
         # diff catches a draw that static analysis and object-introspection
         # both miss -- one hidden inside a called function.
@@ -813,10 +813,11 @@ class StatementProcessor:
                 execution.accessed_files = file_tracker.get_accessed_files()
                 execution.written_paths = frozenset(written_paths)
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls()
-                # `code` (the keyed form), not `source`: the observation is
-                # about what the statement does, which is the same either way,
-                # and this keeps it matched to the simulator's own unparse.
-                self._randomness.observe_statement(pre_rng, code)
+                # The keyed form (`run.code`), not what ran: a call routed
+                # through the call cache rewrites the text, and the key and
+                # the simulation look the observation up by the statement's
+                # own text.
+                self._randomness.observe_statement(pre_rng, run.code)
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
