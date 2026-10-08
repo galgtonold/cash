@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from .content_hashers import builtin_hash
+from .content_hashers import builtin_hash, builtin_hash_family
 from .value_hash import HASH_ERRORS, compute_hash, identity_hash
 
 
@@ -34,7 +34,7 @@ def mutation_fingerprint(obj: Any) -> str | None:
     h = hashlib.sha256()
     t = type(obj)
     h.update(f"{t.__module__}.{t.__qualname__}".encode("utf-8"))
-    digest = builtin_hash(obj)
+    digest = builtin_hash(_canonical_sparse(obj))
     if digest is not None:
         h.update(digest.encode("utf-8"))
         return h.hexdigest()
@@ -72,7 +72,32 @@ def _part_digest(value: Any) -> str:
     """`compute_hash` of one part of a value, or `_Unobservable`."""
     if value is None:
         return "None"
+    value = _canonical_sparse(value)
     digest = compute_hash(value)
     if digest == identity_hash(value):
         raise _Unobservable(type(value).__name__)
     return digest
+
+
+def _canonical_sparse(value: Any) -> Any:
+    """A scipy sparse matrix in canonical form (sorted indices, duplicates
+    summed), else *value* unchanged.
+
+    scipy canonicalizes a CSR/CSC/BSR/COO matrix IN PLACE when it is merely
+    read: ``m.sum()``, ``m @ v`` and friends sort its indices and set
+    ``has_canonical_format``. Its values are unchanged, but `hash_sparse`
+    (rightly, for a cache key) tells an unsorted index from a sorted one, so
+    ``s = heavy(X)`` with a TF-IDF ``X`` was seen changing ``X`` and ran
+    every time. The fingerprint compares the canonical form; a copy is made
+    only when the matrix is not canonical already.
+    """
+    if builtin_hash_family(type(value)) != "scipy.sparse" or not hasattr(value, "sum_duplicates"):
+        return value
+    try:
+        if getattr(value, "has_canonical_format", True):
+            return value
+        canon = value.copy()
+        canon.sum_duplicates()
+        return canon
+    except (TypeError, ValueError, AttributeError, MemoryError):
+        return value
