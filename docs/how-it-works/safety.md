@@ -216,11 +216,16 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @2e425a0f, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @95b8fc09, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
 Two kinds of value are refused after the statement runs, because restoring a
 copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base, and a
-matplotlib `Figure`/`Axes`, which would come back detached from pyplot.
+matplotlib `Figure`/`Axes`, which would come back detached from pyplot. A
+numpy view counts wherever it sits, also inside a list, tuple or dict
+(`parts = np.split(a, 2)`), and its base counts as another variable's whenever
+something besides the view holds it: a name, a dict (`w = data['x'][2:5]`), an
+attribute or another view. A view of an array only it holds
+(`np.arange(10).reshape(2, 5)`) is cached.
 
 ## Related
 

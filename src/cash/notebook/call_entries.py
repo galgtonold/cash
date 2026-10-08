@@ -8,10 +8,13 @@ only while the files it read and its statement's TTL say it is fresh.
 
 from __future__ import annotations
 
+import functools
 import logging
+import sys
 import time as _time
+import types
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from cash.analysis.cacheability_decision import identity_coupled_reason
@@ -27,7 +30,7 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
-from cash.notebook.shared_objects import holds_part_of
+from cash.notebook.shared_objects import holds_a_held_object, holds_part_of
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
@@ -40,6 +43,103 @@ __all__ = ["CallEntries"]
 #: A call cheaper than this gets no content digest, so a statement refers to it
 #: only when it is that statement's plain value (``b = f(a)``), which needs none.
 _REF_MIN_COMPUTE_S = 0.1
+
+#: How many functions `reached_objects` follows: the callee and the helpers of
+#: its own module it names. Past that, what they reach is not looked at.
+_MAX_FUNCTIONS = 32
+
+_ABSENT = object()
+
+
+def refs_beyond(value: Any) -> int:
+    """How many references *value* has, as counted from a caller that holds
+    it in one local; compare with `ONE_LOCAL`. More means something else
+    holds it too (a global, a container, a memo)."""
+    return sys.getrefcount(value)
+
+
+def _one_local() -> int:
+    probe = object()
+    return refs_beyond(probe)
+
+
+#: `refs_beyond` of an object one local of the caller holds and nothing else.
+#: Measured, not assumed: it depends on the interpreter.
+ONE_LOCAL = _one_local()
+
+
+def _code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
+    """*code* and the code objects nested in it (lambdas, generator
+    expressions, inner functions), whose names are not in its own
+    ``co_names``."""
+    yield code
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            yield from _code_scopes(const)
+
+
+def _attributes_named(owner: Any, names: set[str]) -> list[Any]:
+    """The attributes of a class or module *owner* under one of *names*,
+    read from the ``__dict__`` so that no descriptor or property runs."""
+    found = []
+    for scope in getattr(owner, "__mro__", None) or (owner,):
+        namespace = getattr(scope, "__dict__", None)
+        if not isinstance(namespace, Mapping) or scope is object:
+            continue
+        found += [namespace[name] for name in names if name in namespace]
+    return found
+
+
+def reached_objects(fn: Any) -> list[Any]:
+    """The objects *fn* can reach other than through its arguments.
+
+    The globals its code names (``return MODELS[1]``, ``global _DATA``), the
+    attributes it names of a class or module it names (``Config.items``),
+    what its closure and its defaults hold, the object it is bound to, and
+    the same for the functions of its own module it names, so a helper that
+    hands back a global counts too. A result holding one of them must keep
+    being that object, which a copy restored from the cache is not.
+    """
+    found: list[Any] = []
+    owners: list[tuple[Any, set[str]]] = []
+    while isinstance(fn, functools.partial):
+        found += [*fn.args, *fn.keywords.values()]
+        fn = fn.func
+    bound_to = getattr(fn, "__self__", None)
+    fn = getattr(fn, "__func__", fn)
+    seen: set[int] = set()
+    todo = [fn]
+    while todo and len(seen) < _MAX_FUNCTIONS:
+        func = todo.pop()
+        if not isinstance(func, types.FunctionType) or id(func) in seen:
+            continue
+        seen.add(id(func))
+        for cell in func.__closure__ or ():
+            try:
+                found.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                pass
+        found += func.__defaults__ or ()
+        found += (func.__kwdefaults__ or {}).values()
+        names = {name for code in _code_scopes(func.__code__) for name in code.co_names}
+        namespace = func.__globals__
+        if func is fn and bound_to is not None:
+            owners.append((bound_to, names))
+            found.append(bound_to)
+        for name in names:
+            value = namespace.get(name, _ABSENT)
+            if value is _ABSENT:
+                continue
+            if isinstance(value, types.FunctionType) and value.__globals__ is namespace:
+                todo.append(value)
+            elif isinstance(value, (type, types.ModuleType)):
+                owners.append((value, names))
+            else:
+                found.append(value)
+    for owner, names in owners:
+        if isinstance(owner, (type, types.ModuleType)):
+            found += _attributes_named(owner, names)
+    return found
 
 class CallEntries:
     """Reads and writes one notebook session's call entries.
@@ -128,7 +228,7 @@ class CallEntries:
             "[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain", key[:16], hit_cost, saved or 0.0
         )
 
-    def storable(self, result, args, kwargs) -> bool:
+    def storable(self, result, args, kwargs, fn: Any = None, root_held: bool = True) -> bool:
         """Refuse values whose *identity* is load-bearing.
 
         Three families, all of which the statement path already refuses in its
@@ -143,6 +243,19 @@ class CallEntries:
            would not be seen through the other name. At the call node the
            live arguments are in hand
            (:func:`~cash.notebook.shared_objects.holds_part_of`).
+
+           The same goes for an object the function *fn* reaches outside its
+           arguments (`reached_objects`): ``return MODELS[1]``, a lazy
+           singleton (``global _DATA``), ``return Config.items``,
+           ``return LOG.append``, ``return {'model': MODEL}``. A hit would
+           hand back a copy, and writes through the result would no longer
+           reach the global. The statement keeps them linked instead (the
+           decorator warns ``CACHE-RESULT-SHARED`` for the same thing).
+           Those are walked only when something may hold part of the result:
+           *root_held* (the caller saw more references to *result* than its
+           own, `refs_beyond`) or an object inside it held from outside
+           (`holds_a_held_object`). A fresh result is neither, and the walk
+           over a large global the function merely reads is skipped.
 
            Not for a plain value. CPython shares one object for small ints
            and interned strings, so ``score(1, 10)`` returns the very ``10``
@@ -175,7 +288,7 @@ class CallEntries:
         """
         try:
             return (
-                not holds_part_of(result, (*args, *kwargs.values()))
+                not holds_part_of(result, (*args, *kwargs.values(), *self._reached(result, fn, root_held)))
                 and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
@@ -183,6 +296,14 @@ class CallEntries:
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
+
+    @staticmethod
+    def _reached(result, fn: Any, root_held: bool) -> list[Any]:
+        """`reached_objects` of *fn*, or none when nothing can hold part of
+        *result* (see `storable`)."""
+        if fn is None or not (root_held or holds_a_held_object(result)):
+            return []
+        return reached_objects(fn)
 
     def lookup(self, key: str) -> tuple[bool, Any, float, dict]:
         """``(hit, value, recorded_execution_time, metadata)`` -- one backend read.

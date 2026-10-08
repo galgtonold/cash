@@ -33,7 +33,19 @@ from __future__ import annotations
 import hashlib
 import logging
 import sys
+from collections.abc import Iterable
 from typing import Any, Callable
+
+from ..shared_objects import (
+    _EXACT_CONTAINER_TYPES,
+    _EXACT_VALUE_TYPES,
+    VALUE_TYPES,
+    _count_held,
+    _excess,
+    children_of,
+    is_value,
+    library_value_types,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +57,9 @@ __all__ = [
 ]
 
 
-def is_uncacheable_alias(value: Any, user_ns: dict) -> bool:
-    """True if *value* is a live-alias of a NAMED ``user_ns`` object that must
-    NOT be cache-restored.
+def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = ()) -> bool:
+    """True if *value* is, or holds, a live-alias of a ``user_ns`` object that
+    must NOT be cache-restored.
 
     A numpy **view** and a pandas **ref-holder** (groupby/rolling/...) each hold
     a live reference to another in-memory object. Pickling and restoring them
@@ -55,33 +67,104 @@ def is_uncacheable_alias(value: Any, user_ns: dict) -> bool:
     so a downstream mutation of the base is lost. These statements must always
     re-derive from the live base instead of restoring from cache.
 
-    The alias is only *uncacheable* when its base resolves to a NAMED live
-    variable that could be mutated elsewhere. Many fresh arrays (``np.linspace``,
+    *value* is walked as the shared-object check walks an output (the builtin
+    containers and the attributes of the notebook's own objects), so views
+    inside a list (``parts = np.split(a, 2)``) count too.
+
+    The alias is only *uncacheable* when its base is live: bound to a NAMED
+    variable, or held by anything besides the views *value* holds -- an array
+    inside a dict (``window(data['x'], 2)``), an attribute, another view, or
+    *value* itself (``(buf, buf[:3])``). The containers in *cash_held* are
+    cash's own (the call cache holding ``load()``'s result in
+    ``x = load()[::2]``), so their references do not make a base live. Many fresh arrays (``np.linspace``,
     and in some builds ``np.arange``/ufunc results) carry a non-None ``.base``
-    pointing at an anonymous internal buffer that no user variable references;
+    pointing at an anonymous internal buffer that only the view holds;
     restoring an independent copy of those is correct, so they stay cacheable.
     A ``.copy()`` (numpy ``base is None`` / independent pandas frame) is likewise
     not an alias — the over-invalidation guard.
     """
-    try:
-        np = _imported("numpy")
-        if np is not None and isinstance(value, np.ndarray) and value.base is not None:
-            # Only a genuine alias of a NAMED live variable is uncacheable.
-            base = value.base
-            seen: set[int] = set()
-            while base is not None and id(base) not in seen:
-                seen.add(id(base))
-                if _find_name_by_identity(user_ns, base) is not None:
-                    return True
-                base = getattr(base, "base", None)
-            return False
-    except ImportError:
-        pass
+    np = _imported("numpy")
     refholder_types = _pandas_refholder_types()
-    if refholder_types and isinstance(value, refholder_types):
-        src = getattr(value, "obj", None)
-        return src is not None and _find_name_by_identity(user_ns, src) is not None
-    return False
+    if np is None and not refholder_types:
+        return False
+    views, refholders = _aliases_in(value, np, refholder_types)
+    for holder in refholders:
+        src = getattr(holder, "obj", None)
+        if src is not None and _find_name_by_identity(user_ns, src) is not None:
+            return True
+    del refholders
+    return bool(views) and _bases_are_live(views, user_ns, list(cash_held))
+
+
+def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple[list[Any], list[Any]]:
+    """``(views, refholders)``: the numpy arrays with a ``.base`` and the
+    pandas ref-holders that *value* is or holds."""
+    value_types = VALUE_TYPES + library_value_types()
+    ndarray = np.ndarray if np is not None else ()
+    # By exact type, so a plain array in a list is asked without a push.
+    ndarray_type = np.ndarray if np is not None else None
+    views: list[Any] = []
+    refholders: list[Any] = []
+    seen: set[int] = set()
+    stack = [value]
+    exact = _EXACT_VALUE_TYPES
+    containers = _EXACT_CONTAINER_TYPES
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if type(obj) not in containers:
+            if isinstance(obj, ndarray):
+                if obj.base is not None:
+                    views.append(obj)
+                continue
+            if refholder_types and isinstance(obj, refholder_types):
+                refholders.append(obj)
+                continue
+        children = children_of(obj)
+        # Nothing but values, by exact type: asked at C speed (as `_walk` does).
+        if not children or exact.issuperset(map(type, children)):
+            continue
+        for child in children:
+            ctype = type(child)
+            if ctype in containers:
+                # A record of plain values (`{'a': 1, 'b': 'x'}`) holds no
+                # view: skipped here, not pushed, for a list of millions.
+                items = child.values() if ctype is dict else child
+                if exact.issuperset(map(type, items)) and (ctype is not dict or exact.issuperset(map(type, child))):
+                    continue
+                stack.append(child)
+            elif ctype is ndarray_type:
+                if child.base is not None and id(child) not in seen:
+                    seen.add(id(child))
+                    views.append(child)
+            elif ctype not in exact and not is_value(child, value_types):
+                stack.append(child)
+    return views, refholders
+
+
+def _bases_are_live(views: list[Any], user_ns: dict, cash_held: list[Any]) -> bool:
+    """Whether an object on the ``.base`` chain of one of *views* is bound to
+    a name of *user_ns*, or held by more than the *views* and the chain
+    itself and the containers in *cash_held* (by reference count, `_excess`)."""
+    nodes: dict[int, Any] = {}
+    inbound: dict[int, int] = {}
+    for view in views:
+        base = view.base
+        while base is not None:
+            key = id(base)
+            inbound[key] = inbound.get(key, 0) + 1
+            if key in nodes:
+                break
+            nodes[key] = base
+            if _find_name_by_identity(user_ns, base) is not None:
+                return True
+            base = getattr(base, "base", None)
+    # No local reference to a base may be left while the counts are read.
+    view = base = None
+    _count_held(cash_held, nodes, inbound, VALUE_TYPES + library_value_types())
+    return bool(_excess(nodes, inbound, list(nodes)))
 
 
 def _find_name_by_identity(user_ns: dict, obj: Any) -> str | None:

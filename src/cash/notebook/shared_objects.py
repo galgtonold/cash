@@ -212,7 +212,37 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
         seen.add(id(obj))
         if not isinstance(obj, _IMMUTABLE_CONTAINERS):
             yield id(obj)
+            yield from view_bases(obj)
         stack.extend(children_of(obj) or ())
+
+
+def view_bases(value: Any) -> list[int]:
+    """The ids of the arrays a numpy view *value* sits on (its ``.base``
+    chain), empty for anything else. ``arr[2:5]`` is a new object, but
+    writing through it writes into ``arr``."""
+    np = sys.modules.get("numpy")
+    if np is None or not isinstance(value, np.ndarray):
+        return []
+    found: list[int] = []
+    base = value.base
+    while base is not None and id(base) not in found:
+        found.append(id(base))
+        base = getattr(base, "base", None)
+    return found
+
+
+def holds_a_held_object(value: Any) -> bool:
+    """Whether an object *value* holds (not *value* itself) has a holder
+    outside *value*, by reference count, or *value* holds a numpy view (whose
+    base anything may hold). When neither, nothing in *value* below its root
+    can be part of another object, which spares `holds_part_of` a walk over
+    large sources."""
+    value_types = VALUE_TYPES + library_value_types()
+    nodes, inbound, checked, _owner = _walk({"": value}, [], value_types)
+    root = id(value)
+    if _excess(nodes, inbound, [key for key in checked if key != root]):
+        return True
+    return any(view_bases(obj) for obj in nodes.values())
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
@@ -224,6 +254,8 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     ``cfg['a']``, hand back an object a later ``model.fit()`` or
     ``c['n'] = 5`` must reach through both names. Walked as `_walk` walks:
     the builtin containers and the attributes of the notebook's own objects.
+    A numpy view holds the arrays it sits on (`view_bases`), on both sides:
+    ``window(a, 2)`` returning ``a[2:5]`` holds part of ``a``.
     """
     value_types = VALUE_TYPES + library_value_types()
     own = set(_identities(value, value_types))

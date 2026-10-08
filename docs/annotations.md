@@ -221,6 +221,15 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @c8662e9b, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
+A call whose result is or holds an object the notebook can also reach is not
+cached: one of its arguments or an object inside one, a global the function
+names (`return MODELS[1]`, `return {'model': MODEL}`, a lazily built
+`global _DATA`), a class attribute (`return Config.items`), a bound method of a
+global (`return LOG.append`), or a numpy view of any of these
+(`return arr[i:i+3]`, `return np.split(arr, 2)`). A hit would hand back a copy, so writes through the
+result would no longer reach the original. Such a call runs every time.
+
 !!! warning "A cached call skips effects cash cannot see"
     cash does not serve a call from the cache when it sees the function change
     an argument, rebind a variable of its closure, draw random numbers or write

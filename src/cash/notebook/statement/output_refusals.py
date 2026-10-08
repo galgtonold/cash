@@ -22,13 +22,13 @@ __all__ = ["live_shared_reason", "unrestorable_output_reason"]
 _HISTORY_NAMES = re.compile(r"_+|_i+|_\d+|_i\d+|_[iod]h|In|Out")
 
 
-def _alias_refusal(name: str, value: Any, user_ns: dict[str, Any]) -> str | None:
+def _alias_refusal(name: str, value: Any, user_ns: dict[str, Any], cash_held: Iterable[Any] = ()) -> str | None:
     """A live-alias object (numpy view, pandas groupby/rolling ref-holder)
     is not cached: pickling and restoring it decouples it from its live
     base, so a later base mutation would be lost after restore. It is
     re-derived from the live base instead. ``.copy()`` produces no alias
     and stays cacheable."""
-    if is_uncacheable_alias(value, user_ns):
+    if is_uncacheable_alias(value, user_ns, cash_held):
         return f"Live-alias object '{name}' (view/ref-holder); re-derived from live base, not cached."
     return None
 
@@ -73,20 +73,23 @@ def unrestorable_output_reason(
     re-registers the COPY as pyplot's current figure, so ``plt.savefig()``
     would write the cache's snapshot, a blank PNG on the first run.
     """
-    reason = _value_refusal(outputs, captured_vars, user_ns) or shared_output_reason(
+    cash_held = list(cash_held)
+    reason = _value_refusal(outputs, captured_vars, user_ns, cash_held) or shared_output_reason(
         outputs, captured_vars, user_ns, cash_held, shell, holders
     )
     if reason is None and holders:
-        reason = _value_refusal(set(holders), holders, user_ns)
+        reason = _value_refusal(set(holders), holders, user_ns, cash_held)
         if reason is not None:
             holders.clear()
     return reason
 
 
-def _value_refusal(outputs: set[str], captured_vars: dict[str, Any], user_ns: dict[str, Any]) -> str | None:
+def _value_refusal(
+    outputs: set[str], captured_vars: dict[str, Any], user_ns: dict[str, Any], cash_held: Iterable[Any] = ()
+) -> str | None:
     """The first refusal one output's value earns on its own."""
     refusals: tuple[Callable[[str, Any], str | None], ...] = (
-        lambda name, value: _alias_refusal(name, value, user_ns),
+        lambda name, value: _alias_refusal(name, value, user_ns, cash_held),
         identity_coupled_reason,
         _consumable_refusal,
     )
