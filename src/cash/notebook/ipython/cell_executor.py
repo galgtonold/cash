@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import sys
 import uuid
 from collections.abc import Awaitable, Callable, Generator, Iterator
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...remote_source import measured_validation as _measured_validation
 from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
+from ...tracking.function_tracker import is_local_module
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
@@ -62,6 +64,7 @@ from ..statement import ProcessResult
 from ..statement.capture import replay_outputs
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
+from .autoreload_hook import run_autoreload_now
 from .ipython_cell import CellMagic, IPythonCell, ipython_cell
 from .notifications import (
     function_change_rows,
@@ -513,8 +516,35 @@ class CellExecutor:
                     logger.debug("[AUTO_TRACK] Reloaded changed module '%s' (%s) (%s)", mod, path, sym_info)
         except (ImportError, AttributeError, OSError, TypeError, ValueError) as exc:
             logger.debug("Failed to check/reload changed modules: %s", exc)
+            changed_modules = {}
 
+        notifications.extend(self._take_in_autoreload(set(changed_modules)))
         return notifications
+
+    def _take_in_autoreload(self, reloaded_by_cash: set[str]) -> list[ProcessResult]:
+        """Run ``%autoreload`` now, before the cell's statements, as a plain
+        kernel does (`run_autoreload_now`), and treat a local module it
+        reloaded that cash did not as an edit cash saw: the module is
+        tracked and its readers' lineage moves."""
+        try:
+            reloaded = run_autoreload_now(self.shell) - reloaded_by_cash
+        except Exception:  # noqa: BLE001 - a third-party extension's state
+            logger.debug("Running autoreload before the cell failed", exc_info=True)
+            return []
+        ft = self._statement_processor.function_tracker
+        changed: dict[str, str] = {}
+        for name in sorted(reloaded):
+            module = sys.modules.get(name)
+            if module is None or not is_local_module(module):
+                continue
+            path = ft.note_reloaded_elsewhere(name, self.shell.user_ns)
+            if path:
+                changed[name] = path
+        if not changed:
+            return []
+        self._module_invalidator.invalidate(changed, self._statement_processor, None)
+        logger.debug("[AUTO_TRACK] autoreload reloaded: %s", ", ".join(sorted(changed)))
+        return [module_reloaded_row(changed)]
 
     def _raise_failed_reload(
         self,

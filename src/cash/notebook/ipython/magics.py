@@ -764,7 +764,11 @@ class CashMagics(Magics):
         if isinstance(result, RunInstead):
             return self._original_run_cell(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
-            with self._forgetting_what_ipython_binds(raw_cell), self._statement_processor.watching_reads(raw_cell):
+            with (
+                self._tracking_imports_of(raw_cell),
+                self._forgetting_what_ipython_binds(raw_cell),
+                self._statement_processor.watching_reads(raw_cell),
+            ):
                 return self._original_run_cell(raw_cell, *args, **kwargs)
 
         return self._finalize_cell_execution(raw_cell, result, args, kwargs)
@@ -833,10 +837,29 @@ class CashMagics(Magics):
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.
-            with self._forgetting_what_ipython_binds(raw_cell), self._statement_processor.watching_reads(raw_cell):
+            with (
+                self._tracking_imports_of(raw_cell),
+                self._forgetting_what_ipython_binds(raw_cell),
+                self._statement_processor.watching_reads(raw_cell),
+            ):
                 return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
         return await self._finalize_cell_execution_async(raw_cell, result, args, kwargs)
+
+    @contextlib.contextmanager
+    def _tracking_imports_of(self, raw_cell: str) -> Iterator[None]:
+        """Around a cell IPython runs on its own: track the local modules its
+        Python imports once it ran, as the finaliser does for a cell cash
+        runs. ``%load_ext autoreload`` / ``%autoreload 2`` / ``import mylib``
+        in one cell is IPython's to run (it loads an extension), and with
+        ``mylib`` never tracked an edit of ``mylib.py`` reached no key."""
+        try:
+            yield
+        finally:
+            try:
+                self._statement_processor.function_tracker.auto_track_local_imports(raw_cell, self.shell.user_ns)
+            except (ImportError, AttributeError, OSError, TypeError) as exc:
+                logger.debug("Auto-track after an IPython-run cell failed: %s", exc)
 
     @contextlib.contextmanager
     def _forgetting_what_ipython_binds(self, raw_cell: str) -> Iterator[None]:

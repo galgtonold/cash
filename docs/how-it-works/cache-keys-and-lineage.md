@@ -82,7 +82,7 @@ colons, in this order, and hashes the result:
 | Occurrence | `occ` and a 0-based index, which tells a statement repeated in the cell apart. |
 | Callee globals | `callees:`, then `name:lineage` per global a called function reads. |
 | Environment | `env:`, then a digest per `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` it, or a function of yours it calls, reads. |
-| Module data | `moddata:`, then `module.name=digest` per piece of a local module's data it, or a function of yours it calls, reads, by its value. |
+| Module data | `moddata:`, then `module.name=digest` per piece of a local module's data it, or a function of yours it calls, reads, by its value. A function, or an object of a class of yours, kept in that data (a registry dict, a handler set with a setter) counts by its code too, so editing its body moves the key. |
 
 The key is `namespace:` followed by the SHA-256 of the joined parts, for
 example `stmt:ffd3d255…`.

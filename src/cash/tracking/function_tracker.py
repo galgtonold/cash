@@ -128,6 +128,23 @@ def _reload_from_source(module) -> None:
         shutil.rmtree(empty, ignore_errors=True)
 
 
+def _python_of_cell(code: str) -> ast.Module | None:
+    """*code*'s Python, parsed: with its magic lines dropped when it has
+    any (``%load_ext autoreload`` / ``%autoreload 2`` / ``import mylib``,
+    the usual first cell), or None when even that does not parse."""
+    try:
+        return ast.parse(code)
+    except SyntaxError:
+        pass
+    # Imported here: the analysis package imports this module.
+    from ..analysis.code_analyzer import CodeAnalyzer
+
+    try:
+        return ast.parse(CodeAnalyzer.strip_magics(code))
+    except SyntaxError:
+        return None
+
+
 def _with_wrapped_chain(func: Any) -> set[int]:
     """The ids of *func* and the functions its ``__wrapped__`` chain reaches,
     which `source_digest` already folds in."""
@@ -882,6 +899,24 @@ class FunctionTracker:
         """
         return dict(self._reload_errors)
 
+    def note_reloaded_elsewhere(self, module_name: str, user_ns: dict[str, Any] | None = None) -> str | None:
+        """Take in a reload something other than cash made (IPython's
+        ``%autoreload``), as if cash had reloaded the module itself: track
+        it from now on, take its file's mtime and symbols as seen, and drop
+        the source digests of its functions, whose code the reload may have
+        swapped in place. Returns the module's file, or None."""
+        module = sys.modules.get(module_name)
+        file_path = getattr(module, "__file__", None) if module is not None else None
+        if not file_path or not os.path.isfile(file_path):
+            return None
+        if module_name not in self.tracked_modules:
+            self.track_module(module_name, user_ns)
+        with contextlib.suppress(OSError):
+            self.module_mtimes[module_name] = os.path.getmtime(file_path)
+        self.snapshot_module_symbols(module_name)
+        self._invalidate_module_functions(module_name)
+        return file_path
+
     def _invalidate_module_functions(self, module_name: str):
         """Clear cached source hashes for functions from a specific module."""
         for key in self._source_cache.keys():
@@ -914,9 +949,8 @@ class FunctionTracker:
         Returns:
             Set of module names that were newly tracked
         """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
+        tree = _python_of_cell(code)
+        if tree is None:
             return set()
 
         module_names = _collect_imported_names(tree)
