@@ -39,6 +39,87 @@ _PREMADE_ITEMS_MAX = 64
 #: `InMemoryBackend._copy_plans` value for an entry the first hit plans.
 _PLAN_ON_FIRST_HIT = object()
 
+#: JSON-like data with at least this many containers is kept as `marshal`
+#: bytes (`_Marshalled`). Below it the copies a container at a time cost
+#: little, and a hit hands back what `_plain_data.copy_plan` copies.
+_MARSHAL_NODES_MIN = 4096
+
+
+class _Marshalled:
+    """A stored value kept as `marshal` bytes (`_plain_data.marshal_dumps`):
+    a hit reads a new copy out of them, at C speed.
+
+    JSON-like data -- parsed records, an index of lists -- was copied a
+    container at a time on the store and again on every hit: 1.7 s and
+    2.3 s for a million nested records, more than building them took.
+    Kept as bytes, the store writes it once (0.2 s) and a hit reads it
+    (0.4 s), and the tier holds 50 MB where the copy took 700 MB.
+    """
+
+    __slots__ = ("data",)
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def __deepcopy__(self, memo: dict) -> Any:
+        # A copy that falls back to deepcopy (`_deepcopy_with_frames`) reads
+        # a part kept as bytes out, as the pickle round trip does.
+        return _plain_data.marshal_loads(self.data)
+
+    def __reduce__(self) -> tuple:
+        # The pickle round trip of `_deep_copy` reads it out too when it
+        # runs without its persistent_id hook.
+        return _plain_data.marshal_loads, (self.data,)
+
+
+def _marshals(facts: Any) -> bool:
+    """Is JSON-like data with these `_plain_data.TreeFacts` kept as marshal
+    bytes: big enough, and nothing in it marshal would give back otherwise?"""
+    return facts.nodes >= _MARSHAL_NODES_MIN and facts.types <= _plain_data.MARSHAL_TYPES
+
+
+#: `_marshal_parts` looks this far into dicts, and into dicts this small:
+#: a notebook entry's payload, its ``variables``.
+_PARTS_DEPTH = 2
+_PARTS_KEYS = 32
+
+
+def _without(value: dict, parts: dict[int, Any], depth: int = 0) -> dict:
+    """*value* with each of *parts* (`_marshal_parts`) in its dicts as None:
+    what is left to size once the parts are sized by their own walk. A
+    parent walked to size it would walk the part again."""
+    rest = {}
+    for name, item in value.items():
+        if id(item) in parts:
+            item = None
+        elif type(item) is dict and depth < _PARTS_DEPTH and len(item) <= _PARTS_KEYS:
+            item = _without(item, parts, depth + 1)
+        rest[name] = item
+    return rest
+
+
+def _marshal_parts(value: dict, depth: int = 0, found: dict | None = None) -> dict[int, tuple[Any, Any]]:
+    """``{id(part): (part, facts)}`` for the values of *value*, and of the
+    small dicts in it, that are kept as marshal bytes (`_marshals`).
+
+    Only a part nothing outside it reaches into (``held_once``): a list in
+    it that another variable also names must stay that variable's list. The
+    part itself may be held twice -- two names for one list -- since one
+    `_Marshalled` stands for it wherever the copy meets it.
+    """
+    found = {} if found is None else found
+    for item in value.values():
+        kind = type(item)
+        if kind is not dict and kind is not list and kind is not tuple or id(item) in found:
+            continue
+        facts = _plain_data.tree_facts(item)
+        if facts is not None and facts.held_once and _marshals(facts):
+            found[id(item)] = (item, facts)
+        elif kind is dict and depth < _PARTS_DEPTH and len(item) <= _PARTS_KEYS:
+            # A namespace of variables, one of which another name holds.
+            _marshal_parts(item, depth + 1, found)
+    return found
+
 
 class InMemoryBackend(CacheBackend):
     """Entries held in this process's memory, gone when the process ends.
@@ -104,6 +185,9 @@ class InMemoryBackend(CacheBackend):
         #: (`_plain_data.copy_plan`). Decided once, by the first hit: the
         #: stored value is private and never written.
         self._copy_plans: dict[str, Any] = {}
+        #: Keys whose stored value holds parts kept as marshal bytes
+        #: (`_marshal_parts`): only a copy reads them out.
+        self._holds_bytes: builtins.set[str] = set()
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -141,6 +225,7 @@ class InMemoryBackend(CacheBackend):
         by_reference: list[bool] | None = None,
         by_spine: list[bool] | None = None,
         walk: list | None = None,
+        premade: dict[int, Any] | None = None,
     ) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
@@ -166,6 +251,8 @@ class InMemoryBackend(CacheBackend):
         buffers and so costs about a millisecond whatever its size.
 
         *walk* is `_plain_data.tree_walk` of *value*, when the caller has it.
+        *premade* is what to put in the copy for parts of a dict *value*,
+        ``id(part) -> what``: the parts kept as marshal bytes (`_marshal_parts`).
         """
         try:
             value_type = type(value)
@@ -183,7 +270,7 @@ class InMemoryBackend(CacheBackend):
                 done, copied = _plain_data.copy_plain(value)
                 if done:
                     return copied
-            if value_type is dict or value_type is list or value_type is tuple:
+            if premade is None and (value_type is dict or value_type is list or value_type is tuple):
                 # JSON-like data -- an index, records, a dict of lists: one
                 # step per container, where deepcopy took one per leaf.
                 copied = _plain_data.spine_copy(value, walk=walk)
@@ -198,7 +285,7 @@ class InMemoryBackend(CacheBackend):
                 # parts go into deepcopy's memo as already copied: a tuple is
                 # shared, a list of immutables gets a new list, and two names
                 # for one object still come back as one object.
-                memo: dict[int, Any] = {}
+                memo: dict[int, Any] = dict(premade) if premade else {}
                 InMemoryBackend._premade_copies(value, memo, known_cells, record_cells)
                 return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
             if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
@@ -322,6 +409,10 @@ class InMemoryBackend(CacheBackend):
                 return key
             if obj_type is ndarray and not obj.dtype.hasobject:
                 memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
+                alive.append(obj)
+                return key
+            if obj_type is _Marshalled:
+                memo[key] = _plain_data.marshal_loads(obj.data)  # a part kept as bytes, read out
                 alive.append(obj)
                 return key
             if frames and isinstance(obj, frames):
@@ -474,8 +565,13 @@ class InMemoryBackend(CacheBackend):
                 pass
             elif item_type is dict:
                 # JSON-like data (a variable holding an index, a namespace of
-                # such variables) is copied whole; any other dict is looked into.
-                if id(item) not in memo and _plain_data.spine_copy(item, memo) is None and depth < 4:
+                # such variables) is copied whole; any other dict is looked
+                # into, and so is one holding what *memo* has already (a
+                # part kept as bytes): copying it would walk that part.
+                if id(item) in memo:
+                    continue
+                holds_premade = len(item) <= _PREMADE_ITEMS_MAX and not memo.keys().isdisjoint(map(id, item.values()))
+                if (holds_premade or _plain_data.spine_copy(item, memo) is None) and depth < 4:
                     InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1)
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
                 if _plain_data.immutable_below(item):
@@ -493,7 +589,7 @@ class InMemoryBackend(CacheBackend):
             entry = self._store.get(key)
             return dict(entry[0]) if entry is not None else None
 
-    def peek_entry(self, key: str) -> tuple[MetadataDict, Any] | None:
+    def peek_entry(self, key: str, *, value: bool = True) -> tuple[MetadataDict, Any] | None:
         """The stored metadata and value themselves: not copied, not counted.
 
         For writing the entry to another tier as it is
@@ -501,9 +597,19 @@ class InMemoryBackend(CacheBackend):
         would be pure waste. Both are this tier's own objects: never change
         the value; where the entry is stored (``storage``, ``persist_skipped``)
         is all the caller may update in the metadata, once it is stored elsewhere too.
+        A value kept as marshal bytes, or holding parts kept so
+        (`_Marshalled`), is read out of them -- unless *value* is False: then
+        the value is None.
         """
         with self._lock:
-            return self._store.get(key)
+            entry = self._store.get(key)
+        if entry is not None and not value:
+            return entry[0], None
+        if entry is not None and type(entry[1]) is _Marshalled:
+            return entry[0], _plain_data.marshal_loads(entry[1].data)
+        if entry is not None and key in self._holds_bytes:
+            return entry[0], self._safe_deep_copy(entry[1], key, known_cells=self._frame_cells.get(key))
+        return entry
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
@@ -537,6 +643,8 @@ class InMemoryBackend(CacheBackend):
             known_cells = self._frame_cells.get(key)
             plan = self._copy_plans.get(key)
 
+        if type(value) is _Marshalled:
+            return metadata, _plain_data.marshal_loads(value.data)
         if immutable_below:
             # Checked when it was stored; the stored value is private.
             return metadata, (list(value) if type(value) is list else value)
@@ -564,13 +672,32 @@ class InMemoryBackend(CacheBackend):
         # separate walks were most of promoting two million parsed rows here.
         plain = _plain_data.profile(value)
         dict_rows_size = None if plain is not None else _plain_data.dict_rows_profile(value)
-        # JSON-like data -- a notebook entry's payload -- is walked once, for
-        # its size and then its copy: a walk is a pass over every leaf.
-        walk = None if plain is not None or dict_rows_size is not None else _plain_data.tree_walk(value)
+        # JSON-like data -- a notebook entry's payload -- is walked once
+        # (`tree_facts`, which a notebook's checks may have made already),
+        # for its size and how to copy it: big and of marshal's types alone,
+        # it is kept as marshal bytes; else copied a container at a time,
+        # over that walk (inside a `one_look`, which keeps no walk, over a
+        # new one). A dict that is not JSON-like as a whole -- a payload
+        # with numpy's RNG state beside the variables -- has such parts kept
+        # as bytes (`_marshal_parts`), and the rest copied as before.
+        facts = walk = parts = None
+        if plain is None and dict_rows_size is None:
+            if _plain_data.in_a_look():
+                facts = _plain_data.tree_facts(value)
+            else:
+                facts, walk = _plain_data.tree_facts_and_walk(value)
+            if facts is None and type(value) is dict:
+                parts = _marshal_parts(value)
+        whole = facts is not None and _marshals(facts)
+        if whole:
+            walk = None  # not copied a container at a time
         if dict_rows_size is not None:
             size = dict_rows_size
-        elif walk is not None:
-            size = _plain_data.tree_size(value, walk)
+        elif facts is not None:
+            size = facts.size
+        elif parts:
+            # Each part sized by its walk, the rest as before.
+            size = memory_footprint(_without(value, parts)) + sum(part_facts.size for _part, part_facts in parts.values())
         elif plain is None:
             size = memory_footprint(value)
         else:
@@ -593,13 +720,26 @@ class InMemoryBackend(CacheBackend):
 
         frame_cells: dict[int, bool | None] = {}
         plan = None
+        holds_bytes = False
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
             immutable = False
             stored = list(map(dict, value))
+        elif whole and (marshalled := _plain_data.marshal_dumps(value, facts)) is not None:
+            immutable = False
+            stored = _Marshalled(marshalled)
         elif plain is None:
             immutable = False
+            premade = None
+            if parts:
+                premade = {}
+                for part_id, (part, part_facts) in parts.items():
+                    data = _plain_data.marshal_dumps(part, part_facts)
+                    if data is not None:
+                        premade[part_id] = _Marshalled(data)
+            elif facts is not None and walk is None:
+                walk = _plain_data.tree_walk(value)  # for the copy, a container at a time
             # Only for a decorator entry, where the stored value IS what the
             # next call hands back. A notebook statement's payload is the
             # variables a cell left behind, and one unisolatable variable among
@@ -616,7 +756,9 @@ class InMemoryBackend(CacheBackend):
                 by_reference=fell_back,
                 by_spine=by_spine,
                 walk=walk,
+                premade=premade,
             )
+            holds_bytes = bool(premade) and not fell_back
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
                 # each on its own, each the fastest way it allows. Planned
@@ -666,6 +808,10 @@ class InMemoryBackend(CacheBackend):
                 self._copy_plans[key] = plan
             else:
                 self._copy_plans.pop(key, None)
+            if holds_bytes:
+                self._holds_bytes.add(key)
+            else:
+                self._holds_bytes.discard(key)
             self._current_size_bytes += size
 
             # Check max_entries limit
@@ -688,6 +834,7 @@ class InMemoryBackend(CacheBackend):
         self._dict_rows.discard(key)
         self._frame_cells.pop(key, None)
         self._copy_plans.pop(key, None)
+        self._holds_bytes.discard(key)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
         entry = self._store.pop(key, None)

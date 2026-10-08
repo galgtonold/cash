@@ -16,16 +16,19 @@ falls back to its general walk.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import datetime
 import functools
 import gc
+import marshal
 import operator
 import pickle
 import random
 import sys
 from collections import deque
+from collections.abc import Mapping
 from itertools import chain, compress, repeat
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import kept_state
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
@@ -207,6 +210,9 @@ def is_tree(value: Any, leaves: tuple | None = None) -> bool:
     "none" without a walk that visits the items one at a time."""
     if type(value) not in TREE_NODES:
         return False
+    facts = _looked_at(value, leaves)
+    if facts is not _UNKNOWN:
+        return facts is not None and facts.leaves_within(leaves)
     try:
         for _level in tree_levels(value, leaves):
             pass
@@ -229,6 +235,9 @@ def held_only_by_parents(value: Any, leaves: tuple) -> bool:
     """
     if type(value) not in (list, dict):
         return False
+    facts = _looked_at(value, leaves)
+    if facts is not _UNKNOWN:
+        return facts is not None and facts.held_once and facts.leaves_within(leaves)
     try:
         for flat, types in tree_levels(value, leaves):
             if types.isdisjoint(_NODES):
@@ -291,6 +300,260 @@ def tree_levels(value: Any, leaves: tuple | None = None):
         # a Python step per item, three million for a million records.
         level = flat if all(t in TREE_NODES for t in types) else list(compress(flat, map(_NODES.__contains__, map(type, flat))))
     raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
+
+
+class TreeFacts(NamedTuple):
+    """What one walk of JSON-like data (`tree_facts`) found."""
+
+    #: Every exact type below the top and the top's own: the containers,
+    #: the leaves and the dict keys.
+    types: frozenset
+    #: Whether every dict, list and tuple below the top is referenced by its
+    #: parent alone, and once (`held_only_by_parents`).
+    held_once: bool
+    #: `tree_size`'s estimate of the footprint.
+    size: int
+    #: How many containers, the top included.
+    nodes: int
+
+    def leaves_within(self, leaves: tuple | None) -> bool:
+        """Is every leaf and key type among *leaves* (None: the default leaves)?"""
+        if leaves is None:
+            return True
+        return self.types - _NODES <= frozenset(leaves)
+
+
+#: Inside a `one_look`: the values it is about, by name, and the facts
+#: found for them, ``id -> (name, facts)``. None outside one.
+_LOOKED: contextvars.ContextVar[tuple[Mapping[str, Any], dict[int, tuple[str, TreeFacts | None]]] | None] = (
+    contextvars.ContextVar("cash_plain_data_looked", default=None)
+)
+
+#: `_looked_at`'s answer for a value no `one_look` is about, or for
+#: *leaves* that could hold a type its walk would not have taken as a leaf.
+_UNKNOWN: Any = object()
+
+#: A level with at most this many containers is searched for parts
+#: `one_look` has already walked (`tree_facts`).
+_SPLICE_MAX = 64
+
+
+@contextlib.contextmanager
+def one_look(named: Mapping[str, Any]):
+    """Walk each JSON-like value of *named* once while it lasts.
+
+    A statement's outputs are looked at by several checks before they are
+    stored -- whether another name reaches into them, whether they hold a
+    closure, how big they are, how to copy them -- and each was a walk over
+    every container: four for a million parsed records, more than building
+    them took. Inside it, `tree_facts` remembers what it found for a value
+    of *named*, and `is_tree`, `held_only_by_parents` and the RAM tier
+    answer from that; the walk of a dict holding such a value (a notebook
+    entry's payload) takes the value's facts instead of walking it again.
+
+    Nothing here holds a value: the checks count references, and *named*
+    holds them already. A fact is used only while *named* still binds that
+    very object. Only for a stretch in which no code of the user's runs: a
+    value changed in place inside it would be answered from what it was.
+    Nested, the outermost one counts.
+    """
+    token = _LOOKED.set((named, {})) if _LOOKED.get() is None else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _LOOKED.reset(token)
+
+
+def _looked_at(value: Any, leaves: tuple | None) -> Any:
+    """`tree_facts` of *value* when a `one_look` is about it (None when it
+    is not JSON-like data), else `_UNKNOWN`. Also `_UNKNOWN` for *leaves*
+    the walk did not count as leaves: "not a tree" says nothing about them."""
+    look = _LOOKED.get()
+    if look is None or _name_in(look[0], value) is None:
+        return _UNKNOWN
+    if leaves is not None and not frozenset(leaves) <= _facts_leaves():
+        return _UNKNOWN
+    return tree_facts(value)
+
+
+def _name_in(named: Mapping[str, Any], value: Any) -> str | None:
+    """The name *named* binds *value* under, or None."""
+    for name, bound in named.items():
+        if bound is value:
+            return name
+    return None
+
+
+def _known_facts(look: tuple[Mapping[str, Any], dict], value: Any) -> tuple[bool, TreeFacts | None]:
+    """``(found, facts)``: what the current look found for *value* already."""
+    named, memo = look
+    known = memo.get(id(value))
+    if known is not None and named.get(known[0]) is value:
+        return True, known[1]
+    return False, None
+
+
+def _facts_leaves() -> frozenset:
+    """The leaf types `tree_facts` walks over: those of `tree_levels`."""
+    fakes = fake_clock()[0]
+    return frozenset(LEAF_TYPES + fakes) if fakes else _LEAVES
+
+
+_LEAVES = frozenset(LEAF_TYPES)
+
+
+def tree_facts(value: Any) -> TreeFacts | None:
+    """`TreeFacts` of JSON-like *value* (exact dicts, lists and tuples over
+    the leaves of `tree_levels`), from one walk a level at a time; None for
+    anything else. A value a `one_look` is about is walked once in it."""
+    if type(value) not in TREE_NODES:
+        return None
+    look = _LOOKED.get()
+    if look is not None:
+        found, facts = _known_facts(look, value)
+        if found:
+            return facts
+    try:
+        with _gc_paused():  # a dict's values view per dict, see `_gc_paused`
+            facts = _tree_facts(value, look)
+    except (_NotPlain, TypeError):  # TypeError: an unhashable type among them
+        facts = None
+    if look is not None:
+        name = _name_in(look[0], value)
+        if name is not None:
+            look[1][id(value)] = (name, facts)
+    return facts
+
+
+def tree_facts_and_walk(value: Any) -> tuple[TreeFacts | None, list | None]:
+    """`tree_facts` and `tree_walk` of *value* from the one walk, for a
+    caller that may copy it by `spine_copy` (outside a `one_look`)."""
+    if type(value) not in TREE_NODES:
+        return None, None
+    walk: list = []
+    try:
+        with _gc_paused():
+            return _tree_facts(value, None, walk), walk
+    except (_NotPlain, TypeError):
+        return None, None
+
+
+def in_a_look() -> bool:
+    """Is a `one_look` open?"""
+    return _LOOKED.get() is not None
+
+
+def _tree_facts(value: Any, look: tuple[Mapping[str, Any], dict] | None, walk: list | None = None) -> TreeFacts | None:
+    """The walk behind `tree_facts`, the way `_tree_walk` goes: each level's
+    containers in their order, so *walk*, when given, receives its levels
+    (`tree_walk`). Parts *look* knows are taken whole, never with *walk*."""
+    leaves = _facts_leaves()
+    allowed = leaves | _NODES
+    found = {type(value)}
+    held_once = True
+    size = sys.getsizeof(value)
+    nodes = 0
+    level: list = [value]
+    for depth in range(MAX_LEVELS + 1):
+        if walk is None and look is not None and look[1] and depth and len(level) <= _SPLICE_MAX:
+            # A part walked before in this look: its facts, not its levels.
+            rest = []
+            for node in level:
+                found_before, facts = _known_facts(look, node)
+                if not found_before:
+                    rest.append(node)
+                    continue
+                if facts is None:
+                    return None
+                found |= facts.types
+                size += facts.size - sys.getsizeof(node)  # counted once already, as an item above
+                nodes += facts.nodes
+                held_once = False  # not read for the parts taken whole
+            level = rest
+            if not level:
+                break
+        if depth == MAX_LEVELS:
+            raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
+        nodes += len(level)
+        kinds = set(map(type, level))
+        key_types: set = set()
+        if dict in kinds:
+            if len(kinds) == 1:
+                dicts, held = level, map(dict.values, level)
+            else:
+                is_dict = _of_kind(level, dict)
+                dicts = list(compress(level, is_dict))
+                held = list(level)
+                _put_at(held, is_dict, map(dict.values, dicts))
+            key_types = set(map(type, chain.from_iterable(dicts)))
+            if not key_types <= leaves:
+                raise _NotPlain
+            found |= key_types
+            size += _keys_size(dicts)
+            flat = list(chain.from_iterable(held))
+            del held
+        else:
+            flat = list(chain.from_iterable(level))
+        types = set(map(type, flat))
+        if not types <= allowed:
+            raise _NotPlain
+        found |= types
+        size += _level_size(flat)
+        if walk is not None:
+            walk.append((level, flat, types, key_types))
+        if types.isdisjoint(_NODES):
+            break
+        # As `held_only_by_parents` reads it: an item held by its parent
+        # alone has `_unshared_refs` references while the flat list and,
+        # when the containers are picked out, that list hold it too.
+        if types <= _NODES:
+            level, extra = flat, 0
+        else:
+            level, extra = list(compress(flat, map(_NODES.__contains__, map(type, flat)))), 1
+        if held_once and max(map(sys.getrefcount, level)) > _unshared_refs() + extra:
+            held_once = False
+    return TreeFacts(frozenset(found), held_once, size, nodes)
+
+
+def _keys_size(dicts: list) -> int:
+    """`_level_size` of the keys of *dicts*, from a sample of the dicts when
+    there are many: listing every key of a million records was a pass of its own."""
+    n = len(dicts)
+    if n <= SIZE_EXACT_UP_TO:
+        return _level_size(list(chain.from_iterable(dicts)))
+    return sum(map(sys.getsizeof, chain.from_iterable(map(dicts.__getitem__, _picks(n))))) * n // SIZE_SAMPLE
+
+
+#: The exact types `marshal` writes and reads back as themselves. Not
+#: ``bytearray``: marshal writes anything with a buffer as ``bytes``.
+MARSHAL_TYPES = frozenset({dict, list, tuple, str, int, float, bool, type(None), bytes, complex})
+
+
+def marshal_dumps(value: Any, facts: TreeFacts | None) -> bytes | None:
+    """*value* as `marshal` bytes, when *facts* (`tree_facts` of it) show it
+    holds nothing but `MARSHAL_TYPES`; else None.
+
+    A copy that `marshal_loads` turns back into the same value, built in C:
+    each object one step, where `spine_copy` takes Python steps per container
+    and pickle keeps a memo entry per object -- 2.3 s and 1.8 s for a million
+    nested records against 0.6 s. Every object referenced more than once is
+    written once and read back as one object, as pickle does: a list two
+    names share, a dict key every record repeats.
+    """
+    if facts is None or not facts.types <= MARSHAL_TYPES:
+        return None
+    try:
+        return marshal.dumps(value)
+    except (ValueError, RecursionError):
+        return None
+
+
+def marshal_loads(data: bytes) -> Any:
+    """The value `marshal_dumps` wrote, built with the collector held off
+    (`_gc_paused`)."""
+    with _gc_paused():
+        return marshal.loads(data)
 
 
 def numpy_scalar_types() -> tuple:

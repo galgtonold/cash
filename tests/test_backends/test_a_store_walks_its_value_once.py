@@ -4,7 +4,7 @@
 over the 200,000 ints: one to size it (``tree_size``), one to copy it
 (``spine_copy``) and one to plan the copy a hit would make (``copy_plan``),
 15 ms of a cell the plain kernel ran in 30 ms. The size and the copy now
-share one walk, and the plan is made by the first hit: most entries are
+share one walk (`tree_facts_and_walk`), and the plan is made by the first hit: most entries are
 never read.
 """
 
@@ -39,11 +39,12 @@ def _counting(monkeypatch, name):
 
 def test_a_store_walks_the_leaves_once_and_makes_no_copy_plan(monkeypatch):
     walks = _counting(monkeypatch, "_tree_walk")
+    facts_walks = _counting(monkeypatch, "_tree_facts")  # the walk that sizes it, kept for the copy
     plans = _counting(monkeypatch, "copy_plan")
     entry = _entry()
     backend = InMemoryBackend()
     backend.set("k", entry, {})
-    assert len(walks) == 1
+    assert len(walks) + len(facts_walks) == 1
     assert plans == []
     stored = backend.get("k")[1]
     assert stored == entry and stored["variables"]["d"] is not entry["variables"]["d"]

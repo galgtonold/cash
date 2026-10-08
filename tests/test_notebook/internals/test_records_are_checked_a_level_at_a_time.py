@@ -2,12 +2,15 @@
 holders and for closures with state without a Python step per record.
 
 Both checks walked the records one container at a time: seconds on top of a
-first run that took two. A list of JSON-like records over plain values is
+first run that took two; so did, with numpy loaded, the check for a numpy view
+inside an output. A list of JSON-like records over plain values is
 read a level at a time instead. These tests pin that the per-container walks
 are not taken for such records, and are still taken for anything else.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from cash.notebook import call_key, shared_objects
 
@@ -64,3 +67,41 @@ def test_the_closure_check_walks_records_holding_a_function(monkeypatch):
 
     assert not call_key.holds_a_closure_with_state(records)
     assert _CountingSet.calls > 5_000
+
+
+def _alias_walks(monkeypatch) -> list:
+    from cash.notebook.statement import derivation_edges
+
+    walks = []
+    real = derivation_edges._aliases_in
+
+    def counting(value, *args):
+        walks.append(1)
+        return real(value, *args)
+
+    monkeypatch.setattr(derivation_edges, "_aliases_in", counting)
+    return walks
+
+
+def test_the_view_check_does_not_walk_records(monkeypatch):
+    """With numpy loaded, the check for a numpy view held inside an output
+    walked a million records a container at a time: 2.4 s."""
+    pytest.importorskip("numpy")
+    from cash.notebook.statement.derivation_edges import is_uncacheable_alias
+
+    walks = _alias_walks(monkeypatch)
+    records = _records(5_000)
+    assert not is_uncacheable_alias(records, {"records": records})
+    assert walks == []
+
+
+def test_the_view_check_still_finds_a_view_inside_records(monkeypatch):
+    np = pytest.importorskip("numpy")
+    from cash.notebook.statement.derivation_edges import is_uncacheable_alias
+
+    walks = _alias_walks(monkeypatch)
+    base = np.arange(10)
+    records = _records(5_000)
+    records[-1]["window"] = base[:3]
+    assert is_uncacheable_alias(records, {"records": records, "base": base})
+    assert walks == [1]

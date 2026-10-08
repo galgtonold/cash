@@ -308,8 +308,9 @@ class CacheBackend(ABC):
         its value was not worth storing. The default keeps nothing.
         """
 
-    def peek_entry(self, key: str) -> tuple[MetadataDict, Any] | None:
+    def peek_entry(self, key: str, *, value: bool = True) -> tuple[MetadataDict, Any] | None:
         """``(metadata, value)`` for *key* without counting a use, or None.
+        With *value* False the value is not read: ``(metadata, None)``.
 
         Only a backend holding live values can answer cheaply (the RAM tier);
         the default does not answer.

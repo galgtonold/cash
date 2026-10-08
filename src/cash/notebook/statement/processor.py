@@ -10,6 +10,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
+from cash import _plain_data
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
 from cash.backends.persistence_policy import PersistencePolicy
@@ -1235,27 +1236,30 @@ class StatementProcessor:
             accessed_remote=execution.accessed_remote,
             no_cache=run.annotation is not None and run.annotation.no_cache,
         )
-        if not run.skip_cache:
-            self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
-        self._record_file_effects(run, execution)
+        # The share check, the closure check and the RAM tier each look into
+        # the outputs; JSON-like ones are walked once for all of them.
+        with _plain_data.one_look(captured_vars):
+            if not run.skip_cache:
+                self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
+            self._record_file_effects(run, execution)
 
-        # Detect in-place mutations (detection-only; do not modify lineage).
-        # Reuses the StatementAnalysis from process_statement to avoid a
-        # second pass of AST visitors over the same tree.
-        pure_mutations = run.analysis.all_mutated_vars - run.outputs
-        if pure_mutations:
-            logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
+            # Detect in-place mutations (detection-only; do not modify lineage).
+            # Reuses the StatementAnalysis from process_statement to avoid a
+            # second pass of AST visitors over the same tree.
+            pure_mutations = run.analysis.all_mutated_vars - run.outputs
+            if pure_mutations:
+                logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
-        miss_guarded = self._miss_guarded(run, execution, captured_vars)
-        self._skip_a_newly_seen_draw(run)
+            miss_guarded = self._miss_guarded(run, execution, captured_vars)
+            self._skip_a_newly_seen_draw(run)
 
-        saved_metadata = None
-        if not run.skip_cache:
-            saved_metadata = self._store.save(
-                run, execution, captured_vars, miss_guarded=miss_guarded, seed_epochs=self._randomness.seed_epochs
-            )
-        else:
-            logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+            saved_metadata = None
+            if not run.skip_cache:
+                saved_metadata = self._store.save(
+                    run, execution, captured_vars, miss_guarded=miss_guarded, seed_epochs=self._randomness.seed_epochs
+                )
+            else:
+                logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
         self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
