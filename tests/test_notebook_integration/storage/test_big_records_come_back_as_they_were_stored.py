@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.timeout(300)]
 N = 20_000
 
 CELLS = [
-    "%cash_badge print",
+    "import cash\n%cash_on\n%cash_badge print",
     "import time",
     (
         "records = [{'id': i, 'tags': common, 'meta': {'k': i, 'even': i % 2 == 0, 'neg': -0.0, 'z': 1j, "
