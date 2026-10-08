@@ -75,6 +75,10 @@ def _is_silent(args: tuple, kwargs: dict) -> bool:
 
 @magics_class
 class CashMagics(Magics):
+    # The running cell's input is already in IPython's history
+    # (``_store_history_first``); a class default, so it holds before __init__.
+    _cell_history_stored = False
+
     def __init__(self, shell: ShellProtocol, cash_instance: Cash) -> None:
         """Initialise CashMagics in four phases (ordering matters):
 
@@ -748,7 +752,14 @@ class CashMagics(Magics):
     def _execute_cell_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         if not self._auto_cache_enabled or _is_silent(args, kwargs):
             return self._original_run_cell(raw_cell, *args, **kwargs)
+        prev_stored = self._cell_history_stored
+        self._cell_history_stored = self._store_history_first(raw_cell, args, kwargs)
+        try:
+            return self._run_cell_cached(raw_cell, args, kwargs)
+        finally:
+            self._cell_history_stored = prev_stored
 
+    def _run_cell_cached(self, raw_cell: str, args: tuple, kwargs: dict) -> Any:
         try:
             result = self._cell_executor.execute_cell(
                 raw_cell,
@@ -762,9 +773,14 @@ class CashMagics(Magics):
             return self._synthesize_run_cell_raise(e, args, kwargs)
 
         if isinstance(result, RunInstead):
-            return self._original_run_cell(result.source, *args, **kwargs)
+            with self._history_records():
+                return self._original_run_cell(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
-            with self._forgetting_what_ipython_binds(raw_cell), self._statement_processor.watching_reads(raw_cell):
+            with (
+                self._forgetting_what_ipython_binds(raw_cell),
+                self._statement_processor.watching_reads(raw_cell),
+                self._history_records(),
+            ):
                 return self._original_run_cell(raw_cell, *args, **kwargs)
 
         return self._finalize_cell_execution(raw_cell, result, args, kwargs)
@@ -815,6 +831,14 @@ class CashMagics(Magics):
             self._in_sync_cell = prev_in_sync
 
     async def _execute_cell_async_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
+        prev_stored = self._cell_history_stored
+        self._cell_history_stored = self._store_history_first(raw_cell, args, kwargs)
+        try:
+            return await self._run_cell_cached_async(raw_cell, args, kwargs)
+        finally:
+            self._cell_history_stored = prev_stored
+
+    async def _run_cell_cached_async(self, raw_cell: str, args: tuple, kwargs: dict) -> Any:
         try:
             result = await self._cell_executor.execute_cell_async(
                 raw_cell,
@@ -829,11 +853,16 @@ class CashMagics(Magics):
             # needs its own.
             if result.source != raw_cell:
                 kwargs = self._substitute_cell_kwargs(result.source, kwargs)
-            return await self._original_run_cell_async(result.source, *args, **kwargs)
+            with self._history_records():
+                return await self._original_run_cell_async(result.source, *args, **kwargs)
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.
-            with self._forgetting_what_ipython_binds(raw_cell), self._statement_processor.watching_reads(raw_cell):
+            with (
+                self._forgetting_what_ipython_binds(raw_cell),
+                self._statement_processor.watching_reads(raw_cell),
+                self._history_records(),
+            ):
                 return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
         return await self._finalize_cell_execution_async(raw_cell, result, args, kwargs)
@@ -884,7 +913,7 @@ class CashMagics(Magics):
         kwargs: dict,
     ) -> Any:
         """:meth:`_synthesize_run_cell_raise` through the original ``run_cell_async``."""
-        with self._raising_quietly(e):
+        with self._raising_quietly(e), self._history_records():
             return await self._original_run_cell_async(
                 "raise __cash_exception__",
                 *args,
@@ -905,8 +934,73 @@ class CashMagics(Magics):
         Hook-path only: makes sense when ``_execute_cell`` is itself standing
         in for ``run_cell``.
         """
-        with self._raising_quietly(e):
+        with self._raising_quietly(e), self._history_records():
             return self._original_run_cell("raise __cash_exception__", *args, **kwargs)
+
+    def _store_history_first(self, raw_cell: str, args: tuple, kwargs: dict) -> bool:
+        """Put *raw_cell* in IPython's input history before cash runs it.
+
+        IPython stores a cell's input (``_i``, ``In``, ``_ih``, ``%history``,
+        ``%save``, ``%rerun`` and the history database read it) as the cell
+        starts, before its code runs. cash hands IPython a stand-in cell
+        (``pass``, or a one-line ``raise``) after it ran the statements
+        itself, so the history recorded the stand-in, and ``_i`` read inside
+        the cell was one input behind. The cell's own input is stored here,
+        at the count IPython then gives the stand-in, and
+        :meth:`_history_records` drops the stand-in's entry.
+        Returns whether it stored one."""
+        store = kwargs.get("store_history", args[0] if args else False)
+        history = getattr(self.shell, "history_manager", None)
+        if not store or history is None or not raw_cell or raw_cell.isspace():
+            return False
+        try:
+            parsed = self.shell.transform_cell(raw_cell)
+        except Exception:  # noqa: BLE001 - IPython then stores the raw cell as its input
+            parsed = raw_cell
+        if "get_ipython().run_line_magic(" in parsed and "paste" in parsed:
+            return False  # IPython keeps %paste / %cpaste out of the history
+        try:
+            history.store_inputs(self.shell.execution_count, parsed, raw_cell)
+        except Exception:  # noqa: BLE001 - the stand-in's entry is then kept, as before
+            logger.debug("Storing the cell's input history failed", exc_info=True)
+            return False
+        return True
+
+    @contextlib.contextmanager
+    def _history_records(self) -> Iterator[None]:
+        """Around the delegation that ends a cell cash ran: when
+        :meth:`_store_history_first` stored the cell's input, drop the input
+        IPython stores for the delegated cell (the first ``store_inputs``
+        call, made before any of it runs), so the history keeps one entry
+        per cell, the user's own."""
+        history = getattr(self.shell, "history_manager", None)
+        original = getattr(history, "store_inputs", None) if history is not None else None
+        if not self._cell_history_stored or original is None:
+            yield
+            return
+        self._cell_history_stored = False
+        pending = [True]
+
+        def store_inputs(line_num: int, source: str, source_raw: str | None = None) -> None:
+            if pending:
+                pending.clear()
+                return None
+            return original(line_num, source, source_raw)
+
+        had_own = "store_inputs" in getattr(history, "__dict__", {})
+        try:
+            history.store_inputs = store_inputs
+        except (AttributeError, TypeError):
+            yield
+            return
+        try:
+            yield
+        finally:
+            with contextlib.suppress(AttributeError, TypeError):
+                if had_own:
+                    history.store_inputs = original
+                else:
+                    del history.store_inputs  # back to the class's method
 
     @contextlib.contextmanager
     def _raising_quietly(self, e: BaseException) -> Iterator[None]:
@@ -955,8 +1049,10 @@ class CashMagics(Magics):
         self._finalize_cell_body(raw_cell, done)
 
         # Delegate to original run_cell with "pass" so IPython keeps its
-        # execution count + history consistent.
-        result = self._original_run_cell("pass", *args, **kwargs)
+        # execution count + history consistent; the history records the
+        # user's cell, not the stand-in.
+        with self._history_records():
+            result = self._original_run_cell("pass", *args, **kwargs)
         self._record_output_history(done, result)
         return result
 
@@ -1050,11 +1146,12 @@ class CashMagics(Magics):
         self._finalize_cell_body(raw_cell, done)
         # Replace ``transformed_cell`` so IPython runs our ``"pass"`` and NOT
         # the original user cell again (see _substitute_cell_kwargs).
-        result = await self._original_run_cell_async(
-            "pass",
-            *args,
-            **self._substitute_cell_kwargs("pass", kwargs),
-        )
+        with self._history_records():
+            result = await self._original_run_cell_async(
+                "pass",
+                *args,
+                **self._substitute_cell_kwargs("pass", kwargs),
+            )
         self._record_output_history(done, result)
         return result
 
