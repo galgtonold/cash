@@ -32,7 +32,7 @@ from collections.abc import Callable, Mapping
 from itertools import accumulate, chain, compress, islice
 from typing import Any
 
-__all__ = ["find", "put_back"]
+__all__ = ["find", "named_objects", "put_back", "resolver"]
 
 #: Containers and objects a walk looks into before it gives up.
 MAX_NODES = 5_000_000
@@ -51,6 +51,41 @@ class _GiveUp(Exception):
 def type_name(t: type) -> str:
     """How an entry names a kind: ``module.qualname``."""
     return f"{t.__module__}.{t.__qualname__}"
+
+
+def named_objects(func: Any, keep: Callable[[Any], bool]) -> dict[int, list]:
+    """``id(object) -> ["global" | "closure", name]`` for each object *keep*
+    accepts among the globals *func*'s body names and its closure variables."""
+    try:
+        code = func.__code__
+        pairs = [("closure", name, cell.cell_contents) for name, cell in zip(code.co_freevars, func.__closure__ or ())]
+        names: set[str] = set()
+        scopes = [code]
+        while scopes:
+            scope = scopes.pop()
+            names.update(scope.co_names)
+            scopes.extend(c for c in scope.co_consts if isinstance(c, types.CodeType))
+        globals_ = func.__globals__
+        pairs += [("global", name, globals_[name]) for name in names if name in globals_]
+    except (AttributeError, ValueError, TypeError):
+        return {}
+    return {id(obj): [kind, name] for kind, name, obj in pairs if keep(obj)}
+
+
+def resolver(func: Any) -> Callable[[str, str], Any]:
+    """``kind, name -> object``: what *func*'s global or closure variable of
+    that name holds now (`named_objects`)."""
+
+    def resolve(kind: str, name: str) -> Any:
+        if kind == "closure":
+            cells = dict(zip(func.__code__.co_freevars, func.__closure__ or ()))
+            try:
+                return cells[name].cell_contents
+            except ValueError as exc:  # an empty cell
+                raise LookupError(name) from exc
+        return func.__globals__[name]
+
+    return resolve
 
 
 def find(value: Any, named: Mapping[int, list]) -> list | None:

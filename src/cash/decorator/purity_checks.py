@@ -16,7 +16,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data
+from .. import _plain_data, identity_refs
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.cacheability_decision import identity_coupled_reason
@@ -129,15 +129,7 @@ def held_sentinels(func) -> dict[int, list]:
     lock): naming one is common, holding one in a result is not, and every
     store of the function would walk its result for it.
     """
-    try:
-        code = func.__code__
-        pairs = [("closure", name, cell.cell_contents) for name, cell in zip(code.co_freevars, func.__closure__ or ())]
-        named = {name for scope in iter_code_scopes(code) for name in scope.co_names}
-        globals_ = func.__globals__
-        pairs += [("global", name, globals_[name]) for name in named if name in globals_]
-    except (AttributeError, ValueError, RuntimeError):
-        return {}
-    return {id(obj): [kind, name] for kind, name, obj in pairs if _sentinel_like(obj)}
+    return identity_refs.named_objects(func, _sentinel_like)
 
 
 def _sentinel_like(value) -> bool:

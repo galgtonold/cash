@@ -329,7 +329,8 @@ class ResultStore:
         if metadata.held_refs:
             spec = self._registry.cached.get(func_name)
             if spec is not None:
-                value = identity_refs.put_back(value, metadata.held_refs, _resolver(inspect.unwrap(spec.func)))
+                resolve = identity_refs.resolver(inspect.unwrap(spec.func))
+                value = identity_refs.put_back(value, metadata.held_refs, resolve)
         ref = metadata.result_ref
         if ref and len(ref) == 2:
             spec = self._registry.cached.get(func_name)
@@ -900,18 +901,3 @@ class ResultStore:
                 self._backend_slot.backend.delete(f"{prefix}:chunk_{index}")
             except Exception:  # noqa: BLE001 - cleanup must not raise
                 logger.debug("[CORE] could not drop replaced chunk %d of %s", index, prefix)
-
-
-def _resolver(func: Any) -> Any:
-    """``kind, name -> object``: what *func*'s global or closure variable holds now."""
-
-    def resolve(kind: str, name: str) -> Any:
-        if kind == "closure":
-            cells = dict(zip(func.__code__.co_freevars, func.__closure__ or ()))
-            try:
-                return cells[name].cell_contents
-            except ValueError as exc:  # an empty cell
-                raise LookupError(name) from exc
-        return func.__globals__[name]
-
-    return resolve

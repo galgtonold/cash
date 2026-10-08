@@ -63,6 +63,7 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
+from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
@@ -834,6 +835,7 @@ class CallUnit:
         reads = replay_deps(metadata)
         replay_output(metadata)
         restore_globals(call.fn, call.mutated_globals, captured_globals)
+        value = put_back_for_call(call.fn, value, metadata.get("held_refs"))
         if not captured_globals:
             self._hold(call.key, value, metadata.get(DIGEST_FIELD), metadata.get(SIZE_FIELD))
         self._record(call.func_name, call.site, call.key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
@@ -974,6 +976,7 @@ class CallUnit:
             function=call.func_name,
             plain_value=call.site.source == self.plain_value_source,
             code_module=getattr(call.fn, "__module__", None),
+            held_refs=find_for_call(call.fn, result),
         )
         if held:
             self._hold(call.key, result, *held)
