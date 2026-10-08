@@ -186,7 +186,7 @@ notebook statement also drops its older versions when the new one is written.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @435bcd32, cash/backends/serialization.py:PickleSerializer.serialize @5b9d05cd -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @42f0398a, cash/backends/serialization.py:PickleSerializer.serialize @5b9d05cd -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
