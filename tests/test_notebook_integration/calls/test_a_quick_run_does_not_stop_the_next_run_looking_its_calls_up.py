@@ -40,7 +40,7 @@ def test_a_parameter_switched_to_a_quick_value_and_back_is_served(nb_runner, tmp
         nb_runner.set_cell_source(3, f"cfg = {cfg}")
         nb_runner.run_cells([3, 4])
     assert nb_runner.peek("res") == "6.0"
-    assert log.read_text().split() == ["a", "b"], "run(cfg) for 'a' was computed again"
+    assert log.read_text(encoding="utf-8").split() == ["a", "b"], "run(cfg) for 'a' was computed again"
 
 
 def test_a_loop_alternating_quick_and_slow_items_serves_the_slow_ones(nb_runner, tmp_path):
@@ -48,9 +48,9 @@ def test_a_loop_alternating_quick_and_slow_items_serves_the_slow_ones(nb_runner,
     items = [("a", 0), ("b", 0.2), ("c", 0), ("d", 0.2), ("e", 0), ("f", 0.2)]
     loop = "out = []\nfor it in items:\n    out.append(process(it))"
     log = _setup(nb_runner, tmp_path, [process, f"items = {items}", loop])
-    assert log.read_text().split() == ["a", "b", "c", "d", "e", "f"]
+    assert log.read_text(encoding="utf-8").split() == ["a", "b", "c", "d", "e", "f"]
     nb_runner.set_cell_source(3, f"items = {items + [('g', 0)]}")
     nb_runner.run_cells([3, 4])
     assert nb_runner.peek("out") == repr(list("ABCDEFG"))
-    slow_again = [tag for tag in log.read_text().split()[6:] if tag in ("b", "d", "f")]
+    slow_again = [tag for tag in log.read_text(encoding="utf-8").split()[6:] if tag in ("b", "d", "f")]
     assert slow_again == [], f"slow items computed again: {slow_again}"

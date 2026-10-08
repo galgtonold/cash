@@ -27,9 +27,9 @@ def test_slow_calls_at_the_re_check_are_served_on_a_re_run(nb_runner, tmp_path):
     nb_runner.create_notebook([work, "n = 60", "r = [work(i) for i in range(n)]"])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert len(log.read_text().split()) == 60
+    assert len(log.read_text(encoding="utf-8").split()) == 60
 
     nb_runner.set_cell_source(2, "n = 61")
     nb_runner.run_cells([2, 3])
     assert nb_runner.peek("sum(r)") == str(sum(i * 2 for i in range(61)))
-    assert log.read_text().split()[60:] == ["60"], "calls the cache held ran again"
+    assert log.read_text(encoding="utf-8").split()[60:] == ["60"], "calls the cache held ran again"
