@@ -22,10 +22,19 @@ import inspect as _inspect
 import logging
 import sys
 import types as _types
+import weakref
 from collections.abc import Mapping
 from typing import Any
 
+from cash.decorator.arg_hashing import (
+    exposure_mark,
+    frame_borrows_its_data,
+    frame_signature,
+    is_cow_pandas,
+    watch_array_handles,
+)
 from cash.notebook._tee import TeeWriter
+from cash.sizing import pandas_nbytes
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.tracker_context import active_tracker
 from cash.value_hash import compute_hash, is_identity_fallback_hash
@@ -34,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "UNWRAP_FAILED",
+    "ArgFingerprints",
     "call_capturing_output",
     "capture_globals",
     "closure_cells",
@@ -250,14 +260,95 @@ def _rebinds(code: _types.CodeType, cells: frozenset[str]) -> bool:
     return False
 
 
-def hash_args(args: tuple, kwargs: dict) -> tuple:
+#: A frame smaller than this is hashed again rather than remembered: its
+#: hash costs about what checking it costs.
+_FINGERPRINT_MIN_BYTES = 1 << 20
+
+
+class ArgFingerprints:
+    """The content hashes of the pandas frames calls received, kept while
+    the frame provably has not changed since it was hashed.
+
+    ``scores = [evaluate(df, a) for a in alphas]`` hashed ``df`` in full
+    before and after every call, to see whether the callee changed it: 0.7 s
+    a call for an 80 MB frame. Under copy-on-write a frame is checked
+    instead, as the decorator's arguments are: the hash is kept with a
+    shallow copy of the frame, which makes every write through pandas give
+    the frame new arrays, and with the frame's signature (`frame_signature`:
+    the identities of its manager, blocks and axes, its axis names and
+    ``attrs``). A write past pandas -- through a handle it gave out
+    (``.array``, a read-only view made writable), or into an array the
+    frame was built over -- makes the frame borrowed
+    (`frame_borrows_its_data`), and it is hashed again. Anything that is
+    not such a frame is hashed every time.
+
+    Kept for one cell (`clear`), and an entry only while its frame lives.
+    """
+
+    def __init__(self) -> None:
+        #: ``id(frame) -> (weak reference, shallow copy, signature, hash,
+        #: exposure mark)``.
+        self._memo: dict[int, tuple] = {}
+
+    def clear(self) -> None:
+        self._memo.clear()
+
+    def digest(self, value: Any) -> str:
+        """`compute_hash` of *value*, from the memo when it is a frame
+        that has not changed since it was hashed."""
+        if not is_cow_pandas(value):
+            return compute_hash(value)
+        found = self._lookup(value)
+        if found is not None:
+            return found
+        since = exposure_mark()
+        digest = compute_hash(value)
+        if not is_identity_fallback_hash(value, digest) and (pandas_nbytes(value) or 0) >= _FINGERPRINT_MIN_BYTES:
+            self._store(value, digest, since)
+        return digest
+
+    def _lookup(self, value: Any) -> str | None:
+        entry = self._memo.get(id(value))
+        if entry is None:
+            return None
+        ref, held, signature, digest, since = entry
+        try:
+            if ref() is value and not frame_borrows_its_data(value, held, since) and frame_signature(value) == signature:
+                return digest
+        except Exception:  # noqa: BLE001 - a pandas internals change: hash again
+            logger.debug("call unit: could not check a remembered frame", exc_info=True)
+        self._memo.pop(id(value), None)
+        return None
+
+    def _store(self, value: Any, digest: str, since: int) -> None:
+        """Remember *value*'s hash, *since* being the `exposure_mark` taken
+        before it was hashed; nothing for a frame something outside pandas
+        can write."""
+        try:
+            watch_array_handles()
+            held = value.copy(deep=False)
+            if frame_borrows_its_data(value, held, since):
+                return
+            signature = frame_signature(value)
+            memo = self._memo
+            key = id(value)
+            ref = weakref.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
+        except Exception:  # noqa: BLE001 - the memo is a speedup: hash every time
+            logger.debug("call unit: could not remember a frame", exc_info=True)
+            return
+        self._memo[key] = (ref, held, signature, digest, since)
+
+
+def hash_args(args: tuple, kwargs: dict, fingerprints: ArgFingerprints | None = None) -> tuple:
     """Content hashes of the live arguments, for mutation detection.
 
     Every byte of every argument (`compute_hash`): a callee that edits a
     frame's 500th row in place and returns something else must read as
     changed, or its result is stored and a hit skips the edit. Paid only on
     the miss path, twice per argument; a site whose keying and hashing cost
-    more than the call is run plain by the call-site guard.
+    more than the call is run plain by the call-site guard. With
+    *fingerprints*, a pandas frame that provably has not changed since it
+    was last hashed is not read again (`ArgFingerprints`).
 
     An argument whose content cannot be read at all fails closed:
 
@@ -282,7 +373,7 @@ def hash_args(args: tuple, kwargs: dict) -> tuple:
     out = []
     for value in (*args, *kwargs.values()):
         try:
-            h = compute_hash(value)
+            h = compute_hash(value) if fingerprints is None else fingerprints.digest(value)
         except Exception:  # noqa: BLE001 - see the comment below
             # This branch IS live, on every Python before 3.14: hashing an
             # instance of a locally-defined class raises
