@@ -103,6 +103,10 @@ class CacheMetadata:
     #: and, when it pickles, the ``pickle`` (base64). A lookup asks each for
     #: its token again (`dynamic_sources_fresh`).
     dynamic_sources: list[dict[str, str]] | None = None
+    #: The ``dynamic_depends_on=`` resolver calls of those callees, pickled
+    #: (`dynamic_sources.Resolution`): asked again on every lookup, in any
+    #: process, since a resolver may hand out a new source object.
+    dynamic_resolvers: list[dict[str, str]] | None = None
     #: One of those sources does not pickle, so only this process can check
     #: the entry: it stays in RAM (`PersistencePolicy.decide`).
     process_local: bool | None = None

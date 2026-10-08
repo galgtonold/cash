@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @6a50fa96, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3720afe5, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -130,7 +130,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @6a50fa96, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3720afe5, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
@@ -213,7 +213,7 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @435bcd32 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @378b39f3 -->
 A result is written to the RAM tier and to disk, however cheap it was, unless
 a tier's size cap refuses it or a source it depends on cannot be pickled or
 recorded; see

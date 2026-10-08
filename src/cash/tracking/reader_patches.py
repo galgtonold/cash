@@ -653,13 +653,23 @@ def _dynamic_of(tracker: Any) -> tuple[list, dict, list[str]]:
 
 def _portable(dynamic: tuple[list, dict, list[str]]) -> tuple[list, dict, list[str]]:
     """*dynamic* as it crosses back from a worker process: the resolver
-    calls stay behind (only the worker could run them again), and a source
-    that does not pickle becomes a dependency nothing can check, which keeps
-    the caller from being stored, rather than breaking the pool's result."""
+    calls come back too, to be asked again by the caller's entry like its
+    own (a resolver may hand out a new source object, which the old one
+    never answers for); a source or resolver call that does not pickle
+    becomes a dependency nothing can check, which keeps the caller from
+    being stored, rather than breaking the pool's result."""
     import pickle
 
-    sources, _resolutions, failed = dynamic
+    sources, resolutions, failed = dynamic
     kept, failed = [], list(failed)
+    portable: dict = {}
+    for key, resolution in resolutions.items():
+        try:
+            pickle.dumps(resolution)
+        except Exception:  # noqa: BLE001 - pickle raises whatever __reduce__ raises
+            failed.append(str(key[0]) if isinstance(key, tuple) and key else "a dynamic_depends_on resolver")
+            continue
+        portable[key] = resolution
     for source_id, source, token in sources:
         try:
             pickle.dumps(source)
@@ -667,7 +677,7 @@ def _portable(dynamic: tuple[list, dict, list[str]]) -> tuple[list, dict, list[s
             failed.append(source_id)
             continue
         kept.append((source_id, source, token))
-    return kept, {}, failed
+    return kept, portable, failed
 
 
 class _ReadsInWorker:
