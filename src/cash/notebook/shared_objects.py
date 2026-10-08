@@ -437,10 +437,113 @@ def _find_holders(
     directly or through containers and attributes a restore copies along;
     None when a holder is anything else.
 
-    Walks up `gc.get_referrers`, one level of containers per call. The ids in
-    *internal* are references already accounted for (the group's own
-    objects, the mappings that bind it, cash's own containers); this
-    function's own frame and its callers' are too. An object holding a
+    Looked for from the variables down first (`_holders_from_names`), which
+    costs what the namespace's own small containers cost; the search up
+    `gc.get_referrers` walks every object the garbage collector tracks, once
+    per level of containers -- 0.3 s a statement next to a list of three
+    million records. Down is only a first guess: the count taken again with
+    the variables it found joined decides, and when that still finds a holder
+    the search up runs.
+    """
+    found = _holders_from_names(targets, internal, user_ns, known)
+    if found:
+        return found
+    return _holders_from_referrers(targets, internal, user_ns, known)
+
+
+#: How far `_holders_from_names` looks: containers deep, objects in all, and
+#: the largest container it reads. A holder past these is left to the search
+#: up `gc.get_referrers`.
+_DOWN_DEPTH = 4
+_DOWN_NODES = 5_000
+_DOWN_WIDEST = 2_000
+
+
+def _holders_from_names(
+    targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
+) -> set[str]:
+    """The variables of *user_ns* not in *known* from which one of *targets*
+    is reached through the builtin containers and the attributes a restore
+    copies along (`attributes_of`), within `_DOWN_DEPTH` levels; empty when
+    none is found within the bounds.
+
+    Goes through what the search up goes through, and nothing in *internal*
+    (the group's own objects, cash's containers): a variable it names is
+    one that search would name too. One it misses holds a reference the
+    count still sees, which sends the caller up `gc.get_referrers`."""
+    wanted = {id(obj) for obj in targets}
+    exact = _EXACT_VALUE_TYPES
+    roots: dict[int, list[str]] = {}
+    for name, value in list(user_ns.items()):
+        if name in known or type(value) in exact:
+            continue
+        key = id(value)
+        if key in wanted or key not in internal:
+            roots.setdefault(key, []).append(name)
+    if not roots:
+        return set()
+    found: set[str] = set()
+    for key in [k for k in roots if k in wanted]:
+        found.update(roots.pop(key))
+    # Breadth first from every variable at once, remembering who reached
+    # whom, then up from the targets to the variables.
+    parents: dict[int, list[int]] = {key: [] for key in roots}
+    level = [user_ns[names[0]] for names in roots.values()]
+    hits: set[int] = set()
+    budget = _DOWN_NODES
+    for _depth in range(_DOWN_DEPTH):
+        below = []
+        for obj in level:
+            if not isinstance(obj, _CONTAINERS):
+                attrs = attributes_of(obj)
+                if attrs is None:
+                    continue
+                children = list(attrs.values())
+            elif len(obj) > _DOWN_WIDEST:
+                continue
+            else:
+                children = children_of(obj)
+            if not children or exact.issuperset(map(type, children)):
+                continue
+            parent = id(obj)
+            for child in children:
+                ckey = id(child)
+                if ckey in wanted:
+                    hits.add(parent)
+                    continue
+                if type(child) in exact or ckey in internal:
+                    continue
+                seen_from = parents.get(ckey)
+                if seen_from is not None:
+                    seen_from.append(parent)
+                    continue
+                parents[ckey] = [parent]
+                below.append(child)
+        budget -= len(below)
+        if not below or budget < 0:
+            break
+        level = below
+    # Up from the objects holding a target to the variables bound to them.
+    stack = list(hits)
+    reached: set[int] = set()
+    while stack:
+        key = stack.pop()
+        if key in reached:
+            continue
+        reached.add(key)
+        if key in roots:
+            found.update(roots[key])
+        stack.extend(parents.get(key, ()))
+    return found
+
+
+def _holders_from_referrers(
+    targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
+) -> set[str] | None:
+    """`_find_holders` up `gc.get_referrers`, one level of containers per
+    call. The ids in *internal* are references already accounted for (the
+    group's own objects, the mappings that bind it, cash's own containers);
+    this function's own frame and its callers' are too. An object holding a
     reference without telling the garbage collector is not found at all; the
     count taken again afterwards still sees it, and refuses.
     """
