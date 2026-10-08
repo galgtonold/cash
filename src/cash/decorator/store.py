@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .. import identity_refs
 from .._clock import perf_counter as _perf_counter
 from .._memo import RESULT_TYPES, LruMemo
 from ..backends.memory_backend import InMemoryBackend
@@ -32,7 +33,7 @@ from .dynamic_sources import DynamicSources, recorded_sources, remember_sources,
 from .explain import not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
-from .purity_checks import sentinel_ref
+from .purity_checks import held_sentinels, sentinel_ref
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -305,6 +306,14 @@ class ResultStore:
             return None
         return sentinel_ref(inspect.unwrap(spec.func), result)
 
+    def _held_refs(self, func_name: str, result: Any) -> list | None:
+        """The sentinels the body names that *result* holds inside it (`identity_refs.find`)."""
+        spec = self._registry.cached.get(func_name)
+        if spec is None:
+            return None
+        named = held_sentinels(inspect.unwrap(spec.func))
+        return identity_refs.find(result, named) if named else None
+
     def restore_identity(self, func_name: str, metadata: CacheMetadata, value: Any) -> Any:
         """What a hit hands back for *value*: the identity and flags the result had.
 
@@ -317,6 +326,10 @@ class ResultStore:
                 value.flags.writeable = False
             except (AttributeError, ValueError):
                 pass
+        if metadata.held_refs:
+            spec = self._registry.cached.get(func_name)
+            if spec is not None:
+                value = identity_refs.put_back(value, metadata.held_refs, _resolver(inspect.unwrap(spec.func)))
         ref = metadata.result_ref
         if ref and len(ref) == 2:
             spec = self._registry.cached.get(func_name)
@@ -505,7 +518,8 @@ class ResultStore:
                 # and lose disk persistence.
                 copy_required=not self._registry.is_frozen(func_name),
                 read_only=_read_only_array(result) or None,
-                result_ref=self._result_ref(func_name, result),
+                result_ref=(result_ref := self._result_ref(func_name, result)),
+                held_refs=None if result_ref else self._held_refs(func_name, result),
                 # The non-file sources its cached callees resolved, with their
                 # tokens: a lookup asks them again (`dynamic_sources_fresh`).
                 dynamic_sources=(dynamic.records or None) if dynamic is not None else None,
@@ -886,3 +900,18 @@ class ResultStore:
                 self._backend_slot.backend.delete(f"{prefix}:chunk_{index}")
             except Exception:  # noqa: BLE001 - cleanup must not raise
                 logger.debug("[CORE] could not drop replaced chunk %d of %s", index, prefix)
+
+
+def _resolver(func: Any) -> Any:
+    """``kind, name -> object``: what *func*'s global or closure variable holds now."""
+
+    def resolve(kind: str, name: str) -> Any:
+        if kind == "closure":
+            cells = dict(zip(func.__code__.co_freevars, func.__closure__ or ()))
+            try:
+                return cells[name].cell_contents
+            except ValueError as exc:  # an empty cell
+                raise LookupError(name) from exc
+        return func.__globals__[name]
+
+    return resolve

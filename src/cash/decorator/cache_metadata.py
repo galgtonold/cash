@@ -97,6 +97,10 @@ class CacheMetadata:
     #: ``is MISSING`` failed on every hit; a hit hands back the object that
     #: name holds instead (`ResultStore.restore_identity`).
     result_ref: list | None = None
+    #: The same for such objects held INSIDE the result (a list of lookups
+    #: holding ``MISSING``): each distinct object of their kinds, in the
+    #: order a walk meets it, as ``[kind, name, type]`` (`cash.identity_refs`).
+    held_refs: list | None = None
 
     #: The non-file ``dynamic_depends_on=`` sources of the cached functions
     #: the call ran: per source its ``id``, its ``token`` when the call ran

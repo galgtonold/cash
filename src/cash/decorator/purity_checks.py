@@ -6,9 +6,11 @@ from __future__ import annotations
 import ast
 import dataclasses
 import dis
+import enum
 import hashlib
 import inspect
 import logging
+import sys
 import textwrap
 import types
 from collections.abc import Callable
@@ -37,7 +39,7 @@ from ..exceptions import (
     CashImpureFunctionError,
     CashImpurityWarning,
 )
-from ..install_paths import is_user_module
+from ..install_paths import is_user_code_module, is_user_module
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
@@ -115,6 +117,35 @@ def sentinel_ref(func, result) -> list | None:
 
 
 _MISSING_GLOBAL = object()
+
+
+def held_sentinels(func) -> dict[int, list]:
+    """``id(object) -> ["global" | "closure", name]`` for each sentinel-like
+    object *func*'s body names: a bare ``object()``, or an instance of the
+    user's own class compared by identity (`compared_by_identity`).
+
+    What a result may hold inside it and a hit must hand back as that same
+    object (`cash.identity_refs`). Not a library's object (a logger, a
+    lock): naming one is common, holding one in a result is not, and every
+    store of the function would walk its result for it.
+    """
+    try:
+        code = func.__code__
+        pairs = [("closure", name, cell.cell_contents) for name, cell in zip(code.co_freevars, func.__closure__ or ())]
+        named = {name for scope in iter_code_scopes(code) for name in scope.co_names}
+        globals_ = func.__globals__
+        pairs += [("global", name, globals_[name]) for name in named if name in globals_]
+    except (AttributeError, ValueError, RuntimeError):
+        return {}
+    return {id(obj): [kind, name] for kind, name, obj in pairs if _sentinel_like(obj)}
+
+
+def _sentinel_like(value) -> bool:
+    if type(value) is object:
+        return True
+    if isinstance(value, enum.Enum) or not compared_by_identity(value):
+        return False
+    return is_user_code_module(sys.modules.get(type(value).__module__))
 
 
 def shares_memory(result, value) -> bool:

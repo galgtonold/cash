@@ -40,10 +40,12 @@ That is all the setup there is. A few rules hold for every cached function:
 - **A hit returns a copy.** The value is rebuilt from the stored bytes, so
   writing into a result you got from a hit never changes what the next caller
   gets. The copy keeps what the result was: a read-only numpy array is
-  read-only again, and a result that *is* a module global or closure variable
-  the function names, compared by identity (a sentinel such as
-  `MISSING = object()` in `return d.get(key, MISSING)`), comes back as that
-  very object, so `is MISSING` holds on a hit. An object whose class has been
+  read-only again, and a module global or closure variable the function
+  names, compared by identity (a sentinel such as `MISSING = object()` in
+  `return d.get(key, MISSING)`), comes back as that very object, so
+  `is MISSING` holds on a hit. That holds for the result itself and for such
+  an object held inside it, in a list, tuple or dict or in an attribute of
+  an object of your own class (`[d.get(k, MISSING) for k in keys]`). An object whose class has been
   defined again since it was stored (`importlib.reload` of its module) comes
   back as an instance of the class its module names now, as it does when
   read from disk.
