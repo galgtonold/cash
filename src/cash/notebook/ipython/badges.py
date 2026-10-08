@@ -11,6 +11,7 @@ badge and for ``%cash_badge``, which sets its :attr:`~BadgePresenter.mode`.
 from __future__ import annotations
 
 import ast
+import contextlib
 import logging
 import sys
 import threading
@@ -28,6 +29,41 @@ from .error_display import show_clean_error, show_module_load_error
 __all__ = ["BadgePresenter"]
 
 logger = logging.getLogger(__name__)
+
+
+def _streams_idle() -> bool:
+    """Whether ipykernel's stdout and stderr hold no write still to be sent."""
+    for stream in (sys.stdout, sys.stderr):
+        if getattr(stream, "_flush_pending", True) or getattr(stream, "_subprocess_flush_pending", False):
+            return False
+    return True
+
+
+def _no_flush() -> None:
+    pass
+
+
+@contextlib.contextmanager
+def _no_flush_when_streams_idle(pub: Any):
+    """Publish through *pub* without flushing the streams first, when there
+    is nothing in them to flush.
+
+    ipykernel's publisher flushes stdout and stderr before every display, so
+    that what a cell printed comes out before it: two round trips to its IO
+    thread, ~0.5 ms a badge render when nothing was printed (and more on a
+    busy kernel) -- a third of what drawing a trivial cell's badge cost.
+    With a write pending, it flushes as ever.
+    """
+    own = getattr(pub, "__dict__", None)
+    if own is None or "_flush_streams" in own or not hasattr(pub, "_flush_streams") or not _streams_idle():
+        yield
+        return
+    pub._flush_streams = _no_flush
+    try:
+        yield
+    finally:
+        with contextlib.suppress(AttributeError):
+            del pub._flush_streams
 
 
 class BadgePresenter:
@@ -339,10 +375,12 @@ class BadgePresenter:
                         transient={"display_id": display_id} if display_id else {},
                         update=bool(display_id) and update_existing,
                     )
-            elif display_id:
-                display(HTML(html), display_id=display_id, update=update_existing)
             else:
-                display(HTML(html))
+                with _no_flush_when_streams_idle(getattr(self.shell, "display_pub", None)):
+                    if display_id:
+                        display(HTML(html), display_id=display_id, update=update_existing)
+                    else:
+                        display(HTML(html))
         except Exception as e:
             logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
 
