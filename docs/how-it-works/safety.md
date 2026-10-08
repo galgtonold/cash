@@ -221,7 +221,7 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @95b8fc09, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @6aa89a05, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
 Two kinds of value are refused after the statement runs, because restoring a
 copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base, and a

@@ -405,10 +405,12 @@ class TieredBackend(CacheBackend):
         """
         if len(self.backends) < 2:
             return False
-        entry = self.backends[0].peek_entry(key)
+        # The value only once it is to be written: the RAM tier may have to
+        # read it out of the bytes it keeps (`InMemoryBackend.peek_entry`).
+        entry = self.backends[0].peek_entry(key, value=False)
         if entry is None:
             return False
-        stored_metadata, value = entry
+        stored_metadata = entry[0]
         if self._persisted(stored_metadata.get("storage")):
             return False  # on disk already
         decision = self.policy.decide_rebuild(
@@ -427,7 +429,10 @@ class TieredBackend(CacheBackend):
             if k not in ("persist_skipped", "source", "storage", "defer_persist")
         }
         metadata["rebuild_time"] = rebuild_seconds
-        writes = self._write_persistent_tiers(key, value, metadata, None, stored_metadata.get("size") or size)
+        entry = self.backends[0].peek_entry(key)
+        if entry is None or entry[0] is not stored_metadata:
+            return False  # gone or replaced meanwhile
+        writes = self._write_persistent_tiers(key, entry[1], metadata, None, stored_metadata.get("size") or size)
         if not writes.stored:
             if writes.size_refused:
                 self.notices.too_big(key, writes.refused_size, writes.refusing_caps)

@@ -36,6 +36,7 @@ import sys
 from collections.abc import Iterable
 from typing import Any, Callable
 
+from ... import _plain_data
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
     EXACT_VALUE_TYPES,
@@ -86,6 +87,12 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
     np = _imported("numpy")
     refholder_types = _pandas_refholder_types()
     if np is None and not refholder_types:
+        return False
+    if _plain_data.is_tree(value):
+        # JSON-like data holds no array and no pandas object: answered a
+        # level at a time (and, for a statement's output, from the walk its
+        # other checks share), where the walk below takes a Python step per
+        # container -- 2.4 s for a million parsed records.
         return False
     views, refholders = _aliases_in(value, np, refholder_types)
     for holder in refholders:
