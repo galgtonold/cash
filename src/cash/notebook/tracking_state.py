@@ -222,6 +222,18 @@ class TrackingState:
     # W: ModuleInvalidator. R/emptied: UpstreamChecker.
     module_state_rebuilds: set[str] = field(default_factory=set)
 
+    # Statement source hash -> what of the process (``callee_reach.ENVIRON``,
+    # ``CWD``) the statement changed when it ran, in this kernel or, read
+    # back, an earlier one (``process_state_key``). A restart puts the
+    # environment and the working directory back as the shell started them;
+    # the upstream check runs again each statement above the cell that
+    # changed them and has not run in this kernel (``process_state_ran``).
+    # W: MutationRouting; ReexecutionPlanner (read back). R: ReexecutionPlanner.
+    process_state_writers: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Source hashes of those that ran in this kernel.
+    # W: MutationRouting. R: ReexecutionPlanner.
+    process_state_ran: set[str] = field(default_factory=set)
+
     # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
     # those, their file-hash component). The runtime derives a control

@@ -16,16 +16,19 @@ import functools
 import importlib
 import inspect
 import operator
+import os
 import sqlite3
 import sys
 import textwrap
 import types
 from collections.abc import Callable, Iterable, Mapping
+from itertools import repeat
 from typing import Any, NamedTuple
 
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.mutations import MUTATING_METHODS
+from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
@@ -33,12 +36,16 @@ from ..tracking.randomness import get_seeding_rng_modules
 from ..value_types import IMMUTABLE_PRIMS, INTERPRETER_MANAGED_GLOBALS, is_runtime_machinery
 
 __all__ = [
+    "CWD",
+    "ENVIRON",
     "Reach",
     "helper_seeded_modules",
     "module_globals",
     "module_holders",
     "module_state_names",
+    "import_state_writes",
     "module_state_writes",
+    "process_state_writes",
     "reached_user_code",
     "rebound_modules",
     "state_holders",
@@ -168,10 +175,16 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     and a call of a module function that changes the module's globals
     (``mylib.set_k(7)``, or ``set_k(7)`` imported from it), or of a notebook
     function whose body does any of these, and ``importlib.reload(mylib)``,
-    which sets every global anew. A reload runs the module's top
-    level again and drops all of these; the notebook's cells that made them
-    are what puts them back. A ``def`` sets nothing: its body runs when the
-    function is called.
+    which sets every global anew. The same through a name holding
+    what the module holds (``CONFIG["k"] = 7`` after ``from mylib import
+    CONFIG``, ``cfg["k"] = 7`` after ``cfg = mylib.CONFIG``), through a bare
+    decorator (``@mylib.register``), and through a method of the module's
+    class whose body stores on the class (``cls.k = k``, ``type(self).k =
+    k``) or on an instance the module holds. A method of the user's is
+    followed into its body; only a library's method (``dict.update``) is
+    judged by its name. A reload runs the module's top level again and drops
+    all of these; the notebook's cells that made them are what puts them
+    back. A ``def`` sets nothing: its body runs when the function is called.
     """
     if not code or not namespace:
         return frozenset()
@@ -183,28 +196,147 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     return frozenset(found)
 
 
+#: What a statement can change of the process the notebook runs in, which a
+#: kernel restart puts back as the shell started it: its environment
+#: variables, and its working directory.
+ENVIRON = "environ"
+CWD = "cwd"
+
+#: Methods of ``os.environ`` that change it.
+_ENVIRON_SETTING_METHODS = frozenset({"update", "pop", "popitem", "setdefault", "clear", "__setitem__", "__delitem__"})
+#: The functions that change the environment or the working directory, and
+#: how they are spelled where the namespace cannot say (after a restart).
+_PROCESS_SETTERS: tuple[tuple[Any, str], ...] = (
+    (os.chdir, CWD),
+    (getattr(os, "fchdir", None), CWD),
+    (os.putenv, ENVIRON),
+    (getattr(os, "unsetenv", None), ENVIRON),
+)
+_PROCESS_SPELLINGS = {"os.chdir": CWD, "os.fchdir": CWD, "os.putenv": ENVIRON, "os.unsetenv": ENVIRON}
+
+
+def process_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
+    """What of the process *code* changes: `ENVIRON` for ``os.environ["K"] =
+    v``, ``del os.environ["K"]``, ``os.environ.update(...)``, ``os.putenv``;
+    `CWD` for ``os.chdir(d)``. Written in it, or in a function it calls: a
+    notebook function is followed into its body (``setup()`` doing
+    ``os.environ["MODE"] = "b"``), and so is the user's module function and
+    the helpers it calls (``mylib.go(d)`` doing ``os.chdir(d)``), as for the
+    state of a module (`module_state_writes`).
+
+    A kernel restart puts both back as the shell started them; the
+    statements that changed them are what puts the notebook's values back.
+    """
+    if not code:
+        return frozenset()
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    process: set[str] = set()
+    _state_writes(tree.body, namespace or {}, None, set(), process)
+    return frozenset(process)
+
+
+def _is_environ(expr: ast.expr, namespace: Mapping[str, Any]) -> bool:
+    """Whether *expr* is the process environment: ``os.environ``, an alias
+    of it, or (with nothing in the namespace to say) one spelled so."""
+    value, _ = _static_value(expr, namespace)
+    if value is not None:
+        return value is os.environ or value is getattr(os, "environb", None)
+    return dotted_name(expr) in ENVIRON_NAMES
+
+
+def _process_call(func: ast.expr, callee: Any, namespace: Mapping[str, Any]) -> str | None:
+    """`ENVIRON` or `CWD` when calling *func* (resolved to *callee*) changes
+    that of the process."""
+    if callee is not None:
+        for setter, kind in _PROCESS_SETTERS:
+            if setter is not None and callee is setter:
+                return kind
+    if isinstance(func, ast.Attribute) and func.attr in _ENVIRON_SETTING_METHODS and _is_environ(func.value, namespace):
+        return ENVIRON
+    return _PROCESS_SPELLINGS.get(dotted_name(func) or "") if callee is None else None
+
+
 def _state_writes(
-    statements: Iterable[ast.AST], namespace: Mapping[str, Any], found: set[str], followed: set[int]
+    statements: Iterable[ast.AST],
+    namespace: Mapping[str, Any],
+    found: set[str] | None,
+    followed: set[int],
+    process: set[str] | None = None,
+    *,
+    follow: bool = True,
 ) -> None:
-    """Add to *found* the local modules *statements* set state on, run
-    with *namespace* as their globals; *followed* are the notebook functions
-    already walked."""
+    """Add to *found* (unless None) the local modules *statements* set state
+    on, run with *namespace* as their globals; *followed* are the notebook
+    functions already walked. With *process*, add to it what of the process
+    they change (`process_state_writes`). Without *follow*, a call is judged by
+    what it calls, not followed into a body.
+
+    This is the one walk that follows a statement into the notebook
+    functions it calls: whatever else a statement's helpers can change is
+    looked for here, so the bodies are read once, the same way."""
 
     def rooted(node: ast.expr) -> None:
-        """Add the local module the store target *node* sets something on."""
-        if not isinstance(node, (ast.Attribute, ast.Subscript)):
+        """Add the local module the store target *node* sets something on:
+        through the module (``mylib.CONFIG["k"]``), or through a name holding
+        what the module holds (``CONFIG["k"]`` after ``from mylib import
+        CONFIG``, ``cfg["k"]`` after ``cfg = mylib.CONFIG``, ``Cfg.k``)."""
+        if found is None or not isinstance(node, (ast.Attribute, ast.Subscript)):
             return
-        root = node.value
+        changed_in_place(node.value)
+
+    def changed_in_place(root: ast.expr) -> None:
+        """Add the local module whose state changes when *root* is changed in place."""
+        if found is None:
+            return
         while isinstance(root, (ast.Attribute, ast.Subscript)):
             root = root.value
         if isinstance(root, ast.Name):
-            module = namespace.get(root.id)
-            if isinstance(module, types.ModuleType) and _is_local(module):
-                found.add(module.__name__)
+            home = _state_home(namespace.get(root.id), namespace)
+            if home is not None:
+                found.add(home)
+
+    def called(func: ast.expr, node: ast.Call | None) -> None:
+        """What calling *func* sets state on: the function it names, followed
+        into its body -- a method or a class method of a local module's class
+        too (``Cfg.tune(5)`` doing ``cls.k = k``) -- or, for a method no
+        Python code of the user's runs (``CONFIG.update(...)``), the
+        receiver when the method's name says it changes it."""
+        callee, kind, receiver = _resolve_call(func, namespace)
+        if process is not None:
+            changed = _process_call(func, callee, namespace)
+            if changed is not None:
+                process.add(changed)
+        users = isinstance(callee, types.FunctionType) and _is_users_function(callee, namespace)
+        if isinstance(callee, types.FunctionType) and follow:
+            modules = _modules_changed_by(callee, namespace, process)
+            if found is not None:
+                found.update(modules)
+                if users:
+                    found.update(_class_state_written(callee, kind, receiver, namespace))
+            if callee.__globals__ is namespace and id(callee) not in followed:
+                followed.add(id(callee))
+                _state_writes(_function_body(callee), namespace, found, followed, process)
+        if node is None or users or found is None:
+            return
+        if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
+            target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
+            home = _state_home(target, namespace)
+            if home is not None:
+                found.add(home)
+        elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
+            changed_in_place(func.value)
 
     pending = list(statements)
     while pending:
         node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # A bare decorator (``@mylib.register``) is a call of what it
+            # names, made when the definition runs.
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    called(decorator, None)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             # What runs at definition: the decorators and the defaults.
             pending.extend(getattr(node, "decorator_list", ()))
@@ -217,26 +349,279 @@ def _state_writes(
                 for part in ast.walk(target):
                     if isinstance(part, ast.expr) and isinstance(getattr(part, "ctx", None), (ast.Store, ast.Del)):
                         rooted(part)
+                        if (
+                            process is not None
+                            and isinstance(part, ast.Subscript)
+                            and _is_environ(part.value, namespace)
+                        ):
+                            process.add(ENVIRON)
         elif isinstance(node, ast.Call):
-            func = node.func
-            if node.args and _called(func, namespace) is importlib.reload:
+            if found is not None and node.args and _static_value(node.func, namespace)[0] is importlib.reload:
                 # A reload runs the module's top level again: every global it
                 # has is set anew, whatever the cells above set on it.
-                target = _called(node.args[0], namespace)
+                target = _static_value(node.args[0], namespace)[0]
                 if isinstance(target, types.ModuleType) and _is_local(target):
                     found.add(target.__name__)
-            if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
-                target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
-                if isinstance(target, types.ModuleType) and _is_local(target):
-                    found.add(target.__name__)
-            elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
-                rooted(func.value)
-            callee = _called(func, namespace)
-            if isinstance(callee, types.FunctionType):
-                found |= _modules_changed_by(callee, namespace)
-                if callee.__globals__ is namespace and id(callee) not in followed:
-                    followed.add(id(callee))
-                    _state_writes(_function_body(callee), namespace, found, followed)
+            called(node.func, node)
+
+
+def import_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
+    """The local modules, other than the ones it imports, whose state the
+    import statements in *code* set by running the imported modules' top
+    level: ``import plugin`` where ``plugin.py`` does ``@mylib.register``.
+
+    Asked after the statement ran, when what it imported is loaded: a
+    restart drops the registration with ``mylib``, and the import is one of
+    the statements that put it there."""
+    if not code or "import" not in code or not namespace:
+        return frozenset()
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            names.append(node.module)
+            names.extend(f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*")
+    found: set[str] = set()
+    imported: set[str] = set()
+    for name in names:
+        module = sys.modules.get(name)
+        if not isinstance(module, types.ModuleType) or not _is_local(module):
+            continue
+        imported.add(module.__name__)
+        try:
+            body = parse_cached(inspect.getsource(module))
+        except SOURCE_RETRIEVAL_ERRORS:
+            continue
+        if body is not None:
+            _state_writes(body.body, vars(module), found, set())
+    return frozenset(found - imported)
+
+
+def _is_users_function(fn: types.FunctionType, namespace: Mapping[str, Any]) -> bool:
+    """Defined in a cell (its globals are *namespace*) or in a local module:
+    its body says what it changes, not its name."""
+    if fn.__globals__ is namespace:
+        return True
+    home = _loaded(fn.__globals__.get("__name__"))
+    return home is not None and _is_local(home)
+
+
+def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
+    """The local module whose state a store into *value* changes: *value*
+    is the module, a class defined in it, or an object one of its globals
+    holds (by identity: ``from mylib import CONFIG``, ``cfg =
+    mylib.CONFIG``). None for anything else -- a value of the notebook's own,
+    an instance it made of the module's class."""
+    if value is None or isinstance(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
+        return None
+    if isinstance(value, types.ModuleType):
+        return value.__name__ if _is_local(value) else None
+    if inspect.isroutine(value):
+        return None
+    if isinstance(value, type):
+        home = _loaded(getattr(value, "__module__", None))
+        return home.__name__ if home is not None and vars(home) is not namespace and _is_local(home) else None
+    # Every local module loaded but the one whose globals *namespace* is:
+    # ``from mylib import CONFIG`` alone leaves no other trace of ``mylib``.
+    for module in _local_modules():
+        # By identity, at C speed: a module may hold hundreds of names.
+        if vars(module) is not namespace and any(map(operator.is_, list(vars(module).values()), repeat(value))):
+            return module.__name__
+    return None
+
+
+_LOCAL_MODULES: list[Any] = [None, ()]
+
+
+def _local_modules() -> tuple[types.ModuleType, ...]:
+    """The local modules loaded, found again only when ``sys.modules`` has
+    another size or another last entry: asked for a store through any name
+    that is not a module (``df["a"] = 1``), it must not walk the thousand
+    library modules each time."""
+    modules = sys.modules
+    try:
+        last = next(reversed(modules.keys()))
+    except (StopIteration, RuntimeError):
+        last = None
+    stamp = (len(modules), last)
+    if _LOCAL_MODULES[0] != stamp or any(modules.get(m.__name__) is not m for m in _LOCAL_MODULES[1]):
+        _LOCAL_MODULES[1] = tuple(
+            module for module in list(modules.values()) if isinstance(module, types.ModuleType) and _is_local(module)
+        )
+        _LOCAL_MODULES[0] = stamp
+    return _LOCAL_MODULES[1]
+
+
+def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, str, Any]:
+    """``(callee, kind, receiver)`` of the call target *func*: the function
+    it runs, ``"function"``, ``"classmethod"`` (*receiver* the class) or
+    ``"method"`` (*receiver* the instance, or the class when only the class
+    is known: ``mylib.Cfg().setk(5)``). Attributes are looked up statically:
+    no property or ``__getattr__`` runs."""
+    if isinstance(func, ast.Name):
+        return _as_callee(namespace.get(func.id), None, False)
+    if not isinstance(func, ast.Attribute):
+        return None, "function", None
+    owner, instance_of = _static_value(func.value, namespace)
+    if instance_of is not None:
+        try:
+            member = inspect.getattr_static(instance_of, func.attr)
+        except AttributeError:
+            return None, "function", None
+        return _as_callee(member, instance_of, True)
+    if owner is None:
+        return None, "function", None
+    if isinstance(owner, types.ModuleType):
+        return _as_callee(vars(owner).get(func.attr), None, False)
+    try:
+        member = inspect.getattr_static(owner, func.attr)
+    except Exception:  # noqa: BLE001 - an object's attribute lookup
+        return None, "function", None
+    if isinstance(owner, type):
+        return _as_callee(member, owner, False)
+    return _as_callee(member, owner, True)
+
+
+def _as_callee(member: Any, owner: Any, on_instance: bool) -> tuple[Any, str, Any]:
+    if isinstance(member, classmethod):
+        cls = owner if isinstance(owner, type) else type(owner)
+        return member.__func__, "classmethod", cls
+    if isinstance(member, staticmethod):
+        return member.__func__, "function", None
+    if isinstance(member, types.MethodType):
+        receiver = member.__self__
+        kind = "classmethod" if isinstance(receiver, type) else "method"
+        return member.__func__, kind, receiver
+    if isinstance(member, types.FunctionType) and on_instance:
+        return member, "method", owner
+    return member, "function", None
+
+
+def _static_value(expr: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, type | None]:
+    """``(value, None)`` of *expr* (a name or a chain of attributes from
+    one), or ``(None, cls)`` when it is a call of the class *cls* -- an
+    instance of it, not made here -- or ``(None, None)`` when unknown."""
+    if isinstance(expr, ast.Call):
+        value, _ = _static_value(expr.func, namespace)
+        return (None, value) if isinstance(value, type) else (None, None)
+    attrs: list[str] = []
+    while isinstance(expr, ast.Attribute):
+        attrs.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name):
+        return None, None
+    value = namespace.get(expr.id)
+    for attr in reversed(attrs):
+        if isinstance(value, types.ModuleType):
+            value = vars(value).get(attr)
+            continue
+        if not isinstance(value, type) and not _of_a_local_class(value):
+            return None, None
+        try:
+            value = inspect.getattr_static(value, attr)
+        except Exception:  # noqa: BLE001 - an object's attribute lookup
+            return None, None
+        if isinstance(value, (classmethod, staticmethod, property)) or not _plain_attribute(value):
+            return None, None
+    return value, None
+
+
+def _of_a_local_class(value: Any) -> bool:
+    """An instance whose class a local module defines: its attributes are
+    followed (``mylib.CFG.sub.setk``)."""
+    home = _loaded(getattr(type(value), "__module__", None))
+    return home is not None and _is_local(home)
+
+
+def _plain_attribute(value: Any) -> bool:
+    """A value held in a ``__dict__``, not a descriptor that computes one."""
+    return not hasattr(type(value), "__get__") or isinstance(value, (types.FunctionType, type))
+
+
+def _class_state_written(fn: types.FunctionType, kind: str, receiver: Any, namespace: Mapping[str, Any]) -> set[str]:
+    """The local module whose state calling the method *fn* sets: a class
+    method storing on ``cls``, a method storing on ``type(self)`` or
+    ``self.__class__``, of a class a local module defines; or a method
+    storing on ``self`` when the instance is one a local module holds
+    (``mylib.CFG.setk(5)``)."""
+    if kind not in ("classmethod", "method") or receiver is None:
+        return set()
+    cls = receiver if isinstance(receiver, type) else type(receiver)
+    stores = _receiver_stores(fn.__code__)
+    if not stores:
+        return set()
+    found: set[str] = set()
+    on_class = "class" in stores if kind == "method" else ("self" in stores or "class" in stores)
+    if on_class:
+        home = _state_home(cls, namespace)
+        if home is not None:
+            found.add(home)
+    if kind == "method" and "self" in stores and not isinstance(receiver, type):
+        home = _state_home(receiver, namespace)
+        if home is not None:
+            found.add(home)
+    return found
+
+
+@functools.lru_cache(maxsize=4096)
+def _receiver_stores(code: types.CodeType) -> frozenset[str]:
+    """What the method whose code is *code* stores attributes or items on
+    through its first parameter: ``"self"`` for ``self.k = v`` (``cls.k =
+    v`` in a class method), ``"class"`` for ``type(self).k = v`` and
+    ``self.__class__.k = v``."""
+    if not code.co_varnames or code.co_argcount < 1:
+        return frozenset()
+    first = code.co_varnames[0]
+    try:
+        tree = parse_cached(textwrap.dedent(inspect.getsource(code)))
+    except SOURCE_RETRIEVAL_ERRORS:
+        return frozenset()
+    if tree is None:
+        return frozenset()
+    found: set[str] = set()
+
+    def target_root(node: ast.expr) -> None:
+        while isinstance(node, (ast.Attribute, ast.Subscript)):
+            inner = node.value
+            if isinstance(inner, ast.Name) and inner.id == first:
+                if isinstance(node, ast.Attribute) and node.attr == "__class__":
+                    found.add("class")
+                else:
+                    found.add("self")
+                return
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "type"
+                and len(inner.args) == 1
+                and isinstance(inner.args[0], ast.Name)
+                and inner.args[0].id == first
+            ):
+                found.add("class")
+                return
+            node = inner
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
+            targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
+            for target in targets:
+                for part in ast.walk(target):
+                    if isinstance(part, (ast.Attribute, ast.Subscript)) and isinstance(part.ctx, (ast.Store, ast.Del)):
+                        target_root(part)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("setattr", "delattr")
+            and node.args
+        ):
+            target_root(ast.Attribute(value=node.args[0], attr="_", ctx=ast.Store()))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in MUTATING_METHODS:
+            target_root(node.func)
+    return frozenset(found)
 
 
 def helper_seeded_modules(
@@ -365,13 +750,20 @@ def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, struct
         if tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0]):
             return frozenset()
     mentioned = {root for root, _ in names_read(code)}
-    # Only a module, or a function that may call into one, can lead there.
-    if not any(isinstance(namespace.get(root), (types.ModuleType, types.FunctionType, type)) for root in mentioned):
+    # Only a module, a function that may call into one, or what a module
+    # holds (``CONFIG`` after ``from mylib import CONFIG``) can lead there.
+    if not any(_may_lead_to_module_state(namespace.get(root), namespace) for root in mentioned):
         return frozenset()
     modules = module_state_writes(code, namespace)
     if not modules:
         return frozenset()
     return state_holders(modules, code, namespace)
+
+
+def _may_lead_to_module_state(value: Any, namespace: Mapping[str, Any]) -> bool:
+    if isinstance(value, (types.ModuleType, types.FunctionType, types.MethodType, type)):
+        return True
+    return _state_home(value, namespace) is not None or _of_a_local_class(value)
 
 
 def state_holders(modules: Iterable[str], code: str, namespace: Mapping[str, Any]) -> frozenset[str]:
@@ -487,12 +879,16 @@ def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
     return frozenset(changed)
 
 
-def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) -> set[str]:
+def _modules_changed_by(
+    fn: types.FunctionType, namespace: Mapping[str, Any], process: set[str] | None = None
+) -> set[str]:
     """The local modules whose globals calling *fn* changes: its own, or
     those of the helpers it calls, at any depth. ``mylib.add(5)`` calling
     ``_bump(5)``, which does ``global COUNT; COUNT += n``, changes ``mylib``
     as surely as a body that does it itself. A notebook function is followed
-    to the module functions it calls; its own writes are the notebook's."""
+    to the module functions it calls; its own writes are the notebook's.
+    With *process*, add to it what of the process each module function
+    reached changes (`process_state_writes`)."""
     found: set[str] = set()
     seen: set[int] = set()
     pending = [fn]
@@ -508,6 +904,8 @@ def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) ->
                 continue
             if _changed_globals(current.__code__):
                 found.add(home.__name__)
+            if process is not None:
+                process.update(_module_function_process_writes(current))
         for co in _code_objects(current.__code__):
             for name in _loaded_globals(co):
                 value = home_ns.get(name)
@@ -519,20 +917,15 @@ def _modules_changed_by(fn: types.FunctionType, namespace: Mapping[str, Any]) ->
     return found
 
 
-def _called(func: ast.expr, namespace: Mapping[str, Any]) -> Any:
-    """What the call target *func* (``f`` or ``mod.sub.f``) names, or None."""
-    attrs: list[str] = []
-    while isinstance(func, ast.Attribute):
-        attrs.append(func.attr)
-        func = func.value
-    if not isinstance(func, ast.Name):
-        return None
-    obj = namespace.get(func.id)
-    for attr in reversed(attrs):
-        if not isinstance(obj, types.ModuleType):
-            return None
-        obj = vars(obj).get(attr)
-    return obj
+@functools.lru_cache(maxsize=4096)
+def _module_function_process_writes(fn: types.FunctionType) -> frozenset[str]:
+    """What of the process the body of the module function *fn* itself
+    changes (`process_state_writes`), its calls judged by what they call:
+    `_modules_changed_by` reaches its helpers. Once per function: asked for
+    every statement that calls it."""
+    process: set[str] = set()
+    _state_writes(_function_body(fn), fn.__globals__, None, set(), process, follow=False)
+    return frozenset(process)
 
 
 class _Found:

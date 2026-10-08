@@ -29,6 +29,7 @@ from cash.notebook.cache_key import (
     module_state_key,
     mutation_verdict_key,
     note_read_provenance_written,
+    process_state_key,
     read_provenance_key,
     statement_source_hash,
     write_provenance_key,
@@ -72,6 +73,7 @@ class StatementRecords:
         self._mutation_verdicts_written: dict[str, list[str]] = {}
         self._carrier_advances_written: dict[str, list[str]] = {}
         self._module_state_written: dict[str, tuple[list[str], list[str]]] = {}
+        self._process_state_written: dict[str, list[str]] = {}
         self._read_provenance_written: dict[str, list[str]] = {}
 
     def begin_cell(self) -> None:
@@ -248,6 +250,31 @@ class StatementRecords:
             written[source_hash] = persisted
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s module-state persistence failed", _LOG_PROCESSOR)
+
+    def note_process_state(self, code: str, kinds: Iterable[str]) -> None:
+        """Record that the statement *code* changed *kinds* of the process
+        (the environment, the working directory) when it ran now, in this
+        kernel (``TrackingState.process_state_ran``), and keep it for a
+        later kernel (``process_state_key``). Best-effort: without the record
+        a restart's rebuild runs only the ones its text says."""
+        source_hash = statement_source_hash(code)
+        kinds = frozenset(kinds)
+        state = self.tracking_state
+        state.process_state_ran.add(source_hash)
+        state.process_state_writers[source_hash] = kinds
+        persisted = sorted(kinds)
+        if self._process_state_written.get(source_hash) == persisted:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            backend.set_metadata_only(
+                process_state_key(source_hash), {"process_state": True, "kinds": persisted, "ttl": None}
+            )
+            self._process_state_written[source_hash] = persisted
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s process-state persistence failed", _LOG_PROCESSOR)
 
     def persist_carrier_advances(self, source_hash: str, names: frozenset[str] | set[str] | None) -> None:
         """Record, across restarts, which generators this statement drew from.

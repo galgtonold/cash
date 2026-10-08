@@ -121,6 +121,9 @@ class StatementRun:
     #: The local modules running it was seen rebinding a global of
     #: (``callee_reach.rebound_modules``).
     rebound_modules: frozenset[str] = frozenset()
+    #: What of the process it changes (``callee_reach.process_state_writes``:
+    #: the environment, the working directory).
+    process_state: frozenset[str] = frozenset()
 
 
 @dataclass

@@ -439,7 +439,12 @@ class NotebookSimulator:
             if not broken_vars:
                 logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
 
-        if not broken_vars and not has_stale_file_writers:
+        # Nor has a change to the environment or the working directory: after
+        # a restart the statements above that made one run again, whatever
+        # the cell reads (``ReexecutionPlanner.unrun_process_writers``).
+        has_process_writers = bool(self.planner.unrun_process_writers(sim.trace))
+
+        if not broken_vars and not has_stale_file_writers and not has_process_writers:
             self._warn_stale_magic(result.stale_magic_vars, check)
             return ReexecutionPlan([], [], 0.0)
 

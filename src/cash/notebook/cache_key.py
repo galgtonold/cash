@@ -141,6 +141,18 @@ def module_state_key(source_hash: str) -> str:
     return "modstate:" + source_hash
 
 
+def process_state_key(source_hash: str) -> str:
+    """Backend key for what of the process (the environment, the working
+    directory) a statement changed when it last ran.
+
+    ``TrackingState.process_state_writers`` holds it for the session. After
+    a restart ``setup()`` doing ``os.environ["MODE"] = "b"`` reads as a call
+    of a function not defined yet, and the environment the cell below runs
+    in is the one the shell started the kernel with.
+    """
+    return "procstate:" + source_hash
+
+
 def carrier_advances_key(source_hash: str) -> str:
     """Backend key for which generators a statement drew from when it last ran.
 
