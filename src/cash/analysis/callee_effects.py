@@ -19,7 +19,11 @@ __all__ = [
     "all_param_names",
     "resolve_function_def",
     "params_mutated_in_function",
-    "standalone_call_arg_targets",
+    "CallArgTargets",
+    "argument_roots",
+    "call_arg_targets",
+    "iterated_sources",
+    "statement_calls",
     "function_arg_mutations",
     "scope_locals",
     "free_vars_mutated_in_function",
@@ -72,8 +76,8 @@ def _params_mutated_via_nested_calls(
     at the matching position / keyword.
     """
     out: set[str] = set()
-    for node in ast.walk(func):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+    for node in statement_calls(func):
+        if not isinstance(node.func, ast.Name):
             continue
         callee_name = node.func.id
         if callee_name in seen:
@@ -101,6 +105,14 @@ def resolve_function_def(name, resolve_source):
     source = resolve_source(name)
     if not source:
         return None
+    return _parse_function_def(source)
+
+
+@functools.lru_cache(maxsize=256)
+def _parse_function_def(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """*source*'s first statement when it is a ``def``. Memoised: every
+    statement that calls a helper asks what the helper does to its
+    arguments, and the trees are only read."""
     try:
         parsed = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError):
@@ -108,6 +120,25 @@ def resolve_function_def(name, resolve_source):
     if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
         return parsed.body[0]
     return None
+
+
+class _RunningMutationVisitor(MutationVisitor):
+    """The mutations a function body makes as it runs: not those of a
+    ``def``, ``lambda`` or ``class`` it builds, which run when that is
+    called, if ever. ``make(store)`` returning ``lambda v: store.append(v)``
+    leaves ``store`` as it was."""
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
 
 
 def params_mutated_in_function(
@@ -137,7 +168,7 @@ def params_mutated_in_function(
     params = all_param_names(func)
     if not params:
         return frozenset()
-    visitor = MutationVisitor()
+    visitor = _RunningMutationVisitor()
     for stmt in func.body:
         visitor.visit(stmt)
     mutated = {m.variable for m in visitor.mutations} & params
@@ -146,38 +177,139 @@ def params_mutated_in_function(
     return frozenset(mutated)
 
 
-def standalone_call_arg_targets(
-    tree: ast.Module | None,
-) -> frozenset[tuple[str, tuple[str | None, ...], tuple[tuple[str, str], ...]]]:
-    """Top-level bare-``Expr`` calls to a NAME, with their variable arguments.
+#: A call's arguments as the caller's variables: per positional slot, then
+#: per keyword, the names whose objects the argument hands over.
+CallArgTargets = tuple[str, tuple[frozenset[str], ...], tuple[tuple[str, frozenset[str]], ...]]
+
+#: Nodes whose calls run later, or never, not when the statement runs.
+_DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def statement_calls(tree: ast.AST | None, *, control_bodies: bool = True) -> list[ast.Call]:
+    """Every call *tree* makes as it runs, nested ones and the ones in an
+    assignment or a comprehension included: not the calls in a ``def``, a
+    ``class`` or a ``lambda``. Without *control_bodies*, not the ones in the
+    body of a loop or a branch either."""
+    out: list[ast.Call] = []
+    if tree is None:
+        return out
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.Call):
+            out.append(node)
+        for field, value in ast.iter_fields(node):
+            if not control_bodies and isinstance(node, _CONTROL_NODES) and field in _CONTROL_BODIES:
+                continue
+            for child in value if isinstance(value, list) else (value,):
+                if isinstance(child, ast.AST) and not isinstance(child, _DEFERRED_SCOPES):
+                    visit(child)
+
+    visit(tree)
+    return out
+
+
+_CONTROL_NODES = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
+_CONTROL_BODIES = frozenset({"body", "orelse", "finalbody", "handlers"})
+
+
+def iterated_sources(tree: ast.AST | None) -> dict[str, frozenset[str]]:
+    """Loop and comprehension targets of *tree*, each with the variables its
+    values come out of: ``d`` in ``for d in ds`` or ``[f(d) for d in ds]``
+    is an element of ``ds``, and a change to ``d`` in place is a change to
+    what ``ds`` holds. ``for i, d in enumerate(ds)`` and ``for k, v in
+    cfg.items()`` lead to ``ds`` and ``cfg``. A ``for`` target is a variable
+    itself and is among them; a comprehension's is not."""
+    if tree is None:
+        return {}
+    sources: dict[str, set[str]] = {}
+    loop_targets: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            roots = _iterable_roots(node.iter)
+            for target in ast.walk(node.target):
+                if isinstance(target, ast.Name):
+                    sources.setdefault(target.id, set()).update(roots)
+                    if not isinstance(node, ast.comprehension):
+                        loop_targets.add(target.id)
+    resolved: dict[str, frozenset[str]] = {}
+    for name in sources:
+        # A nested loop over a row of the outer one: `for row in rows for x in row`.
+        roots: set[str] = {name} if name in loop_targets else set()
+        seen = {name}
+        pending = list(sources[name])
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in sources:
+                pending.extend(sources[current])
+                if current in loop_targets:
+                    roots.add(current)
+            else:
+                roots.add(current)
+        resolved[name] = frozenset(roots)
+    return resolved
+
+
+def _iterable_roots(expr: ast.AST) -> set[str]:
+    """The variables the values of *expr*, a loop's iterable, come out of:
+    every name it reads, but the functions it calls (``enumerate``, ``zip``)."""
+    called = {id(n.func) for n in ast.walk(expr) if isinstance(n, ast.Call)}
+    return {n.id for n in ast.walk(expr) if isinstance(n, ast.Name) and id(n) not in called}
+
+
+def argument_roots(arg: ast.AST, iterated: dict[str, frozenset[str]]) -> frozenset[str]:
+    """The variables whose objects *arg*, an argument of a call, hands over:
+    ``x``; the ``s`` of ``s.d`` or ``s["d"]`` (the callee gets a part of
+    it); for a loop or comprehension target, the variables it iterates
+    (*iterated*, see :func:`iterated_sources`). Nothing for a value the call
+    builds itself (``f(x.copy())``, ``f([1, 2])``)."""
+    node = arg.value if isinstance(arg, ast.Starred) else arg
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return frozenset()
+    return iterated.get(node.id, frozenset({node.id}))
+
+
+def call_arg_targets(tree: ast.Module | None) -> frozenset[CallArgTargets]:
+    """Calls to a NAME anywhere in *tree*, with the variables each argument hands over.
 
     Returns ``(func_name, positional, keywords)`` per call:
 
-    * ``positional`` — a tuple with the variable name for each positional argument
-      that is a bare ``Name``, or ``None`` for anything else (literal, expression,
-      ``*args``) since only a tracked variable can be a reset target.
-    * ``keywords`` — ``(param_name, arg_var)`` pairs for keyword arguments whose
-      value is a bare ``Name``.
+    * ``positional`` — per positional argument, the variables it hands over
+      (:func:`argument_roots`); empty for a literal or an expression. After a
+      ``*args`` the positions are unknown, so no slot follows it.
+    * ``keywords`` — ``(param_name, variables)`` per keyword argument.
 
-    Only bare-``Expr`` calls (result discarded) are returned: a call made purely
-    for effect is the mutation pattern, whereas a pure call captures its result
-    (``r = f(x)``). Method calls (``obj.m(x)``) are handled by the method-receiver
-    path and excluded here.
+    A bare call (``add(data)``) and a call whose result is kept (``r =
+    add(data)``, ``print(add(data))``, ``[add(d) for d in ds]``) alike: a
+    helper that changes its argument and returns a summary changes it as
+    much as one that returns nothing. Method calls (``obj.m(x)``) are left
+    to the method-receiver path, and calls inside a ``def`` or a ``lambda``
+    run later, if at all. Not the calls in a loop's or a branch's body: the
+    runtime runs those one statement at a time, each read on its own, and
+    the control structure owns what its body changes.
     """
     if tree is None:
         return frozenset()
-    out: set[tuple[str, tuple[str | None, ...], tuple[tuple[str, str], ...]]] = set()
-    for node in tree.body:
-        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
+    iterated = iterated_sources(tree)
+    out: set[CallArgTargets] = set()
+    for call in statement_calls(tree, control_bodies=False):
         if not isinstance(call.func, ast.Name):
             continue
-        positional = tuple(a.id if isinstance(a, ast.Name) else None for a in call.args)
+        positional: list[frozenset[str]] = []
+        for a in call.args:
+            if isinstance(a, ast.Starred):
+                break
+            positional.append(argument_roots(a, iterated))
         keywords = tuple(
-            (kw.arg, kw.value.id) for kw in call.keywords if kw.arg is not None and isinstance(kw.value, ast.Name)
+            (kw.arg, roots)
+            for kw in call.keywords
+            if kw.arg is not None and (roots := argument_roots(kw.value, iterated))
         )
-        out.add((call.func.id, positional, keywords))
+        out.add((call.func.id, tuple(positional), keywords))
     return frozenset(out)
 
 
@@ -187,16 +319,17 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
 
     *resolve_source* maps a function name to its source string (or ``None`` if it
     is not a resolvable user-defined function — a builtin, C function, lambda, or
-    unknown name). For each top-level bare-``Expr`` call the function body is
-    parsed, its mutated parameters are found via :func:`params_mutated_in_function`
-    (interprocedurally — a param mutated only through a further resolvable call is
-    detected too), and each is mapped back to the call's positional /
-    keyword argument variable.
+    unknown name). For each call in *tree* (:func:`call_arg_targets`: bare or
+    not) the function body is parsed, its mutated parameters are found via
+    :func:`params_mutated_in_function` (interprocedurally — a param mutated
+    only through a further resolvable call is detected too), and each is
+    mapped back to the variables the call's positional / keyword argument
+    hands over.
     """
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for func_name, positional, keywords in standalone_call_arg_targets(tree):
+    for func_name, positional, keywords in call_arg_targets(tree):
         fdef = resolve_function_def(func_name, resolve_source)
         if fdef is None:
             continue
@@ -204,12 +337,12 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
         if not mutated_params:
             continue
         pos_params = _positional_param_names(fdef)
-        for i, arg_var in enumerate(positional):
-            if arg_var and i < len(pos_params) and pos_params[i] in mutated_params:
-                out.add(arg_var)
-        for param, arg_var in keywords:
+        for i, arg_vars in enumerate(positional):
+            if i < len(pos_params) and pos_params[i] in mutated_params:
+                out.update(arg_vars)
+        for param, arg_vars in keywords:
             if param in mutated_params:
-                out.add(arg_var)
+                out.update(arg_vars)
     return frozenset(out)
 
 

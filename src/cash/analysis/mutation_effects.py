@@ -38,11 +38,10 @@ from .callee_effects import (
     mutating_partials,
     partial_arg_mutations,
     reduce_free_mutations,
-    standalone_call_arg_targets,
     stateful_closure_vars,
     stateful_self_functions,
 )
-from .code_analyzer import CodeAnalyzer, parse_cell_source
+from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
@@ -408,6 +407,10 @@ def _branch_mutations(
             pass  # nothing the analysis can see; the rules below still apply
         mutated.update(selfref_reassignment_targets(stmt))
         mutated.update(_bare_call_receivers(stmt, is_module))
+        # `%time acc.append(x)` in the body changes `acc` as the plain line does.
+        inner = magic_python(ast.Module(body=[stmt], type_ignores=[])).body[1:]
+        if inner:
+            mutated |= _branch_mutations(inner, targets, is_builtin, is_module)
     # ``os.remove(f)`` reads as ``list.remove`` on ``os``; a module's lineage
     # is its code, which no call through it changes.
     return {v for v in mutated if not is_builtin(v) and not is_module(v)} - targets
@@ -537,11 +540,13 @@ class _CellWrites:
 
     def add_argument_mutations(self, facts: _CellFacts, sources: NotebookSources) -> None:
         """A variable passed to a helper that mutates that parameter
-        (``def add(d): d.append(x)`` + ``add(data)``) is reset like a receiver."""
-        if standalone_call_arg_targets(facts.tree):
-            arg_muts = function_arg_mutations(facts.tree, sources.functions.get) - facts.nocache
-            self.mutated |= arg_muts
-            self.method_receivers |= arg_muts
+        (``def add(d): d.append(x)`` + ``add(data)`` or ``n = add(data)``) is
+        reset like a receiver."""
+        if not facts.calls_something:
+            return  # nothing to look up: the notebook is not read
+        arg_muts = function_arg_mutations(facts.tree, sources.functions.get) - facts.nocache
+        self.mutated |= arg_muts
+        self.method_receivers |= arg_muts
 
     def add_callee_state(self, facts: _CellFacts, sources: NotebookSources) -> None:
         """State a called function changes without the cell naming it."""
@@ -778,12 +783,9 @@ def statement_effects(
             callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
             if namespace is not None:
                 callee_globals = capturable_globals(callee_globals, namespace)
-        if standalone_call_arg_targets(tree):
-            arg_mutations = frozenset(
-                v
-                for v in function_arg_mutations(tree, resolve_source)
-                if not is_module_name(v, namespace, virtual_modules)
-            )
+        arg_mutations = frozenset(
+            v for v in function_arg_mutations(tree, resolve_source) if not is_module_name(v, namespace, virtual_modules)
+        )
     except Exception as exc:  # noqa: BLE001 - unknown writes must not read as no writes
         # What the called functions write is unknown, so the statement keeps
         # its own reads and writes and is marked to run uncached.
@@ -813,7 +815,7 @@ class ReceiverClasses:
     #: Method receivers no rule decides and no verdict covers. The runtime
     #: observes or assumes them; the simulation assumes they change.
     unknown_receivers: frozenset[str] = frozenset()
-    #: Bare-call arguments no verdict covers. The runtime fingerprints them;
+    #: Call arguments no verdict covers. The runtime fingerprints them;
     #: the simulation leaves them alone, since treating every ``print(df)``
     #: as a change would bump ``df`` for every reader.
     unknown_args: frozenset[str] = frozenset()
@@ -896,7 +898,7 @@ def classify_receivers(
     recorded for this statement (None when it has not run); it is called only
     when the statement has a receiver or argument to decide, since the
     simulation reads it from the backend. *arguments* are the
-    bare-call arguments the engine considers (see ``bare_call_arguments``).
+    call arguments the engine considers (see ``call_arguments``).
     A module is never a receiver: ``pd.set_option(...)`` is a module
     function call, counted only as a change to a setting the module keeps.
     """

@@ -83,3 +83,47 @@ def test_a_call_that_only_reads_its_argument_changes_nothing(nb_runner, tmp_path
     nb_runner.run_all()
     raw = nb_runner.get_raw_output(4)
     assert "CACHED: total" in raw, "print(df) was treated as changing df, and the cell below re-ran:\n" + raw
+
+
+#: A helper of the notebook's that changes its argument and returns a summary:
+#: the result is kept, and the change in place must happen on every run.
+HELPER = (
+    "import time\n"
+    "def add_features(df):\n"
+    "    time.sleep(0.3)\n"
+    "    df['x2'] = df['a'] * 2\n"
+    "    return df[['x2']].describe()"
+)
+FRAME = "df = pd.DataFrame({'a': [1.0, 2.0, 3.0]})"
+COLUMNS = "print('C', list(df.columns))"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "summary = add_features(df)",
+        "summaries = [add_features(f) for f in [df]]",
+        "for f in [df]:\n    s = add_features(f)",
+    ],
+)
+def test_a_helper_whose_result_is_kept_changes_its_argument_on_every_run_all(nb_runner, call):
+    nb_runner.create_notebook([SETUP, HELPER, FRAME, call, COLUMNS])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "C ['a', 'x2']" in nb_runner.get_output(5), nb_runner.get_raw_output(5)
+    nb_runner.run_all()
+    assert nb_runner.peek("list(df.columns)") == "['a', 'x2']", (
+        "the second Run All restored the result and skipped the change:\n" + nb_runner.get_raw_output(4)
+    )
+
+
+@pytest.mark.fresh_kernel
+def test_a_helper_whose_result_is_kept_changes_its_argument_after_a_restart(nb_runner):
+    nb_runner.create_notebook([SETUP, HELPER, FRAME, "summary = add_features(df)", COLUMNS])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert nb_runner.peek("list(df.columns)") == "['a', 'x2']", (
+        "after a restart the change was skipped:\n" + nb_runner.get_raw_output(4)
+    )

@@ -67,7 +67,7 @@ def ipython_cell(raw_cell: str, transform: Callable[[str], str]) -> IPythonCell 
     when IPython runs it on its own.
 
     That is a cell magic other than ``%%time`` and ``%%prun``, a cell of
-    magics and nothing else (nothing to track), a cell that loads an
+    magic lines and nothing else (nothing to track), a cell that loads an
     extension or switches cash, and one whose transform does not keep its
     lines in place or does not parse (a genuine syntax error).
     """
@@ -97,6 +97,14 @@ def ipython_cell(raw_cell: str, transform: Callable[[str], str]) -> IPythonCell 
         tree = CodeAnalyzer.parse_cell(transformed)
     except SyntaxError:
         return None
-    if magic is None and all(calls_ipython(node) for node in tree.body):
+    if magic is None and all(_is_magic_line(node) for node in tree.body):
         return None
     return IPythonCell(transformed, tree, magic)
+
+
+def _is_magic_line(node: ast.stmt) -> bool:
+    """Whether *node* is a magic or a shell command on a line of its own.
+    A loop or a branch with one in its body is Python, which cash runs:
+    run by IPython, what ``for i in r: %time acc.append(i)`` changed was
+    never seen."""
+    return isinstance(node, (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign)) and calls_ipython(node)

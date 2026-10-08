@@ -900,6 +900,12 @@ class CashMagics(Magics):
         # np.random.rand(2)``) is a position a later draw is rewound past.
         rng_before = capture_rng_state()
         try:
+            # What `%time train(model)` hands to a call, to see it change.
+            snapshots = processor.magic_cell_snapshots(raw_cell)
+        except Exception:  # noqa: BLE001 - nothing watched: the magic changes only what it says
+            logger.debug("Watching what the magics hand to calls failed", exc_info=True)
+            snapshots = {}
+        try:
             yield
         finally:
             try:
@@ -915,7 +921,7 @@ class CashMagics(Magics):
                 logger.debug("Recording the random streams around the cell failed", exc_info=True)
             processor.forget_rebound(before, lineage_before)
             try:
-                processor.record_magic_cell(raw_cell, lineage_before)
+                processor.record_magic_cell(raw_cell, lineage_before, snapshots)
             except Exception:  # noqa: BLE001 - the names then keep no lineage, as before
                 logger.debug("Recording what the magics bound failed", exc_info=True)
 

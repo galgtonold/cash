@@ -591,6 +591,7 @@ class StatementProcessor:
             # a branch as one unit, so one in a body keeps no lineage, as before.
             if len(run.tree.body) == 1 and is_magic_statement(run.tree.body[0]) and not is_control_body(run.code):
                 run.magic_reads = self.magic_reads(run.tree.body[0])
+                run.magic_snapshots = self._mutations.magic_snapshots(run.tree.body[0], run.code)
 
         done = self._check_redundant_import(run)
         if done is not None:
@@ -1002,6 +1003,7 @@ class StatementProcessor:
         self._post_execute(run, execution)
         self._forget_ipython_bindings(run)
         if run.magic_reads is not None:
+            self.note_magic_changes(run.code, run.magic_snapshots)
             self.record_magic(run.code, run.tree.body[0], run.magic_reads)
         return metrics
 
@@ -1024,10 +1026,40 @@ class StatementProcessor:
         lineage = self.tracking_state.variable_lineage
         return {name: lineage.get(name) for name in read}
 
-    def record_magic_cell(self, raw_cell: str, lineage_before: Mapping[str, str]) -> None:
+    def magic_cell_snapshots(self, raw_cell: str) -> dict[str, dict[str, str | None]]:
+        """:meth:`MutationClassifier.magic_snapshots` for every statement of
+        *raw_cell*, a cell of magics only that IPython runs on its own, by
+        statement, before it runs; for :meth:`record_magic_cell`."""
+        cell = simulation_cell(raw_cell)
+        if cell is None:
+            return {}
+        source, tree = cell
+        snapshots: dict[str, dict[str, str | None]] = {}
+        for node in tree.body:
+            if is_magic_statement(node):
+                code = statement_code(node, source)
+                taken = self._mutations.magic_snapshots(node, code)
+                if taken is not None:
+                    snapshots[code] = taken
+        return snapshots
+
+    def note_magic_changes(self, code: str, snapshots: dict[str, str | None] | None) -> None:
+        """Record what the magic statement *code* changed through a call's
+        argument (``MutationClassifier.note_magic_changes``), across restarts too."""
+        changed = self._mutations.note_magic_changes(code, snapshots)
+        if changed is not None:
+            self._records.persist_mutation_verdict(statement_source_hash(code), changed)
+
+    def record_magic_cell(
+        self,
+        raw_cell: str,
+        lineage_before: Mapping[str, str],
+        snapshots: Mapping[str, dict[str, str | None]] | None = None,
+    ) -> None:
         """:meth:`record_magic` for every statement of *raw_cell*, a cell of
         magics only that IPython ran on its own, in order, from the lineages
-        before it ran (*lineage_before*)."""
+        before it ran (*lineage_before*) and the fingerprints taken before it
+        ran (*snapshots*, :meth:`magic_cell_snapshots`)."""
         cell = simulation_cell(raw_cell)
         if cell is None:
             return
@@ -1037,7 +1069,9 @@ class StatementProcessor:
         running: dict[str, str | None] = dict(lineage_before)
         for node in tree.body:
             _, read = magic_effects(node, self._is_module)
-            running.update(self.record_magic(statement_code(node, source), node, {n: running.get(n) for n in read}))
+            code = statement_code(node, source)
+            self.note_magic_changes(code, (snapshots or {}).get(code))
+            running.update(self.record_magic(code, node, {n: running.get(n) for n in read}))
 
     def record_magic(self, code: str, node: ast.stmt, reads: Mapping[str, str | None]) -> dict[str, str]:
         """Give each name the magic statement *node* (*code*) bound or changed
@@ -1049,7 +1083,10 @@ class StatementProcessor:
         (``%run``) stay without one.
         """
         ns = self.shell.user_ns
-        changed, _ = magic_effects(node, self._is_module)
+        changed, read = magic_effects(node, self._is_module)
+        # And what it was seen changing through a call's argument
+        # (`%time train(model)`), as the simulation reads it back.
+        changed |= {n for n in self._mutations.magic_changed_arguments(code) if n in read and not self._is_module(n)}
         rerun = is_rerun_magic(node)
         base = magic_base(code, reads)
         digests: dict[str, str] = {}

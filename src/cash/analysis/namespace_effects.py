@@ -28,7 +28,13 @@ from ..install_paths import is_user_code_file
 from ..purity import is_pure
 from ..source_reading import getsource
 from .ast_util import called_names, resolve_callee
-from .callee_effects import source_called_names, source_global_rebinds
+from .callee_effects import (
+    argument_roots,
+    iterated_sources,
+    source_called_names,
+    source_global_rebinds,
+    statement_calls,
+)
 from .file_effects import (
     READ_TEXT_MARKERS,
     REPEATABILITY_REPLACING,
@@ -52,6 +58,8 @@ __all__ = [
     "notebook_global_rebinds",
     "bare_call_argument_names",
     "bare_call_arguments",
+    "call_argument_names",
+    "call_arguments",
     "is_estimator",
     "fits_its_receiver",
 ]
@@ -1007,6 +1015,19 @@ def bare_call_argument_names(tree: ast.Module | None) -> frozenset[str]:
     return frozenset(names)
 
 
+def call_argument_names(tree: ast.Module | None) -> frozenset[str]:
+    """Every variable a call in *tree* is handed, live or not:
+    `call_arguments` without the namespace filter."""
+    if tree is None:
+        return frozenset()
+    iterated = iterated_sources(tree)
+    names: set[str] = set(bare_call_argument_names(tree))
+    for call in statement_calls(tree, control_bodies=False):
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            names |= argument_roots(arg, iterated)
+    return frozenset(names)
+
+
 #: Builtins that read what they are given and change none of it.
 _READING_BUILTINS = frozenset({"len", "print", "repr", "str", "type", "id", "isinstance"})
 
@@ -1039,10 +1060,8 @@ def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str
     """Names a bare expression statement hands straight to its call, which the
     call could change in place: ``im.add_qc(df)``, ``sc.tl.leiden(hv)``.
 
-    One definition for the runtime (which observes them) and the simulation
-    (which reproduces the runtime's verdict), so the two cannot disagree about
-    which names are candidates. Modules, classes, functions and immutable
-    values are never candidates.
+    Modules, classes, functions and immutable values are never candidates
+    (:func:`call_arguments` is the engines' entry point).
     """
     if tree is None:
         return frozenset()
@@ -1055,6 +1074,46 @@ def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str
         if _only_reads(call, arg_names, user_ns):
             continue
         names.update(arg_names)
+    return _changeable(names, user_ns)
+
+
+def call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
+    """Names a statement's calls could change in place, to watch around it.
+
+    The arguments of a bare call (:func:`bare_call_arguments`), and the
+    variables handed to a function of the user's anywhere else in the
+    statement: ``summary = add_features(df)``, ``r = work(s.d)``, ``rs =
+    [work(d) for d in ds]`` (a change to ``d`` is one to what ``ds``
+    holds). A helper that changes its argument and returns a summary
+    changes it as much as one that returns nothing, and a hit that
+    restored only ``summary`` left ``df`` without its new column.
+
+    Only a function of the user's (:func:`_users_callee`) is followed past
+    a bare call: a library function whose result is kept (``m =
+    np.mean(arr)``, ``X = scaler.transform(df)``) returns its answer
+    instead of changing its arguments, and watching it would hash each
+    frame it reads twice. Not inside a loop's or a branch's body, which
+    the control structure owns.
+
+    One definition for the runtime (which observes them) and the simulation
+    (which reproduces the runtime's verdict), so the two cannot disagree about
+    which names are candidates. Modules, classes, functions and immutable
+    values are never candidates.
+    """
+    if tree is None:
+        return frozenset()
+    names: set[str] = set(bare_call_arguments(tree, user_ns))
+    iterated = iterated_sources(tree)
+    for call in statement_calls(tree, control_bodies=False):
+        if not _users_callee(call.func, user_ns):
+            continue
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            names |= argument_roots(arg, iterated)
+    return _changeable(names, user_ns)
+
+
+def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
+    """The live names among *names* whose value a call could change in place."""
     out: set[str] = set()
     for name in names:
         if name not in user_ns:
@@ -1066,6 +1125,40 @@ def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str
             continue
         out.add(name)
     return frozenset(out)
+
+
+def _users_callee(func: ast.expr, user_ns: Mapping[str, Any]) -> bool:
+    """Whether the callee *func* names is code of the user's: a function or
+    class defined in the notebook or a project module, or a method of an
+    object of such a class. One cash cannot name without running something
+    (``make()(x)``, ``steps[i](x)``) counts as one, to be safe; a builtin or
+    a library's never does."""
+    target = resolve_callee(func, user_ns, modules_only=False, builtins_fallback=True)
+    if target is None:
+        return not (isinstance(func, ast.Name) and hasattr(builtins, func.id))
+    return _users_code(target)
+
+
+def _users_code(target: Any) -> bool:
+    """Whether calling *target* runs a function the user wrote."""
+    if isinstance(target, functools.partial):
+        target = target.func
+    if inspect.ismethod(target):
+        target = target.__func__
+    if isinstance(target, type):
+        target = inspect.getattr_static(target, "__init__", None)
+    elif not isinstance(target, types.FunctionType) and not inspect.isroutine(target):
+        target = inspect.getattr_static(type(target), "__call__", None)
+    if isinstance(target, (staticmethod, classmethod)):
+        target = target.__func__
+    if not isinstance(target, types.FunctionType):
+        return False
+    try:
+        target = inspect.unwrap(target)
+    except ValueError:
+        return True
+    code = getattr(target, "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename)
 
 
 def is_estimator(value: object) -> bool:
