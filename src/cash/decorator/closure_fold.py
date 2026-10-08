@@ -624,6 +624,9 @@ class ClosureFold:
         # Set by `CodeArgs`: the walk of the code a value holds, for a captured
         # container of functions.
         self.code_args: CodeArgs | None = None
+        #: `GlobalsFold.captured_code_digest`, bound by `Cash`: the digest of
+        #: the code a captured container holds and of what it reads.
+        self.held_code: Callable[[str, Any, str, Any], str | None] | None = None
 
     def fold_closure(
         self, func: Callable, func_name: str, state_hash: str, _walked: frozenset[int] = frozenset()
@@ -770,7 +773,7 @@ class ClosureFold:
             # cannot be hashed runs the call uncached rather than being
             # left out of the key.
             try:
-                h = capture_digest(self._args, v)
+                h = self._values.table_digest("capture", v, lambda: capture_digest(self._args, v))
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(func, name, v, e) from e
             pending = CAPTURE_WATCH.get()
@@ -780,10 +783,12 @@ class ClosureFold:
             # that code reads: its digest has the code alone, and `price`
             # reading RATE moved nothing. As for a module global holding it
             # (`GlobalsFold._held_code_parts`).
-            if self.code_args is not None:
-                code_parts = self.code_args.carrier_parts(v, func_name, owner_code=getattr(func, "__code__", None))
-                if code_parts:
-                    h = f"{h}:" + hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
+            # Kept per version of a table of plain functions
+            # (`GlobalsFold.captured_code_digest`).
+            if self.held_code is not None:
+                code_digest = self.held_code(name, v, func_name, getattr(func, "__code__", None))
+                if code_digest is not None:
+                    h = f"{h}:{code_digest}"
             return (name, h)
         return None
 

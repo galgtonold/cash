@@ -8,14 +8,16 @@ import functools
 import hashlib
 import pickle
 import types
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user
+from .._memo import CODE_OBJECTS, TABLES, LruMemo
+from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user, qualname_of
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
+from .code_tables import CodeTable
 from .function_identity import hash_callable_source
 from .key_values import carried_payload, held_partials, reduced_state, stabilize_for_global_hash
 from .user_code import is_cash_wrapper
@@ -68,6 +70,9 @@ class GlobalValues:
         # id(value) -> (value, digest) for immutable plain data globals; see
         # `global_value_digest`. The value is held, so its id is not reused.
         self._immutable_digests: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
+        # (kind, id(value)) -> (its `CodeTable` snapshot, digest) for a
+        # table of plain functions; see `table_digest`.
+        self._table_digests: LruMemo[tuple[str, int], tuple[CodeTable, str]] = LruMemo(TABLES)
 
     def data_callable_identity(self, fn: Any) -> str:
         """A callable found INSIDE a data global, identified by what calling it runs.
@@ -119,7 +124,7 @@ class GlobalValues:
         on every hit cost a full hash each time.
         """
         if plain is None:
-            return self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {})
+            return self.data_digest(value)
         args = self._args
         memo = plain == "immutable" and not (args.override_hashers or args.type_hashers)
         if memo:
@@ -132,6 +137,48 @@ class GlobalValues:
         if memo:
             self._immutable_digests[id(value)] = (value, digest)
         return digest
+
+    def data_digest(self, value: Any) -> str:
+        """The digest of a data value that may hold code: each function in it
+        by what calling it runs (`data_callable_identity`). Kept per version
+        of a table of plain functions (`table_digest`)."""
+        return self.table_digest(
+            "data",
+            value,
+            lambda: self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {}),
+        )
+
+    def table_digest(self, kind: str, value: Any, compute: Callable[[], str]) -> str:
+        """*compute*'s digest of *value*, kept while *value* is a table of
+        plain functions whose `CodeTable` snapshot holds: a dispatch table of
+        1000 functions read on every hit re-identified each one every time.
+        Not with a hasher registered, which may answer differently for the
+        same objects, nor for functions that call a helper, whose identity
+        is looked up again on every call."""
+        args = self._args
+        memo = not (args.override_hashers or args.type_hashers)
+        if memo:
+            entry = self._table_digests.get((kind, id(value)))
+            if entry is not None and entry[0].holds(value):
+                return entry[1]
+        digest = compute()
+        if memo:
+            table = CodeTable.of(value)
+            if table is not None and all(self._calls_no_helper(fn) for fn in table.functions):
+                self._table_digests[(kind, id(value))] = (table, digest)
+        return digest
+
+    @staticmethod
+    def _calls_no_helper(fn: Any) -> bool:
+        if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+            return True
+        try:
+            report = get_analyzer().analyze_reached(fn)
+        except Exception:  # noqa: BLE001 - not kept, built every time
+            return False
+        return not (
+            set(report.helper_source_hashes) - {qualname_of(fn)} or report.helper_bindings or report.cached_callees
+        )
 
     def carried_state_digest(self, value: Any) -> str | None:
         """Digest of the data a callable carries besides its code, or None.
@@ -241,8 +288,7 @@ class GlobalValues:
     def safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
         try:
-            stabilized = stabilize_for_global_hash(value, self.data_callable_identity)
-            return self._args.hash_payload((stabilized,), {})
+            return self.data_digest(value)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
             self._notices.warn_once(
                 CashImpurityWarning,

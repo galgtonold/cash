@@ -255,7 +255,9 @@ changed. The second list is what cash does not see, and what to do about it.
       also inside a library object (a transformer in an sklearn
       pipeline), and what that code reads, its environment reads included:
       a handler in a dispatch table, a step in a list (a `lambda` too), a
-      property or dunder method of a settings object.
+      property or dunder method of a settings object. A table of plain
+      functions is keyed once per version of it: a hit on a table of 1000
+      handlers costs about 3 ms, not a re-analysis of each handler.
     - A **file** read by a
       [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked),
       by content, or declared with `file_depends_on=`. Also a file it looked

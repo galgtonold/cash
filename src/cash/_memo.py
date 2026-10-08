@@ -37,6 +37,7 @@ __all__ = [
     "RESULT_TYPES",
     "SOURCE_FILES",
     "STATEMENTS",
+    "TABLES",
     "STATE_LEDGERS",
     "USER_CALLEES",
     "LruMemo",
@@ -173,6 +174,10 @@ DYNAMIC_RESOLUTIONS = 256
 #: The pickled size of the resolver calls' arguments kept at most: a
 #: service passing arrays through a loader keeps the latest few.
 DYNAMIC_RESOLUTION_BYTES = 64 << 20
+
+#: One snapshot per table of functions a cached function reads, with what
+#: was built from it (`decorator.code_tables.CodeTable`).
+TABLES = 256
 
 #: One revalidation token per remote URL.
 REMOTE_URLS = 1024

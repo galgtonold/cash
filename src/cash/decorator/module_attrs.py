@@ -17,7 +17,7 @@ from ..analysis.helper_bindings import resolve_local_import
 from ..install_paths import is_user_module
 from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes
-from .key_values import iter_contained, plain_data_kind, stabilize_for_global_hash
+from .key_values import iter_contained, plain_data_kind
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
@@ -113,7 +113,7 @@ class ModuleAttrFold:
                     fold(f"{name}.{attr}", getattr(value, attr, None))
         return parts
 
-    def local_binding_parts(self, func: Callable) -> list[tuple[str, str]]:
+    def local_binding_parts(self, func: Callable, func_name: str = "?", owner_code: Any = None) -> list[tuple[str, str]]:
         """Key parts for data reached through names the module's globals never see.
 
         Two shapes:
@@ -126,7 +126,9 @@ class ModuleAttrFold:
           decorator factory, read by the wrapper as ``settings.ROUNDING``.
 
         Data values are folded, and a module's ``ATTR`` reads, the same way the
-        ``module.ATTR`` channel folds a global module's. A user module the
+        ``module.ATTR`` channel folds a global module's, the code a value
+        holds with them (`GlobalsFold.held_value_code_parts`; *owner_code* is
+        the cached function's code, for the drift guard). A user module the
         body has not imported yet is imported here -- the import the body is
         about to make; a library module only if it is already loaded.
         """
@@ -159,10 +161,11 @@ class ModuleAttrFold:
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
                 return  # code: the helper walk follows it
             try:
-                stabilized = stabilize_for_global_hash(value, self._values.data_callable_identity)
-                parts.append((label, self._args.hash_payload((stabilized,), {})))
+                parts.append((label, self._values.data_digest(value)))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                pass
+                return
+            if self._held_code is not None and plain_data_kind(value) is None:
+                parts.extend(self._held_code(label, value, func_name, owner_code, own_pkg))
 
         for name, attrs in attr_reads.items():
             obj = resolve(name)
