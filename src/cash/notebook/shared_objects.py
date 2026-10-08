@@ -84,7 +84,7 @@ _CALLABLE_TYPES: tuple[type, ...] = (types.FunctionType, types.BuiltinFunctionTy
 #: datetime from a container where `isinstance` against `VALUE_TYPES` walks the
 #: whole tuple (and its abstract classes), the cost of a walk over millions of
 #: leaves. A subclass or any other type still goes through `isinstance`.
-_EXACT_VALUE_TYPES: frozenset[type] = frozenset(
+EXACT_VALUE_TYPES: frozenset[type] = frozenset(
     {
         int,
         float,
@@ -101,10 +101,10 @@ _EXACT_VALUE_TYPES: frozenset[type] = frozenset(
 )
 
 #: The leaves of a tree `_walk` asks about as one object (`_plain_data.held_only_by_parents`).
-_TREE_LEAVES: tuple[type, ...] = tuple(_EXACT_VALUE_TYPES)
+_TREE_LEAVES: tuple[type, ...] = tuple(EXACT_VALUE_TYPES)
 
 #: The builtin containers by exact type: never a value type, so no `isinstance`.
-_EXACT_CONTAINER_TYPES: frozenset[type] = frozenset({list, dict, set, tuple, frozenset})
+EXACT_CONTAINER_TYPES: frozenset[type] = frozenset({list, dict, set, tuple, frozenset})
 
 #: The builtin containers a restore copies along with their contents.
 _CONTAINERS = (list, dict, set, tuple, frozenset)
@@ -245,7 +245,7 @@ def holds_a_held_object(value: Any) -> bool:
     value_types = VALUE_TYPES + library_value_types()
     nodes, inbound, checked, _owner = _walk({"": value}, [], value_types)
     root = id(value)
-    if _excess(nodes, inbound, [key for key in checked if key != root]):
+    if excess_refs(nodes, inbound, [key for key in checked if key != root]):
         return True
     return any(view_bases(obj) for obj in nodes.values())
 
@@ -269,7 +269,7 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     return any(key in own for source in sources for key in _identities(source, value_types))
 
 
-def _excess(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:
+def excess_refs(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:
     """The ids among *ids* whose reference count is above *inbound* plus this
     function's own references (`_OVERHEAD`)."""
     shared = []
@@ -280,7 +280,7 @@ def _excess(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) 
 
 
 def _calibrate() -> int:
-    """How many references `_excess` itself adds to an object it checks.
+    """How many references `excess_refs` itself adds to an object it checks.
 
     Measured, not assumed: it depends on the interpreter (3.14 stops counting
     the argument of ``sys.getrefcount``). The probe is held by one list, so
@@ -450,12 +450,12 @@ def _check_group(
     a variable."""
     value_types = VALUE_TYPES + library_value_types()
     nodes, inbound, checked, owner = _walk(group, bindings, value_types, keep_identity)
-    internal = _count_held(cash_held, nodes, inbound, value_types, named_held)
+    internal = count_held(cash_held, nodes, inbound, value_types, named_held)
     named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
     for mapping, key in named_held:
         if id(mapping.get(key)) in nodes:
             inbound[id(mapping.get(key))] += 1
-    excess = _excess(nodes, inbound, checked)
+    excess = excess_refs(nodes, inbound, checked)
     if not excess:
         return set(), set()
     shared = {owner[k] for k in excess}
@@ -509,7 +509,7 @@ def _holders_from_names(
     one that search would name too. One it misses holds a reference the
     count still sees, which sends the caller up `gc.get_referrers`."""
     wanted = {id(obj) for obj in targets}
-    exact = _EXACT_VALUE_TYPES
+    exact = EXACT_VALUE_TYPES
     roots: dict[int, list[str]] = {}
     for name, value in list(user_ns.items()):
         if name in known or type(value) in exact:
@@ -620,7 +620,7 @@ def _holders_from_referrers(
     return None
 
 
-def _count_held(
+def count_held(
     held: list[Any],
     nodes: dict[int, Any],
     inbound: dict[int, int],
@@ -643,7 +643,7 @@ def _count_held(
     for mapping, key in named_held:
         if id(mapping.get(key)) in reach:
             refs[id(mapping.get(key))] += 1
-    users = _excess(reach, refs, list(reach))
+    users = excess_refs(reach, refs, list(reach))
     del reach
     while users:
         key = users.pop()
@@ -673,8 +673,8 @@ def _walk_held(
     edges: dict[int, list[int]] = {}
     seen: set[int] = set()
     stack = list(held)
-    exact = _EXACT_VALUE_TYPES
-    containers = _EXACT_CONTAINER_TYPES
+    exact = EXACT_VALUE_TYPES
+    containers = EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
         if id(obj) in seen:
@@ -734,8 +734,8 @@ def _walk(
     owner: dict[int, str] = {}
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
-    exact = _EXACT_VALUE_TYPES
-    containers = _EXACT_CONTAINER_TYPES
+    exact = EXACT_VALUE_TYPES
+    containers = EXACT_CONTAINER_TYPES
     # The roots whose identity counts first: what they reach is checked.
     first = [name for name in group if name in identity]
     reached: int | None = None

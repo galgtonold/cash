@@ -37,12 +37,12 @@ from collections.abc import Iterable
 from typing import Any, Callable
 
 from ..shared_objects import (
-    _EXACT_CONTAINER_TYPES,
-    _EXACT_VALUE_TYPES,
+    EXACT_CONTAINER_TYPES,
+    EXACT_VALUE_TYPES,
     VALUE_TYPES,
-    _count_held,
-    _excess,
     children_of,
+    count_held,
+    excess_refs,
     is_value,
     library_value_types,
 )
@@ -107,8 +107,8 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
     refholders: list[Any] = []
     seen: set[int] = set()
     stack = [value]
-    exact = _EXACT_VALUE_TYPES
-    containers = _EXACT_CONTAINER_TYPES
+    exact = EXACT_VALUE_TYPES
+    containers = EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
         if id(obj) in seen:
@@ -147,7 +147,7 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
 def _bases_are_live(views: list[Any], user_ns: dict, cash_held: list[Any]) -> bool:
     """Whether an object on the ``.base`` chain of one of *views* is bound to
     a name of *user_ns*, or held by more than the *views* and the chain
-    itself and the containers in *cash_held* (by reference count, `_excess`)."""
+    itself and the containers in *cash_held* (by reference count, `excess_refs`)."""
     nodes: dict[int, Any] = {}
     inbound: dict[int, int] = {}
     for view in views:
@@ -163,8 +163,8 @@ def _bases_are_live(views: list[Any], user_ns: dict, cash_held: list[Any]) -> bo
             base = getattr(base, "base", None)
     # No local reference to a base may be left while the counts are read.
     view = base = None
-    _count_held(cash_held, nodes, inbound, VALUE_TYPES + library_value_types())
-    return bool(_excess(nodes, inbound, list(nodes)))
+    count_held(cash_held, nodes, inbound, VALUE_TYPES + library_value_types())
+    return bool(excess_refs(nodes, inbound, list(nodes)))
 
 
 def _find_name_by_identity(user_ns: dict, obj: Any) -> str | None:
