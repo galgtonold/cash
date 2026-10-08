@@ -21,6 +21,7 @@ import sys
 import textwrap
 import types
 from collections.abc import Iterable, Mapping
+from itertools import repeat
 from typing import Any, NamedTuple
 
 from ..analysis.ast_util import parse_cached
@@ -228,7 +229,7 @@ def process_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froz
     if tree is None:
         return frozenset()
     process: set[str] = set()
-    _state_writes(tree.body, namespace or {}, set(), set(), process)
+    _state_writes(tree.body, namespace or {}, None, set(), process)
     return frozenset(process)
 
 
@@ -256,16 +257,16 @@ def _process_call(func: ast.expr, callee: Any, namespace: Mapping[str, Any]) -> 
 def _state_writes(
     statements: Iterable[ast.AST],
     namespace: Mapping[str, Any],
-    found: set[str],
+    found: set[str] | None,
     followed: set[int],
     process: set[str] | None = None,
     *,
     follow: bool = True,
 ) -> None:
-    """Add to *found* the local modules *statements* set state on, run
-    with *namespace* as their globals; *followed* are the notebook functions
-    already walked. With *process*, add to it what of the process they
-    change (`process_state_writes`). Without *follow*, a call is judged by
+    """Add to *found* (unless None) the local modules *statements* set state
+    on, run with *namespace* as their globals; *followed* are the notebook
+    functions already walked. With *process*, add to it what of the process
+    they change (`process_state_writes`). Without *follow*, a call is judged by
     what it calls, not followed into a body.
 
     This is the one walk that follows a statement into the notebook
@@ -277,12 +278,14 @@ def _state_writes(
         through the module (``mylib.CONFIG["k"]``), or through a name holding
         what the module holds (``CONFIG["k"]`` after ``from mylib import
         CONFIG``, ``cfg["k"]`` after ``cfg = mylib.CONFIG``, ``Cfg.k``)."""
-        if not isinstance(node, (ast.Attribute, ast.Subscript)):
+        if found is None or not isinstance(node, (ast.Attribute, ast.Subscript)):
             return
         changed_in_place(node.value)
 
     def changed_in_place(root: ast.expr) -> None:
         """Add the local module whose state changes when *root* is changed in place."""
+        if found is None:
+            return
         while isinstance(root, (ast.Attribute, ast.Subscript)):
             root = root.value
         if isinstance(root, ast.Name):
@@ -303,13 +306,15 @@ def _state_writes(
                 process.add(changed)
         users = isinstance(callee, types.FunctionType) and _is_users_function(callee, namespace)
         if isinstance(callee, types.FunctionType) and follow:
-            found.update(_modules_changed_by(callee, namespace, process))
-            if users:
-                found.update(_class_state_written(callee, kind, receiver, namespace))
+            modules = _modules_changed_by(callee, namespace, process)
+            if found is not None:
+                found.update(modules)
+                if users:
+                    found.update(_class_state_written(callee, kind, receiver, namespace))
             if callee.__globals__ is namespace and id(callee) not in followed:
                 followed.add(id(callee))
                 _state_writes(_function_body(callee), namespace, found, followed, process)
-        if node is None or users:
+        if node is None or users or found is None:
             return
         if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
             target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
@@ -413,7 +418,8 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     # Every local module loaded but the one whose globals *namespace* is:
     # ``from mylib import CONFIG`` alone leaves no other trace of ``mylib``.
     for module in _local_modules():
-        if vars(module) is not namespace and any(held is value for held in list(vars(module).values())):
+        # By identity, at C speed: a module may hold hundreds of names.
+        if vars(module) is not namespace and any(map(operator.is_, list(vars(module).values()), repeat(value))):
             return module.__name__
     return None
 
@@ -818,7 +824,7 @@ def _module_function_process_writes(fn: types.FunctionType) -> frozenset[str]:
     `_modules_changed_by` reaches its helpers. Once per function: asked for
     every statement that calls it."""
     process: set[str] = set()
-    _state_writes(_function_body(fn), fn.__globals__, set(), set(), process, follow=False)
+    _state_writes(_function_body(fn), fn.__globals__, None, set(), process, follow=False)
     return frozenset(process)
 
 
