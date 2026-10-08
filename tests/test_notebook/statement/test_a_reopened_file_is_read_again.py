@@ -1,10 +1,11 @@
-"""What is read from an open file is keyed by what was read, not by the file.
+"""A reopened file is read from its start again, not served what an old handle gave.
 
-``lines = fh.readlines()`` runs every time (it moves ``fh``). Its output's
-lineage was the same whenever ``fh`` had the same lineage, so after the file
-was reopened a statement built on ``lines`` was served what it had computed
-when the file stood at its end: ``0`` where a plain kernel counts 3 (found
-replaying a student's notebook of the JuNE dataset, 'student_2' step 81).
+``fh = open(path)`` binds a new handle at the start of the file on every run,
+but its lineage was the same each time, so after ``lines = fh.readlines()``
+had been run on a handle at its end, a rerun of the open and the read was
+served that result: ``0`` where a plain kernel counts 3 (found replaying a
+student's notebook of the JuNE dataset, 'student_2' step 81). A statement that
+binds an open file now gets a lineage of its own on every run.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def _printed(capsys) -> str:
 @pytest.mark.parametrize("drain", sorted(DRAINS))
 def test_a_reopened_file_is_read_again(cash_magics, tmp_path, capsys, drain):
     data = tmp_path / "probe_data.txt"
-    data.write_text("a\nb\nc\n")
+    data.write_text("a\nb\nc\n", encoding="utf-8")
     cells = [f"fh = open(r'{data}')", DRAINS[drain], READ]
     cash_magics.cash_on("")
     with warnings.catch_warnings():

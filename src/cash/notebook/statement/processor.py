@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import io
 import logging
 import secrets
 import types
@@ -733,7 +734,6 @@ class StatementProcessor:
                 f"a cache hit would not advance it, so the statement runs every time"
             )
             run.skip_cache = True
-            run.value_keyed_lineage = True
 
     def _lookup(
         self, run: StatementRun, analysis_time: float, hash_time: float
@@ -1203,6 +1203,14 @@ class StatementProcessor:
             components=self._records.lineages_read(inputs) if inputs else {},
         )
 
+    def _binds_a_stream(self, run: StatementRun) -> bool:
+        """Whether the statement bound an open file: a handle is a new stream
+        at its start on every run, which its lineage alone cannot tell, so a
+        reader below (``lines = fh.readlines()``) would be served what it
+        computed from an earlier handle, left at its end."""
+        user_ns = self.shell.user_ns
+        return any(isinstance(user_ns.get(name), io.IOBase) for name in run.outputs)
+
     def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics.
 
@@ -1235,7 +1243,7 @@ class StatementProcessor:
             accessed_files=execution.accessed_files,
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
-            no_cache=(run.annotation is not None and run.annotation.no_cache) or run.value_keyed_lineage,
+            no_cache=(run.annotation is not None and run.annotation.no_cache) or self._binds_a_stream(run),
         )
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.

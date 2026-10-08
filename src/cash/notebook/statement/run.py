@@ -90,15 +90,6 @@ class StatementRun:
     #: the rewritten code is what compiles.
     exec_code: str = ""
     exec_tree: ast.Module | None = None
-    #: Whether the outputs' lineages also carry a digest of their values, as
-    #: for ``# @cash:no-cache``: set for a statement that reads from a file
-    #: or an iterator it does not rebind (`drawn_stream_inputs`). It runs
-    #: every time and moves the stream without telling the lineage, so an
-    #: output's lineage from the statement and the stream's lineage would be
-    #: the same whatever the stream held: ``lines = fh.readlines()`` after a
-    #: reopen would key what is built on ``lines`` as it was keyed when the
-    #: file was at its end.
-    value_keyed_lineage: bool = False
     #: The input variables holding a random generator that the statement drew
     #: from (``carrier_advances``); None when it read no generator.
     carriers_advanced: set[str] | None = None
