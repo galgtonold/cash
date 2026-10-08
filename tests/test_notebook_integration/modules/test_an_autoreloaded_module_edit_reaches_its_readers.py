@@ -7,6 +7,7 @@ The same for a module only ``%aimport`` loads.
 """
 
 import os
+import uuid
 
 import pytest
 
@@ -32,9 +33,12 @@ def _edit(path):
     ids=["import_beside_the_magics", "from_import_beside_the_magics", "aimport"],
 )
 def test_the_reader_runs_the_edited_code(nb_runner, cells):
-    path = nb_runner.work_dir / "mylib.py"
+    # A name of its own: a warm kernel keeps the extension, and what it
+    # recorded of a `mylib` another test loaded, between tests.
+    name = f"arlib_{uuid.uuid4().hex[:8]}"
+    path = nb_runner.work_dir / f"{name}.py"
     path.write_text(V1, encoding="utf-8")
-    nb_runner.create_notebook(cells)
+    nb_runner.create_notebook([cell.replace("mylib", name) for cell in cells])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert nb_runner.peek("x") == "10"
