@@ -434,26 +434,41 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     return None
 
 
-_LOCAL_MODULES: list[Any] = [None, ()]
+#: ``[stamp, entries, modules]``: the ``sys.modules`` stamp the local
+#: modules were found at, the ``(key, module)`` entries they were found
+#: under, and the modules (each once).
+_LOCAL_MODULES: list[Any] = [None, (), ()]
 
 
 def _local_modules() -> tuple[types.ModuleType, ...]:
     """The local modules loaded, found again only when ``sys.modules`` has
-    another size or another last entry: asked for a store through any name
-    that is not a module (``df["a"] = 1``), it must not walk the thousand
-    library modules each time."""
+    another size or another last entry, or an entry they were found under
+    holds another object now: asked for a store through any name that is
+    not a module (``df["a"] = 1``), it must not walk the thousand library
+    modules each time.
+
+    Checked by the key each was found under, not by its ``__name__``: a
+    module can sit under another key than its name, and the name's own
+    entry then holds something else for good. ``multiprocessing`` keeps a
+    script's ``__main__`` as ``__mp_main__``, and IPython puts its own
+    ``__main__`` in its place, so a check by name found the cache stale on
+    every call and walked every loaded module again, per statement."""
     modules = sys.modules
     try:
         last = next(reversed(modules.keys()))
     except (StopIteration, RuntimeError):
         last = None
     stamp = (len(modules), last)
-    if _LOCAL_MODULES[0] != stamp or any(modules.get(m.__name__) is not m for m in _LOCAL_MODULES[1]):
-        _LOCAL_MODULES[1] = tuple(
-            module for module in list(modules.values()) if isinstance(module, types.ModuleType) and _is_local(module)
+    if _LOCAL_MODULES[0] != stamp or any(modules.get(key) is not module for key, module in _LOCAL_MODULES[1]):
+        entries = tuple(
+            (key, module)
+            for key, module in list(modules.items())
+            if isinstance(module, types.ModuleType) and _is_local(module)
         )
+        _LOCAL_MODULES[1] = entries
+        _LOCAL_MODULES[2] = tuple({id(module): module for _key, module in entries}.values())
         _LOCAL_MODULES[0] = stamp
-    return _LOCAL_MODULES[1]
+    return _LOCAL_MODULES[2]
 
 
 def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, str, Any]:
