@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from cash.backends._writes import all_pending_writes
 from tests._work_counts import deepcopy_steps, hashed_bytes, pickled_bytes
 
 pytestmark = pytest.mark.core
@@ -65,6 +66,10 @@ def test_a_miss_pickles_its_value_about_once(disk_cash, fn):
     f = disk_cash.cache(fn)
     with pickled_bytes() as pickled:
         f(1)
+        # The disk write serializes the RAM tier's copy on the writer
+        # thread after the call returns: count it too.
+        for queue in all_pending_writes():
+            queue.wait_all()
     size = _pickle_size(fn(1))
     # 1.0x today, 2.0x for the dataclass list (stored, and copied into RAM by
     # a pickle round trip); the bound catches one more pickle of the value.
