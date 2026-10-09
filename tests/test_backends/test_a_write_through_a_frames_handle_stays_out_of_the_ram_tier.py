@@ -4,7 +4,9 @@ Copy-on-write covers writes made through pandas, not the writable handles
 pandas hands out: ``s.array`` of any column and ``s.values`` of a nullable or
 categorical column point at the block itself. The RAM tier copied frames
 shallowly, so ``df["score"].values[0] = 100`` on a returned frame changed
-what every later hit returned. It copies them deep on store and on hit.
+what every later hit returned. A table with such columns is copied deep on
+store and on hit; one it shares instead is frozen first
+(``test_a_ram_hit_shares_a_frozen_table.py``).
 """
 
 import numpy as np

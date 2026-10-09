@@ -24,6 +24,10 @@ def _named(metadata: MetadataDict) -> str | None:
     return metadata.get("code") or (f"{function}(...)" if function else None)
 
 
+#: `TieredBackend._private_copy` when the first tier has no copy to give.
+_NO_COPY: Any = object()
+
+
 class _TierWrites(NamedTuple):
     """What one pass over the persistent tiers did (`_write_persistent_tiers`)."""
 
@@ -62,6 +66,9 @@ class TieredBackend(CacheBackend):
         self.policy = policy if policy is not None else PersistencePolicy()
         self.notices = StoreNotices()
         self._clear_watch = ClearWatcher()
+        #: Keys read from a slower tier once and not kept by a faster one
+        #: (`InMemoryBackend.promote`), oldest first: the next read keeps them.
+        self._read_once: dict[str, None] = {}
 
     def get_metadata(self, key: str) -> dict | None:
         """Get only metadata for a cache key from the first backend that has it.
@@ -314,13 +321,22 @@ class TieredBackend(CacheBackend):
             if metadata is not None:
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
+                read_before = self._read_once.pop(key, False) is None
                 for j in range(i):
                     # Always offered: a faster tier should hold what is being
                     # read. One it can never hold -- over the RAM tier's
                     # eviction target -- that tier refuses itself
                     # (`InMemoryBackend.set`), which is what keeps a restore of
-                    # a big entry from emptying it.
+                    # a big entry from emptying it. A tier that would have to
+                    # copy the value takes it on its second read
+                    # (`InMemoryBackend.promote`): the value just read is the
+                    # caller's own, and most are read once per process.
+                    promote = getattr(self.backends[j], "promote", None)
                     try:
+                        if promote is not None and not read_before:
+                            if not promote(key, value, metadata):
+                                self._remember_read(key)
+                            continue
                         self.backends[j].set(key, value, metadata)
                     except Exception as e:  # noqa: BLE001 - backend errors must not propagate
                         logger.warning(
@@ -336,6 +352,31 @@ class TieredBackend(CacheBackend):
 
                 return metadata, value
         return None, None
+
+    def _private_copy(self, key: str, metadata: MetadataDict) -> Any:
+        """The first tier's own copy of *key*'s value for a persistent tier
+        that `takes_private_values`, or `_NO_COPY`."""
+        if not any(getattr(b, "takes_private_values", False) for b in self.backends[1:]):
+            return _NO_COPY
+        private_copy = getattr(self.backends[0], "private_copy", None)
+        if private_copy is None:
+            return _NO_COPY
+        try:
+            return private_copy(key, _NO_COPY, metadata)
+        except Exception:  # noqa: BLE001 - the caller's value, serialized as before
+            logger.debug("no private copy of %r", key, exc_info=True)
+            return _NO_COPY
+
+    #: How many keys `_read_once` remembers.
+    _READ_ONCE_KEYS = 4096
+
+    def _remember_read(self, key: str) -> None:
+        self._read_once[key] = None
+        while len(self._read_once) > self._READ_ONCE_KEYS:
+            try:
+                del self._read_once[next(iter(self._read_once))]
+            except (StopIteration, KeyError, RuntimeError):  # another thread got there
+                break
 
     def _write_persistent_tiers(
         self,
@@ -507,11 +548,21 @@ class TieredBackend(CacheBackend):
                 if decision.report:
                     self.notices.not_worth_bytes(key, decision.weight, exec_time, code=_named(metadata))
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
-            writes = (
-                self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
-                if decision.persist
-                else _TierWrites([], False, cap_size, [], [])
-            )
+            if decision.persist:
+                # The RAM tier's own copy, when it has one nothing changes: a
+                # tier that takes it serializes it in the background, and the
+                # caller pays one copy (or none, for a table) instead of two.
+                private = self._private_copy(key, metadata)
+                writes = self._write_persistent_tiers(
+                    key,
+                    value if private is _NO_COPY else private,
+                    metadata,
+                    serializer,
+                    cap_size,
+                    private=private is not _NO_COPY,
+                )
+            else:
+                writes = _TierWrites([], False, cap_size, [], [])
             stored_destinations.extend(writes.stored)
             store_errors.extend(writes.errors)
             size_refused = writes.size_refused

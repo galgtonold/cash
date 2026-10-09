@@ -19,6 +19,7 @@ from typing import Any
 from cash.exceptions import CacheBackendError
 
 from .. import _plain_data, kept_state
+from . import frame_sharing
 from .._lazy_module import LazyModule
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
@@ -35,6 +36,16 @@ __all__ = ["InMemoryBackend"]
 #: A list or tuple with at most this many items has the frames in it
 #: copied as `_copy_frame` copies them, not deep (`_safe_deep_copy`).
 _PREMADE_ITEMS_MAX = 64
+
+
+#: `InMemoryBackend._frame_cells` verdict for a pandas table stored frozen
+#: (`frame_sharing`): a hit hands out a shallow copy of it.
+_SHARED = "shared"
+
+
+#: `InMemoryBackend._frame_cells` verdict for a table stored as
+#: `_TableWithBytes`: only a copy reads it out.
+_BYTES = "bytes"
 
 
 #: `InMemoryBackend._copy_plans` value for an entry the first hit plans.
@@ -137,6 +148,109 @@ def _marshal_parts(value: dict, depth: int = 0, found: dict | None = None) -> di
     return found
 
 
+class _TableWithBytes:
+    """A pandas table stored with its object columns of lists and dicts kept
+    as `marshal` bytes (`_plain_data.marshal_dumps`), the way big JSON-like
+    values are (`_Marshalled`).
+
+    Such cells were copied one container at a time on the store and on every
+    hit: 1.6 s and 1.4 s for a million rows of two-item lists, more than
+    building the table. Written once as bytes, a hit reads new cells out of
+    them at C speed. *table* is the rest of it, with those columns holding
+    None, kept as any table is (shared when it can be frozen).
+    """
+
+    __slots__ = ("columns", "table")
+
+    def __init__(self, table: Any, columns: tuple[int, ...], data: bytes) -> None:
+        self.table = table
+        self.columns = (columns, data)
+
+    @staticmethod
+    def make(frame: Any, record_cells: dict) -> _TableWithBytes | None:
+        """*frame* kept this way, or None when one of its columns of objects
+        holds anything but `_plain_data.MARSHAL_TYPES`, or a list or dict that
+        something outside its cell also holds (that sharing must survive the
+        copy: the cell copy keeps it), or its labels hold such objects."""
+        try:
+            import numpy as np
+
+            if _mutable_labels(frame):
+                return None
+            is_series = getattr(frame, "ndim", 2) == 1
+            positions = (0,) if is_series else tuple(i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object")
+            lists = [frame.to_numpy().tolist()] if is_series else [frame.iloc[:, i].to_numpy().tolist() for i in positions]
+            writable = tuple(n for n, cells in enumerate(lists) if not _plain_data.immutable_below(cells))
+            if not writable:
+                return None
+            columns = [lists[n] for n in writable]
+            del lists
+            # Each cell is held by the table's array and its column's list
+            # (and, for several columns, by the list of them all).
+            if len(columns) == 1:
+                facts = _plain_data.held_items_facts(columns[0], 1)
+            else:
+                facts = _plain_data.held_items_facts([cell for cells in columns for cell in cells], 2)
+            if facts is None or not facts.held_once:
+                return None
+            data = _plain_data.marshal_dumps(columns, facts)
+            if data is None:
+                return None
+            del columns
+            empty = np.full(len(frame), None, dtype=object)
+            if is_series:
+                rest = frame._constructor(empty, index=frame.index, name=frame.name).__finalize__(frame)
+            else:
+                rest = frame.copy(deep=False)
+                for n in writable:
+                    rest.isetitem(positions[n], empty.copy())
+            # Its other object columns passed `immutable_below`: no scan again.
+            rest = InMemoryBackend._copy_frame(rest, {id(rest): False}, record_cells)
+            return _TableWithBytes(rest, tuple(positions[n] for n in writable), data)
+        except Exception:  # noqa: BLE001 - copied a cell at a time instead
+            logger.debug("could not keep a %s's cells as bytes", type(frame).__name__, exc_info=True)
+            return None
+
+    def read_out(self, known_cells: dict | None) -> Any:
+        """A new table: *table* copied as stored, the cells read out of the bytes."""
+        copied = InMemoryBackend._copy_frame(self.table, known_cells)
+        positions, data = self.columns
+        columns = _plain_data.marshal_loads(data)
+        if getattr(copied, "ndim", 2) == 1:
+            # In place: a new Series would drop its attrs, its flags and a
+            # subclass, which a disk hit keeps.
+            copied.iloc[:] = _object_array(columns[0])
+            return copied
+        for position, cells in zip(positions, columns):
+            copied.isetitem(position, _object_array(cells))
+        return copied
+
+    def __deepcopy__(self, memo: dict) -> Any:
+        return self.read_out(None)
+
+    def __reduce__(self) -> tuple:
+        return _read_out_table, (self.table, self.columns)
+
+
+def _read_out_table(table: Any, columns: tuple) -> Any:
+    kept = _TableWithBytes(table, *columns)
+    return kept.read_out(None)
+
+
+def _object_array(cells: list) -> Any:
+    """A numpy object array of *cells*, each a cell: a list stays a list,
+    where ``np.array`` would make a dimension of it."""
+    import numpy as np
+
+    try:
+        return np.fromiter(cells, dtype=object, count=len(cells))
+    except (TypeError, ValueError):  # numpy before 1.23
+        array = np.empty(len(cells), dtype=object)
+        for i, cell in enumerate(cells):
+            array[i] = cell
+        return array
+
+
 class _Unservable(Exception):
     """A part kept as bytes sits inside an object no copy can be made of:
     it cannot be read out, so the entry cannot be handed out at all."""
@@ -157,7 +271,7 @@ def _reaches_marshalled(value: Any) -> bool:
         if id(obj) in seen:
             continue
         seen.add(id(obj))
-        if type(obj) is _Marshalled:
+        if type(obj) is _Marshalled or type(obj) is _TableWithBytes:
             return True
         if type(obj) in _ATOMS or isinstance(obj, stop):
             continue
@@ -168,7 +282,8 @@ def _reaches_marshalled(value: Any) -> bool:
 class InMemoryBackend(CacheBackend):
     """Entries held in this process's memory, gone when the process ends.
 
-    A hit returns a copy, so changing it does not change the entry. Entries
+    A hit returns a copy, so changing it does not change the entry (a pandas
+    table: a shallow copy of frozen data, `frame_sharing`). Entries
     are evicted when the byte cap or the entry cap is reached, or when the
     machine runs short of memory.
     """
@@ -302,6 +417,8 @@ class InMemoryBackend(CacheBackend):
             value_type = type(value)
             if _is_pandas_frame(value_type):
                 return InMemoryBackend._copy_frame(value, known_cells, record_cells)
+            if value_type is _TableWithBytes:
+                return value.read_out(known_cells)
             if value_type.__name__ == "ndarray" and value_type is getattr(sys.modules.get("numpy"), "ndarray", None):
                 if not value.dtype.hasobject:
                     return _copy_array(value)
@@ -365,12 +482,17 @@ class InMemoryBackend(CacheBackend):
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
-        Deep, on every store and every hit. A shallow copy is not enough even
-        under pandas copy-on-write: copy-on-write covers writes made through
-        pandas, but ``s.array`` of any column and ``s.values`` of a nullable
-        or categorical column are writable handles to the block itself, so
-        ``df["score"].values[0] = 100`` on a returned frame would land in the
-        stored entry and in every later hit.
+        Under pandas copy-on-write, a table of numbers, dates and text is not
+        copied at all: the store keeps its data frozen where it is and a hit
+        hands out a shallow copy (`frame_sharing`). A deep copy cost 0.2 s per
+        250 MB on every store and every hit, most of an unchanged Run All.
+        Copy-on-write alone is not enough -- ``s.array`` of any column and
+        ``s.values`` of a nullable or categorical column are writable handles
+        to the block itself -- so the frozen data is read-only and marked
+        shared for good. Any other table (nullable or categorical columns,
+        mutable labels, a subclass, data something outside pandas holds) is
+        copied deep, on the store and on every hit; its private copy is
+        frozen and shared when it can be.
 
         A deep pandas copy does not copy the Python objects in an object
         column: a list, dict or array in a cell stayed one object shared by
@@ -388,9 +510,26 @@ class InMemoryBackend(CacheBackend):
         copied: a cell list returned beside its frame stays the frame's.
         """
         mutable = known_cells.get(id(frame)) if known_cells is not None else None
+        if mutable is _SHARED:
+            # Frozen when stored (`frame_sharing`): a shallow copy, which
+            # pandas copies before any write, is as independent as a deep one.
+            return frame_sharing.hand_out(frame)
         if mutable is None:
             mutable = _holds_mutable_cells(frame)
+        if record_cells is not None and mutable is False:
+            # Stored: kept as the caller's own data, frozen, not copied.
+            stored = frame_sharing.adopt(frame, cells_known=True)
+            if stored is not None:
+                record_cells[id(stored)] = _SHARED
+                return stored
         copied = None
+        if mutable and record_cells is not None:
+            # Stored: its columns of lists and dicts kept as bytes, the rest
+            # as any other table.
+            kept = _TableWithBytes.make(frame, record_cells)
+            if kept is not None:
+                record_cells[id(kept)] = _BYTES
+                return kept
         if mutable:
             copied = InMemoryBackend._copy_cells(frame, memo)
             if copied is None:
@@ -404,6 +543,8 @@ class InMemoryBackend(CacheBackend):
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
+            if mutable is False and frame_sharing.freeze(copied, own=True, cells_known=True):
+                mutable = _SHARED  # private, now frozen: hits share it
             record_cells[id(copied)] = mutable
         return copied
 
@@ -457,6 +598,10 @@ class InMemoryBackend(CacheBackend):
                 return key
             if obj_type is _Marshalled:
                 memo[key] = _plain_data.marshal_loads(obj.data)  # a part kept as bytes, read out
+                alive.append(obj)
+                return key
+            if obj_type is _TableWithBytes:
+                memo[key] = obj.read_out(known_cells)
                 alive.append(obj)
                 return key
             if frames and isinstance(obj, frames):
@@ -603,6 +748,8 @@ class InMemoryBackend(CacheBackend):
         for item in value.values():
             if _is_pandas_frame(type(item)) and id(item) not in memo:
                 memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells, memo)
+            elif type(item) is _TableWithBytes and id(item) not in memo:
+                memo[id(item)] = item.read_out(known_cells)
         for item in value.values():
             item_type = type(item)
             if _is_pandas_frame(item_type):
@@ -626,6 +773,25 @@ class InMemoryBackend(CacheBackend):
                     # it holds goes into the memo too, so a name bound to one
                     # of them still shares it with the copy.
                     _plain_data.spine_copy(item, memo)
+
+    def promote(self, key: str, value: Any, metadata: MetadataDict) -> bool:
+        """Keep *value*, just read from a slower tier, when that costs no copy;
+        False, with nothing kept, when it would.
+
+        The value is the caller's alone: nothing else has seen it. Its pandas
+        tables are frozen where they are (`frame_sharing`) and kept as they
+        are, so a restore of a 400 MB table costs no second copy. A value the
+        store would have to copy -- an array, records, an object -- is not
+        kept on its first read (`TieredBackend.get` keeps it on the second):
+        a restored value is mostly read once per process, and copying it
+        took longer than reading it from disk.
+        """
+        if not _cheap_to_keep(value):
+            return False
+        for frame in _frames_in(value):
+            if not frame_sharing.freeze(frame, own=True):
+                return False
+        return self.set(key, value, metadata) is not False
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
@@ -657,6 +823,29 @@ class InMemoryBackend(CacheBackend):
             copied = self._copy_holding_bytes(entry[1], key, self._frame_cells.get(key))
             return None if copied is _UNSERVABLE else (entry[0], copied)
         return entry
+
+    def private_copy(self, key: str, default: Any = None, metadata: MetadataDict | None = None) -> Any:
+        """The stored value for *key* to write to another tier, when it is a
+        copy only this tier holds, which nothing changes; else *default*.
+        With *metadata*, only the value stored with that very dict (the
+        write that just stored it, not an earlier or a later one).
+
+        Every stored value is that -- a hit copies it, or shares a frozen
+        table (`frame_sharing`) -- except one kept by reference (it could not
+        be copied: the caller holds it) and one holding parts kept as bytes
+        (reading those out is a full copy). A value kept whole as bytes is
+        read out into a new object, which no one else holds.
+        """
+        with self._lock:
+            entry = self._store.get(key)
+            holds_bytes = key in self._holds_bytes
+        if entry is None or holds_bytes or entry[0].get("by_reference"):
+            return default
+        if metadata is not None and entry[0] is not metadata:
+            return default
+        if type(entry[1]) is _Marshalled:
+            return _plain_data.marshal_loads(entry[1].data)
+        return entry[1]
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
@@ -739,11 +928,14 @@ class InMemoryBackend(CacheBackend):
         # Each part read out once, for the copy of the whole and, should
         # that fail, for the copy a value at a time.
         memo: dict[int, Any] = {}
-        _read_parts(value, memo)
+        if type(value) is dict:
+            _read_parts(value, memo)
         fell_back: list[bool] = []
         copied = self._safe_deep_copy(value, key, known_cells=known_cells, by_reference=fell_back, premade=memo)
         if not fell_back:
             return copied
+        if type(value) is not dict:
+            return _UNSERVABLE  # a table kept with bytes that could not be read out
         try:
             return self._copy_spine(value, memo, known_cells)
         except _Unservable:
@@ -873,7 +1065,7 @@ class InMemoryBackend(CacheBackend):
                 walk=walk,
                 premade=premade,
             )
-            holds_bytes = bool(premade) and not fell_back
+            holds_bytes = (bool(premade) or _BYTES in frame_cells.values()) and not fell_back
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
                 # each on its own, each the fastest way it allows. Planned
@@ -1182,7 +1374,7 @@ def _memory_reading() -> Any | None:
 #: are all immutable (str, bytes, numbers, dates, Decimal...), so a copy of
 #: the column may share them. Anything else ("mixed", "unknown-array", ...)
 #: may hold a list, dict or array.
-_IMMUTABLE_CELLS = frozenset(
+IMMUTABLE_CELLS = frozenset(
     {
         "empty",
         "string",
@@ -1202,6 +1394,43 @@ _IMMUTABLE_CELLS = frozenset(
         "period",
     }
 )
+
+
+#: `_cheap_to_keep` looks this far into a value, at containers this small.
+_CHEAP_DEPTH = 3
+_CHEAP_ITEMS = 64
+#: An array at most this big is copied for the RAM tier on its first read.
+_CHEAP_ARRAY_BYTES = 1 << 20
+
+
+def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
+    """Can the RAM tier keep *value* without copying much of it: atoms,
+    small arrays and pandas tables it can freeze (`frame_sharing`), in a few
+    small dicts, lists and tuples (a notebook entry's payload)?"""
+    kind = type(value)
+    if kind in _ATOMS:
+        return True
+    if _is_pandas_frame(kind):
+        return frame_sharing.enabled() and frame_sharing.freezable(value)
+    if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        return not value.dtype.hasobject and value.nbytes <= _CHEAP_ARRAY_BYTES
+    if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH and len(value) <= _CHEAP_ITEMS:
+        items = value.values() if kind is dict else value
+        if kind is dict and not all(type(name) in _ATOMS for name in value):
+            return False
+        return all(_cheap_to_keep(item, depth + 1) for item in items)
+    return False
+
+
+def _frames_in(value: Any, depth: int = 0) -> list:
+    """The pandas tables `_cheap_to_keep` found in *value*."""
+    kind = type(value)
+    if _is_pandas_frame(kind):
+        return [value]
+    if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH:
+        items = value.values() if kind is dict else value
+        return [frame for item in items for frame in _frames_in(item, depth + 1)]
+    return []
 
 
 #: Types `InMemoryBackend._deep_copy`'s pickler copies itself, without a look.
@@ -1267,11 +1496,94 @@ def _round_trip(value: Any) -> Any:
 
 def _copy_array(array: Any) -> Any:
     """A copy of a numpy array of numbers, read-only if it was, as a
-    pickle round trip makes it."""
-    copied = array.copy(order="K")
+    pickle round trip makes it. A big one times the copy (`copy_seconds`)."""
+    if array.nbytes < _TIMED_COPY_BYTES:
+        copied = array.copy(order="K")
+    else:
+        started = _copy_clock()
+        copied = array.copy(order="K")
+        _note_copy_speed(array.nbytes, _copy_clock() - started)
     if not array.flags.writeable:
         copied.flags.writeable = False
     return copied
+
+
+#: An array copy at least this big is timed (`_note_copy_speed`).
+_TIMED_COPY_BYTES = 1 << 20
+#: Bytes per second this process copied its last big arrays at, newest last
+#: (`_copy_clock`): the copy speed of THIS machine and its memory, which a
+#: fitted model cannot know (a hit of an 80 MB array measured 0.2-0.8 s on
+#: one machine, against 0.02 s fitted). Empty until measured.
+_COPY_SPEED: list[float] = []
+def _fine_thread_clock() -> Any:
+    """The clock a copy is timed with: this thread's CPU time, where it
+    resolves a microsecond; else the wall clock (Windows: 15.6 ms ticks).
+
+    CPU time, because a copy that waited for a core says nothing about the
+    copy: the wall time of the cell it would replace waited too.
+    """
+    try:
+        if time.get_clock_info("thread_time").resolution <= 1e-6:
+            return time.thread_time
+    except (AttributeError, ValueError, OSError):
+        pass
+    return time.perf_counter
+
+
+_copy_clock = _fine_thread_clock()
+
+#: How many readings `copy_seconds` takes the fastest of. The fastest, not
+#: the mean: one copy caught behind other work says little about the next,
+#: and a cell's caching should not flip with every burst of load.
+_COPY_READINGS = 8
+
+
+def _note_copy_speed(nbytes: int, seconds: float) -> None:
+    if seconds <= 0:
+        return
+    _COPY_SPEED.append(nbytes / seconds)
+    del _COPY_SPEED[:-_COPY_READINGS]
+
+
+def copy_seconds(nbytes: int) -> float:
+    """Seconds this process takes to copy *nbytes* of array data, measured
+    (a probe copy the first time nothing has been measured yet)."""
+    if not _COPY_SPEED:
+        import numpy as np
+
+        probe = np.ones(_PROBE_BYTES // 8)
+        for _ in range(2):  # the first touches fresh pages
+            _copy_array(probe)
+    return nbytes / max(_COPY_SPEED)
+
+
+_PROBE_BYTES = 8 << 20
+
+#: What a hit of a table the tier shares costs (`frame_sharing`): a shallow
+#: copy, whatever its size.
+SHARED_HIT_SECONDS = 1e-4
+
+
+def hit_seconds(value: Any, size_bytes: int) -> float | None:
+    """What handing out a RAM hit of *value* (about *size_bytes*) costs in
+    this process, or None when the tier cannot say: a table it shares costs
+    a shallow copy; an array or a table it copies, a copy at the measured
+    speed (`copy_seconds`)."""
+    kind = type(value)
+    try:
+        if _is_pandas_frame(kind):
+            dtypes = [value.dtype] if value.ndim == 1 else list(value.dtypes)
+            if any(str(dtype) == "object" for dtype in dtypes):
+                return None  # its cells decide (`_holds_mutable_cells`): not scanned here
+            if frame_sharing.enabled() and frame_sharing.freezable(value):
+                return SHARED_HIT_SECONDS
+            return copy_seconds(size_bytes)
+        if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+            if not value.dtype.hasobject:
+                return copy_seconds(size_bytes)
+    except Exception:  # noqa: BLE001 - an estimate it cannot make: the fitted one
+        logger.debug("no measured hit cost for a %s", kind.__name__, exc_info=True)
+    return None
 
 
 def _copy_polars(frame: Any) -> Any:
@@ -1352,7 +1664,7 @@ def _holds_mutable_cells(frame: Any) -> bool:
             columns = [frame] if str(frame.dtype) == "object" else []
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns) or (
+        return any(infer_dtype(column, skipna=True) not in IMMUTABLE_CELLS for column in columns) or (
             _mutable_labels(frame)
         )
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
@@ -1377,5 +1689,5 @@ def _mutable_labels(frame: Any) -> bool:
     dtypes += [array.dtype for array in arrays]
     arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
     return any(
-        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in _IMMUTABLE_CELLS for array in arrays
+        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in IMMUTABLE_CELLS for array in arrays
     )

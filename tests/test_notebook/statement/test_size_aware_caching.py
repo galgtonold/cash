@@ -8,6 +8,21 @@ compute was expensive enough or the statement is marked ``@cash:persist``.
 
 from unittest.mock import MagicMock
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _a_known_copy_speed():
+    """A RAM hit is priced at the copy speed the process measures
+    (`memory_backend.hit_seconds`); pinned to 1.5 GB/s, where the cases
+    below sit, so the machine's load cannot move them."""
+    from cash.backends import memory_backend
+
+    saved = list(memory_backend._COPY_SPEED)
+    memory_backend._COPY_SPEED[:] = [1.5e9]
+    yield
+    memory_backend._COPY_SPEED[:] = saved
+
 
 class TestSizeAwareCaching:
     """Tests for size-aware caching threshold in StatementProcessor."""

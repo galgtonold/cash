@@ -444,7 +444,23 @@ def in_a_look() -> bool:
     return _LOOKED.get() is not None
 
 
-def _tree_facts(value: Any, look: tuple[Mapping[str, Any], dict] | None, walk: list | None = None) -> TreeFacts | None:
+def held_items_facts(value: list, extra: int) -> TreeFacts | None:
+    """`tree_facts` of the list *value*, whose items something else holds
+    *extra* more references to each (the column of a table, for a list of
+    its cells): ``held_once`` then says whether nothing BUT that holds them,
+    or anything below them, beyond their parents. Never from a `one_look`."""
+    if type(value) is not list:
+        return None
+    try:
+        with _gc_paused():
+            return _tree_facts(value, None, top_extra=extra)
+    except (_NotPlain, TypeError):
+        return None
+
+
+def _tree_facts(
+    value: Any, look: tuple[Mapping[str, Any], dict] | None, walk: list | None = None, top_extra: int = 0
+) -> TreeFacts | None:
     """The walk behind `tree_facts`, the way `_tree_walk` goes: each level's
     containers in their order, so *walk*, when given, receives its levels
     (`tree_walk`). Parts *look* knows are taken whole, never with *walk*."""
@@ -511,7 +527,9 @@ def _tree_facts(value: Any, look: tuple[Mapping[str, Any], dict] | None, walk: l
             level, extra = flat, 0
         else:
             level, extra = list(compress(flat, map(_NODES.__contains__, map(type, flat)))), 1
-        if held_once and max(map(sys.getrefcount, level)) > _unshared_refs() + extra:
+        if not depth:
+            extra += top_extra
+        if held_once and level and max(map(sys.getrefcount, level)) > _unshared_refs() + extra:
             held_once = False
     return TreeFacts(frozenset(found), held_once, size, nodes)
 
