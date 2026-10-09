@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
+from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, SITE_SLOTS, wrap_eligible_calls
 from cash.notebook.call_refs import with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
@@ -152,8 +153,12 @@ class CallRouting:
         *,
         cash_instance: Callable[[], Any | None],
         is_stateful_call: Callable[[str], bool],
+        digests: DigestHandoff | None = None,
     ) -> None:
         self.shell = shell
+        #: The statement's argument digests, shared by its calls and its
+        #: in-place-change check (`DigestHandoff`).
+        self.digests = digests if digests is not None else DigestHandoff()
         self.tracking_state = tracking_state
         self.function_tracker = function_tracker
         self.compute_hash = compute_hash
@@ -225,9 +230,11 @@ class CallRouting:
         never leak into one that carries no annotation."""
         self.ttl = ttl
         self.persist = persist
+        self.digests.begin_statement()
 
     def begin_cell(self) -> None:
         """A cell starts."""
+        self.digests.begin_cell()
         if self._call_cache is not None:
             self._call_cache.begin_cell()
 
@@ -584,6 +591,7 @@ class CallRouting:
                 loop_vars_provider=self.current_loop_vars_for_call_key,
                 loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
                 slots=SITE_SLOTS,
+                digests=self.digests,
             )
             self._call_cache_owner = cash_instance
         return self._call_cache

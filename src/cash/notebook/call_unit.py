@@ -46,7 +46,7 @@ from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import (
-    ArgFingerprints,
+    DigestHandoff,
     UNWRAP_FAILED,
     call_capturing_output,
     capture_globals,
@@ -252,6 +252,8 @@ class _Invocation:
     hit: bool = False
     #: Whether the call's result went to the cache (see ``_SiteRun.stored``).
     stored: bool = False
+    #: Its ticket from `DigestHandoff.call_started`.
+    ticket: tuple[int, int] = (0, 0)
 
 
 @dataclasses.dataclass
@@ -494,8 +496,12 @@ class CallUnit:
         loop_var_digests_provider: Callable[[], Mapping[str, str]] | None = None,
         ttl_provider: Callable[[], int | None] | None = None,
         persist_provider: Callable[[], bool] | None = None,
+        digests: DigestHandoff | None = None,
     ):
         self._cash = cash_instance
+        #: The statement's argument digests, shared with its in-place-change
+        #: check (`DigestHandoff`).
+        self._digests = digests if digests is not None else DigestHandoff()
         #: Builds each call's key and remembers what each site was keyed on.
         self._keys = CallKeys(ctx_provider, loop_vars_provider, loop_var_digests_provider)
         #: Looks call entries up and writes them; holds the sites refused.
@@ -558,7 +564,7 @@ class CallUnit:
         self.held_results: dict[int, tuple[Any, str, str, int]] = {}
         #: The hashes of the frames this cell's calls received, checked
         #: rather than read again while unchanged; emptied by :meth:`begin_cell`.
-        self._fingerprints = ArgFingerprints()
+        self._fingerprints = self._digests.fingerprints
 
     def _cost_floor_s(self) -> float:
         """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
@@ -628,6 +634,7 @@ class CallUnit:
             # prints: a user's KeyError showed three of cash's wrapper frames
             # between their cell and their function.
             __tracebackhide__ = True
+            ticket = self._digests.call_started()
             run = self._site_runs.get(site)
             if run is None:
                 run = self._site_runs[site] = _SiteRun()
@@ -660,7 +667,7 @@ class CallUnit:
             # One slot per invocation: a call the callee makes through a
             # lambda it was handed runs its own `_invoke` inside this one.
             self._invoked_keys.append(None)
-            invocation = _Invocation()
+            invocation = _Invocation(ticket=ticket)
             self._invocations.append(invocation)
             outside = self._running == 0
             tracked = tracking_seconds() if outside else 0.0
@@ -914,7 +921,8 @@ class CallUnit:
         # to the enclosing statement's tracker immediately, so the miss-path
         # "recorded for free" behaviour holds.
         rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
-        arg_hashes_before = hash_args(call.args, call.kwargs, self._fingerprints)
+        ticket = self._invocations[-1].ticket if self._invocations else (0, 0)
+        arg_hashes_before = hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket))
         module_before = _module_globals(call.fn)
         started = _perf_counter()
         call_tracker = FileAccessTracker(
@@ -931,7 +939,7 @@ class CallUnit:
         # Read while `result` is this frame's only reference of its own.
         result_held = refs_beyond([result]) > ONE_LOCAL
         stored = False
-        if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before) or _rebound_unwatched(
+        if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before, ticket) or _rebound_unwatched(
             call, module_before
         ):
             self._entries.refuse(call.key)
@@ -949,7 +957,9 @@ class CallUnit:
             self._invocations[-1].stored = True
         return result
 
-    def _did_what_a_hit_cannot(self, call: _Call, rng_before, arg_hashes_before: tuple) -> bool:
+    def _did_what_a_hit_cannot(
+        self, call: _Call, rng_before, arg_hashes_before: tuple, ticket: tuple[int, int] = (0, 0)
+    ) -> bool:
         """Whether the call just run had an effect a hit would silently skip."""
         modules_before, carriers_before = rng_before
         if rng_modules_changed(modules_before, capture_rng_state()) or carrier_states_changed(carriers_before):
@@ -965,7 +975,13 @@ class CallUnit:
         # The identity check only catches `return arg` -- this
         # catches "mutated but returned a *different* object", which
         # a hit would silently skip.
-        return hash_args(call.args, call.kwargs, self._fingerprints) != arg_hashes_before
+        arg_hashes_after = hash_args(call.args, call.kwargs, self._fingerprints)
+        if arg_hashes_after != arg_hashes_before:
+            return True
+        # Unchanged: what was just read is what the statement's own check
+        # after it would read (`DigestHandoff.note_after`).
+        self._digests.note_after(ticket, (*call.args, *call.kwargs.values()), arg_hashes_after)
+        return False
 
     def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True) -> bool:
         """Past the cost floor, safe to hand back as a copy, and cheaper to
@@ -1133,6 +1149,7 @@ class CallCache:
         ttl_provider: Callable[[], int | None],
         persist_provider: Callable[[], bool],
         slots: SiteSlots | None = None,
+        digests: DigestHandoff | None = None,
     ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
@@ -1190,6 +1207,7 @@ class CallCache:
             loop_var_digests_provider,
             ttl_provider,
             persist_provider,
+            digests,
         )
         #: The unit's sites run plain (one dict, emptied in place), read on
         #: every call.

@@ -9,20 +9,22 @@ an AnnData-like object that scanpy writes to.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from typing import Any
 
-from .content_hashers import builtin_hash, builtin_hash_family
+from .content_hashers import builtin_family_of, builtin_hash_family
 from .value_hash import HASH_ERRORS, compute_hash, identity_hash
 
 
-def mutation_fingerprint(obj: Any) -> str | None:
+def mutation_fingerprint(obj: Any, content: Callable[[Any], str] | None = None) -> str | None:
     """A digest that changes when *obj* is changed IN PLACE, or ``None``.
 
-    Reads the whole value: `builtin_hash` for the library types (pandas,
-    numpy, polars, ...), and for an AnnData-like object every part scanpy
-    writes to -- the ``obs``/``var`` frames, ``X``, and each value of
-    ``uns``/``obsm``/``varm``/``obsp``/``varp``/``layers`` -- each by its own
-    content hash. A checksum of ``X`` and the key names alone missed a
+    Reads the whole value: `compute_hash` (through *content* when given --
+    `DigestHandoff`, which hands one digest between the checks around a
+    statement and its call), and for an AnnData-like object every part
+    scanpy writes to -- the ``obs``/``var`` frames, ``X``, and each value
+    of ``uns``/``obsm``/``varm``/``obsp``/``varp``/``layers`` -- each by its
+    own content hash. A checksum of ``X`` and the key names alone missed a
     reordering of ``X`` and a column rewritten in place. Taken only around a
     statement that is actually executing, twice, so its O(n) cost is paid
     next to real work.
@@ -34,15 +36,11 @@ def mutation_fingerprint(obj: Any) -> str | None:
     h = hashlib.sha256()
     t = type(obj)
     h.update(f"{t.__module__}.{t.__qualname__}".encode("utf-8"))
-    digest = builtin_hash(_canonical_sparse(obj))
-    if digest is not None:
-        h.update(digest.encode("utf-8"))
-        return h.hexdigest()
-    try:
-        is_anndata = all(hasattr(obj, a) for a in ("obs", "var", "uns", "X"))
-    except Exception:  # noqa: BLE001 - a property that raises: not AnnData-like
-        is_anndata = False
-    if is_anndata:
+    canon = _canonical_sparse(obj)
+    if canon is not obj:
+        # A copy in canonical form: hashed on its own, never handed on.
+        digest = compute_hash(canon)
+    elif builtin_family_of(t) is None and _is_anndata_like(obj):
         try:
             parts: list[Any] = [repr(getattr(obj, "shape", None))]
             for slot in ("obs", "var", "X", "uns"):
@@ -56,12 +54,22 @@ def mutation_fingerprint(obj: Any) -> str | None:
                     parts.append(f"{slot}[{key!r}]={_part_digest(mapping[key])}")
         except (_Unobservable, *HASH_ERRORS):
             return None
+        h.update(b"anndata|")
         h.update("|".join(parts).encode("utf-8"))
         return h.hexdigest()
-    digest = compute_hash(obj)
-    if digest == identity_hash(obj):
+    else:
+        digest = (content or compute_hash)(obj)
+    if digest == identity_hash(canon):
         return None
-    return digest
+    h.update(digest.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _is_anndata_like(obj: Any) -> bool:
+    try:
+        return all(hasattr(obj, a) for a in ("obs", "var", "uns", "X"))
+    except Exception:  # noqa: BLE001 - a property that raises: not AnnData-like
+        return False
 
 
 class _Unobservable(Exception):

@@ -731,45 +731,55 @@ def dict_rows_profile(value: Any) -> int | None:
     return total
 
 
-def identity_snapshot(value: Any) -> list[tuple | None] | None:
+def identity_snapshot(value: Any) -> list[list | None] | None:
     """What a call could change in *value*, as object identities, or None.
 
-    One tuple of items per level, for every level whose parents include a
+    The items of each level, for every level whose parents include a
     list -- a tuple cannot change, so the items below tuples only are not
     held. Comparing identities after a call (`identity_changed`) sees a sort,
     an append, a ``del``, a ``rows[i] = ...`` or a ``row[3] = ...`` at C speed:
     the re-hash it replaces was skipped for a big argument, so ``rows.sort()``
     on a million parsed rows was stored and the warm run skipped it.
-    The tuples hold their items, so an id cannot be reused while they exist.
+    The lists hold their items, so an id cannot be reused while they exist.
     None for anything that is not plain data, and for a ``bytearray`` leaf,
     which changes in place without changing its identity.
     """
     if type(value) not in PLAIN_SEQS:
         return None
-    snapshot: list[tuple | None] = []
+    snapshot: list[list | None] = []
     parents_can_change = type(value) is list
     try:
         for flat, types in _levels(value):
             if bytearray in types:
                 return None
-            snapshot.append(tuple(flat) if parents_can_change else None)
+            # `flat` is a new list of its own: held as it is, not copied.
+            snapshot.append(flat if parents_can_change else None)
             parents_can_change = list in types
     except (_NotPlain, TypeError):
         return None
     return snapshot
 
 
-def identity_changed(value: Any, snapshot: list[tuple | None]) -> bool:
-    """Did *value* change since `identity_snapshot` took *snapshot*?"""
-    try:
-        levels = list(_levels(value)) if type(value) in PLAIN_SEQS else None
-    except (_NotPlain, TypeError):
+def identity_changed(value: Any, snapshot: list[list | None]) -> bool:
+    """Did *value* change since `identity_snapshot` took *snapshot*?
+
+    Level by level from the top: where every item is the object it was, its
+    type is too, and the level below is built from those same objects, so
+    nothing is asked of a type again. Below tuples only (a None level)
+    nothing can have changed. The top level is *value* itself, read in place:
+    on a list of ten million ints this is one pass of ``is``.
+    """
+    if type(value) not in PLAIN_SEQS or not snapshot:
         return True
-    if levels is None or len(levels) != len(snapshot):
-        return True
-    for (flat, _types), before in zip(levels, snapshot):
+    last = len(snapshot) - 1
+    flat: Any = value
+    for depth, before in enumerate(snapshot):
+        if depth:
+            flat = list(chain.from_iterable(flat))
         if before is not None and (len(flat) != len(before) or not all(map(operator.is_, flat, before))):
             return True
+        if depth < last:
+            flat = [x for x in flat if type(x) in PLAIN_SEQS]
     return False
 
 

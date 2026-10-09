@@ -20,6 +20,7 @@ from cash.exceptions import (
     CacheKeyComputationError,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
+from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.cache_key import (
     CacheKeyContext,
     CacheKeyResult,
@@ -180,7 +181,10 @@ class StatementProcessor:
         self.tracking_state: TrackingState = tracking_state or TrackingState()
         self._randomness = StatementRandomness(shell, self.tracking_state)
         self._rebuild_cost = RebuildCostLedger(shell, self.tracking_state, cash_instance)
-        self._mutations = MutationClassifier(shell, self.tracking_state, compute_hash_fn)
+        # A statement's argument digests, handed between its in-place-change
+        # check and the calls inside it, so each hashes a big argument once.
+        digests = DigestHandoff()
+        self._mutations = MutationClassifier(shell, self.tracking_state, compute_hash_fn, digests)
         self._calls = CallRouting(
             shell,
             self.tracking_state,
@@ -188,6 +192,7 @@ class StatementProcessor:
             compute_hash_fn,
             cash_instance=self.get_cash_instance,
             is_stateful_call=self._check_callable_stateful,
+            digests=digests,
         )
 
         # Cache-freshness checker (TTL / file-dep / input-file invalidation).

@@ -408,7 +408,8 @@ def test_an_argument_over_budget_for_the_key_is_hashed_once_more(tmp_path, monke
     """The key's own hash already says what a re-hash would cost, so over the
     budget the per-argument hashes are skipped: a miss on two million rows
     hashed them three times. The whole-arguments hash after the body stays --
-    it is what sees a change."""
+    it is what sees a change in a dict (a plain list is checked by identity
+    instead: `test_a_plain_argument_is_hashed_once_per_miss`)."""
     c = _cash(tmp_path)
     monkeypatch.setattr(purity_checks, "MUTATION_CHECK_BUDGET_S", 0.0)  # any key's cost is over it
     hashes = []
@@ -418,5 +419,5 @@ def test_an_argument_over_budget_for_the_key_is_hashed_once_more(tmp_path, monke
     def reads(rows):
         return len(rows)
 
-    _call_capturing(c, reads, [1, 2, 3])
+    _call_capturing(c, reads, {"a": 1, "b": 2})
     assert len(hashes) == 2, f"one miss hashed its arguments {len(hashes)} times"

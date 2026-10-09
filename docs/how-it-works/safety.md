@@ -132,6 +132,10 @@ A method call has no assignment target, so cash classifies its object:
   `rs = [work(d) for d in ds]` (all of `ds`). There one that cannot be
   fingerprinted, such as a database connection, does not count as changed. A
   library function whose result is kept (`m = np.mean(arr)`) is not watched.
+  When the statement is nothing but that call (`y = f(x)`), its fingerprints
+  and the cached call's own check of its arguments share one full read of
+  each argument before the call and one after it, and a DataFrame that
+  provably has not changed since it was last read is not read again.
 
 A changed object gets a new lineage from the statement, so everything
 downstream of it misses, and the statement itself is not cached. Restoring it

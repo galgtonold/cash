@@ -544,7 +544,9 @@ cash takes your word, so a scratch buffer left out with `ignore=` costs a
 miss nothing, and a body that changes it in place is cached all the same.
 `key=` is different: it says how to tell calls apart, not that an argument
 does not matter, so every argument is still checked, and every miss hashes
-each one in full, before and after the body.
+each one in full before the body, and again after it unless every argument
+is plain data that cash checks by identity instead
+([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)).
 [`CACHE-NET-LOSS`](warnings.md#cache-net-loss) says so when that is what a
 miss costs.
 
@@ -628,7 +630,7 @@ would skip or get wrong:
 
 Logging calls are not side effects for this purpose.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @9415c95c broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @a3930913 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 

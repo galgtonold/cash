@@ -22,6 +22,7 @@ from cash.analysis.mutations import assigned_method_call_receivers, standalone_m
 from cash.analysis.namespace_effects import bare_call_arguments, call_arguments, fits_its_receiver, is_estimator
 from cash.mutation_fingerprint import mutation_fingerprint
 from cash.notebook.cache_key import statement_source_hash
+from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.consumables import watched_call_receivers
 from cash.notebook.magic_effects import magic_call_arguments
 from cash.notebook.restored_var import hashed_by_lineage
@@ -45,10 +46,15 @@ class MutationClassifier:
         shell: ShellProtocol,
         tracking_state: TrackingState,
         compute_hash: Callable[[Any], str] | None,
+        digests: DigestHandoff | None = None,
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
         self.compute_hash = compute_hash
+        #: The argument digests handed between this check and the calls
+        #: inside the statement, so a big argument is hashed once before
+        #: and once after (`DigestHandoff`).
+        self.digests = digests if digests is not None else DigestHandoff()
         # Pre-execution fingerprints of a bare call's arguments, by statement
         # source hash -- see :meth:`classify`.
         self._arg_snapshots: dict[str, dict[str, str]] = {}
@@ -62,8 +68,9 @@ class MutationClassifier:
         mutation joins the outputs.
         """
         mutated = {b for b in observe if self._receiver_mutated(b)}
+        after = self.digests.digest_after
         for name, before in self._arg_snapshots.pop(source_hash, {}).items():
-            if mutation_fingerprint(self.shell.user_ns.get(name)) != before:
+            if mutation_fingerprint(self.shell.user_ns.get(name), after) != before:
                 mutated.add(name)
         return mutated
 
@@ -163,8 +170,10 @@ class MutationClassifier:
         # The result is learned into the verdict, so neither the next run nor
         # the simulation asks again: `print(df)` is learned as reading only.
         snapshots: dict[str, str] = {}
+        if classes.unknown_args:
+            self.digests.watch(tree)
         for name in classes.unknown_args:
-            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
+            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name), self.digests.digest)
             if fingerprint is None:
                 if name in kept_only:
                     # `rows = fetch(conn)`: a handle that cannot be pickled
@@ -208,7 +217,7 @@ class MutationClassifier:
         watched, bare = magic_call_arguments(node, self.shell.user_ns)
         snapshots: dict[str, str | None] = {}
         for name in watched:
-            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name))
+            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name), self.digests.fingerprints.digest)
             if fingerprint is None and name not in bare:
                 continue
             snapshots[name] = fingerprint
@@ -225,7 +234,9 @@ class MutationClassifier:
         changed = {
             name
             for name, before in snapshots.items()
-            if before is None or name not in user_ns or mutation_fingerprint(user_ns[name]) != before
+            if before is None
+            or name not in user_ns
+            or mutation_fingerprint(user_ns[name], self.digests.fingerprints.digest) != before
         }
         self.tracking_state.mutation_verdicts[statement_source_hash(code)] = changed
         return changed
