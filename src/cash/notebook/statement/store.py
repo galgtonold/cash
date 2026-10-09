@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from cash import cost_model
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
+from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -325,6 +326,12 @@ class StatementStore:
             type_name = type(var_value).__name__
             family = cost_model.resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(type_name, obj_size, backend_kind)
+            if is_ram_backend:
+                # What a hit costs here, as the RAM tier measures it: a copy
+                # at this machine's speed now, or nothing for a table it shares.
+                measured = memory_backend.hit_seconds(var_value, obj_size)
+                if measured is not None:
+                    est_restore_time = measured
             prediction: dict[str, Any] = {
                 "size_bytes": obj_size,
                 "restore_seconds": est_restore_time,

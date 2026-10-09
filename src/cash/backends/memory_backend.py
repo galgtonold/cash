@@ -1496,11 +1496,75 @@ def _round_trip(value: Any) -> Any:
 
 def _copy_array(array: Any) -> Any:
     """A copy of a numpy array of numbers, read-only if it was, as a
-    pickle round trip makes it."""
-    copied = array.copy(order="K")
+    pickle round trip makes it. A big one times the copy (`copy_seconds`)."""
+    if array.nbytes < _TIMED_COPY_BYTES:
+        copied = array.copy(order="K")
+    else:
+        started = time.perf_counter()
+        copied = array.copy(order="K")
+        _note_copy_speed(array.nbytes, time.perf_counter() - started)
     if not array.flags.writeable:
         copied.flags.writeable = False
     return copied
+
+
+#: An array copy at least this big is timed (`_note_copy_speed`).
+_TIMED_COPY_BYTES = 1 << 20
+#: Bytes per second this process copies an array at, as last measured: the
+#: copy speed of THIS machine under its current load, which a fitted model
+#: cannot know (a hit of an 80 MB array measured 0.02 s on a quiet machine
+#: and 0.2-0.8 s on a busy one, against 0.02 s fitted). Empty until measured.
+_COPY_SPEED: list[float] = []
+
+
+def _note_copy_speed(nbytes: int, seconds: float) -> None:
+    if seconds <= 0:
+        return
+    speed = nbytes / seconds
+    # Half the old reading, half the new: the speed follows the machine's
+    # load within a few copies, and one outlier moves it by half.
+    _COPY_SPEED[:] = [speed if not _COPY_SPEED else (_COPY_SPEED[0] + speed) / 2]
+
+
+def copy_seconds(nbytes: int) -> float:
+    """Seconds this process takes to copy *nbytes* of array data, measured
+    (a probe copy the first time nothing has been measured yet)."""
+    if not _COPY_SPEED:
+        import numpy as np
+
+        probe = np.ones(_PROBE_BYTES // 8)
+        for _ in range(2):  # the first touches fresh pages
+            _copy_array(probe)
+    return nbytes / _COPY_SPEED[0]
+
+
+_PROBE_BYTES = 8 << 20
+
+#: What a hit of a table the tier shares costs (`frame_sharing`): a shallow
+#: copy, whatever its size.
+SHARED_HIT_SECONDS = 1e-4
+
+
+def hit_seconds(value: Any, size_bytes: int) -> float | None:
+    """What handing out a RAM hit of *value* (about *size_bytes*) costs in
+    this process, or None when the tier cannot say: a table it shares costs
+    a shallow copy; an array or a table it copies, a copy at the measured
+    speed (`copy_seconds`)."""
+    kind = type(value)
+    try:
+        if _is_pandas_frame(kind):
+            dtypes = [value.dtype] if value.ndim == 1 else list(value.dtypes)
+            if any(dtype == object for dtype in dtypes):
+                return None  # its cells decide (`_holds_mutable_cells`): not scanned here
+            if frame_sharing.enabled() and frame_sharing.freezable(value):
+                return SHARED_HIT_SECONDS
+            return copy_seconds(size_bytes)
+        if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+            if not value.dtype.hasobject:
+                return copy_seconds(size_bytes)
+    except Exception:  # noqa: BLE001 - an estimate it cannot make: the fitted one
+        logger.debug("no measured hit cost for a %s", kind.__name__, exc_info=True)
+    return None
 
 
 def _copy_polars(frame: Any) -> Any:
