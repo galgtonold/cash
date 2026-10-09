@@ -21,6 +21,7 @@ from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .code_tables import CodeTable
+from .global_reads import reach_pass
 from .global_values import UNHASHABLE_GLOBAL_FIX
 from .key_values import (
     carried_payload,
@@ -643,9 +644,10 @@ class GlobalsFold:
         Shared by the two callers that need it: a cached function's own helpers
         and the helpers of the cached functions it calls.
         """
-        state_hash = self._fold_named_helpers(report, func, func_name, state_hash, owner_code, seen)
-        state_hash = self._fold_binding_data(report, func, state_hash, owner_code)
-        return self._fold_held_helpers(report, func, func_name, state_hash, owner_code, seen)
+        with reach_pass():
+            state_hash = self._fold_named_helpers(report, func, func_name, state_hash, owner_code, seen)
+            state_hash = self._fold_binding_data(report, func, state_hash, owner_code)
+            return self._fold_held_helpers(report, func, func_name, state_hash, owner_code, seen)
 
     def _fold_named_helpers(
         self, report: PurityReport, func: Callable, func_name: str, state_hash: str, owner_code: Any, seen: set
