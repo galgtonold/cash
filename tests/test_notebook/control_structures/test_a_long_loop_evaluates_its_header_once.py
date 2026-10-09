@@ -15,6 +15,9 @@ import pytest
 
 from tests._cell_driver import run_cash_cell
 
+# The progress bar is one of the headers, and every case imports it.
+pytest.importorskip("tqdm")
+
 COUNTED = (
     "class Counted:\n"
     "    def __init__(self, n):\n        self.n, self.iters = n, 0\n"
