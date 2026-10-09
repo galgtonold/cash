@@ -195,7 +195,7 @@ is the folder this run actually used. The summary also lists results that were
 computed but not stored. It prints on any normal exit or uncaught exception,
 not when the process is killed. `summary=True` in code or config does the same.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @de955740 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @f6cfa1c5 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
@@ -232,7 +232,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8d524a5e, cash/decorator/code_args.py:CodeArgs.fold_code_args @61607ad9 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903, cash/decorator/code_args.py:CodeArgs.fold_code_args @61607ad9 -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -502,7 +502,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3720afe5 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @c3c0e6a8 -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key

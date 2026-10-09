@@ -53,46 +53,151 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+
+
+def _own_bindings(scope: ast.AST) -> set[str]:
+    """The names the function or lambda *scope* binds itself: its parameters
+    and every name its own body assigns, imports, defines or catches, minus
+    those it declares ``global``.
+
+    Nested functions, lambdas and classes are not entered (their own names
+    are theirs), nor are comprehension targets; a ``:=`` inside a
+    comprehension binds here, as Python scopes it. A name this misses is
+    resolved as a global, which can only add an edge, never lose one.
+    """
+    args = scope.args
+    bound = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg) if a is not None}
+    declared_global: set[str] = set()
+    stack: list[ast.AST] = list(scope.body) if isinstance(scope.body, list) else [scope.body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+            continue  # its decorators and defaults may hold a `:=`; missing one only adds an edge
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, ast.Global):
+            declared_global.update(node.names)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update((alias.asname or alias.name).split(".")[0] for alias in node.names if alias.name != "*")
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+        if isinstance(node, ast.comprehension):
+            stack.extend((node.iter, *node.ifs))  # its target is the comprehension's own
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return bound - declared_global
+
+
+def _comprehension_targets(node: ast.AST) -> set[str]:
+    """Names the comprehension *node* binds in its own scope (its targets)."""
+    return {n.id for gen in node.generators for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+
+
+def _dotted_chain(node: ast.expr) -> list[str] | None:
+    """``["a", "b", "c"]`` for ``a.b.c``; None when the root is not a name."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    parts.reverse()
+    return parts
+
+
 class _CallVisitor(ast.NodeVisitor):
     """Collect all function-call names from an AST for find_called_functions.
 
     ``referenced`` is every name and ``a.b`` chain READ anywhere, called or
     not: ``map(inner, xs)``, ``pool.map(inner, xs)``, ``delayed(inner)(x)``,
     ``for fn in [inner]``, ``def f(fn=inner)``.
+
+    A chain whose first name the function binds itself -- a parameter, an
+    assignment, a loop or ``with`` target, a comprehension variable, a free
+    variable from an enclosing function (*outer_locals*) -- is a local, not
+    the global of that name, and is left out: ``def f(df): df.values`` must
+    never look at a module-level ``df``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, outer_locals: frozenset[str] | set[str] = frozenset()) -> None:
         self.names_to_resolve: list[str] = []
         self.referenced: list[str] = []
+        self._scopes: list[set[str]] = [set(outer_locals)] if outer_locals else []
+
+    def _is_local(self, name: str) -> bool:
+        return any(name in scope for scope in self._scopes)
+
+    def _scoped(self, bound: set[str], nodes: list[ast.AST]) -> None:
+        self._scopes.append(bound)
+        try:
+            for node in nodes:
+                self.visit(node)
+        finally:
+            self._scopes.pop()
+
+    def _visit_function(self, node: ast.AST) -> None:
+        # Decorators, defaults and annotations run in the enclosing scope.
+        for deco in getattr(node, "decorator_list", ()):
+            self.visit(deco)
+        args = node.args
+        for default in (*args.defaults, *(d for d in args.kw_defaults if d is not None)):
+            self.visit(default)
+        if not isinstance(node, ast.Lambda):
+            for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg):
+                if a is not None and a.annotation is not None:
+                    self.visit(a.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
+        body = node.body if isinstance(node.body, list) else [node.body]
+        self._scoped(_own_bindings(node), body)
+
+    visit_FunctionDef = _visit_function
+    visit_AsyncFunctionDef = _visit_function
+    visit_Lambda = _visit_function
+
+    def _visit_comprehension(self, node: ast.AST) -> None:
+        # The first iterable is evaluated in the enclosing scope.
+        first, *rest = node.generators
+        self.visit(first.iter)
+        inner: list[ast.AST] = [*first.ifs]
+        for gen in rest:
+            inner.extend((gen.iter, *gen.ifs))
+        if isinstance(node, ast.DictComp):
+            inner.extend((node.key, node.value))
+        else:
+            inner.append(node.elt)
+        self._scoped(_comprehension_targets(node), inner)
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
 
     def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load):
+        if isinstance(node.ctx, ast.Load) and not self._is_local(node.id):
             self.referenced.append(node.id)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.ctx, ast.Load):
-            parts: list[str] = []
-            curr: ast.expr = node
-            while isinstance(curr, ast.Attribute):
-                parts.append(curr.attr)
-                curr = curr.value
-            if isinstance(curr, ast.Name):
-                parts.append(curr.id)
-                self.referenced.append(".".join(reversed(parts)))
+            chain = _dotted_chain(node)
+            if chain is not None and not self._is_local(chain[0]):
+                self.referenced.append(".".join(chain))
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        if isinstance(node.func, ast.Name):
-            self.names_to_resolve.append(node.func.id)
-        elif isinstance(node.func, ast.Attribute):
-            parts: list[str] = []
-            curr: ast.expr = node.func
-            while isinstance(curr, ast.Attribute):
-                parts.append(curr.attr)
-                curr = curr.value
-            if isinstance(curr, ast.Name):
-                parts.append(curr.id)
-                self.names_to_resolve.append(".".join(reversed(parts)))
+        chain = _dotted_chain(node.func)
+        if chain is not None and not self._is_local(chain[0]):
+            self.names_to_resolve.append(".".join(chain))
         self.generic_visit(node)
 
 
@@ -529,6 +634,37 @@ def _callee_name(obj: Any, known_by_id: Mapping[int, str]) -> str | None:
     return f"{module}.{qualname}"
 
 
+def static_attribute(obj: Any, name: str) -> Any:
+    """``obj.name`` as analysis may read it: without running user code.
+
+    Looked up with `inspect.getattr_static`, so no property, ``__getattr__``
+    or other descriptor of a user's value runs: ``df.values`` on a
+    module-level table would build an array of the whole table, and a lazy
+    loader would load. A ``staticmethod`` or ``classmethod`` gives the
+    function it holds and a slot its value; any other descriptor comes back
+    as itself (a ``property`` object names no function). A module's own
+    ``__getattr__`` (PEP 562, how packages import submodules lazily) still
+    answers a name its namespace lacks: that is how the call itself would
+    reach it. Raises AttributeError when nothing is found.
+    """
+    try:
+        value = inspect.getattr_static(obj, name, _MISSING)
+        if value is _MISSING and isinstance(obj, types.ModuleType) and "__getattr__" in vars(obj):
+            value = getattr(obj, name)
+    except Exception as exc:  # noqa: BLE001 - a probe of arbitrary objects
+        raise AttributeError(name) from exc
+    if value is _MISSING:
+        raise AttributeError(name)
+    if isinstance(value, (staticmethod, classmethod)):
+        return value.__func__
+    if isinstance(value, types.MemberDescriptorType) and not isinstance(obj, type):
+        return value.__get__(obj, type(obj))  # a __slots__ slot: a plain read
+    return value
+
+
+_MISSING = object()
+
+
 class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
 
@@ -549,7 +685,8 @@ class CodeAnalyzer:
         result after ``inner``'s helper changed -- only a CALL made an edge.
         """
 
-        visitor = _CallVisitor()
+        code = getattr(func, "__code__", None)
+        visitor = _CallVisitor(frozenset(getattr(code, "co_freevars", ()) or ()))
         try:
             source = textwrap.dedent(getsource(func))
             tree = ast.parse(source)
@@ -584,7 +721,7 @@ class CodeAnalyzer:
             if obj is not None:
                 try:
                     for part in parts[1:]:
-                        obj = getattr(obj, part)
+                        obj = static_attribute(obj, part)
                     obj = unwrap_partials(obj)
                     fqn = _callee_name(obj, known_by_id)
                     if fqn is not None and (known_functions is None or fqn in known_functions):

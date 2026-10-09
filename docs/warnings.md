@@ -218,7 +218,7 @@ keeps happening, the cap is too small for what you use.
 room (the message says how much is free). If it does not, cache smaller
 results, or move `cache_dir` to a bigger volume.
 
-<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @de955740 -->
+<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @f6cfa1c5 -->
 **When it is safe to ignore.** When the result is rarely needed and a
 recompute now and then is cheaper than the disk it would take. It is said once
 per function or statement per process. Cheaper recomputes are not warned
@@ -1088,7 +1088,7 @@ the result of that call came from an emptied iterator.
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
-<!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @35da8b91 -->
+<!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @0e105084 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
 ...")`, `pd.read_sql`). A query over a SQLite file the function opens itself
@@ -1158,7 +1158,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @f140e8b2, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @541209ac, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
 <!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
@@ -1303,7 +1303,7 @@ connection, a lock, a logger), leave it out of the key with `ignore=` or
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8d524a5e -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903 -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 

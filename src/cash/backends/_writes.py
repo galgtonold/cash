@@ -351,6 +351,9 @@ class PendingWrites:
         self._running: tuple[float, int] | None = None
         #: Has a sized write finished here, so the costs above are measured?
         self._measured = False
+        # Called by `wait_all` before it waits: a submitter that holds work
+        # back for a while (a timer) submits it now, so a drain still covers it.
+        self._drain_hooks: list[Callable[[], None]] = []
         _LIVE_WRITE_QUEUES.add(self)
         _watch_child_processes()
 
@@ -678,6 +681,13 @@ class PendingWrites:
         if getattr(self._tls, "current_key", None) is not None:
             return True
         with self._lock:
+            hooks = list(self._drain_hooks)
+        for hook in hooks:
+            try:
+                hook()
+            except Exception as exc:  # noqa: BLE001 - a drain must not fail on one submitter
+                logger.debug("Releasing held writes failed: %s", exc)
+        with self._lock:
             futures = list(self._pending.values())
         for f in futures:
             if f in skip:
@@ -690,6 +700,11 @@ class PendingWrites:
             except Exception as exc:  # noqa: BLE001 - re-raising would punish the wrong caller
                 logger.debug("Pending write failed (surfaced via wait(key)): %s", exc)
         return not any(f in skip and not f.done() for f in futures)
+
+    def on_drain(self, hook: Callable[[], None]) -> None:
+        """Have `wait_all` call *hook* first, to submit work held back."""
+        with self._lock:
+            self._drain_hooks.append(hook)
 
     def failed_writes(self) -> list[tuple[str, BaseException]]:
         """Keys whose write raised and was never observed by a ``wait(key)``."""

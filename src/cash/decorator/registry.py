@@ -27,6 +27,7 @@ from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .explain import MissKind, MissReason
 from .function_identity import func_key, hash_callable_source
+from .global_reads import reach_pass
 
 if TYPE_CHECKING:
     from .reporting import Notices
@@ -576,7 +577,8 @@ class FunctionRegistry:
             for called in called_names:
                 if called != func_name:
                     self.graph.add_dependency(func_name, called)
-            report = get_analyzer().analyze(func)
+            with reach_pass():
+                report = get_analyzer().analyze(func)
         except Exception as e:
             # The analysis is what finds the helpers the key folds. An empty
             # report would key the function by its own code alone, leaving

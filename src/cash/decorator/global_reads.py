@@ -6,11 +6,13 @@ Analysis only, memoized per code object; the folds hash what it names."""
 from __future__ import annotations
 
 import ast
+import contextlib
 import dis
 import sys
 import textwrap
+import threading
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
@@ -157,6 +159,50 @@ NAMESPACE_BY_NAME = frozenset(
 )
 
 
+#: code object -> (does it name a `NAMESPACE_BY_NAME` accessor, the global
+#: names its instructions load), over it and its nested scopes. A fact of the
+#: code alone, so it holds for as long as the code object lives.
+_REACH_FACTS: LruMemo[Any, tuple[bool, tuple[str, ...]]] = LruMemo(CODE_OBJECTS)
+
+
+def _reach_facts(code: types.CodeType) -> tuple[bool, tuple[str, ...]]:
+    """`_REACH_FACTS` for *code* and every scope nested in it."""
+    cached = _REACH_FACTS.get(code)
+    if cached is None:
+        accessor = False
+        loads: dict[str, None] = {}
+        for scope in iter_code_scopes(code):
+            if NAMESPACE_BY_NAME.intersection(scope.co_names or ()):
+                accessor = True
+            for instr in dis.get_instructions(scope):
+                if instr.opname in _GLOBAL_LOADS and isinstance(instr.argval, str):
+                    loads[instr.argval] = None
+        cached = (accessor, tuple(loads))
+        _REACH_FACTS[code] = cached
+    return cached
+
+
+_PASS = threading.local()
+
+
+@contextlib.contextmanager
+def reach_pass() -> Iterator[None]:
+    """One analysis pass, in which a module's bindings do not move: a
+    `reaches_namespace_by_name` walk that ends "no" marks every function it
+    visited "no" for the rest of the pass, since it walked everything each
+    of them reaches. A chain of helpers analysed one after another is then
+    walked once, not once per helper. Nothing is remembered past the pass,
+    so a helper rebound later is followed as it is then. Nests."""
+    if getattr(_PASS, "no", None) is not None:
+        yield
+        return
+    _PASS.no = {}
+    try:
+        yield
+    finally:
+        _PASS.no = None
+
+
 def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> bool:
     """Can a string in *scopes* name a global of *module_globals*?
 
@@ -164,27 +210,42 @@ def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> 
     function of the same module it loads does (followed transitively, its
     own methods included for a class): ``get("K")`` with ``def get(name):
     return globals()[name]``. Without one, a string is just text.
+
+    What each code object names and loads is read from its bytecode once
+    (`_reach_facts`); which function a loaded name is is looked up in
+    *module_globals* on every walk, so a helper rebound since is followed
+    as it is now. A chain of helpers each calling the next costs a dict
+    lookup per link here, not a bytecode walk.
     """
-    seen: set[int] = set()
+    known_no = getattr(_PASS, "no", None)
+    namespace_id = id(module_globals)
+    seen: dict[int, Any] = {}
     stack = list(scopes)
     while stack:
-        scope = stack.pop()
-        if id(scope) in seen:
+        code = stack.pop()
+        if id(code) in seen:
             continue
-        seen.add(id(scope))
-        if NAMESPACE_BY_NAME.intersection(scope.co_names or ()):
+        seen[id(code)] = code
+        if known_no is not None and known_no.get((namespace_id, id(code)), (None,))[0] is code:
+            continue  # everything it reaches was walked this pass: no accessor
+        accessor, loads = _reach_facts(code)
+        if accessor:
             return True
-        for instr in dis.get_instructions(scope):
-            if instr.opname not in _GLOBAL_LOADS:
-                continue
-            value = module_globals.get(instr.argval)
+        for name in loads:
+            value = module_globals.get(name)
             members = vars(value).values() if isinstance(value, type) else (value,)
             for member in members:
                 member = getattr(member, "__func__", member)
                 member = getattr(member, "__wrapped__", member)  # a cached helper
                 if isinstance(member, types.FunctionType) and member.__globals__ is module_globals:
-                    stack.extend(iter_code_scopes(member.__code__))
+                    stack.append(member.__code__)
+    if known_no is not None:
+        # Held with the code and its namespace, so neither id is reused while remembered.
+        for code_id, code in seen.items():
+            known_no[(namespace_id, code_id)] = (code, module_globals)
     return False
+
+
 #: The opcodes that read an attribute (``LOAD_METHOD`` before 3.12).
 _ATTR_OPS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
 

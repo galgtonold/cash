@@ -68,6 +68,7 @@ from .file_deps import (
     snapshot_tracked_deps,
 )
 from .function_identity import func_key, hash_callable_source
+from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
 from .registry import resolve_dynamic_dependencies
@@ -438,6 +439,8 @@ class KeyBuilder:
         reads_token = READS_FOLDED.set({})
         reached_ttls: list = []
         ttls_token = REACHED_TTLS.set(reached_ttls)
+        # Each value module data holds is hashed once per key (`KEY_BUILD_DIGESTS`).
+        digests_token = KEY_BUILD_DIGESTS.set({})
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
@@ -489,6 +492,7 @@ class KeyBuilder:
                 args_hash = self._keyed_args_hash(keyed, failure)
             self._args.note_arg_cost(func_name)
         finally:
+            KEY_BUILD_DIGESTS.reset(digests_token)
             PLAIN_CENSUS.memo = previous
             REACHED_TTLS.reset(ttls_token)
             READS_FOLDED.reset(reads_token)

@@ -3,8 +3,9 @@ new process can say why its first call missed.
 
 One small JSON file per function under ``<cache>/.keys/``. Changes are kept
 in memory and written by a background writer, several stores to one file at a
-time; results kept in RAM only and warnings shown ride along with the next
-write, or with `StoredKeyRecord.flush` at shutdown.
+time and each file at most once per `StoredKeyRecord.WRITE_INTERVAL`; results
+kept in RAM only and warnings shown ride along with the next write, or with
+`StoredKeyRecord.flush` at shutdown.
 """
 
 from __future__ import annotations
@@ -16,15 +17,17 @@ import os
 import threading
 import time
 import weakref
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from .._memo import RECORDS, LruMemo
 from .._paths import replace_with_retry
 from ..backends._writes import PendingWrites
 from ..backends.cache_dir import recreate_cache_dir
 from ..tracking.tracker_context import untracked
+from .call_state import PROCESS_STARTED
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,160 @@ class _Changes:
         doc["warned"].update(self.warned)
 
 
+class MissFacts(NamedTuple):
+    """What a record says about one key that was looked up and not found:
+    the answers `MissHistory.absent_entry_reason` asks of it."""
+
+    #: ``[stored_at, ttl]`` when an earlier run stored this key, else None.
+    stored: list | None
+    #: ``[computed_at, why]`` when a run kept it in RAM only, else None.
+    ram_only: list | None
+    #: The newest key with the same dynamic and argument parts under another
+    #: state (results kept in RAM only first, as the record is read newest
+    #: first), or None.
+    same_arguments: str | None
+    #: The states of the entries an earlier process left.
+    earlier_states: frozenset
+    #: The newest of those entries, when the key's state is not among them.
+    newest_earlier: str | None
+    #: The newest stored key that is not this one, or None.
+    last_other: str | None
+
+
+def _key_parts(key: str) -> list[str]:
+    return key.rsplit(":", 3)
+
+
+def _earlier_time(value: Any) -> float | None:
+    """When an entry an EARLIER process wrote was written, else None."""
+    if value and isinstance(value[0], (int, float)) and value[0] < PROCESS_STARTED:
+        return value[0]
+    return None
+
+
+def facts_from_doc(doc: Doc, cache_key: str) -> MissFacts:
+    """`MissFacts` for *cache_key*, read from a whole record (`StoredKeyRecord.read`).
+
+    The reference for `_View.facts`, which answers the same from indexes."""
+    record, ram_only = doc["keys"], doc["ram_only"]
+    new = _key_parts(cache_key)
+    same = None
+    earlier_states: frozenset = frozenset()
+    newest = None
+    if len(new) == 4:
+        for key in reversed([*record, *ram_only]):
+            old = _key_parts(key)
+            if len(old) == 4 and old[2:] == new[2:] and old[1] != new[1]:
+                same = key
+                break
+        earlier = {
+            key: value
+            for kind in ("keys", "ram_only")
+            for key, value in doc[kind].items()
+            if _earlier_time(value) is not None
+        }
+        earlier_states = frozenset(key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3)
+        if earlier_states and new[1] not in earlier_states:
+            newest = max(earlier, key=lambda key: earlier[key][0])
+    others = [key for key in record if key != cache_key]
+    return MissFacts(
+        record.get(cache_key), ram_only.get(cache_key), same, earlier_states, newest, others[-1] if others else None
+    )
+
+
+class _View:
+    """One record as `StoredKeyRecord.read` would return it -- the file plus
+    the changes not written yet -- kept up to date as keys are noted, with
+    the indexes a miss reason asks. A miss of a cheap function read and
+    merged the whole record, then walked every key in it, on every call."""
+
+    def __init__(self, disk: Doc | None, overlays: list[_Changes]) -> None:
+        #: The disk record this view was built on (`StoredKeyRecord._memo`), by identity.
+        self.disk = disk
+        self.keys: dict[str, Any] = {}
+        self.ram_only: dict[str, Any] = {}
+        #: kind -> (dynamic part, argument part) -> {key: state}, in record order.
+        self._by_args: dict[str, dict[tuple[str, str], dict[str, str]]] = {"keys": {}, "ram_only": {}}
+        #: key -> (written at, state or None) for the entries an earlier process left.
+        self._earlier: dict[str, tuple[float, str | None]] = {}
+        self._earlier_states: Counter = Counter()
+        if disk is not None:
+            for kind in ("keys", "ram_only"):
+                for key, value in disk[kind].items():
+                    self._put(kind, key, value)
+        for changes in overlays:
+            self.apply(changes)
+
+    def apply(self, changes: _Changes) -> None:
+        """As `_Changes.apply` does to a whole record."""
+        for key, value in changes.keys.items():
+            self.put("keys", key, value)
+        for key, value in changes.ram_only.items():
+            self.put("ram_only", key, value)
+
+    def put(self, kind: str, key: str, value: Any) -> None:
+        """*key* noted under *kind*: out of the other kind, last in its own."""
+        self._drop("ram_only" if kind == "keys" else "keys", key)
+        self._drop(kind, key)
+        self._put(kind, key, value)
+
+    def _entries(self, kind: str) -> dict[str, Any]:
+        return self.keys if kind == "keys" else self.ram_only
+
+    def _put(self, kind: str, key: str, value: Any) -> None:
+        self._entries(kind)[key] = value
+        parts = _key_parts(key)
+        state = parts[1] if len(parts) == 4 else None
+        if state is not None:
+            self._by_args[kind].setdefault((parts[2], parts[3]), {})[key] = state
+        at = _earlier_time(value)
+        if at is not None:
+            self._earlier[key] = (at, state if key.count(":") >= 3 else None)
+            if state is not None:
+                self._earlier_states[state] += 1
+
+    def _drop(self, kind: str, key: str) -> None:
+        entries = self._entries(kind)
+        if key not in entries:
+            return
+        del entries[key]
+        parts = _key_parts(key)
+        if len(parts) == 4:
+            index = self._by_args[kind]
+            same = index.get((parts[2], parts[3]))
+            if same is not None:
+                same.pop(key, None)
+                if not same:
+                    del index[(parts[2], parts[3])]
+        earlier = self._earlier.pop(key, None)
+        if earlier is not None and earlier[1] is not None:
+            self._earlier_states[earlier[1]] -= 1
+            if self._earlier_states[earlier[1]] <= 0:
+                del self._earlier_states[earlier[1]]
+
+    def facts(self, cache_key: str) -> MissFacts:
+        """`facts_from_doc` of the record this view stands for."""
+        new = _key_parts(cache_key)
+        same = None
+        earlier_states: frozenset = frozenset()
+        newest = None
+        if len(new) == 4:
+            for kind in ("ram_only", "keys"):
+                for key, state in reversed(self._by_args[kind].get((new[2], new[3]), {}).items()):
+                    if state != new[1]:
+                        same = key
+                        break
+                if same is not None:
+                    break
+            earlier_states = frozenset(self._earlier_states)
+            if earlier_states and new[1] not in earlier_states:
+                newest = max(self._earlier, key=lambda key: self._earlier[key][0])
+        last_other = next((key for key in reversed(self.keys) if key != cache_key), None)
+        return MissFacts(
+            self.keys.get(cache_key), self.ram_only.get(cache_key), same, earlier_states, newest, last_other
+        )
+
+
 # Every live record, for `_reset_after_fork_in_child`.
 _LIVE_RECORDS: weakref.WeakSet = weakref.WeakSet()
 
@@ -103,6 +260,11 @@ class StoredKeyRecord:
     #: States whose ledger a record keeps, most recent last.
     STATES_MAX = 8
     WARNED_MAX = 32
+    #: Seconds between two writes of one record. A miss of a cheap function
+    #: rewrote the whole file each time (a read, a JSON dump, a rename: more
+    #: than the call); what is not written yet is still in memory, where
+    #: `read` answers from, and `flush` writes it at shutdown.
+    WRITE_INTERVAL = 1.0
 
     def __init__(self, local_dir: Callable[[], str | None]) -> None:
         """*local_dir* returns the built backend's local directory, or None
@@ -114,10 +276,18 @@ class StoredKeyRecord:
         # Serialises this process's rewrites of a record.
         self._io_lock = threading.Lock()
         self._memo: LruMemo[str, tuple[tuple[int, int], Doc]] = LruMemo(RECORDS)
+        # path -> when its memo was last found to match the file (monotonic).
+        self._checked: dict[str, float] = {}
+        # path -> its `_View`, kept while it is in use (`miss_facts`).
+        self._views: dict[str, _View] = {}
         self._pending: dict[str, _Changes] = {}
         # Taken by a write in progress; still part of what `read` answers.
         self._writing: dict[str, _Changes] = {}
         self._scheduled: set[str] = set()
+        # path -> when its last write ended (monotonic), and the timer that
+        # schedules a write held back by `WRITE_INTERVAL`.
+        self._last_write: dict[str, float] = {}
+        self._timers: dict[str, threading.Timer] = {}
         self._writes: PendingWrites | None = None
         self._closed = False
         _LIVE_RECORDS.add(self)
@@ -137,6 +307,8 @@ class StoredKeyRecord:
         self._io_lock = threading.Lock()
         self._scheduled = set()
         self._writing = {}
+        self._timers = {}  # the parent's timer threads did not survive the fork
+        self._views = {}  # built with the parent's writes in progress
 
     def path(self, func_name: str) -> str | None:
         """Where *func_name*'s record lives, or None.
@@ -161,21 +333,52 @@ class StoredKeyRecord:
         # then applied twice, which changes nothing, rather than not at all.
         with self._lock:
             overlays = [c.copy() for c in (self._writing.get(path), self._pending.get(path)) if c is not None]
-        doc = self._read_disk(path)
+        # Another process's write shows within `WRITE_INTERVAL`: this answers
+        # "why did that miss?", and a stat per miss cost more than the rest.
+        doc = self._read_disk(path, recheck_after=self.WRITE_INTERVAL)
         for changes in overlays:
             changes.apply(doc)
         return doc
 
-    def _read_disk(self, path: str) -> Doc:
-        """The record on disk, through a memo on its (mtime, size)."""
+    def miss_facts(self, func_name: str, cache_key: str) -> MissFacts:
+        """`facts_from_doc` of what `read` returns for *func_name*, from a view
+        kept up to date as keys are noted: a lookup per question, not a copy
+        and a walk of the whole record per miss."""
+        path = self.path(func_name)
+        if path is None:
+            return facts_from_doc(_empty(), cache_key)
+        disk_doc = self._disk_doc(path, self.WRITE_INTERVAL)  # the file, as `read` sees it
+        with self._lock:
+            view = self._views.get(path)
+            if view is None or view.disk is not disk_doc:
+                overlays = [c for c in (self._writing.get(path), self._pending.get(path)) if c is not None]
+                view = self._views[path] = _View(disk_doc, overlays)
+            return view.facts(cache_key)
+
+    def _read_disk(self, path: str, *, recheck_after: float = 0.0) -> Doc:
+        """The record on disk, through a memo on its (mtime, size) (a copy).
+        A memo checked against the file less than *recheck_after* seconds
+        ago is taken without a stat."""
+        doc = self._disk_doc(path, recheck_after)
+        return _empty() if doc is None else {kind: dict(value) for kind, value in doc.items()}
+
+    def _disk_doc(self, path: str, recheck_after: float) -> Doc | None:
+        """`_read_disk`'s answer as the memo's own record, never changed once
+        kept (callers must not change it either); None for no file."""
         with self._lock:
             memo = self._memo.get(path)
+            checked = self._checked.get(path)
+        now = time.monotonic()
+        if memo is not None and checked is not None and now - checked < recheck_after:
+            return memo[1]
         try:
             st = os.stat(path)
         except OSError:
-            return _empty()
+            return None
         if memo is not None and memo[0] == (st.st_mtime_ns, st.st_size):
-            return {kind: dict(value) for kind, value in memo[1].items()}
+            with self._lock:
+                self._checked[path] = now
+            return memo[1]
         try:
             # A nested call reads this while the outer call's file tracker is
             # live, and it must not become that entry's dependency.
@@ -184,9 +387,7 @@ class StoredKeyRecord:
         except (OSError, ValueError):
             # Another process mid-rewrite (on Windows a read that overlaps the
             # rename fails): the last record read beats none.
-            if memo is not None:
-                return {kind: dict(value) for kind, value in memo[1].items()}
-            return _empty()
+            return memo[1] if memo is not None else None
         return self._remember(path, st, data)
 
     def _remember(self, path: str, st: os.stat_result, data: Any) -> Doc:
@@ -198,7 +399,8 @@ class StoredKeyRecord:
                     doc[kind] = value
         with self._lock:
             self._memo[path] = ((st.st_mtime_ns, st.st_size), doc)
-        return {kind: dict(value) for kind, value in doc.items()}
+            self._checked[path] = time.monotonic()
+        return doc
 
     # -- noting ----------------------------------------------------------
 
@@ -254,7 +456,14 @@ class StoredKeyRecord:
             other.pop(cache_key, None)
             mine = getattr(changes, kind)
             _put_last(mine, cache_key, value)
+            trimmed = len(mine) > self.KEYS_MAX
             _trim(mine, self.KEYS_MAX)
+            view = self._views.get(path)
+            if view is not None:
+                if trimmed:  # an older note left the record: built again on the next miss
+                    del self._views[path]
+                else:
+                    view.put(kind, cache_key, value)
             if state in changes.states:
                 _put_last(changes.states, state, changes.states[state])
             elif state is not None:
@@ -266,15 +475,32 @@ class StoredKeyRecord:
 
     # -- writing ---------------------------------------------------------
 
-    def _schedule(self, path: str) -> None:
+    def _schedule(self, path: str, *, hold: bool = False) -> None:
+        """Have *path* written: now, or once `WRITE_INTERVAL` has passed since
+        its last write. *hold* always goes through the timer: the writer task
+        itself must not submit to its own queue."""
         with self._lock:
-            if path in self._scheduled:
-                return  # the queued write takes this change too
+            if path in self._scheduled or path in self._timers:
+                return  # the queued (or held back) write takes this change too
+            wait = self._last_write.get(path, float("-inf")) + self.WRITE_INTERVAL - time.monotonic()
+            if (wait > 0 or hold) and not self._closed:
+                wait = max(wait, 0.0)
+                # Written a moment ago: hold this one back. A timer, not a
+                # sleep in the writer, so nothing that waits for the write
+                # queue waits for the interval.
+                timer = threading.Timer(wait, self._release_held, (path,))
+                timer.daemon = True
+                self._timers[path] = timer
+                timer.start()
+                return
             if self._closed:
                 queue = None
             else:
                 if self._writes is None:
                     self._writes = PendingWrites(max_workers=1)
+                    # A drain of the write queues (after a notebook cell, or
+                    # before a listing) also writes what is held back.
+                    self._writes.on_drain(self._submit_held)
                 queue = self._writes
                 self._scheduled.add(path)
         if queue is None:
@@ -287,20 +513,46 @@ class StoredKeyRecord:
                 self._scheduled.discard(path)
             self._write_now(path)
 
-    def _write_while_pending(self, path: str) -> None:
-        """Writer task: write *path* until no change for it is left.
+    def _release_held(self, path: str) -> None:
+        """Timer callback: schedule the write `_schedule` held back."""
+        with self._lock:
+            if self._timers.pop(path, None) is None:
+                return  # flushed meanwhile
+        self._schedule(path)
 
-        Checks for a late change and gives up the slot in one step, so a
-        change noted meanwhile either is written here or schedules a new task
+    def _submit_held(self) -> None:
+        """Drain hook: submit every write held back by `WRITE_INTERVAL` now."""
+        with self._lock:
+            timers, self._timers = self._timers, {}
+            queue = self._writes
+        for path, timer in timers.items():
+            timer.cancel()
+            with self._lock:
+                if path in self._scheduled:
+                    continue  # a queued write takes it
+                self._scheduled.add(path)
+            try:
+                if queue is None:
+                    raise RuntimeError("closed")
+                queue.submit(f"stored-keys:{path}", self._write_while_pending, path)
+            except RuntimeError:
+                with self._lock:
+                    self._scheduled.discard(path)
+                self._write_now(path)
+
+    def _write_while_pending(self, path: str) -> None:
+        """Writer task: write *path*.
+
+        Gives up the slot and checks for a late change in one step, so a
+        change noted meanwhile is held for the next write, after the interval
         (a task must not submit to its own queue: it would wait on itself).
         """
-        while True:
-            while self._write_now(path):
-                pass
-            with self._lock:
-                if path not in self._pending or self._closed:
-                    self._scheduled.discard(path)
-                    return
+        self._write_now(path)
+        with self._lock:
+            self._scheduled.discard(path)
+            late = path in self._pending and not self._closed
+        if late:
+            self._schedule(path, hold=True)
 
     def _write_now(self, path: str) -> bool:
         """Write the changes pending for *path*. False when there were none.
@@ -336,10 +588,15 @@ class StoredKeyRecord:
         finally:
             with self._lock:
                 self._writing.pop(path, None)
+                self._last_write[path] = time.monotonic()
         return True
 
     def flush(self) -> None:
         """Wait for queued writes, then write every change still pending. Never raises."""
+        with self._lock:
+            timers, self._timers = self._timers, {}
+        for timer in timers.values():
+            timer.cancel()  # their changes are pending: written below
         queue = self._writes
         if queue is not None and not queue.in_worker_thread():
             queue.wait_all()

@@ -178,6 +178,29 @@ def _code_objects(code: types.CodeType):
             yield from _code_objects(const)
 
 
+#: id of a compiled module -> (that module, its code objects by qualified
+#: name). The module is held so the id cannot be reused while the entry lives.
+_CODE_INDEX: LruMemo[int, tuple[types.CodeType, dict[str, list[types.CodeType]]]] = LruMemo(COMPILED_MODULES)
+
+
+def _code_by_name(module: types.CodeType) -> dict[str, list[types.CodeType]]:
+    """Every code object in the compiled *module*, by ``co_qualname`` (and by
+    ``co_name`` under a ``"name:"`` prefix, for Pythons without qualnames).
+    Built once per compiled file version, so checking each of a module's
+    functions costs a lookup, not a walk of the whole module."""
+    cached = _CODE_INDEX.get(id(module))
+    if cached is not None and cached[0] is module:
+        return cached[1]
+    index: dict[str, list[types.CodeType]] = {}
+    for candidate in _code_objects(module):
+        qualname = getattr(candidate, "co_qualname", None)
+        if qualname is not None:
+            index.setdefault(qualname, []).append(candidate)
+        index.setdefault("name:" + candidate.co_name, []).append(candidate)
+    _CODE_INDEX[id(module)] = (module, index)
+    return index
+
+
 def loaded_code_matches_disk(fn: object) -> bool:
     """False when *fn*'s source file was edited after this process loaded it.
 
@@ -214,12 +237,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
     if live is None:
         return True
     qualname = getattr(code, "co_qualname", None)
-    for candidate in _code_objects(module):
-        if qualname is not None:
-            if getattr(candidate, "co_qualname", None) != qualname:
-                continue
-        elif candidate.co_name != code.co_name:
-            continue
+    for candidate in _code_by_name(module).get(qualname if qualname is not None else "name:" + code.co_name, ()):
         # Not ``types.FunctionType(candidate, {})``: that raises for a nested
         # function with free variables (it needs a closure), and only the
         # code is read anyway.
