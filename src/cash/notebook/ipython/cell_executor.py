@@ -52,6 +52,7 @@ from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutation_effects import analyze_statement
 from ...remote_source import measured_validation as _measured_validation
 from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
@@ -109,14 +110,32 @@ def _read_names(node: ast.AST) -> set[str]:
     return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)}
 
 
+def _changed_by_a_failed_step(node: ast.stmt) -> set[str]:
+    """The names statement *node* may have changed before it raised: what it
+    changes in place (``lst.append(x)``), and for a loop or branch also what
+    its body binds, since part of it ran."""
+    try:
+        changed = set(analyze_statement(ast.unparse(node), node).all_mutated_vars)
+    except Exception:  # noqa: BLE001 - an analysis of arbitrary code: assume nothing changed in place
+        changed = set()
+    if is_control_structure(node):
+        changed |= _stored_names(node)
+    return changed
+
+
 def _owed_by_skips(body: list[ast.stmt], skipped: set[int], failed: int) -> list[int]:
     """The skipped statements before statement *failed* whose work a plain run
     leaves in the namespace: the last writer of a name among the statements
-    before it, plus the skipped statements those read from."""
+    before it, plus the skipped statements those read from. Not a name the
+    failed statement changed in place: running its writer again would wipe
+    what that statement had done before it raised."""
     writers = [_stored_names(node) for node in body[:failed]]
+    in_place = _changed_by_a_failed_step(body[failed]) if failed < len(body) else set()
     owed: set[int] = set()
     pending: list[tuple[int, set[str]]] = []
     for name in set().union(*writers) if writers else set():
+        if name in in_place:
+            continue
         last = max(k for k, names in enumerate(writers) if name in names)
         if last in skipped and last not in owed:
             owed.add(last)
@@ -902,6 +921,11 @@ class CellExecutor:
             except BaseException:
                 # What follows never ran; the upstream check must not credit it.
                 self.tracking_state.failed_cells[exact_source_digest(raw_cell)] = i
+                # What the statement changed before it raised was recorded
+                # against no lineage, so each name it may have changed no longer
+                # matches the run that made it: a re-run must rebuild it.
+                for name in _changed_by_a_failed_step(node):
+                    self.tracking_state.lineage.discard(name)
                 # A statement the plan skipped as overwritten later in the cell
                 # was overwritten by one that never completed: its names stay as
                 # a plain run leaves them.
