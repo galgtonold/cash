@@ -15,8 +15,8 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from cash.backends import frame_sharing, memory_backend  # noqa: E402
-from cash.backends.memory_backend import InMemoryBackend  # noqa: E402
+from cash.backends import frame_sharing, memory_backend  # noqa: E402 - after the pandas importorskip
+from cash.backends.memory_backend import InMemoryBackend  # noqa: E402 - after the pandas importorskip
 
 pytestmark = pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
 
