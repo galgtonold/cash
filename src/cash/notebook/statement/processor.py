@@ -1215,11 +1215,18 @@ class StatementProcessor:
         elsewhere, which a lineage made of the code and the handle's cannot
         tell, so a reader below (``lines = fh.readlines()``, ``n = text.count(x)``
         after ``text = fh.read()``) would be served what it computed from an
-        earlier handle or an earlier read."""
+        earlier handle or an earlier read.
+
+        A closed handle is no stream: ``with open(path) as f:`` leaves one
+        bound, which nothing can read from, and the statement is cached as
+        any other -- the file it read is its dependency. Taken as a stream,
+        it made every value the block read uncacheable and hashed in full
+        on every run (300,000 records: 2.2 s of CPU a run).
+        """
         if run.drew_from_stream:
             return True
         user_ns = self.shell.user_ns
-        return any(isinstance(user_ns.get(name), io.IOBase) for name in run.outputs)
+        return any(_open_stream(user_ns.get(name)) for name in run.outputs)
 
     def _post_execute(self, run: StatementRun, execution: StatementExecution) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics.
@@ -1768,3 +1775,13 @@ class StatementProcessor:
             raise result.error from None
         logger.debug("[SILENT] Error in statement: %s", result.error)
         return False
+
+
+def _open_stream(value: Any) -> bool:
+    """Is *value* a file or stream that can still be read or written?"""
+    if not isinstance(value, io.IOBase):
+        return False
+    try:
+        return not value.closed
+    except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
+        return True

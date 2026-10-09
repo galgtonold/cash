@@ -44,11 +44,43 @@ def test_the_holder_check_does_not_walk_each_record(monkeypatch):
     assert _children_asked(monkeypatch, {"records": _records(5_000)}) < 10
 
 
-def test_the_holder_check_walks_records_another_name_reaches_into(monkeypatch):
+def test_the_holder_check_reads_records_another_name_reaches_into_a_level_at_a_time(monkeypatch):
+    """Only the list another name holds is taken on its own: it keeps the
+    records shared, as the walk found."""
     namespace = {"records": _records(5_000)}
     namespace["tags"] = namespace["records"][9]["tags"]
 
+    assert _children_asked(monkeypatch, namespace) < 10
+    assert shared_objects.shared_names({"records": namespace["records"]}, (namespace,)) == {"records"}
+
+
+def test_the_holder_check_walks_records_holding_an_object(monkeypatch):
+    import types
+
+    namespace = {"records": _records(5_000)}
+    namespace["records"][-1]["obj"] = types.SimpleNamespace(k=1)
+
     assert _children_asked(monkeypatch, namespace) > 5_000
+
+
+def test_the_holder_check_walks_records_two_names_reach_into_one_inside_the_other(monkeypatch):
+    """The record and a list inside it, each held by a name of the group:
+    counted from both, the edge between them would count twice."""
+    namespace = {"records": _records(5_000)}
+    namespace["rec"] = namespace["records"][9]
+    namespace["tags"] = namespace["records"][9]["tags"]
+    asked = []
+    real = shared_objects.children_of
+
+    def counting(value):
+        asked.append(1)
+        return real(value)
+
+    monkeypatch.setattr(shared_objects, "children_of", counting)
+    roots = {name: namespace[name] for name in ("records", "rec", "tags")}
+
+    assert shared_objects.shared_names(roots, (namespace,)) == set()
+    assert len(asked) > 5_000
 
 
 def test_the_closure_check_does_not_walk_each_record(monkeypatch):
@@ -105,3 +137,90 @@ def test_the_view_check_still_finds_a_view_inside_records(monkeypatch):
     records[-1]["window"] = base[:3]
     assert is_uncacheable_alias(records, {"records": records, "base": base})
     assert walks == [1]
+
+
+def _counting_children(monkeypatch) -> list:
+    asked: list = []
+    real = shared_objects.children_of
+
+    def counting(value):
+        asked.append(1)
+        return real(value)
+
+    monkeypatch.setattr(shared_objects, "children_of", counting)
+    return asked
+
+
+def test_records_a_loop_variable_holds_one_of_are_not_walked(monkeypatch):
+    """``for r in records:`` leaves ``r`` bound to the last record: the check
+    of the loop's outputs walked every record, about 12 us each, on every run."""
+    namespace = {"records": _records(5_000)}
+    namespace["r"] = namespace["records"][-1]
+    asked = _counting_children(monkeypatch)
+
+    holders, shared = shared_objects.share_group(["r"], {"r": namespace["r"]}, namespace)
+
+    assert (sorted(holders), shared) == (["records"], set())
+    assert len(asked) < 50
+
+
+def _parsed(n: int) -> list:
+    import datetime
+
+    when = datetime.datetime(2020, 1, 1)
+    return [(f"u{i}", [("a", when), ("b", when)]) for i in range(n)]
+
+
+def test_pairs_a_loop_variable_holds_a_list_of_are_not_walked(monkeypatch):
+    """``for (name, act) in parsed:`` then ``parsed = sorted(parsed, ...)``:
+    every pair was walked, twice, and once more for the closure check."""
+    namespace = {"parsed": _parsed(5_000)}
+    namespace["name"], namespace["act"] = namespace["parsed"][-1]
+    asked = _counting_children(monkeypatch)
+
+    holders, shared = shared_objects.share_group(["parsed"], {"parsed": namespace["parsed"]}, namespace)
+
+    assert (sorted(holders), shared) == (["act"], set())
+    assert len(asked) < 50
+
+
+def test_the_rounds_of_the_holder_search_read_the_records_once(monkeypatch):
+    from cash import _plain_data
+
+    namespace = {"parsed": _parsed(5_000)}
+    namespace["act"] = namespace["parsed"][-1][1]
+    reads = []
+    real = _plain_data.held_beyond_parents
+
+    def counting(value, *args):
+        if value is namespace["parsed"]:
+            reads.append(1)
+        return real(value, *args)
+
+    monkeypatch.setattr(_plain_data, "held_beyond_parents", counting)
+
+    holders, _shared = shared_objects.share_group(["parsed"], {"parsed": namespace["parsed"]}, namespace)
+
+    assert sorted(holders) == ["act"]
+    assert reads == [1]
+
+
+def test_where_a_variable_holds_part_of_records_is_found_without_walking_them(monkeypatch):
+    from cash.notebook import holder_patches
+
+    parsed = _parsed(5_000)
+    act = parsed[1234][1]
+    steps = []
+    real = holder_patches._steps
+
+    def counting(value, *args):
+        steps.append(1)
+        return real(value, *args)
+
+    monkeypatch.setattr(holder_patches, "_steps", counting)
+    asked = _counting_children(monkeypatch)
+
+    patches = holder_patches.holder_patches({"act": act}, {"parsed": parsed})
+
+    assert patches["act"].places == (((), "parsed", (("item", 1234), ("item", 1))),)
+    assert len(steps) + len(asked) < 50

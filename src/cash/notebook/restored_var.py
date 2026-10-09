@@ -10,7 +10,10 @@ files it depends on, and its session hash.
 
 from __future__ import annotations
 
+import itertools
 import logging
+import sys
+import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FORWARD_PROBE_PLACEHOLDER", "apply_held_var", "apply_restored_var", "hashed_by_lineage"]
+__all__ = ["FORWARD_PROBE_PLACEHOLDER", "apply_held_var", "apply_restored_var", "hashed_by_lineage", "identity_digest"]
 
 #: Stands in the namespace for a variable the upstream check's forward probe
 #: found a current-cell cache hit for: a statement whose input is not in the
@@ -53,12 +56,56 @@ def hashed_by_lineage(value: Any) -> bool:
     t = type(value)
     if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None:
         return True
+    artist = _artist_class()
+    if artist is not None and isinstance(value, artist):
+        return True
     if t in (list, tuple, dict, set, frozenset):
         if len(value) > _LINEAGE_HASHED_ITEMS:
             return True
         items = value.values() if t is dict else value
-        return any(type(v).__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(type(v)) is not None for v in items)
+        return any(
+            type(v).__name__ in _LINEAGE_HASHED_TYPES
+            or builtin_hash_family(type(v)) is not None
+            or (artist is not None and isinstance(v, artist))
+            for v in items
+        )
     return False
+
+
+#: What makes each `identity_digest` one no other binding, in this process
+#: or another, gets.
+_IDENTITY_PREFIX = f"identity:{uuid.uuid4().hex}:"
+_IDENTITY_COUNT = itertools.count()
+
+
+def identity_digest(value: Any) -> str | None:
+    """A digest for *value*, a matplotlib figure, axes or artist, that no
+    other binding gets, or None for any other value.
+
+    ``for g, ax in zip(groups, axes):`` hashed each axes in full -- a pickle
+    of its whole figure -- per iteration, to key statements that draw on it
+    and run every time anyway. Each binding is its own instead: a statement
+    keyed by one never hits, as when it ran uncached. Not the object's
+    ``id``: a later figure can be given the same one.
+    """
+    artist = _artist_class()
+    if artist is None or not isinstance(value, artist):
+        return None
+    return f"{_IDENTITY_PREFIX}{next(_IDENTITY_COUNT)}"
+
+
+def _artist_class() -> type | None:
+    """``matplotlib.artist.Artist`` once matplotlib is loaded, else None.
+
+    A figure, its axes and what is drawn on them are tied to the figure by
+    identity, and a plot statement runs every time: its figure's content
+    hash -- a pickle of the whole figure -- decided nothing, and was most
+    of cash's own time in a plot cell. Hashed by lineage like a frame:
+    a check that would compare its content reads it as changed.
+    """
+    module = sys.modules.get("matplotlib.artist")
+    artist = getattr(module, "Artist", None)
+    return artist if isinstance(artist, type) else None
 
 
 def apply_restored_var(

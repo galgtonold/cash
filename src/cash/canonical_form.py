@@ -21,6 +21,7 @@ import copyreg
 import datetime
 import decimal
 import fractions
+import hashlib
 import logging
 import operator
 import sys
@@ -28,6 +29,7 @@ import types
 import uuid
 import weakref
 from collections.abc import Callable, Generator
+from itertools import chain
 from typing import Any, NamedTuple
 
 from . import _plain_data, kept_state
@@ -131,6 +133,7 @@ def stable_key_repr(
     seen: dict | None = None,
     hook: Callable[[Any], Any] | None = None,
     left: list | None = None,
+    fielded: list | None = None,
 ) -> Any:
     """The form a cache key hashes *value* in: equal values pickle to equal
     bytes, in any process.
@@ -176,9 +179,12 @@ def stable_key_repr(
     *left*, when given, gets an entry for each object left to pickle whole
     (`canonical_bytes` reads it): only then can the form hold an object
     pickled twice, whose identity only pickle's memo records.
+    *fielded*, when given, lets an object of a plain class be keyed by its
+    fields (`_fields_form`) and gets the id of each one that is; the caller
+    must then check that none of them is held twice (`canonical_bytes`).
     """
     try:
-        return _walk(value, _Walk(content, {} if seen is None else seen, hook, left))
+        return _walk(value, _Walk(content, {} if seen is None else seen, hook, left, fielded))
     except RecursionError:
         raise TooDeepValueError(_too_deep(value)) from None
 
@@ -200,15 +206,23 @@ class _Walk:
     containers met so far (*seen*), and the caller's *content*, *hook* and
     *left* (see `stable_key_repr`)."""
 
-    __slots__ = ("content", "holds_set", "hook", "left", "seen", "stack")
+    __slots__ = ("content", "fielded", "holds_set", "hook", "left", "seen", "stack")
 
     def __init__(
-        self, content: ContentHashing, seen: dict, hook: Callable[[Any], Any] | None, left: list | None
+        self,
+        content: ContentHashing,
+        seen: dict,
+        hook: Callable[[Any], Any] | None,
+        left: list | None,
+        fielded: list | None = None,
     ) -> None:
         self.content = content
         self.seen = seen
         self.hook = hook
         self.left = left
+        #: The ids of the objects keyed by their fields (`_fields_form`),
+        #: None when none may be.
+        self.fielded = fielded
         self.stack: set[int] = set()
         #: Objects known to hold a set (`contains_set`'s *found*).
         self.holds_set: dict[int, Any] = {}
@@ -349,7 +363,19 @@ def canonical_bytes(
     the writable containers the walk met (`stable_key_repr`'s *seen*).
     """
     left: list = []
-    form = stable_key_repr(value, content, seen=seen, hook=hook, left=left)
+    fielded: list = []
+    walked: dict = {} if seen is None else seen
+    form = stable_key_repr(value, content, seen=walked, hook=hook, left=left, fielded=fielded)
+    if fielded and (left or len(set(fielded)) != len(fielded) or not walked.keys().isdisjoint(fielded)):
+        # An object keyed by its fields, or a list or dict inside one that
+        # something else holds too, is one pickle's memo no longer sees:
+        # met again -- in another argument, inside an object left to
+        # pickle, walked -- it would key like an equal copy. Keyed the old
+        # way.
+        del form
+        left = []
+        walked.clear()
+        form = stable_key_repr(value, content, seen=walked, hook=hook, left=left)
     try:
         if left:
             return b"m" + _plain_data.key_dumps(form)
@@ -496,6 +522,10 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 items.append((k_form, v if type(v) in prims else (yield v)))
             return (yield from _typed(value, tuple(items), walk))
         if isinstance(value, (list, tuple)):
+            if walk.fielded is not None and len(value) >= RECORDS_FROM:
+                by_fields = _records_by_fields(value, walk)
+                if by_fields is not None:
+                    return by_fields
             records = record_class(value, walk.content.family) if len(value) >= RECORDS_FROM else None
             record_form = _record_former(records, walk) if records is not None else None
             for v in value:
@@ -507,6 +537,10 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                     items.append((yield v))
             return (yield from _typed(value, tuple(items), walk))
         t = type(value)
+        if walk.fielded is not None:
+            by_fields = _object_by_fields(value, walk)
+            if by_fields is not None:
+                return by_fields
         if contains_set(value, walk.holds_set):
             return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
         if holds_content_data(value, walk.content):
@@ -527,6 +561,151 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
         return value
     finally:
         walk.stack.discard(id(value))
+
+
+#: What the fields of records keyed by their fields may hold
+#: (`_records_by_fields`): values that cannot change, with no set, frame or
+#: code inside -- a ``datetime`` or ``time`` only with no ``tzinfo``
+#: (`_CLOCKS`), which is any object. Not a ``bytearray``: one held by two
+#: records changes in both, which only pickle's memo recorded.
+_FIELD_LEAVES = frozenset((*IMMUTABLE_PRIMS, *PARSED_VALUE_TYPES))
+_CLOCKS = frozenset((datetime.datetime, datetime.time))
+
+_STR_ONLY = frozenset((str,))
+
+#: The methods by which a class says what pickle stores for its instances.
+_PICKLE_HOOKS = ("__reduce__", "__reduce_ex__", "__getstate__", "__getnewargs__", "__getnewargs_ex__", "__cash_key__")
+
+
+class _PlainProbe:
+    pass
+
+
+#: The instance size of a class written in Python with no slots.
+_PLAIN_SIZE = (_PlainProbe.__basicsize__, _PlainProbe.__itemsize__)
+
+
+def fields_class(t: type) -> bool:
+    """Is *t* a class whose instances pickle as their class and ``__dict__``
+    alone, as ``object`` pickles them? Then an instance is keyed by its
+    fields (`_fields_form`) and needs no pickle of its own.
+
+    Written in Python with no slots and no C base (`_record_kind`), with no
+    metaclass -- remembered per class, as none of it changes -- and, asked
+    each time, with no method saying what pickle stores or how to key it
+    (`_PICKLE_HOOKS`), of its own or registered with ``copyreg``.
+    """
+    try:
+        fixed = _FIELDS_CLASSES[t]
+    except KeyError:
+        fixed = _FIELDS_CLASSES[t] = _decide_fields_class(t)
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return False
+    if not fixed or t in copyreg.dispatch_table or kept_state.chooses_its_state(t):
+        return False
+    return all(getattr(t, name, None) is getattr(object, name, None) for name in _PICKLE_HOOKS)
+
+
+def _decide_fields_class(t: type) -> bool:
+    if type(t) is not type or _record_kind(t) is not _OBJECT_RECORD:
+        return False
+    return (t.__basicsize__, t.__itemsize__) == _PLAIN_SIZE and bool(t.__dictoffset__)
+
+
+_FIELDS_CLASSES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _found_by_name(t: type) -> bool:
+    """Does pickle find *t* by its module and qualified name, as it must to
+    pickle an instance? A class made in a function, or one a cell defined
+    again, is not: its instances are unkeyable, as pickled."""
+    module = sys.modules.get(t.__module__)
+    found: Any = module
+    for part in t.__qualname__.split("."):
+        found = getattr(found, part, None)
+        if found is None:
+            return False
+    return found is t
+
+
+def _fields_form(kind: str, t: type, digest: str) -> tuple:
+    """The form of objects keyed by their fields: a tuple no value's form
+    can be, since every container's form is tagged (`_typed`)."""
+    return ("__cash_fields__", kind, f"{t.__module__}.{t.__qualname__}", digest)
+
+
+def _records_by_fields(value: list | tuple, walk: _Walk) -> Any:
+    """The form of a list or tuple of records of one class keyed by their
+    fields, or None to walk it as before.
+
+    A million records cost about 5 us each a hit: each one asked of the
+    hook, left to pickle whole -- an object's reduce in Python per record --
+    and pickled with a memo entry per object. Every record's ``__dict__``
+    holding values alone (`_FIELD_LEAVES`) under string names, the
+    records are their class and those dicts, pickled at C speed without a
+    memo. That no record is held twice -- in *value* or anywhere else in
+    the key -- is the caller's check (*walk*'s ``fielded``).
+    """
+    if type(value) not in (list, tuple):
+        return None
+    kinds = set(map(type, value))
+    t = kinds.pop()
+    if kinds or walk.content.family(t) is not None or not fields_class(t):
+        return None
+    if walk.hook is not None and walk.hook(value[0]) is not NOT_HOOKED:
+        return None  # the hook answers by type: it keys every record
+    if not _found_by_name(t):
+        return None
+    states = list(map(_STATE_OF, value))
+    if set(map(type, states)) != {dict} or not _STR_ONLY.issuperset(map(type, chain.from_iterable(states))):
+        return None
+    kinds = set(map(type, chain.from_iterable(map(dict.values, states))))
+    if not _FIELD_LEAVES.issuperset(kinds):
+        return None
+    if not kinds.isdisjoint(_CLOCKS) and any(
+        type(v) in _CLOCKS and v.tzinfo is not None for v in chain.from_iterable(map(dict.values, states))
+    ):
+        return None
+    digest = hashlib.sha256(_plain_data.pickle_unshared(states)).hexdigest()
+    walk.fielded.extend(map(id, value))  # type: ignore[union-attr]
+    return ("__cash_type__", _BUILTIN_CONTAINER_TAGS[type(value)], (_fields_form("records", t, digest),))
+
+
+def _object_by_fields(value: Any, walk: _Walk) -> Any:
+    """The form of one object keyed by its fields, or None to key it as
+    before: an object of a plain class (`fields_class`) whose ``__dict__``
+    holds JSON-like data (`_plain_data.tree_levels`) with a container of
+    `RECORDS_FROM` items or more in it.
+
+    ``self.data = records`` keyed a method's every call by a search of all
+    the records for a set, then a pickle of the object whole, where the
+    same records as an argument are keyed by one read of their content at
+    C speed (`_plain_data.sharing`): 0.77 s a hit for 100,000 records. The
+    lists and dicts held twice inside are part of that digest, as pickle's
+    memo kept them. That nothing outside holds the object too is the
+    caller's check (*walk*'s ``fielded``).
+    """
+    t = type(value)
+    if not fields_class(t):
+        return None
+    state = getattr(value, "__dict__", None)
+    if type(state) is not dict or not _STR_ONLY.issuperset(map(type, state)):
+        return None
+    if not any(type(v) in _plain_data.TREE_NODES and len(v) >= RECORDS_FROM for v in state.values()):
+        return None  # small: pickled whole costs no more
+    if not _found_by_name(t):
+        return None
+    shape = _plain_data.sharing(state, tree=True)
+    if shape is None:
+        return None
+    digest = hashlib.sha256(_plain_data.pickle_unshared((state, shape[0]))).hexdigest()
+    # Its lists and dicts something else holds too: met again in the key --
+    # in another object keyed by its fields, or walked -- they are one
+    # object two parts of the key share, which pickle's memo recorded.
+    walk.fielded.append(id(value))  # type: ignore[union-attr]
+    walk.fielded.extend(shape[1])
+    del shape
+    return _fields_form("object", t, digest)
 
 
 #: A list or tuple at least this long is checked for records (`record_class`).

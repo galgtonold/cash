@@ -13,9 +13,11 @@ from cash.notebook import shared_objects
 
 def _tree_checks(monkeypatch) -> list[object]:
     asked: list[object] = []
-    real = _plain_data.held_only_by_parents
+    real = _plain_data.held_beyond_parents
     monkeypatch.setattr(
-        _plain_data, "held_only_by_parents", lambda value, leaves: asked.append(value) or real(value, leaves)
+        _plain_data,
+        "held_beyond_parents",
+        lambda value, leaves, limit: asked.append(value) or real(value, leaves, limit),
     )
     return asked
 

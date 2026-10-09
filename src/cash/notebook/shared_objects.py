@@ -101,7 +101,7 @@ EXACT_VALUE_TYPES: frozenset[type] = frozenset(
 )
 
 #: The leaves of a tree `_walk` asks about as one object (`_plain_data.held_only_by_parents`).
-_TREE_LEAVES: tuple[type, ...] = tuple(EXACT_VALUE_TYPES)
+TREE_LEAVES: tuple[type, ...] = tuple(EXACT_VALUE_TYPES)
 
 #: The builtin containers by exact type: never a value type, so no `isinstance`.
 EXACT_CONTAINER_TYPES: frozenset[type] = frozenset({list, dict, set, tuple, frozenset})
@@ -255,7 +255,7 @@ def holds_a_held_object(value: Any) -> bool:
     can be part of another object, which spares `holds_part_of` a walk over
     large sources."""
     value_types = VALUE_TYPES + library_value_types()
-    nodes, inbound, checked, _owner = _walk({"": value}, [], value_types)
+    nodes, inbound, checked, _owner, _breaks = _walk({"": value}, [], value_types)
     root = id(value)
     if excess_refs(nodes, inbound, [key for key in checked if key != root]):
         return True
@@ -414,8 +414,12 @@ def share_group(
     cash_held = list(cash_held)
     named_held = list(named_held)
     joined: set[str] = set()
+    # What each round finds below a root of JSON-like data, for the next
+    # round: no code runs between them, so what holds a part of it is the
+    # same (`_walk`'s *memo*).
+    memo: dict[int, list | None] = {}
     for _round in range(_MAX_ROUNDS):
-        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns)
+        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo)
         if not shared:
             return {name: group[name] for name in joined}, set()
         if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group):
@@ -435,7 +439,10 @@ def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
     stored together, the two would no longer be the same object."""
     value_types = VALUE_TYPES + library_value_types()
     seen: set[int] = set()
-    stack = list(group.values())
+    # JSON-like data holds no function at all: asked a level at a time, where
+    # the walk below takes a Python step per object -- most of re-sorting a
+    # list of 450,000 parsed pairs a loop variable still held part of.
+    stack = [root for root in group.values() if not _plain_data.is_tree(root, TREE_LEAVES)]
     while stack:
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in seen:
@@ -454,29 +461,62 @@ def _check_group(
     named_held: list[tuple[Mapping[str, Any], str]],
     keep_identity: Iterable[str] | None,
     user_ns: Mapping[str, Any] | None = None,
+    memo: dict[int, list | None] | None = None,
 ) -> tuple[set[str], set[str] | None]:
     """``(shared, found)`` for *group*: the names whose objects are held
     beyond what the group, *bindings*, *cash_held* and *named_held* account
     for, and -- with *user_ns* -- the variables of *user_ns* outside the
     group that hold them (`_find_holders`), None when one holder is not such
-    a variable."""
+    a variable. *memo* is `_walk`'s, kept by the caller across rounds."""
     value_types = VALUE_TYPES + library_value_types()
-    nodes, inbound, checked, owner = _walk(group, bindings, value_types, keep_identity)
-    internal = count_held(cash_held, nodes, inbound, value_types, named_held)
-    named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
-    for mapping, key in named_held:
-        if id(mapping.get(key)) in nodes:
-            inbound[id(mapping.get(key))] += 1
-    excess = excess_refs(nodes, inbound, checked)
-    if not excess:
-        return set(), set()
-    shared = {owner[k] for k in excess}
-    if user_ns is None:
-        return shared, None
-    internal |= {id(group), id(bindings), id(cash_held), id(named_held), id(nodes), *nodes, *named}
-    internal |= {id(m) for m in bindings if m is not user_ns}
-    discounted = {key for mapping, key in named_held if mapping is user_ns}
-    return shared, _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted)
+    if memo is None:
+        memo = {}
+    for fast in (True, False):
+        nodes, inbound, checked, owner, breaks = _walk(
+            group, bindings, value_types, keep_identity, fast=fast, memo=memo
+        )
+        _count_memo(memo, nodes, inbound)
+        if not excess_refs(nodes, inbound, checked):
+            # Every reference is the group's own already. What cash holds
+            # itself only adds to the counts, so it cannot leave one over:
+            # not walked. It was walked for every statement, ``x = 0`` too
+            # -- the output history holding a displayed list of 400,000
+            # tuples, 1.2 s a statement.
+            return set(), set()
+        internal = count_held(cash_held, nodes, inbound, value_types, named_held, user_ns)
+        for mapping, key in named_held:
+            if id(mapping.get(key)) in nodes:
+                inbound[id(mapping.get(key))] += 1
+        excess = excess_refs(nodes, inbound, checked)
+        if not excess:
+            return set(), set()
+        shared = {owner[k] for k in excess}
+        if user_ns is None:
+            return shared, None
+        named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
+        internal |= {id(group), id(bindings), id(cash_held), id(named_held), id(nodes), *nodes, *named}
+        internal |= {id(memo), *(id(listed) for listed in memo.values() if listed is not None)}
+        internal |= {id(m) for m in bindings if m is not user_ns}
+        discounted = {key for mapping, key in named_held if mapping is user_ns}
+        found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted)
+        if found is not None or breaks.isdisjoint(excess):
+            return shared, found
+        # A container a root read a level at a time holds besides its parent
+        # (`_take_breaks`): the search up from it climbs through the
+        # containers above it, which the walk left out of *internal*, and a
+        # longer climb can give up where the full walk's would not. Asked
+        # again of the full walk, with none of these references left.
+        del nodes, inbound, checked, owner, breaks, internal, excess, found
+    return shared, None
+
+
+def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: dict[int, int]) -> None:
+    """Add to *inbound* the memo's own reference to each node it lists. In
+    a function of its own, so that no loop variable is left holding one."""
+    for listed in memo.values():
+        for key in map(id, listed or ()):
+            if key in nodes:
+                inbound[key] += 1
 
 
 def _find_holders(
@@ -649,6 +689,7 @@ def count_held(
     inbound: dict[int, int],
     value_types: tuple[type, ...],
     named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
+    bound_in: Mapping[str, Any] | None = None,
 ) -> set[int]:
     """Add to *inbound* the references that the containers in *held*, which
     cash holds itself, and the containers inside them make to *nodes*; the
@@ -660,13 +701,41 @@ def count_held(
     too (a list a cell ended with, so ``Out`` holds it: ``frames = [df1,
     df2]\nframes``) is the user's: its references to *nodes* are a holder's,
     and so are those of everything inside it.
+
+    *bound_in*, the notebook's variables when given: a list, dict or tuple
+    of JSON-like data a variable is bound to is the user's on its face, and
+    is not walked into (`_walk_held`'s *cut*) -- the output history holding
+    a displayed list of 400,000 tuples was walked a tuple at a time for
+    each statement whose output another variable shares.
     """
     roots = {id(obj) for obj in held}
-    reach, refs, edges = _walk_held(held, nodes, value_types)
+    named_held = list(named_held)
+    cut = _bound_trees(bound_in, named_held) if bound_in is not None else None
+    reach, refs, edges = _walk_held(held, nodes, value_types, cut)
     for mapping, key in named_held:
         if id(mapping.get(key)) in reach:
             refs[id(mapping.get(key))] += 1
     users = excess_refs(reach, refs, list(reach))
+    if cut:
+        met = [key for key in cut if key in reach]
+        if met and (
+            id(bound_in) in edges
+            or not set(met) <= set(users)
+            or not all(_plain_data.is_tree(reach[key], TREE_LEAVES) for key in met)
+        ):
+            # The variables' own mapping is inside what cash holds, so a
+            # binding is no proof, or one is no JSON-like data whose parts
+            # can be read a level at a time: walked whole, as before.
+            del reach, refs, edges, users, met
+            return count_held(held, nodes, inbound, value_types, named_held)
+        # What is inside a variable's tree is the user's, as the walk below
+        # it would have found: a part also reached another way is too.
+        others = set(refs).difference(met, users)
+        if others:
+            under = _parts_under([reach[key] for key in met])
+            users.extend(others & under)
+            del under
+        del met, others
     del reach
     while users:
         key = users.pop()
@@ -681,8 +750,30 @@ def count_held(
     return own
 
 
+def _bound_trees(bound_in: Mapping[str, Any], named_held: list[tuple[Mapping[str, Any], str]]) -> set[int]:
+    """The ids of the lists, dicts and tuples bound to names of
+    *bound_in* other than the *named_held* ones (whose binding `count_held`
+    counts as cash's own)."""
+    skip = {key for mapping, key in named_held if mapping is bound_in}
+    return {id(value) for name, value in bound_in.items() if type(value) in _plain_data.TREE_NODES and name not in skip}
+
+
+def _parts_under(trees: list[Any]) -> set[int]:
+    """The ids of everything inside *trees*, JSON-like data, read a level at
+    a time."""
+    under: set[int] = set()
+    for tree in trees:
+        for flat, kinds in _plain_data.tree_levels(tree, TREE_LEAVES):
+            if not kinds.isdisjoint(_plain_data.TREE_NODES):
+                under.update(id(item) for item in flat if type(item) in _CONTAINER_KINDS)
+    return under
+
+
+_CONTAINER_KINDS = frozenset(_plain_data.TREE_NODES)
+
+
 def _walk_held(
-    held: list[Any], nodes: dict[int, Any], value_types: tuple[type, ...]
+    held: list[Any], nodes: dict[int, Any], value_types: tuple[type, ...], cut: set[int] | None = None
 ) -> tuple[dict[int, Any], dict[int, int], dict[int, list[int]]]:
     """``(reach, refs, edges)`` for the containers in *held* and inside them:
     *reach* the containers inside them by id (not *held* itself, nor
@@ -730,8 +821,15 @@ def _walk_held(
             refs[ckey] = refs.get(ckey, 0) + 1
             if ckey not in reach:
                 reach[ckey] = child
-                stack.append(child)
+                if not cut or ckey not in cut:
+                    stack.append(child)
     return reach, refs, edges
+
+
+#: Most containers below a root of JSON-like data that `_walk` takes on
+#: their own, held besides their parent (`_take_breaks`); past it, the
+#: root is walked one container at a time.
+_MAX_BREAKS = 64
 
 
 def _walk(
@@ -739,9 +837,12 @@ def _walk(
     bindings: list[Mapping[str, Any]],
     value_types: tuple[type, ...],
     keep_identity: Iterable[str] | None = None,
-) -> tuple[dict[int, Any], dict[int, int], list[int], dict[int, str]]:
-    """``(nodes, inbound, checked, owner)`` for the objects reachable from
-    the roots in *group*, walked as one graph.
+    *,
+    fast: bool = True,
+    memo: dict[int, list | None] | None = None,
+) -> tuple[dict[int, Any], dict[int, int], list[int], dict[int, str], set[int]]:
+    """``(nodes, inbound, checked, owner, breaks)`` for the objects
+    reachable from the roots in *group*, walked as one graph.
 
     *nodes* holds each object once by id, *inbound* counts the references to
     it the walk accounts for (for a root: *group* itself and each of
@@ -751,6 +852,18 @@ def _walk(
     *owner* names the root each object was first reached from. Returns
     before the counts are read, so none of its local references are left to
     inflate them.
+
+    With *fast*, a root of JSON-like data whose containers are held by their
+    parents alone, but for a few (`_take_breaks`), is read a level at a time
+    instead of walked: *nodes* leaves out the containers below it that only
+    their parent holds, whose counts can never be above *inbound*, and every
+    count it does hold is the one the walk with *fast* off makes, so the two
+    find the same objects shared. *breaks* are the ids of the containers it
+    took on their own.
+
+    *memo*, when given, keeps what a level-at-a-time read found below each
+    root by its id, for a later walk over the same objects with no code run
+    in between; its lists are references the caller must count.
     """
     nodes: dict[int, Any] = {}
     inbound: dict[int, int] = {}
@@ -758,7 +871,7 @@ def _walk(
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
     exact = EXACT_VALUE_TYPES
-    containers = EXACT_CONTAINER_TYPES
+    taken: set[int] = set()
     # The roots whose identity counts first: what they reach is checked.
     first = [name for name in group if name in identity]
     reached: int | None = None
@@ -780,47 +893,32 @@ def _walk(
             # below the root to count, asked at C speed. Before the tree
             # check, which also sizes every item for the facts it keeps.
             continue
-        if _plain_data.held_only_by_parents(root, _TREE_LEAVES):
-            # Records as a parser returns them: no container below the root
-            # has a holder besides its parent, read a level at a time at C
-            # speed. Only the root's own count is left to compare; walked one
-            # container at a time, a million records took seconds.
-            continue
-        stack = [root]
-        while stack:
-            children = children_of(stack.pop())
-            # Nothing but values, by exact type: asked at C speed, where the
-            # loop below takes a Python step per item -- 35 ms of storing a
-            # list of 200,000 ints.
-            if not children or exact.issuperset(map(type, children)):
+        if not fast:
+            if _plain_data.held_only_by_parents(root, TREE_LEAVES):
+                # Records as a parser returns them: no container below the
+                # root has a holder besides its parent, read a level at a time
+                # at C speed. Only the root's own count is left to compare;
+                # walked one container at a time, a million records took
+                # seconds.
                 continue
-            for child in children:
-                ctype = type(child)
-                if ctype in exact or (ctype not in containers and is_value(child, value_types)):
-                    continue
-                if ctype is tuple or ctype is frozenset:
-                    for item in child:
-                        itype = type(item)
-                        if itype not in exact and (itype in containers or not is_value(item, value_types)):
-                            break
-                    else:
-                        # Holds nothing but values: no identity to count, and
-                        # not a node (the loop below reads that as "carries
-                        # nothing"). A walk over millions of such pairs is
-                        # most of what a list of records costs.
-                        continue
-                ckey = id(child)
-                inbound[ckey] = inbound.get(ckey, 0) + 1
-                if ckey not in nodes:
-                    nodes[ckey] = child
-                    owner[ckey] = name
-                    order.append(ckey)
-                    stack.append(child)
+        else:
+            if memo is not None and key in memo:
+                breaks = memo[key]
+            else:
+                breaks = _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
+                if memo is not None:
+                    memo[key] = breaks
+            if breaks is not None and _take_breaks(breaks, name, nodes, inbound, owner, order, value_types):
+                taken.update(map(id, breaks))
+                continue
+            del breaks
+        _descend([root], name, nodes, inbound, owner, order, value_types)
     if reached is None:
         reached = len(order)
     # Children before parents: a tuple counts only when something mutable
     # is inside it, however deep.
     carries: dict[int, bool] = {}
+    containers = EXACT_CONTAINER_TYPES
     for ckey in reversed(order):
         value = nodes[ckey]
         if isinstance(value, _IMMUTABLE_CONTAINERS):
@@ -831,4 +929,113 @@ def _walk(
                 for c in value
             )
     candidates = order[:reached]
-    return nodes, inbound, [k for k in candidates if carries.get(k, True)], owner
+    return nodes, inbound, [k for k in candidates if carries.get(k, True)], owner, taken
+
+
+def _is_node(child: Any, value_types: tuple[type, ...]) -> bool:
+    """Whether `_walk` counts *child*, met inside a root: not a value, and
+    not a tuple or frozenset holding values alone."""
+    exact = EXACT_VALUE_TYPES
+    containers = EXACT_CONTAINER_TYPES
+    ctype = type(child)
+    if ctype in exact or (ctype not in containers and is_value(child, value_types)):
+        return False
+    if ctype is tuple or ctype is frozenset:
+        for item in child:
+            itype = type(item)
+            if itype not in exact and (itype in containers or not is_value(item, value_types)):
+                return True
+        # Holds nothing but values: no identity to count, and not a node (the
+        # carries loop reads that as "carries nothing"). A walk over millions
+        # of such pairs is most of what a list of records costs.
+        return False
+    return True
+
+
+def _descend(
+    stack: list[Any],
+    name: str,
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    owner: dict[int, str],
+    order: list[int],
+    value_types: tuple[type, ...],
+) -> None:
+    """`_walk` one container at a time below the objects on *stack*, which
+    are nodes already: each reference to a node counted once in *inbound*,
+    each new node taken under *name*."""
+    exact = EXACT_VALUE_TYPES
+    containers = EXACT_CONTAINER_TYPES
+    while stack:
+        children = children_of(stack.pop())
+        # Nothing but values, by exact type: asked at C speed, where the
+        # loop below takes a Python step per item -- 35 ms of storing a
+        # list of 200,000 ints.
+        if not children or exact.issuperset(map(type, children)):
+            continue
+        for child in children:
+            ctype = type(child)
+            if ctype in exact or (ctype not in containers and is_value(child, value_types)):
+                continue
+            if (ctype is tuple or ctype is frozenset) and not _is_node(child, value_types):
+                continue
+            ckey = id(child)
+            inbound[ckey] = inbound.get(ckey, 0) + 1
+            if ckey not in nodes:
+                nodes[ckey] = child
+                owner[ckey] = name
+                order.append(ckey)
+                stack.append(child)
+
+
+def _take_breaks(
+    breaks: list[Any],
+    name: str,
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    owner: dict[int, str],
+    order: list[int],
+    value_types: tuple[type, ...],
+) -> bool:
+    """Count the root *name* of JSON-like data from the containers below it
+    that something besides their parent holds (*breaks*,
+    `_plain_data.held_beyond_parents`), not from every container; False,
+    with nothing counted, when that cannot be done.
+
+    Every other container below the root has one reference, its parent's,
+    which the walk would count too: it can neither be shared nor be reached
+    but through its parent, so leaving it out changes no count the walk
+    compares. Each break is counted as the walk counts a child (one
+    reference from the root's side, the least it has) and walked below as
+    the walk walks it. That is a lower bound only while no break lies below
+    another, whose edge the walk below would count a second time: then
+    False. ``for r in recs:`` leaves one record ``r`` holds too, and the
+    statement's check reads ``recs`` a level at a time instead of a Python
+    step per record.
+    """
+    breaks = [obj for obj in breaks if _is_node(obj, value_types)]
+    if not breaks:
+        return True
+    ids = {id(obj) for obj in breaks}
+    for obj in breaks:
+        own = id(obj)
+        stack = [obj]
+        seen = {own}
+        while stack:
+            for child in children_of(stack.pop()) or ():
+                ckey = id(child)
+                if ckey in seen or type(child) in EXACT_VALUE_TYPES:
+                    continue
+                if ckey in ids:
+                    return False
+                seen.add(ckey)
+                stack.append(child)
+    for obj in breaks:
+        ckey = id(obj)
+        inbound[ckey] = inbound.get(ckey, 0) + 1
+        if ckey not in nodes:
+            nodes[ckey] = obj
+            owner[ckey] = name
+            order.append(ckey)
+            _descend([obj], name, nodes, inbound, owner, order, value_types)
+    return True
