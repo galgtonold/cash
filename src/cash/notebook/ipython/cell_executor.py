@@ -89,6 +89,48 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _stored_names(node: ast.AST) -> set[str]:
+    """The names a statement binds or changes in place: its ``Name`` targets,
+    and the base of an attribute or item target (``df['a'] = ...``)."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
+            names.add(sub.id)
+        elif isinstance(sub, (ast.Attribute, ast.Subscript)) and isinstance(sub.ctx, ast.Store):
+            base = sub.value
+            while isinstance(base, (ast.Attribute, ast.Subscript)):
+                base = base.value
+            if isinstance(base, ast.Name):
+                names.add(base.id)
+    return names
+
+
+def _read_names(node: ast.AST) -> set[str]:
+    return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)}
+
+
+def _owed_by_skips(body: list[ast.stmt], skipped: set[int], failed: int) -> list[int]:
+    """The skipped statements before statement *failed* whose work a plain run
+    leaves in the namespace: the last writer of a name among the statements
+    before it, plus the skipped statements those read from."""
+    writers = [_stored_names(node) for node in body[:failed]]
+    owed: set[int] = set()
+    pending: list[tuple[int, set[str]]] = []
+    for name in set().union(*writers) if writers else set():
+        last = max(k for k, names in enumerate(writers) if name in names)
+        if last in skipped and last not in owed:
+            owed.add(last)
+            pending.append((last, _read_names(body[last])))
+    while pending:
+        at, reads = pending.pop()
+        for name in reads:
+            earlier = [k for k in range(at) if name in writers[k]]
+            if earlier and earlier[-1] in skipped and earlier[-1] not in owed:
+                owed.add(earlier[-1])
+                pending.append((earlier[-1], _read_names(body[earlier[-1]])))
+    return sorted(owed)
+
+
 @dataclass
 class _CellRun:
     """A cell on its way through the pipeline, once phases 1-6 are done."""
@@ -794,6 +836,8 @@ class CellExecutor:
         jump_runs = self._jump_runs(tree.body, raw_cell)
         #: Statements a restore of a later version made unnecessary.
         planned: dict[int, ProcessResult] = {}
+        #: Statements the plan skipped without a restore, with what to run them again.
+        skipped: dict[int, tuple[str, str | None, str | None, int]] = {}
 
         for i, node in enumerate(tree.body):
             if i in jump_runs:
@@ -811,7 +855,10 @@ class CellExecutor:
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1
             if i in planned:
-                all_metrics.append(planned.pop(i))
+                metric = planned.pop(i)
+                all_metrics.append(metric)
+                if metric.get("status") is CacheStatus.SKIPPED:
+                    skipped[i] = (stmt_code, stmt_display, stmt_exec_source, occ)
                 continue
             annotation = get_statement_annotations(raw_cell, node)
             is_last = i == len(tree.body) - 1
@@ -855,6 +902,22 @@ class CellExecutor:
             except BaseException:
                 # What follows never ran; the upstream check must not credit it.
                 self.tracking_state.failed_cells[exact_source_digest(raw_cell)] = i
+                # A statement the plan skipped as overwritten later in the cell
+                # was overwritten by one that never completed: its names stay as
+                # a plain run leaves them.
+                for owed in _owed_by_skips(tree.body, set(skipped), i):
+                    code, display, exec_source, occurrence = skipped[owed]
+                    yield from self._statement_steps(
+                        cell,
+                        code,
+                        annotation=get_statement_annotations(raw_cell, tree.body[owed]),
+                        display_code=display,
+                        exec_source=exec_source,
+                        occurrence_index=occurrence,
+                        is_last=False,
+                        written_later=frozenset(),
+                        buffered=[],
+                    )
                 raise
             badge_render_time += render_time
 
