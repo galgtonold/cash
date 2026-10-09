@@ -48,7 +48,8 @@ def test_an_edited_helper_in_the_chain_still_reads_as_edited(tmp_path, monkeypat
     for i in range(CHAIN):
         assert loaded_code_module.loaded_code_matches_disk(getattr(mod, f"h{i}"))
     text = path.read_text(encoding="utf-8")
-    path.write_text(text.replace(f"def h{CHAIN - 1}(x):\n    return x\n", f"def h{CHAIN - 1}(x):\n    return x * 7\n"))
+    edited = text.replace(f"def h{CHAIN - 1}(x):\n    return x\n", f"def h{CHAIN - 1}(x):\n    return x * 7\n")
+    path.write_text(edited, encoding="utf-8")
     # A new file version: the index is built from the new text.
     st = path.stat()
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - 30_000_000_000))
