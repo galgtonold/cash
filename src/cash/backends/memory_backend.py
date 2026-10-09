@@ -774,6 +774,25 @@ class InMemoryBackend(CacheBackend):
                     # of them still shares it with the copy.
                     _plain_data.spine_copy(item, memo)
 
+    def promote(self, key: str, value: Any, metadata: MetadataDict) -> bool:
+        """Keep *value*, just read from a slower tier, when that costs no copy;
+        False, with nothing kept, when it would.
+
+        The value is the caller's alone: nothing else has seen it. Its pandas
+        tables are frozen where they are (`frame_sharing`) and kept as they
+        are, so a restore of a 400 MB table costs no second copy. A value the
+        store would have to copy -- an array, records, an object -- is not
+        kept on its first read (`TieredBackend.get` keeps it on the second):
+        a restored value is mostly read once per process, and copying it
+        took longer than reading it from disk.
+        """
+        if not _cheap_to_keep(value):
+            return False
+        for frame in _frames_in(value):
+            if not frame_sharing.freeze(frame, own=True):
+                return False
+        return self.set(key, value, metadata) is not False
+
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
         with self._lock:
@@ -1352,6 +1371,43 @@ _IMMUTABLE_CELLS = frozenset(
         "period",
     }
 )
+
+
+#: `_cheap_to_keep` looks this far into a value, at containers this small.
+_CHEAP_DEPTH = 3
+_CHEAP_ITEMS = 64
+#: An array at most this big is copied for the RAM tier on its first read.
+_CHEAP_ARRAY_BYTES = 1 << 20
+
+
+def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
+    """Can the RAM tier keep *value* without copying much of it: atoms,
+    small arrays and pandas tables it can freeze (`frame_sharing`), in a few
+    small dicts, lists and tuples (a notebook entry's payload)?"""
+    kind = type(value)
+    if kind in _ATOMS:
+        return True
+    if _is_pandas_frame(kind):
+        return frame_sharing.enabled() and frame_sharing.freezable(value)
+    if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        return not value.dtype.hasobject and value.nbytes <= _CHEAP_ARRAY_BYTES
+    if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH and len(value) <= _CHEAP_ITEMS:
+        items = value.values() if kind is dict else value
+        if kind is dict and not all(type(name) in _ATOMS for name in value):
+            return False
+        return all(_cheap_to_keep(item, depth + 1) for item in items)
+    return False
+
+
+def _frames_in(value: Any, depth: int = 0) -> list:
+    """The pandas tables `_cheap_to_keep` found in *value*."""
+    kind = type(value)
+    if _is_pandas_frame(kind):
+        return [value]
+    if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH:
+        items = value.values() if kind is dict else value
+        return [frame for item in items for frame in _frames_in(item, depth + 1)]
+    return []
 
 
 #: Types `InMemoryBackend._deep_copy`'s pickler copies itself, without a look.
