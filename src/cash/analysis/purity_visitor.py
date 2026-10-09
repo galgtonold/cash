@@ -21,6 +21,7 @@ helper walk (`helper_walk`) resolves and visits them.
 from __future__ import annotations
 
 import ast
+import inspect
 import sqlite3
 import time
 import types
@@ -77,7 +78,12 @@ def _opens_tracked_database(func: ast.expr, namespace: dict[str, Any] | None) ->
     if isinstance(func, ast.Name):
         return namespace.get(func.id) is sqlite3.connect
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        return getattr(namespace.get(func.value.id), func.attr, None) is sqlite3.connect
+        # Read without running code: a module-level value's property must
+        # not run (or cost a whole table's conversion) during analysis.
+        try:
+            return inspect.getattr_static(namespace.get(func.value.id), func.attr, None) is sqlite3.connect
+        except Exception:  # noqa: BLE001 - a probe of arbitrary objects
+            return False
     return False
 
 
