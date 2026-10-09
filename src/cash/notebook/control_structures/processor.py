@@ -441,6 +441,7 @@ class ControlStructureProcessor:
         raw_cell: str | None = None,
         inherited_annotation: "CacheAnnotation | None" = None,
         force_outputs: set[str] | None = None,
+        update_lineage: bool = True,
     ) -> ControlStructureResult:
         """
         Execute an entire control structure as a single unit.
@@ -459,6 +460,10 @@ class ControlStructureProcessor:
         capture/restore and treat as expected writes — the accumulator + leaked
         loop variable of an accumulator-loop fast path. ``None`` for every
         other single-unit structure, which keeps their behaviour unchanged.
+
+        *update_lineage* False leaves the lineage update of what the structure
+        changed to the caller: a loop that ran its first passes one by one
+        and the rest as this unit updates them once, for the whole loop.
         """
         try:
             code = ast.unparse(node)
@@ -478,7 +483,7 @@ class ControlStructureProcessor:
                 stream_output=True,
                 force_outputs=force_outputs,
             )
-            return self._finalize_single_unit(node, code, metrics)
+            return self._finalize_single_unit(node, code, metrics, update_lineage)
         except Exception as e:  # broad fallback wrapping arbitrary user code executed as a unit
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
@@ -539,6 +544,7 @@ class ControlStructureProcessor:
         node: ast.AST,
         code: str,
         metrics: "ProcessResult",
+        update_lineage: bool = True,
     ) -> ControlStructureResult:
         """Shared post-execution bookkeeping for a single-unit control structure.
 
@@ -547,7 +553,7 @@ class ControlStructureProcessor:
         annotation, and clean-traceback line offset can never drift apart.
         """
         # After execution, update lineage for mutated variables
-        if metrics.get("status") in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+        if update_lineage and metrics.get("status") in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
             _helpers.update_lineage_after_execution(
                 self.shell,
                 self.statement_processor,
