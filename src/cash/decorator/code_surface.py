@@ -459,6 +459,15 @@ class CodeSurface:
         # has pickled one yet is not code.
         if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__", "__slotnames__"):
             return []
+        # Reading `cls.__annotations__` of a class with none of its own
+        # stores an empty dict on it (3.10-3.13), and 3.14 (PEP 649) caches
+        # what it computed in `__annotations_cache__` and sets
+        # `__annotate_func__ = None`: whether something has read them yet is
+        # not code. Annotations a class body has, and the annotate function
+        # it made, stay part of the surface.
+        unread = member is None or (type(member) is dict and not member)
+        if name == "__annotations_cache__" or (name in ("__annotate_func__", "__annotations__") and unread):
+            return []
         # The class docstring is documentation, the same as a method's
         # (masked in `_code_object_identity`), so it is folded as if
         # there were none -- the member itself stays, because for a
