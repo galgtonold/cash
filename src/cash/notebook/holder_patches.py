@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _plain_data
-from .shared_objects import _TREE_LEAVES, VALUE_TYPES, attributes_of, children_of, is_value, library_value_types
+from .shared_objects import TREE_LEAVES, VALUE_TYPES, attributes_of, children_of, is_value, library_value_types
 
 __all__ = ["HolderPatch", "apply_patch", "holder_patches"]
 
@@ -154,7 +154,7 @@ def _tree_group(
     for name, root in outputs.items():
         if is_value(root, value_types):
             continue
-        places = _plain_data.tree_paths(root, held, _TREE_LEAVES)
+        places = _plain_data.tree_paths(root, held, TREE_LEAVES)
         if places is None:
             return None
         for key, paths in places.items():

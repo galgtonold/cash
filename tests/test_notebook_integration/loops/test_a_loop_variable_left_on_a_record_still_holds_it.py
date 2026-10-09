@@ -27,6 +27,7 @@ def test_a_record_the_loop_variable_holds_is_still_the_records(nb_runner):
         nb_runner.run_all()
         assert nb_runner.peek("check") == expected, f"{label} Run All"
     nb_runner.restart()
+    nb_runner._init_cash()
     nb_runner.run_all()
     assert nb_runner.peek("check") == expected, "after a restart"
 
@@ -47,5 +48,6 @@ def test_re_sorted_pairs_keep_the_list_a_loop_variable_holds(nb_runner):
         nb_runner.run_all()
         assert nb_runner.peek("check") == expected, f"{label} Run All"
     nb_runner.restart()
+    nb_runner._init_cash()
     nb_runner.run_all()
     assert nb_runner.peek("check") == expected, "after a restart"

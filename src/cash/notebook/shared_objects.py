@@ -101,7 +101,7 @@ EXACT_VALUE_TYPES: frozenset[type] = frozenset(
 )
 
 #: The leaves of a tree `_walk` asks about as one object (`_plain_data.held_only_by_parents`).
-_TREE_LEAVES: tuple[type, ...] = tuple(EXACT_VALUE_TYPES)
+TREE_LEAVES: tuple[type, ...] = tuple(EXACT_VALUE_TYPES)
 
 #: The builtin containers by exact type: never a value type, so no `isinstance`.
 EXACT_CONTAINER_TYPES: frozenset[type] = frozenset({list, dict, set, tuple, frozenset})
@@ -442,7 +442,7 @@ def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
     # JSON-like data holds no function at all: asked a level at a time, where
     # the walk below takes a Python step per object -- most of re-sorting a
     # list of 450,000 parsed pairs a loop variable still held part of.
-    stack = [root for root in group.values() if not _plain_data.is_tree(root, _TREE_LEAVES)]
+    stack = [root for root in group.values() if not _plain_data.is_tree(root, TREE_LEAVES)]
     while stack:
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in seen:
@@ -835,7 +835,7 @@ def _walk(
             # check, which also sizes every item for the facts it keeps.
             continue
         if not fast:
-            if _plain_data.held_only_by_parents(root, _TREE_LEAVES):
+            if _plain_data.held_only_by_parents(root, TREE_LEAVES):
                 # Records as a parser returns them: no container below the
                 # root has a holder besides its parent, read a level at a time
                 # at C speed. Only the root's own count is left to compare;
@@ -846,7 +846,7 @@ def _walk(
             if memo is not None and key in memo:
                 breaks = memo[key]
             else:
-                breaks = _plain_data.held_beyond_parents(root, _TREE_LEAVES, _MAX_BREAKS)
+                breaks = _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
                 if memo is not None:
                     memo[key] = breaks
             if breaks is not None and _take_breaks(breaks, name, nodes, inbound, owner, order, value_types):
