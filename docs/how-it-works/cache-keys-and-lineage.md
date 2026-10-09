@@ -41,7 +41,7 @@ statement, and a variable with no lineage.
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
 
-<!-- claim: cash/bulk_digest.py:BulkHasher @?, cash/bulk_digest.py:LEAF_BYTES == 1048576, cash/bulk_digest.py:MAX_THREADS == 8 -->
+<!-- claim: cash/bulk_digest.py:BulkHasher @ed12972c, cash/bulk_digest.py:LEAF_BYTES == 1048576, cash/bulk_digest.py:MAX_THREADS == 8 -->
 The bytes go through SHA-256, cut into 1 MiB pieces whose digests are
 digested together: a big array or column is hashed on several threads at
 once (up to eight), and the result is the same however many there are.
