@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from cash.backends import frame_sharing
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend, _TableWithBytes
 from cash.backends.tiered_backend import TieredBackend
@@ -58,6 +59,20 @@ def test_every_hit_gets_cells_of_its_own():
     df["tags"].iloc[2].append(99)  # the caller's own table, after the store
     pd.testing.assert_frame_equal(backend.get("k")[1], _frame())
     pd.testing.assert_frame_equal(second, _frame())
+
+
+@pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
+def test_its_other_columns_are_shared_frozen():
+    backend = InMemoryBackend()
+    backend.set("k", pd.DataFrame({"tags": [[1], [2], [3]], "w": [1.0, 2.0, 3.0]}), {"execution_time": 1.0})
+    hit, other = backend.get("k")[1], backend.get("k")[1]
+    assert np.shares_memory(hit["w"].to_numpy(), other["w"].to_numpy())
+    with pytest.raises(ValueError):
+        hit["w"].array[0] = -1.0  # read-only: the memory is shared
+    hit.loc[0, "w"] = -1.0  # pandas copies first
+    hit["tags"].iloc[0].append(9)
+    again = backend.get("k")[1]
+    assert again["w"].iloc[0] == 1.0 and again["tags"].iloc[0] == [1]
 
 
 def test_a_series_of_lists_keeps_its_name_index_and_attrs():

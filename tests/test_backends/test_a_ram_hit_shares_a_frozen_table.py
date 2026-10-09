@@ -202,10 +202,9 @@ class TestWhatIsNotSharedIsCopied:
         [
             lambda: pd.DataFrame({"n": pd.array([1, 2, None], dtype="Int64"), "w": [1.0, 2.0, 3.0]}),
             lambda: pd.DataFrame({"c": pd.Categorical(["a", "b", "a"]), "w": [1.0, 2.0, 3.0]}),
-            lambda: pd.DataFrame({"tags": [[1], [2], [3]], "w": [1.0, 2.0, 3.0]}),
             lambda: pd.DataFrame({"w": [1.0, 2.0, 3.0]}, index=pd.MultiIndex.from_tuples([(1, 2), (1, 3), (2, 2)])),
         ],
-        ids=["nullable", "categorical", "list_cells", "multiindex"],
+        ids=["nullable", "categorical", "multiindex"],
     )
     def test_a_table_cash_does_not_freeze_is_copied_and_stays_writable(self, make):
         df = make()

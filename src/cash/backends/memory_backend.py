@@ -204,7 +204,8 @@ class _TableWithBytes:
                 rest = frame.copy(deep=False)
                 for n in writable:
                     rest.isetitem(positions[n], empty.copy())
-            rest = InMemoryBackend._copy_frame(rest, None, record_cells)
+            # Its other object columns passed `immutable_below`: no scan again.
+            rest = InMemoryBackend._copy_frame(rest, {id(rest): False}, record_cells)
             return _TableWithBytes(rest, tuple(positions[n] for n in writable), data)
         except Exception:  # noqa: BLE001 - copied a cell at a time instead
             logger.debug("could not keep a %s's cells as bytes", type(frame).__name__, exc_info=True)
