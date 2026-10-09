@@ -14,8 +14,8 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from cash import Cash  # noqa: E402
-from cash.backends import InMemoryBackend  # noqa: E402
+from cash import Cash  # noqa: E402 - imported after the importorskip above
+from cash.backends import InMemoryBackend  # noqa: E402 - imported after the importorskip above
 
 
 def _frame() -> pd.DataFrame:

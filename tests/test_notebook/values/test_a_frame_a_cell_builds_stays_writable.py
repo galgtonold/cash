@@ -9,8 +9,8 @@ import pytest
 
 pytest.importorskip("pandas")
 
-from tests._cell_driver import run_cash_cell  # noqa: E402
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S  # noqa: E402
+from tests._cell_driver import run_cash_cell  # noqa: E402 - imported after the importorskip above
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S  # noqa: E402 - imported after the importorskip above
 
 BUILD = (
     "import time\nimport numpy as np\nimport pandas as pd\n"
