@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..loop_split import LoopSplitStore, is_split_half, loop_source_hash, store_for_backend
@@ -82,6 +83,10 @@ class LoopSplitPolicy:
         except TypeError:
             return None
         if n <= PROBE_ITERS:
+            return None
+        if isinstance(iterable, Mapping):
+            # Never probed: a ``defaultdict`` answers ``d[0:0]`` by adding the
+            # key ``slice(0, 0, None)``, which the loop then iterates.
             return None
         try:
             iterable[0:0]
