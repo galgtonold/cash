@@ -133,6 +133,8 @@ class ControlStructureProcessor:
         # The control-outcome record last written (or ``None``: deleted) per
         # key, so an unchanged loop does not rewrite it on every run.
         self._outcomes_written: dict[str, dict[str, Any] | None] = {}
+        # The decomposed loops running now, innermost last (`LoopPass`).
+        self.loop_passes: list[_helpers.LoopPass] = []
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
         self._for_handler = ForLoopHandler(shell, statement_processor, dispatcher=self)

@@ -384,32 +384,40 @@ class ForLoopHandler:
 
         total_iterations = 0
         cached_iterations = 0
-        for idx, iteration_value in enumerate(iterable):
-            total_iterations += 1
-            iter_started = _time.perf_counter()
-            if self._process_one_iteration(
-                node,
-                iteration_value,
-                iterable_lineage,
-                target_names,
-                ttl,
-                silent,
-                all_metrics,
-                parent_context,
-                raw_cell,
-                loop_annotation,
-            ):
-                cached_iterations += 1
-            if probe_n is not None and idx < _SPLIT_PROBE_ITERS:
-                probe_elapsed += _time.perf_counter() - iter_started
-            # A name the body rebinds (`d = pd.read_csv(f)`) holds only its
-            # latest iteration's file, so the accumulator's inheritance is
-            # gathered as the loop goes. One changed in place
-            # (`parts.append(d)`) keeps every file and is read once at the
-            # end: read per iteration, its growing set would make the
-            # gathering quadratic.
-            for name in body_names:
-                body_files.update(file_deps.get(name, ()))
+        loop_pass = _helpers.LoopPass()
+        passes = getattr(self.dispatcher, "loop_passes", None)
+        if isinstance(passes, list):
+            passes.append(loop_pass)
+        try:
+            for idx, iteration_value in enumerate(iterable):
+                total_iterations += 1
+                iter_started = _time.perf_counter()
+                if self._process_one_iteration(
+                    node,
+                    iteration_value,
+                    iterable_lineage,
+                    target_names,
+                    ttl,
+                    silent,
+                    all_metrics,
+                    parent_context,
+                    raw_cell,
+                    loop_annotation,
+                ):
+                    cached_iterations += 1
+                if probe_n is not None and idx < _SPLIT_PROBE_ITERS:
+                    probe_elapsed += _time.perf_counter() - iter_started
+                # A name the body rebinds (`d = pd.read_csv(f)`) holds only its
+                # latest iteration's file, so the accumulator's inheritance is
+                # gathered as the loop goes. One changed in place
+                # (`parts.append(d)`) keeps every file and is read once at the
+                # end: read per iteration, its growing set would make the
+                # gathering quadratic.
+                for name in body_names:
+                    body_files.update(file_deps.get(name, ()))
+        finally:
+            if isinstance(passes, list) and passes and passes[-1] is loop_pass:
+                passes.pop()
 
         if probe_n is not None:
             self._split_policy.record_verdict(node, probe_elapsed, probe_n)
@@ -421,6 +429,7 @@ class ForLoopHandler:
             node,
             ast.unparse(node),
             body_files=body_files,
+            unchanged=loop_pass.unchanged(self.shell, self.statement_processor, node),
         )
         return total_iterations, cached_iterations
 
