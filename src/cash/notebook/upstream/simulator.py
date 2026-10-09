@@ -32,12 +32,14 @@ from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
 from ..consumables import is_write_stream
+from ..lineage_store import LineageWatch
 from ..magic_effects import magic_cell_of
 from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
 from .cache_restore import CacheRestorer
 from .control_simulation import ControlSimulation
+from .file_writers import LazyReadPaths
 from .loop_rules import LoopRules
 from .mismatch_classifier import MismatchClassifier
 from .read_scope import ReadScope
@@ -396,23 +398,32 @@ class NotebookSimulator:
         # Scope the writer-scheduling to files THIS cell's reconstruction reads
         #: a writer whose output no relevant consumer reads is
         # an unrelated / terminal side-effect that must never be re-fired here.
-        relevant_read_paths, relevant_read_paths_known = self.read_scope.relevant_read_paths(
-            required_inputs,
-            sim.trace,
-            notebook_cells,
-            current_cell_idx,
+        # Only a writer needs them, so they are worked out when the first
+        # writer asks (`LazyReadPaths`): above a cell with none -- as found
+        # now or by the plan below -- they cost a walk of every statement the
+        # cell derives from, on every cell run.
+        writer_positions = self.planner.file_writers.writer_positions(sim.trace)
+        relevant_read_paths = LazyReadPaths(
+            lambda: self.read_scope.relevant_read_paths(
+                required_inputs,
+                sim.trace,
+                notebook_cells,
+                current_cell_idx,
+            )
         )
+        relevant_read_paths_known = True
 
         # File writes have no variable edge, so an edited/new upstream writer
         # statement leaves broken_vars empty while the on-disk state a reader
         # depends on is stale. The plan must still be built so
         # the planner can schedule the writer.
-        has_stale_file_writers = bool(
+        has_stale_file_writers = bool(writer_positions) and bool(
             self.planner.file_writers.find_stale_file_writer_indices(
                 sim.trace,
                 virtual_lineage=sim.virtual_lineage,
                 relevant_read_paths=relevant_read_paths,
                 relevant_read_paths_known=relevant_read_paths_known,
+                writer_positions=writer_positions,
             )
         )
 
@@ -489,7 +500,7 @@ class NotebookSimulator:
 
     # --- After the repair ran ---
 
-    def resync_after_replay(self, records_before: dict[str, tuple]) -> None:
+    def resync_after_replay(self, records_before: LineageWatch) -> None:
         """Bring the simulation's snapshots in line with what the replay recorded.
 
         After upstream statements run or are restored, ``variable_lineage``
@@ -509,26 +520,21 @@ class NotebookSimulator:
         (see :meth:`StaleValueGuard.record_consumable_bases`)."""
         self.stale_values.record_consumable_bases(inputs, current_cell_idx, cell_code)
 
-    def lineage_records(self) -> dict[str, tuple]:
-        """Each variable's recorded lineage and input-lineage map, as held now.
+    def lineage_records(self) -> LineageWatch:
+        """A watch on every variable's lineage and input-lineage map from now
+        on, for `resync_after_replay` to tell which ones the repair recorded
+        again (`_rerecorded_since`).
 
-        The map object is kept (not copied): recording a variable replaces it,
-        so ``is`` tells a re-recording apart even when the lineage came out the
-        same.
+        Recording a variable replaces its input map, so ``is`` tells a
+        re-recording apart even when the lineage came out the same. The watch
+        notes the few names written; a snapshot of every one compared at the
+        end walked every name the notebook binds, on every cell run.
         """
-        return {
-            v: (h, self.tracking_state.executed_input_lineages.get(v))
-            for v, h in self.tracking_state.variable_lineage.items()
-        }
+        return self.tracking_state.lineage.watch()
 
-    def _rerecorded_since(self, before: dict[str, tuple]) -> set[str]:
+    def _rerecorded_since(self, before: LineageWatch) -> set[str]:
         """Variables this upstream pass recorded again (re-executed or restored)."""
-        changed = set()
-        for v, h in self.tracking_state.variable_lineage.items():
-            old = before.get(v)
-            if old is None or old[0] != h or old[1] is not self.tracking_state.executed_input_lineages.get(v):
-                changed.add(v)
-        return changed
+        return before.rerecorded(self.tracking_state.variable_lineage, self.tracking_state.executed_input_lineages)
 
     def _should_sync_cache_var(
         self,

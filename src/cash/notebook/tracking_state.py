@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
-from cash.notebook.lineage_store import LineageStore
+from cash.notebook.lineage_store import InputLineages, LineageStore
 from cash.notebook.recorded_reads import ReadRecord
 
 __all__ = ["TrackingState"]
@@ -107,7 +107,7 @@ class TrackingState:
     # restored from this cell. None when there is no notebook to read, and
     # then nothing is persisted ahead of need.
     # W: UpstreamChecker (per cell). R: StatementProcessor.end_cell_persistence (RebuildCostLedger).
-    read_by_later_cells: frozenset[str] | None = None
+    read_by_later_cells: Set[str] | None = None
 
     # The simulation's lineage for every name as of just before the current
     # cell ran. Used for one thing: a name a control structure read that the
@@ -144,6 +144,8 @@ class TrackingState:
     # Variable -> the lineage of each input when its statement last ran.
     # W: StatementLineageBuilder, StatementRestorer, the simulator's restore
     # drain. R: the upstream check, ModuleInvalidator, miss attribution.
+    # Its writes are seen by the watches of :attr:`lineage` (see
+    # ``LineageStore.watch``): it becomes ``InputLineages`` on construction.
     executed_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
 
     # Cache key -> (files, object-storage URLs) that statement itself read on
@@ -310,6 +312,10 @@ class TrackingState:
     # did.
     # W: StatementProcessor. R: StatementLineage (simulation).
     held_with: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.executed_input_lineages, InputLineages):
+            self.executed_input_lineages = self.lineage.input_lineages(self.executed_input_lineages)
 
     def reset_session_state(self) -> None:
         """Forget everything this session recorded, as a fresh kernel would.

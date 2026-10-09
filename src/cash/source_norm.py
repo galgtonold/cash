@@ -45,6 +45,7 @@ import textwrap
 import tokenize
 import types
 
+from ._memo import NOTEBOOK_STATEMENTS
 from .analysis.annotations import ANNOTATION_PATTERN, waiver_items
 from .value_types import IMMUTABLE_PRIMS
 
@@ -546,6 +547,7 @@ def source_identity_digest(source: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
 def exact_source_digest(source: str) -> str:
     """Digest *source* exactly as given, as the key of a session ledger.
 
@@ -558,6 +560,9 @@ def exact_source_digest(source: str) -> str:
     (``control_outcomes``), and the simulation's per-cell snapshots. Every
     writer and reader keys them through here, so a change to how the text
     is spelled reaches both sides at once.
+
+    Memoised by the text, which alone decides it: the upstream check digests
+    every cell above the one it checks, twice, on every cell run.
     """
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 

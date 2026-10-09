@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import builtins
 import dis
+import functools
 import hashlib
 import logging
 import types
@@ -17,7 +18,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
-from cash._memo import CODE_OBJECTS, LruMemo
+from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.randomness import rng_carrier_kind
@@ -46,6 +47,7 @@ __all__ = [
 ]
 
 
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
 def statement_source_hash(code: str) -> str:
     """The code half of a statement's cache key and of its outputs' lineage.
 
@@ -59,6 +61,9 @@ def statement_source_hash(code: str) -> str:
     the upstream checker, the mismatch classifier's executed-hash lookup --
     must call this, not ``sha256(code)``, or the two sides stop agreeing for
     any statement that carries a docstring.
+
+    Memoised by the text, which alone decides it: the upstream check asks it
+    of every statement above the cell on every cell run.
     """
     return hashlib.sha256(unparse_without_docstrings(code).encode("utf-8")).hexdigest()
 

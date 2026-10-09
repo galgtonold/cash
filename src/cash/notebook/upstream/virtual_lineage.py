@@ -372,10 +372,13 @@ class VirtualLineage:
             virtual_lineage=dict(cached_entry.virtual_lineage),
             virtual_modules=set(cached_entry.virtual_modules),
         )
-        for ci in range(first_changed_cell):
-            sim.trace.extend(self.cache.entries[ci].trace_segment)
-            sim.vars_mutated_by_loops.update(self.cache.entries[ci].vars_mutated_by_loops)
-            sim.vars_with_stale_files.update(self.cache.entries[ci].vars_with_stale_files)
+        trace, looped, stale = sim.trace, sim.vars_mutated_by_loops, sim.vars_with_stale_files
+        for entry in self.cache.entries[:first_changed_cell]:
+            trace.extend(entry.trace_segment)
+            if entry.vars_mutated_by_loops:
+                looped.update(entry.vars_mutated_by_loops)
+            if entry.vars_with_stale_files:
+                stale.update(entry.vars_with_stale_files)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",

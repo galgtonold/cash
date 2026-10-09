@@ -17,7 +17,7 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
-from ..._memo import STATEMENTS
+from ..._memo import NOTEBOOK_STATEMENTS, STATEMENTS
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
 from ...analysis.cacheability import statement_writes_files
@@ -41,11 +41,13 @@ from ..consumables import is_write_stream
 from ._types import key_lineages
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .._protocols import ShellProtocol
     from ..tracking_state import TrackingState
     from .cache_probe import CacheProbe
 
-__all__ = ["FileWriterScheduler"]
+__all__ = ["FileWriterScheduler", "LazyReadPaths"]
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +91,45 @@ def _only_defines(code: str) -> bool:
     except (SyntaxError, ValueError, TypeError):
         return False
     return bool(body) and all(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _writer_by_text(code: str) -> bool | None:
+    """Whether *code* writes files, as far as its text alone tells: None when
+    it calls something, which may be a user function that writes. Memoised
+    by the text: asked of every statement above the cell on every cell run."""
+    if _only_defines(code):
+        # ``def save_page(...)`` writes nothing when it runs; its callers do,
+        # and they are writers above. Taken for one, it had no provenance to
+        # vouch for it after a restart, was re-fired, and pulled every write
+        # of its cell along.
+        return False
+    if statement_writes_files(code):
+        return True
+    if "(" not in code:
+        # Calls nothing: no user function, defined or not, can write for
+        # it. Most statements of a notebook (``x2 = x1 + 1``); asked of
+        # each one above the cell, on every cell.
+        return False
+    return None
+
+
+class LazyReadPaths:
+    """The files the cell's reconstruction reads and whether that is all of
+    them (``ReadScope.relevant_read_paths``), worked out when a writer first
+    needs them and then kept for the rest of the check. Passed where the
+    paths are, as ``relevant_read_paths``."""
+
+    __slots__ = ("_find", "_found")
+
+    def __init__(self, find: Callable[[], tuple[set[str], bool]]) -> None:
+        self._find = find
+        self._found: tuple[set[str], bool] | None = None
+
+    def resolve(self) -> tuple[set[str], bool]:
+        if self._found is None:
+            self._found = self._find()
+        return self._found
 
 
 class FileWriterScheduler:
@@ -367,6 +408,7 @@ class FileWriterScheduler:
         relevant_read_paths: set[str] | None = None,
         relevant_read_paths_known: bool = True,
         stale_exports: list | None = None,
+        writer_positions: tuple[int, ...] | None = None,
     ) -> list[int]:
         """Trace indices of file-WRITING statements whose effect is stale.
 
@@ -392,6 +434,9 @@ class FileWriterScheduler:
         with -- is appended to *stale_exports* as ``(index, paths)``: the
         file on disk is now out of date, and the badge must not call it
         current.
+
+        *writer_positions* are the trace's writers (:meth:`writer_positions`)
+        when the caller has just found them.
         """
         executed_writes = self.tracking_state.executed_write_stmt_codes
         runtime_lineage = self.tracking_state.variable_lineage
@@ -407,12 +452,15 @@ class FileWriterScheduler:
             return virt is not None and run is not None and virt != run
 
         writer_indices: list[int] = []
-        for i, entry in enumerate(simulation_trace):
+        if writer_positions is None:
+            writer_positions = self.writer_positions(simulation_trace)
+        for i in writer_positions:
             if i in skip:
                 continue
+            if isinstance(relevant_read_paths, LazyReadPaths):
+                relevant_read_paths, relevant_read_paths_known = relevant_read_paths.resolve()
+            entry = simulation_trace[i]
             stmt_code, _outputs, inputs = entry.stmt_code, entry.outputs, entry.inputs
-            if not self._is_file_writer(stmt_code, simulation_trace):
-                continue
             inputs = self._writer_inputs(inputs, simulation_trace)
             # Scope gate: skip a writer whose output file no relevant consumer
             # reads. Its write runs when the user runs its own
@@ -595,7 +643,7 @@ class FileWriterScheduler:
         return kept
 
     @staticmethod
-    @functools.lru_cache(maxsize=STATEMENTS)
+    @functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
     def _called_names(code: str) -> frozenset[str]:
         try:
             tree = ast.parse(code)
@@ -626,6 +674,14 @@ class FileWriterScheduler:
                 defs[node.name] = entry
         return defs
 
+    def writer_positions(self, simulation_trace: list) -> tuple[int, ...]:
+        """Trace positions of the statements that write files
+        (:meth:`_is_file_writer`). The simulator asks first: only a writer
+        needs the files the cell reads, which are worked out only then."""
+        return tuple(
+            i for i, entry in enumerate(simulation_trace) if self._is_file_writer(entry.stmt_code, simulation_trace)
+        )
+
     def _unbound_helpers(self, names, defs: dict) -> list:
         """The ``def`` entries for *names* that are not live functions."""
         user_ns = self._user_ns() or {}
@@ -637,19 +693,9 @@ class FileWriterScheduler:
         the helper). A replay that re-ran a cell's inline writes but not its
         helper's left the report folder half old, half new."""
 
-        if _only_defines(stmt_code):
-            # ``def save_page(...)`` writes nothing when it runs; its callers do,
-            # and they are writers above. Taken for one, it had no provenance to
-            # vouch for it after a restart, was re-fired, and pulled every write
-            # of its cell along.
-            return False
-        if statement_writes_files(stmt_code):
-            return True
-        if "(" not in stmt_code:
-            # Calls nothing: no user function, defined or not, can write for
-            # it. Most statements of a notebook (``x2 = x1 + 1``); asked of
-            # each one above the cell, on every cell.
-            return False
+        by_text = _writer_by_text(stmt_code)
+        if by_text is not None:
+            return by_text
         if statement_calls_user_writer(stmt_code, self._user_ns()) is not None:
             return True
         defs = self._trace_defs(simulation_trace)
