@@ -34,6 +34,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
 from ..cache_status import CacheStatus
 from ..loop_split import split_nodes
+from ..restored_var import identity_digest
 from . import helpers as _helpers
 from . import single_unit_policy
 from .common import (
@@ -484,8 +485,10 @@ class ForLoopHandler:
         for name, val in bindings.items():
             try:
                 # The loop variable's hash IS the per-iteration cache-key
-                # discriminator: its whole content.
-                full = compute_hash(val)
+                # discriminator: its whole content -- or, for a figure or
+                # what is drawn on it, a digest no other binding gets
+                # (`identity_digest`).
+                full = identity_digest(val) or compute_hash(val)
                 # `variable_lineage[name]` and `loop_var_digests[name]` want
                 # different things. `variable_lineage` wants PROVENANCE, and
                 # `val`'s own `_cash_lineage_hash` is the cheap right answer.
