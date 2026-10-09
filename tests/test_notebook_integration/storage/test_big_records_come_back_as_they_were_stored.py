@@ -60,3 +60,37 @@ def test_records_restored_from_the_cache_are_the_records_the_cell_built(nb_runne
     nb_runner.restart()
     nb_runner.run_all()
     assert nb_runner.peek("r") == EXPECTED, "after a restart"
+
+
+PARSE_CELLS = [
+    "import cash\n%cash_on",
+    "import json",
+    "with open('events.jsonl') as f:\n    records = [json.loads(line) for line in f]",
+    "def parse(r):\n    return {'id': r['id'], 'v': r['value'] * 1.1}",
+    "clean = [parse(r) for r in records if r['ok']]",
+    "n = len(clean)",
+]
+
+
+def test_records_read_inside_a_with_block_survive_a_helper_edit(nb_runner):
+    """``with open(...) as f`` leaves ``f`` bound to a closed file beside the
+    records. The tier keeps the records as bytes and the closed file as a
+    closed file, which no later copy can copy: a hit handed back the tier's
+    own entry, and the cell after an edited helper got the bytes' wrapper
+    for ``records`` (``'_Marshalled' object is not iterable``)."""
+    import json
+
+    n = 10_000
+    lines = (json.dumps({"id": i, "value": i * 0.5, "ok": i % 7 != 0, "tags": ["a"]}) for i in range(n))
+    (nb_runner.work_dir / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    expected = sum(1 for i in range(n) if i % 7 != 0)
+    nb_runner.create_notebook(PARSE_CELLS)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("n") == repr(expected), "first Run All"
+    nb_runner.run_all()
+    assert nb_runner.peek("type(records).__name__") == "'list'", "second Run All: the records cell is a hit"
+    nb_runner.set_cell_source(4, PARSE_CELLS[3].replace("1.1", "1.2"))
+    nb_runner.run_all()
+    assert nb_runner.peek("type(records).__name__") == "'list'", "after the helper edit"
+    assert nb_runner.peek("(n, clean[0]['v'])") == repr((expected, 0.5 * 1.2)), "after the helper edit"

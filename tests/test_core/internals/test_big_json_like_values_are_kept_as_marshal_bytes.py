@@ -154,3 +154,20 @@ def test_records_another_name_reaches_into_are_not_kept_apart():
     backend = InMemoryBackend()
     backend.set("k", payload)
     assert "k" not in backend._holds_bytes
+
+
+def test_clearing_the_tier_forgets_which_entries_hold_bytes():
+    backend = InMemoryBackend()
+    backend.set("k", {"variables": {"records": _records(5_000), "o": object()}})
+    assert backend._holds_bytes == {"k"}
+    backend.clear()
+    assert backend._holds_bytes == set()
+
+
+def test_a_hit_on_an_entry_holding_bytes_never_takes_a_copy_plan(monkeypatch):
+    """Only a copy reads the parts kept as bytes out; a plan would share them."""
+    calls = _counting(monkeypatch, "copy_plan", "copy_by_plan")
+    backend = InMemoryBackend()
+    backend.set("k", {"variables": {"records": _records(5_000), "o": object()}})
+    assert backend.get("k")[1]["variables"]["records"] == _records(5_000)
+    assert calls == []

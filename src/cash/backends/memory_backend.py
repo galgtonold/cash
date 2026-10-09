@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import copy
 import ctypes
+import gc
 import io
 import logging
 import pickle
@@ -38,6 +39,9 @@ _PREMADE_ITEMS_MAX = 64
 
 #: `InMemoryBackend._copy_plans` value for an entry the first hit plans.
 _PLAN_ON_FIRST_HIT = object()
+
+#: `InMemoryBackend._copy_holding_bytes` for an entry it cannot hand out.
+_UNSERVABLE = object()
 
 #: JSON-like data with at least this many containers is kept as `marshal`
 #: bytes (`_Marshalled`). Below it the copies a container at a time cost
@@ -98,6 +102,18 @@ def _without(value: dict, parts: dict[int, Any], depth: int = 0) -> dict:
     return rest
 
 
+def _read_parts(value: dict, memo: dict[int, Any], depth: int = 0) -> None:
+    """``memo[id(part)] = what it holds`` for each `_Marshalled` where
+    `_marshal_parts` puts them: in *value*'s dicts, as far as it looks."""
+    for item in value.values():
+        kind = type(item)
+        if kind is _Marshalled:
+            if id(item) not in memo:
+                memo[id(item)] = _plain_data.marshal_loads(item.data)
+        elif kind is dict and depth < _PARTS_DEPTH and len(item) <= _PARTS_KEYS:
+            _read_parts(item, memo, depth + 1)
+
+
 def _marshal_parts(value: dict, depth: int = 0, found: dict | None = None) -> dict[int, tuple[Any, Any]]:
     """``{id(part): (part, facts)}`` for the values of *value*, and of the
     small dicts in it, that are kept as marshal bytes (`_marshals`).
@@ -119,6 +135,34 @@ def _marshal_parts(value: dict, depth: int = 0, found: dict | None = None) -> di
             # A namespace of variables, one of which another name holds.
             _marshal_parts(item, depth + 1, found)
     return found
+
+
+class _Unservable(Exception):
+    """A part kept as bytes sits inside an object no copy can be made of:
+    it cannot be read out, so the entry cannot be handed out at all."""
+
+
+def _reaches_marshalled(value: Any) -> bool:
+    """Does *value* hold a `_Marshalled` anywhere below it?
+
+    For an object the hit could not copy (`InMemoryBackend._copy_holding_bytes`),
+    whose parts no copy read out. Walks what the collector sees it refer to,
+    never into classes, modules or code, which a stored part never sits in.
+    """
+    stop = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.CodeType)
+    seen: builtins.set[int] = set()
+    todo = [value]
+    while todo:
+        obj = todo.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if type(obj) is _Marshalled:
+            return True
+        if type(obj) in _ATOMS or isinstance(obj, stop):
+            continue
+        todo.extend(gc.get_referents(obj))
+    return False
 
 
 class InMemoryBackend(CacheBackend):
@@ -598,8 +642,10 @@ class InMemoryBackend(CacheBackend):
         the value; where the entry is stored (``storage``, ``persist_skipped``)
         is all the caller may update in the metadata, once it is stored elsewhere too.
         A value kept as marshal bytes, or holding parts kept so
-        (`_Marshalled`), is read out of them -- unless *value* is False: then
-        the value is None.
+        (`_Marshalled`), is read out of them, into a copy
+        (`_copy_holding_bytes`): the bytes never leave the tier. None when a
+        part sits in what no copy can be made of. Unless *value* is False:
+        then the value is None.
         """
         with self._lock:
             entry = self._store.get(key)
@@ -608,7 +654,8 @@ class InMemoryBackend(CacheBackend):
         if entry is not None and type(entry[1]) is _Marshalled:
             return entry[0], _plain_data.marshal_loads(entry[1].data)
         if entry is not None and key in self._holds_bytes:
-            return entry[0], self._safe_deep_copy(entry[1], key, known_cells=self._frame_cells.get(key))
+            copied = self._copy_holding_bytes(entry[1], key, self._frame_cells.get(key))
+            return None if copied is _UNSERVABLE else (entry[0], copied)
         return entry
 
     def get_metadata(self, key: str) -> MetadataDict | None:
@@ -642,9 +689,21 @@ class InMemoryBackend(CacheBackend):
             dict_rows = key in self._dict_rows
             known_cells = self._frame_cells.get(key)
             plan = self._copy_plans.get(key)
+            holds_bytes = key in self._holds_bytes
 
         if type(value) is _Marshalled:
             return metadata, _plain_data.marshal_loads(value.data)
+        if holds_bytes:
+            # Parts kept as bytes: only a copy reads them out, never a plan
+            # or the stored value itself.
+            copied = self._copy_holding_bytes(value, key, known_cells)
+            if copied is _UNSERVABLE:
+                with self._lock:
+                    entry = self._store.get(key)
+                    if entry is not None and entry[1] is value:
+                        self._drop(key)
+                return None, None
+            return metadata, copied
         if immutable_below:
             # Checked when it was stored; the stored value is private.
             return metadata, (list(value) if type(value) is list else value)
@@ -661,6 +720,62 @@ class InMemoryBackend(CacheBackend):
             if copied is not None:
                 return metadata, copied
         return metadata, self._safe_deep_copy(value, key, known_cells=known_cells)
+
+    def _copy_holding_bytes(self, value: Any, key: str, known_cells: dict[int, bool] | None) -> Any:
+        """A copy of a stored *value* holding parts kept as marshal bytes
+        (`_marshal_parts`) with every part read out, or `_UNSERVABLE`.
+
+        The copy of the whole reads them out wherever they sit. When it
+        cannot be made -- the store's copy turned something into what no
+        copy takes again: a closed file a ``with`` left bound, stored as a
+        closed file -- the stored value itself must not go out, with the
+        bytes in it. Its dicts are rebuilt instead, the parts in them read
+        out once each, and every other value in them copied on its own,
+        with those reads in the memo: a tuple holding the records still
+        holds the records the name does. A value that cannot be copied is
+        handed out as it is, as the whole would have been -- unless a part
+        sits inside it, which nothing can read out: then `_UNSERVABLE`.
+        """
+        # Each part read out once, for the copy of the whole and, should
+        # that fail, for the copy a value at a time.
+        memo: dict[int, Any] = {}
+        _read_parts(value, memo)
+        fell_back: list[bool] = []
+        copied = self._safe_deep_copy(value, key, known_cells=known_cells, by_reference=fell_back, premade=memo)
+        if not fell_back:
+            return copied
+        try:
+            return self._copy_spine(value, memo, known_cells)
+        except _Unservable:
+            logger.debug("a part kept as bytes sits in what cannot be copied: %r is not served", key)
+            return _UNSERVABLE
+
+    @staticmethod
+    def _copy_spine(value: dict, memo: dict[int, Any], known_cells: dict[int, bool] | None, depth: int = 0) -> dict:
+        """*value*'s dicts (as far as `_marshal_parts` looks) rebuilt, and
+        each other value in them copied on its own (`_copy_holding_bytes`)."""
+        copied = {}
+        for name, item in value.items():
+            if id(item) in memo:
+                copied[name] = memo[id(item)]
+            elif type(item) is dict and depth < _PARTS_DEPTH and len(item) <= _PARTS_KEYS:
+                copied[name] = memo[id(item)] = InMemoryBackend._copy_spine(item, memo, known_cells, depth + 1)
+            elif type(item) in _ATOMS:
+                copied[name] = item
+            else:
+                # Its own memo: a copy that fails half-way leaves half-made
+                # copies in it, which another value must not be given.
+                trial = dict(memo)
+                try:
+                    copied[name] = InMemoryBackend._deep_copy(item, trial, known_cells, None)
+                except Exception:  # noqa: BLE001 - what cannot be copied is shared, as the whole was
+                    if _reaches_marshalled(item):
+                        raise _Unservable from None
+                    copied[name] = item
+                else:
+                    memo.update(trial)
+                memo[id(item)] = copied[name]  # two names for it still share it
+        return copied
 
     def set(
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
@@ -852,6 +967,7 @@ class InMemoryBackend(CacheBackend):
             self._dict_rows.clear()
             self._frame_cells.clear()
             self._copy_plans.clear()
+            self._holds_bytes.clear()
             self._gdsf_base.clear()
             self._seq_by_key.clear()
             self._current_size_bytes = 0
