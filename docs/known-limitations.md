@@ -314,7 +314,7 @@ functions that call it. A module-level read of a name bound only below raises
 <!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
 cash reads a cell's Python, not what IPython makes of its magics. A magic or a
 shell command runs every time, uncached, and cash never runs one for you.
-<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @5bfe5bec, cash/analysis/code_analyzer.py:magic_python @0ec0a1ce -->
+<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @24994a9f, cash/analysis/code_analyzer.py:magic_python @0ec0a1ce -->
 The names it binds or changes (`files = !ls`, `t = %time f()`,
 `%time x = f()`, the receiver of `%time model.fit()`, an argument
 `%time train(model)` was seen changing in place) keep the value it left,

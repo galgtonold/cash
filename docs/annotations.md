@@ -180,7 +180,7 @@ waives the whole block, as the comment would anywhere inside it.
 
 ### `# @cash:no-cache-calls` { #call-level-caching-default-and-cashno-cache-calls }
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @6db32f13 -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._entry_for @8af6be51 -->
 cash also caches the expensive **calls inside** a statement, by default and with
 no directive. That is what keeps work cached where the statement itself cannot
 be: in `results.append(compute(x))` the append runs every time, but `compute(x)`
