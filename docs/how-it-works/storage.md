@@ -187,7 +187,7 @@ notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk
 
-<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @49460812, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @3267884e -->
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @49460812, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
 The disk write runs on a background thread, and your code carries on while it
 does. cash waits for a write only when something needs it on disk:
 
@@ -229,6 +229,16 @@ write and read. Parquet files are smaller for columns with few distinct values
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
 
+<span id="compression"></span>
+
+<!-- claim: cash/backends/compression.py:ZSTD_LEVEL == 3, cash/backends/compression.py:ZLIB_LEVEL == 1, cash/backends/compression.py:MIN_SAVING == 0.1, cash/backends/compression.py:compress @9df58020 -->
+With `compress` on, each entry is compressed on the background writer: with
+zstd on Python 3.14 and later, with zlib before, both at fast settings. cash
+first tries the first megabyte; an entry that does not shrink by a tenth
+(random floats, images already compressed) is stored as it is. An entry
+compressed with zstd reads as missing on an older Python, and is recomputed
+there.
+
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or
     S3 bucket is as trustworthy as whoever can write to it. Never point cash at
@@ -249,7 +259,7 @@ restart, an out-of-memory kill) leaves that file behind. The first write of a
 later process on the same machine removes it; one left by another machine
 goes once nobody has written to it for a day.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @3267884e -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

@@ -96,7 +96,7 @@ What happens on an error depends on where the value was set:
 | Field | Default | Description |
 |---|---|---|
 | `cache_dir` | `".cash"` | Where the disk tier writes. Add it to `.gitignore`. |
-| `compress` | `false` | gzip each entry on disk. Worth it mainly for text-like values. |
+| `compress` | `false` | Compress each entry on disk: zstd on Python 3.14 and later, zlib before (fast settings, about 1 s for a 60 MB table). An entry that does not shrink by a tenth, such as random floats, is stored as it is. Worth it mainly for text-like values. ([Where your cache lives](../how-it-works/storage.md#compression)) |
 | `max_cache_size` | `null` (auto) | Disk cap in bytes or a size such as `"5GB"`. At the cap, the entries worth least per byte (compute time per byte, raised by hits) are evicted first. A single value bigger than the cap is not written ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)). Each process enforces the cap on its own writes. cash shows the cap, and where it comes from, when caching starts ([Where your cache lives](../how-it-works/storage.md#where-the-cache-folder-is)). |
 | `max_memory_entries` | `null` | Entry-count cap for the RAM tier, evicting least recently used. `null` means no count limit; the RAM tier is still capped in bytes. |
 | `flush_interval` | `5` | Seconds between the disk tier's metadata flushes. `0` flushes after every write. |

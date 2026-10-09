@@ -7,7 +7,6 @@ directory-wide files are `cache_dir`'s.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import logging
 import os
@@ -26,6 +25,7 @@ from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, entry_expired
+from . import compression
 from ._writes import PendingWrites
 from .cache_dir import (
     CacheDirStamp,
@@ -250,7 +250,9 @@ class FileBackend(CacheBackend):
         """
         Args:
             cache_dir: Directory for cache files.
-            compress: Whether to gzip-compress data files.
+            compress: Whether to compress each entry's payload (zstd on
+                Python 3.14+, else zlib; see ``compression``). A payload that
+                does not shrink is stored as it is.
             max_size_bytes: Byte cap. A write that goes over it evicts the
                 entries worth least per byte. ``None``: no cap.
             flush_interval: Seconds between writes of access statistics.
@@ -552,13 +554,15 @@ class FileBackend(CacheBackend):
             self._read_keys.add(key)
             self.evictor.note_read(key)
 
-            if metadata.get("compressed", False):
+            codec = metadata.get("compressed", False)
+            if codec:
                 try:
-                    payload = gzip.decompress(payload)
-                except (OSError, gzip.BadGzipFile, EOFError):
-                    # Flag says compressed but the bytes are not: the raw
-                    # bytes are the payload.
-                    logger.debug("Entry for %r flagged compressed but is not", key)
+                    payload = compression.decompress(codec, payload)
+                except Exception as exc:  # noqa: BLE001 - every codec raises its own
+                    # A codec this Python lacks, or bytes it cannot inflate:
+                    # a miss, computed again, never the raw bytes unpickled.
+                    logger.debug("Cache get for %r: cannot decompress (%s): %s", key, codec, exc)
+                    return None, None
 
             if isinstance(payload, SplitPayload):
                 # Written only for a PickleSerializer value (`set`).
@@ -691,8 +695,13 @@ class FileBackend(CacheBackend):
         if isinstance(serialized_value, SplitPayload):
             chunks = split_chunks(serialized_value.stream, serialized_value.buffers)
             split = True
+            metadata["compressed"] = False
         else:
-            chunks = [gzip.compress(serialized_value) if self.compress else serialized_value]
+            codec = None
+            if self.compress:
+                codec, serialized_value = compression.compress(serialized_value)
+            metadata["compressed"] = codec or False
+            chunks = [serialized_value]
             split = False
         # The bytes the value occupies on disk, after compression.
         metadata["size"] = sum(len(c) for c in chunks)
@@ -781,7 +790,6 @@ class FileBackend(CacheBackend):
             # needs to be populated synchronously for the badge.
             metadata["size"] = nbytes
 
-        metadata["compressed"] = self.compress
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 

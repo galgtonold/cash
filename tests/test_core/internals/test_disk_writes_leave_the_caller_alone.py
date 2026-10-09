@@ -5,6 +5,8 @@
   nor copies it.
 * A caller's value is still copied before ``set`` returns, so a later change
   to it cannot reach the entry.
+* ``compress=True`` compresses on the writer at a fast level (zstd 3 or zlib
+  1), not gzip's default 9, which took 30 s for a 59 MB table.
 * Queued writes hold copies of values, so a run of large stores waits for
   older writes once more than ``MAX_QUEUED_BYTES`` would be held.
 * A notebook cell ends with at most ``MAX_BACKLOG_S`` of writing left, by
@@ -86,6 +88,38 @@ def test_persisting_a_ram_entry_hands_the_disk_tier_the_ram_copy(tmp_path, split
     assert splits == [("cash-cache-writer", False)]
     np.testing.assert_array_equal(disk.get("k")[1], np.arange(N, dtype=np.float64))
     disk.shutdown()
+
+
+def test_a_compressed_write_runs_on_the_writer_at_a_fast_level(tmp_path, monkeypatch):
+    from cash.backends import compression
+
+    calls = []
+    if compression.CODEC == "zstd":
+        real = compression._zstd.compress
+
+        def spy(data, level=None, **kwargs):
+            calls.append((threading.current_thread().name, level))
+            return real(data, level=level, **kwargs)
+
+        monkeypatch.setattr(compression._zstd, "compress", spy)
+        fast = 3
+    else:
+        real = zlib.compress
+
+        def spy(data, level=-1, **kwargs):
+            calls.append((threading.current_thread().name, level))
+            return real(data, level, **kwargs)
+
+        monkeypatch.setattr(compression.zlib, "compress", spy)
+        fast = 1
+    backend = FileBackend(str(tmp_path), compress=True, flush_interval=0)
+    value = ["the same line"] * 200_000
+    backend.set("k", value)
+    backend._writes.wait_all()
+    assert calls, "nothing was compressed"
+    assert all(thread == "cash-cache-writer" and level <= fast for thread, level in calls), calls
+    assert backend.get("k")[1] == value
+    backend.shutdown()
 
 
 def test_queued_writes_hold_at_most_max_queued_bytes(monkeypatch):
