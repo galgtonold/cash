@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import builtins
-import copy
 import functools
 import importlib
 import inspect
@@ -27,7 +26,7 @@ from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource
-from .ast_util import bytecode_global_refs, parse_cached
+from .ast_util import bytecode_global_refs, copy_tree, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 from .namespace_effects import capturable_globals, notebook_global_rebinds
@@ -1035,7 +1034,7 @@ def magic_python(tree: ast.Module) -> ast.Module:
     is what comes back."""
     if not any(python_magic_argument(node) is not None for node in ast.walk(tree)):
         return tree
-    return _MagicPythonSplicer().visit(copy.deepcopy(tree))
+    return _MagicPythonSplicer().visit(copy_tree(tree))
 
 
 class _MagicPythonSplicer(ast.NodeTransformer):
