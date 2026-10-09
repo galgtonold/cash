@@ -442,6 +442,9 @@ so it is never served from the cache. A loop over a call that cannot be
 evaluated twice and has no length (`for x in make_rows():`) still runs pass by
 pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
 `for x in rows:`).
+A header built by builtins or a progress bar
+(`tqdm(list(zip(a, b)))`) is evaluated once, by the unit, as plain Python
+evaluates it.
 
 The expensive call inside the loop body (`fetch(e)` in `out.append(fetch(e))`)
 is still cached, so usually there is nothing to do. **Fix** when it is not:
