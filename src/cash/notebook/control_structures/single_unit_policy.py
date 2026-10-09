@@ -319,6 +319,46 @@ def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[s
         return False
 
 
+def _is_own_iterator(value: Any) -> bool:
+    """``iter(value) is value``, asked without running a user ``__iter__``
+    when it cannot be so: ``iter`` refuses a result with no ``__next__``,
+    so a value whose type has none is never its own iterator."""
+    return hasattr(type(value), "__next__") and iter(value) is value
+
+
+#: Stands for the loop's iterable when the header has not been evaluated:
+#: it has no length and cannot be iterated, so only the header's text and
+#: the names it reads decide.
+_UNEVALUATED = object()
+
+
+def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
+    """Whether *node* goes as one unit, decided without evaluating its header.
+
+    The unit runs the loop from source, which evaluates the header. Deciding
+    first on a header evaluated for the purpose built it twice:
+    ``for a, b in tqdm(list(zip(actions, next_actions))):`` over 2M pairs
+    built the list twice and drew a second bar, 3.4 s plain against 8.2 s.
+    A header that is a call to a pure builtin producer or a progress bar is
+    sized from what it wraps (:func:`estimated_iterations` reads the names'
+    lengths) and judged safe from its text and the names it reads
+    (:func:`header_safe_to_reevaluate`), so it is evaluated once, by the
+    unit, as plain Python evaluates it. Anything else is evaluated first, as
+    before.
+    """
+    call = node.iter
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return False
+    name = call.func.id
+    builtin = getattr(_builtins, name, None)
+    pure = name in PURE_ITER_PRODUCERS and user_ns.get(name, builtin) is builtin
+    if not (pure or _is_progress_bar(name, user_ns)):
+        return False
+    return header_safe_to_reevaluate(call, _UNEVALUATED, user_ns) and should_run_as_single_unit(
+        node, _UNEVALUATED, user_ns
+    )
+
+
 def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:
     """Whether the loop header may be safely evaluated a second time.
 
@@ -359,7 +399,7 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
         or _opens_for_reading(iter_node, user_ns)
     )
     try:
-        if not fresh and iter(iterable) is iterable:
+        if not fresh and _is_own_iterator(iterable):
             return False
     except TypeError:
         pass  # not iterable: the loop itself will say so
@@ -377,7 +417,7 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
             value = user_ns.get(sub.id)
             if value is not None:
                 try:
-                    if iter(value) is value:
+                    if _is_own_iterator(value):
                         return False
                 except TypeError:
                     pass  # not iterable: cannot be drained

@@ -33,7 +33,7 @@ from ...lineage_tag import own_tag
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
 from ..cache_status import CacheStatus
-from ..loop_split import split_nodes
+from ..loop_split import loop_source_hash, split_nodes
 from . import helpers as _helpers
 from . import single_unit_policy
 from .common import (
@@ -181,6 +181,17 @@ class ForLoopHandler:
         logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
+            if self._whole_before_evaluating(node):
+                # The unit evaluates the header, once (`runs_whole_unevaluated`).
+                logger.debug("[CONTROL] Fast-loop: executing as single unit, header unevaluated")
+                return self.dispatcher.execute_as_single_unit(
+                    node,
+                    ttl,
+                    silent,
+                    raw_cell,
+                    inherited_annotation,
+                    force_outputs=self._single_unit_outputs(node, prev_node),
+                )
             iter_code = ast.unparse(node.iter)
             iterable, header_files = self._evaluate_iterable(iter_code)
 
@@ -234,6 +245,22 @@ class ForLoopHandler:
     # ------------------------------------------------------------------
     # The steps of process()
     # ------------------------------------------------------------------
+
+    def _whole_before_evaluating(self, node: ast.For) -> bool:
+        """Whether the loop runs as one unit with its header left to the unit
+        (`single_unit_policy.runs_whole_unevaluated`). A loop with a recorded
+        split verdict is evaluated first: `_run_whole` splits it."""
+        user_ns = getattr(self.shell, "user_ns", None) or {}
+        if not single_unit_policy.runs_whole_unevaluated(node, user_ns):
+            return False
+        store = self._split_policy.store()
+        if store is None:
+            return True
+        try:
+            return store.get(loop_source_hash(node)) is None
+        except (OSError, ValueError, RecursionError):
+            logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
+            return False
 
     def _evaluate_iterable(self, iter_code: str) -> tuple[Any, set[str]]:
         """Evaluate the loop's iterator, and the files evaluating it read.
