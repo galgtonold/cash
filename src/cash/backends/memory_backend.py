@@ -824,6 +824,29 @@ class InMemoryBackend(CacheBackend):
             return None if copied is _UNSERVABLE else (entry[0], copied)
         return entry
 
+    def private_copy(self, key: str, default: Any = None, metadata: MetadataDict | None = None) -> Any:
+        """The stored value for *key* to write to another tier, when it is a
+        copy only this tier holds, which nothing changes; else *default*.
+        With *metadata*, only the value stored with that very dict (the
+        write that just stored it, not an earlier or a later one).
+
+        Every stored value is that -- a hit copies it, or shares a frozen
+        table (`frame_sharing`) -- except one kept by reference (it could not
+        be copied: the caller holds it) and one holding parts kept as bytes
+        (reading those out is a full copy). A value kept whole as bytes is
+        read out into a new object, which no one else holds.
+        """
+        with self._lock:
+            entry = self._store.get(key)
+            holds_bytes = key in self._holds_bytes
+        if entry is None or holds_bytes or entry[0].get("by_reference"):
+            return default
+        if metadata is not None and entry[0] is not metadata:
+            return default
+        if type(entry[1]) is _Marshalled:
+            return _plain_data.marshal_loads(entry[1].data)
+        return entry[1]
+
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
 

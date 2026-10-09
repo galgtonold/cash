@@ -24,6 +24,10 @@ def _named(metadata: MetadataDict) -> str | None:
     return metadata.get("code") or (f"{function}(...)" if function else None)
 
 
+#: `TieredBackend._private_copy` when the first tier has no copy to give.
+_NO_COPY: Any = object()
+
+
 class _TierWrites(NamedTuple):
     """What one pass over the persistent tiers did (`_write_persistent_tiers`)."""
 
@@ -349,6 +353,20 @@ class TieredBackend(CacheBackend):
                 return metadata, value
         return None, None
 
+    def _private_copy(self, key: str, metadata: MetadataDict) -> Any:
+        """The first tier's own copy of *key*'s value for a persistent tier
+        that `takes_private_values`, or `_NO_COPY`."""
+        if not any(getattr(b, "takes_private_values", False) for b in self.backends[1:]):
+            return _NO_COPY
+        private_copy = getattr(self.backends[0], "private_copy", None)
+        if private_copy is None:
+            return _NO_COPY
+        try:
+            return private_copy(key, _NO_COPY, metadata)
+        except Exception:  # noqa: BLE001 - the caller's value, serialized as before
+            logger.debug("no private copy of %r", key, exc_info=True)
+            return _NO_COPY
+
     #: How many keys `_read_once` remembers.
     _READ_ONCE_KEYS = 4096
 
@@ -367,8 +385,14 @@ class TieredBackend(CacheBackend):
         metadata: MetadataDict,
         serializer: Serializer | None,
         cap_size: int,
+        *,
+        private: bool = False,
     ) -> _TierWrites:
-        """Write to every tier past RAM that takes an entry this size."""
+        """Write to every tier past RAM that takes an entry this size.
+
+        *private*: *value* is the RAM tier's own copy, which nothing changes;
+        a tier that `takes_private_values` serializes it in the background
+        instead of copying it first (``FileBackend.set``)."""
         stored_destinations: list[str] = []
         errors: list[str] = []
         size_refused = False  # a tier skipped this object because it's too big
@@ -404,7 +428,10 @@ class TieredBackend(CacheBackend):
                     refusing_caps.append(int(cap))
                     continue
             try:
-                backend.set(key, value, metadata, serializer)
+                if private and getattr(backend, "takes_private_values", False):
+                    backend.set(key, value, metadata, serializer, private=True)
+                else:
+                    backend.set(key, value, metadata, serializer)
                 stored_destinations.append(backend.source_label)
             except Exception as e:  # noqa: BLE001 - backend errors must not propagate
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
@@ -519,11 +546,21 @@ class TieredBackend(CacheBackend):
                 if decision.report:
                     self.notices.not_worth_bytes(key, decision.weight, exec_time, code=_named(metadata))
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
-            writes = (
-                self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
-                if decision.persist
-                else _TierWrites([], False, cap_size, [], [])
-            )
+            if decision.persist:
+                # The RAM tier's own copy, when it has one nothing changes: a
+                # tier that takes it serializes it in the background, and the
+                # caller pays one copy (or none, for a table) instead of two.
+                private = self._private_copy(key, metadata)
+                writes = self._write_persistent_tiers(
+                    key,
+                    value if private is _NO_COPY else private,
+                    metadata,
+                    serializer,
+                    cap_size,
+                    private=private is not _NO_COPY,
+                )
+            else:
+                writes = _TierWrites([], False, cap_size, [], [])
             stored_destinations.extend(writes.stored)
             store_errors.extend(writes.errors)
             size_refused = writes.size_refused
