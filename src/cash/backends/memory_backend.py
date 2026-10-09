@@ -1374,7 +1374,7 @@ def _memory_reading() -> Any | None:
 #: are all immutable (str, bytes, numbers, dates, Decimal...), so a copy of
 #: the column may share them. Anything else ("mixed", "unknown-array", ...)
 #: may hold a list, dict or array.
-_IMMUTABLE_CELLS = frozenset(
+IMMUTABLE_CELLS = frozenset(
     {
         "empty",
         "string",
@@ -1581,7 +1581,7 @@ def _holds_mutable_cells(frame: Any) -> bool:
             columns = [frame] if str(frame.dtype) == "object" else []
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(infer_dtype(column, skipna=True) not in _IMMUTABLE_CELLS for column in columns) or (
+        return any(infer_dtype(column, skipna=True) not in IMMUTABLE_CELLS for column in columns) or (
             _mutable_labels(frame)
         )
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
@@ -1606,5 +1606,5 @@ def _mutable_labels(frame: Any) -> bool:
     dtypes += [array.dtype for array in arrays]
     arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
     return any(
-        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in _IMMUTABLE_CELLS for array in arrays
+        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in IMMUTABLE_CELLS for array in arrays
     )

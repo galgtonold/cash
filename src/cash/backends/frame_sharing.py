@@ -187,9 +187,9 @@ def _cells_unchangeable(array: Any) -> bool:
     """Is every cell of an object array a value nothing can change in place?"""
     from pandas.api.types import infer_dtype
 
-    from .memory_backend import _IMMUTABLE_CELLS
+    from .memory_backend import IMMUTABLE_CELLS
 
-    return infer_dtype(array.ravel(), skipna=True) in _IMMUTABLE_CELLS
+    return infer_dtype(array.ravel(), skipna=True) in IMMUTABLE_CELLS
 
 
 def _freezable_values(values: Any) -> bool:
