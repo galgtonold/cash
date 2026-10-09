@@ -315,6 +315,11 @@ class EffectObserver:
         #: taken.
         self.arg_snapshot: dict[str, str] | None = None
         self.arg_identities: dict[str, tuple[Any, list]] | None = None
+        #: True when those identities, with the arguments that cannot change
+        #: at all, cover every argument the check looks at: unchanged
+        #: identities then prove nothing changed, with no hash after the body
+        #: (`PurityChecks.argument_identities`).
+        self.arg_identities_cover_all = False
         #: Random generators held by arguments a ``__cash_key__`` or a
         #: registered hasher keys, with their state before the body
         #: (`PurityChecks.held_generators`).

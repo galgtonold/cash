@@ -608,8 +608,12 @@ behave differently from the first.
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, except those
 [left out of the key with `ignore=`](decorator.md#leaving-arguments-out-of-the-key),
-which are not checked at all. One that cannot
-be hashed again after the call counts as changed. So does a draw from a random
+which are not checked at all. A plain list or tuple (of numbers, strings,
+dates, and lists and tuples of them) is checked by the identity of every item
+it holds, at every level, which costs a fraction of a hash; when every argument
+is either such a list or a value that cannot change (a number, a string, a tuple
+of them), nothing is hashed a second time. Any other argument is hashed again
+after the call, and one that cannot be hashed again counts as changed. So does a draw from a random
 generator held by an argument that `__cash_key__` or a registered hasher keys,
 which that key does not see move. Past about 50 ms of hashing,
 the message may say "an argument" instead of naming which one.

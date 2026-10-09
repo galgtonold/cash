@@ -980,7 +980,9 @@ class CallRunner:
         # and nothing to pay for.
         run.observer = self._purity.make_effect_observer()
         run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs)
-        run.observer.arg_identities = self._purity.argument_identities(func_name, args, kwargs)
+        run.observer.arg_identities, run.observer.arg_identities_cover_all = self._purity.argument_identities(
+            func_name, args, kwargs
+        )
         run.observer.held_generators = self._purity.held_generators(func_name, args, kwargs)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.

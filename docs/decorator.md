@@ -544,7 +544,9 @@ cash takes your word, so a scratch buffer left out with `ignore=` costs a
 miss nothing, and a body that changes it in place is cached all the same.
 `key=` is different: it says how to tell calls apart, not that an argument
 does not matter, so every argument is still checked, and every miss hashes
-each one in full, before and after the body.
+each one in full before the body, and again after it unless every argument
+is plain data that cash checks by identity instead
+([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)).
 [`CACHE-NET-LOSS`](warnings.md#cache-net-loss) says so when that is what a
 miss costs.
 

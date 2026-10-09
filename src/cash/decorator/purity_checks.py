@@ -298,6 +298,25 @@ class LearnedMutations:
         self._by_code.setdefault((code, scope), set()).add(name)
 
 
+#: Exact types whose instances cannot change once built (no subclass: one
+#: can carry attributes).
+_UNCHANGEABLE_TYPES = (str, int, float, bool, type(None), bytes, complex)
+
+
+def _cannot_change(value: Any) -> bool:
+    """Whether *value* can never change in place: an exact immutable
+    primitive, or an exact tuple or frozenset of such values."""
+    t = type(value)
+    if t in _UNCHANGEABLE_TYPES:
+        return True
+    if t is tuple or t is frozenset:
+        try:
+            return all(map(_cannot_change, value))
+        except RecursionError:
+            return False
+    return False
+
+
 class PurityChecks:
     """What a cached function does besides returning its result: the static
     purity findings, the effects and argument mutations a first call is seen to
@@ -665,28 +684,42 @@ class PurityChecks:
             held.extend((f"{name}.{attr}", v) for attr, v in attrs.items() if rng_carrier_kind(v) is not None)
         return capture_argument_carrier_states(held) if held else []
 
-    def argument_identities(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, tuple[Any, list]]:
-        """``{parameter: (value, identity snapshot)}`` for the plain lists and
-        tuples a call receives, before the body runs.
+    def argument_identities(
+        self, func_name: str, args: tuple, kwargs: dict
+    ) -> tuple[dict[str, tuple[Any, list]], bool]:
+        """``({parameter: (value, identity snapshot)}, covers_all)`` for the
+        plain lists and tuples a call receives, before the body runs.
 
         The hash snapshot below is retired for a big argument and never covers
         a frozen one, which is exactly where ``rows.sort()`` on a million
         parsed rows, or a field rewritten in every row of a frozen result, got
         stored. Identities cost a fraction of a hash, so they are
         taken whatever the size (`_plain_data.identity_snapshot`).
+
+        *covers_all* is True when every argument the check looks at is either
+        such a list or tuple or a value that cannot change at all
+        (`_cannot_change`). A plain list's leaves cannot change in place, so
+        when no identity at any level moved, nothing in it did, and
+        `PurityChecks.check_argument_mutation` needs no hash after the body:
+        on a list of ten million ints that hash was a second of a 3.5 s miss.
         """
         try:
             canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
         except Exception:  # noqa: BLE001 - best effort, like the check itself
-            return {}
+            return {}, False
         found: dict[str, tuple[Any, list]] = {}
+        covers_all = True
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         for name, value in named:
             if type(value) is list or type(value) is tuple:
                 snapshot = _plain_data.identity_snapshot(value)
-                if snapshot is not None and any(level is not None for level in snapshot):
+                if snapshot is None:
+                    covers_all = False
+                elif any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
-        return found
+            elif not _cannot_change(value):
+                covers_all = False
+        return found, covers_all
 
     def check_argument_mutation(
         self,
@@ -743,6 +776,10 @@ class PurityChecks:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
+        if observer.arg_identities_cover_all:
+            # Every argument is plain data whose identities did not move, or
+            # cannot change at all: nothing in them changed.
+            return
         try:
             after = self.checked_arguments_hash(func_name, args, kwargs)
         except Exception:
