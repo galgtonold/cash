@@ -259,6 +259,7 @@ def update_lineage_after_execution(
     code: str,
     body_files: set[str] | None = None,
     unchanged: frozenset[str] | set[str] = frozenset(),
+    unit_digest: str | None = None,
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -270,6 +271,10 @@ def update_lineage_after_execution(
     *unchanged* names variables the structure's text could change but that
     no statement which could change them ran (:meth:`LoopPass.unchanged`):
     they keep their lineage, and their value is not read.
+
+    *unit_digest* names what a loop run as one unit left by what went in
+    (``ControlStructureProcessor._unit_digest``); it then stands in for the
+    hash of each changed value.
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
@@ -306,6 +311,7 @@ def update_lineage_after_execution(
                 body_nodes,
                 mutated_vars | target_names,
             ),
+            unit_digest=unit_digest,
         )
 
 
@@ -507,6 +513,7 @@ def update_mutated_variable_lineages(
     iterable_lineage: str | None,
     loop_code: str,
     input_lineages: dict[str, str] | None = None,
+    unit_digest: str | None = None,
 ) -> None:
     """Give every variable the control structure mutated a new lineage.
 
@@ -522,6 +529,10 @@ def update_mutated_variable_lineages(
 
     Re-running an unchanged mutation does not churn: the statement restore
     puts the receiver's pre-loop lineage back before the loop mints the next.
+
+    *unit_digest*, when given, stands in for the value hash: what went into a
+    loop whose outcome is a function of its key, which names the value
+    without reading it.
     """
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
@@ -535,7 +546,7 @@ def update_mutated_variable_lineages(
 
         try:
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
-            value_hash = statement_processor.compute_hash(val)
+            value_hash = f"unit={unit_digest}" if unit_digest else statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
             prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)

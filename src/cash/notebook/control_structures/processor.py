@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import logging
 import types
 from typing import TYPE_CHECKING, Any
@@ -51,6 +52,7 @@ from ...tracking.randomness import (
 from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
 from ..callee_reach import helper_seeded_modules, reached_user_code
+from ..consumables import is_stream
 from ..lineage_formula import statement_environment_reads
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.file_deps import compute_file_hash_component
@@ -135,6 +137,9 @@ class ControlStructureProcessor:
         self._outcomes_written: dict[str, dict[str, Any] | None] = {}
         # The decomposed loops running now, innermost last (`LoopPass`).
         self.loop_passes: list[_helpers.LoopPass] = []
+        # The top-level structure running now, with what `process` saw
+        # before it ran (`_unit_digest`).
+        self._unit_frame: tuple | None = None
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
         self._for_handler = ForLoopHandler(shell, statement_processor, dispatcher=self)
@@ -191,6 +196,7 @@ class ControlStructureProcessor:
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
         rng_before = capture_rng_state() if isinstance(node, ast.For) else None
+        self._unit_frame = (node, reads, before, rng_before, reads_before)
         # Where each generator it can draw from stands, so a draw in the body
         # moves the variable on (`carrier_advances`).
         positions = carrier_positions(carrier_candidates(reads, self.shell.user_ns), self.shell.user_ns)
@@ -202,6 +208,7 @@ class ControlStructureProcessor:
             with observe_writes() as written:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
         finally:
+            self._unit_frame = None
             if positions:
                 try:
                     sp.advance_carriers_of_a_structure(
@@ -317,6 +324,44 @@ class ControlStructureProcessor:
             written[key] = record
         except Exception:  # never let bookkeeping break the user's loop
             logger.debug("[CONTROL] control-outcome persistence failed", exc_info=True)
+
+    def _unit_digest(self, node: ast.AST, code: str, metrics: "ProcessResult") -> str | None:
+        """What a top-level loop run as one unit left, named by what went in;
+        None when only its values can say.
+
+        After the loop, each variable it changed gets a new lineage (see
+        ``update_mutated_variable_lineages``), which reads its whole value:
+        four lists of 1.7M items filled by a loop of 5.7 s took 7.6 s more.
+        When what the loop left is a function of the statement's key, the
+        key names it as well as the values do. That holds when the loop's
+        outcome is all it did, as a trusted outcome record requires
+        (:meth:`_persistable_callees`: no global RNG moved, no clock, no
+        environment or module data read outside the key, no file written,
+        no hidden global write), it read no file, and it drew from no
+        iterator. A restored loop is named the same way, by the key it was
+        found under.
+        """
+        frame = self._unit_frame
+        key = metrics.get("cache_key")
+        if frame is None or frame[0] is not node or not isinstance(node, ast.For) or not key:
+            return None
+        _node, reads, before, rng_before, reads_before = frame
+        state = self.statement_processor.tracking_state
+        try:
+            for file_key, (local, remote) in state.statement_file_reads.items():
+                if reads_before.get(file_key, (None,))[0] is not local and (local or remote):
+                    return None
+            user_ns = self.shell.user_ns
+            if any(is_stream(user_ns.get(name)) for name in reads):
+                return None
+            callees = self._persistable_callees(node, code, reads, before, rng_before)
+        except Exception:  # never let bookkeeping break the user's loop; the values say it
+            logger.debug("[CONTROL] could not name a loop's outcome by its key", exc_info=True)
+            return None
+        if callees is None:
+            return None
+        named = ":".join([str(key), *(f"{name}={lin}" for name, lin in sorted(callees.items()))])
+        return hashlib.sha256(named.encode()).hexdigest()
 
     def _persistable_callees(self, node, code, reads, before, rng_before) -> dict[str, str] | None:
         """What a later kernel must find unchanged to trust this loop's record, or None.
@@ -559,6 +604,7 @@ class ControlStructureProcessor:
                 self.statement_processor,
                 node,
                 code,
+                unit_digest=self._unit_digest(node, code, metrics),
             )
 
         # Annotate metrics with control structure body statements
