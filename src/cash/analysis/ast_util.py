@@ -8,7 +8,8 @@ module; on anything else it is looked up statically, or not at all.
 :func:`called_dotted_names` the ``module.func`` spellings. :func:`parse_cached`
 is the one bounded parse memo for statement and cell text.
 :func:`bytecode_global_refs` is what stands in for the names a tree reads
-when a function has no source.
+when a function has no source. :func:`copy_tree` is the one way cash copies
+a syntax tree.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ __all__ = [
     "bytecode_global_refs",
     "called_dotted_names",
     "called_names",
+    "copy_tree",
     "parse_cached",
     "resolve_callee",
     "resolve_dotted_name",
@@ -51,6 +53,35 @@ def parse_cached(code: str) -> ast.Module | None:
         return ast.parse(code)
     except (SyntaxError, ValueError):  # ValueError: a null byte in the source
         return None
+
+
+def copy_tree(node: ast.AST) -> Any:
+    """*node* and everything under it as new nodes, except the constants, which
+    the copy shares with the original.
+
+    Only the syntax fields are followed. Any other attribute (positions, and a
+    ``parent`` link some tools set) is shared, never copied: IPython's
+    tracebacks set ``.parent`` on every node of each file they show, the
+    interpreter-wide ``ast.Load()`` / ``ast.Store()`` nodes included, after
+    which ``copy.deepcopy`` of a seven-node call also copied that whole file
+    (0.08 ms became 0.6 s per copy). ``copy.deepcopy`` of a cell with a long
+    literal also took 0.45 s a statement. Nothing changes a constant in place,
+    and cash's rewrites replace whole nodes, so the two trees may hold the
+    same ones.
+    """
+    kind = type(node)
+    if kind is ast.Constant:
+        return node
+    new = kind.__new__(kind)
+    fields = new.__dict__
+    fields.update(node.__dict__)
+    for name in node._fields:
+        value = fields.get(name)
+        if isinstance(value, list):
+            fields[name] = [copy_tree(item) if isinstance(item, ast.AST) else item for item in value]
+        elif isinstance(value, ast.AST):
+            fields[name] = copy_tree(value)
+    return new
 
 
 def resolve_callee(

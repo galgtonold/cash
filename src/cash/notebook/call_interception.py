@@ -42,13 +42,13 @@ from __future__ import annotations
 
 import ast
 import builtins
-import copy
 import inspect
 import types
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from ..analysis.ast_util import copy_tree as _copy_tree
 from .call_key import global_names_reached
 from .lineage_formula import is_cash_instrumentation
 
@@ -229,30 +229,6 @@ class SiteSlots:
 #: The numbering the notebook rewrites with: one per process, so a call cache
 #: rebuilt by ``reset_session()`` still reads a lambda made before it.
 SITE_SLOTS = SiteSlots()
-
-
-def _copy_tree(node):
-    """*node* and everything under it as new nodes, except the constants, which
-    the copy shares with the original.
-
-    ``copy.deepcopy`` of a cell with a long literal took 0.45 s a statement:
-    the copy was most of what a cell with no call to rewrite cost. Nothing
-    changes a constant in place, and the rewrite replaces whole nodes, so
-    the two trees may hold the same ones.
-    """
-    kind = type(node)
-    if kind is ast.Constant:
-        return node
-    new = kind.__new__(kind)
-    fields = new.__dict__
-    fields.update(node.__dict__)
-    for name in node._fields:
-        value = fields.get(name)
-        if isinstance(value, list):
-            fields[name] = [_copy_tree(item) if isinstance(item, ast.AST) else item for item in value]
-        elif isinstance(value, ast.AST):
-            fields[name] = _copy_tree(value)
-    return new
 
 
 def interceptable(fn) -> bool:
@@ -523,7 +499,7 @@ def _content_source(call: ast.Call, local: frozenset[str]) -> str:
         except (ValueError, TypeError, AttributeError, RecursionError):  # no content key for this site
             return ""
     computed = set(_computed_arg_positions(call, local))
-    shape = copy.deepcopy(call)
+    shape = _copy_tree(call)
     for i in range(len(shape.args)):
         if i in computed:
             shape.args[i] = ast.Name(id=f"_arg{i}", ctx=ast.Load())

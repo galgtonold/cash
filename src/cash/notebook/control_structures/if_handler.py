@@ -113,8 +113,14 @@ class IfHandler:
                 else:
                     cached_count += 1
 
-            # After execution, update lineage for mutated variables
-            _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
+            # After execution, update lineage for mutated variables. In the
+            # body of a decomposed loop, only for a branch that ran, and only
+            # what it may have changed (`LoopPass`).
+            loop_pass = _helpers.current_loop_pass(self.dispatcher)
+            if loop_pass is None:
+                _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
+            elif branch_body:
+                loop_pass.branch_ran(self.shell, self.statement_processor, node, branch_body)
 
             # Tag all metrics with body statements for the whole if block
             # (so the badge can show the header and which branch we took)

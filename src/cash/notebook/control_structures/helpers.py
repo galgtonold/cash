@@ -258,6 +258,8 @@ def update_lineage_after_execution(
     node: ast.AST,
     code: str,
     body_files: set[str] | None = None,
+    unchanged: frozenset[str] | set[str] = frozenset(),
+    unit_digest: str | None = None,
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -265,18 +267,21 @@ def update_lineage_after_execution(
 
     This ensures downstream statements have correct cache keys even when
     variables were modified in-place (e.g., dict accumulation in loops).
+
+    *unchanged* names variables the structure's text could change but that
+    no statement which could change them ran (:meth:`LoopPass.unchanged`):
+    they keep their lineage, and their value is not read.
+
+    *unit_digest* names what a loop run as one unit left by what went in
+    (``ControlStructureProcessor._unit_digest``); it then stands in for the
+    hash of each changed value.
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
         return
 
-    lineage = statement_processor.tracking_state.variable_lineage
     user_ns = shell.user_ns
-    mutated_vars = control_structure_mutations(
-        node,
-        lambda name: name in BUILTIN_NAMES and name not in lineage,
-        lambda name: is_module_name(name, user_ns),
-    )
+    mutated_vars = structure_mutations(shell, statement_processor, node) - set(unchanged)
     # A local module the structure sets state on changes like any receiver:
     # one its text says, or one its body was seen setting state on. Recorded
     # for the simulation, which cannot run it (``module_state_outputs``).
@@ -306,7 +311,80 @@ def update_lineage_after_execution(
                 body_nodes,
                 mutated_vars | target_names,
             ),
+            unit_digest=unit_digest,
         )
+
+
+def structure_mutations(shell, statement_processor, node: ast.AST) -> set[str]:
+    """The variables *node*'s text may change (``control_structure_mutations``),
+    with the runtime's rules for builtins and modules."""
+    lineage = statement_processor.tracking_state.variable_lineage
+    user_ns = shell.user_ns
+    return control_structure_mutations(
+        node,
+        lambda name: name in BUILTIN_NAMES and name not in lineage,
+        lambda name: is_module_name(name, user_ns),
+    )
+
+
+def _without_branches(stmts: list[ast.stmt]) -> list[ast.stmt]:
+    """*stmts* with each ``if`` among them left out (a ``pass`` in its place).
+
+    These are the ``if`` statements a decomposed loop body hands to the if
+    handler, which reports the branch it ran (:meth:`LoopPass.branch_ran`).
+    An ``if`` deeper inside another structure is kept: that structure may
+    run as one unit, and nothing reports which of its branches ran.
+    """
+    return [ast.Pass() if isinstance(stmt, ast.If) else stmt for stmt in stmts]
+
+
+class LoopPass:
+    """The ``if`` branches that ran in one decomposed loop, for the loop's
+    lineage update when it ends.
+
+    After an ``if`` in a loop body runs a branch, what that branch may have
+    changed gets a new lineage (``update_lineage_after_execution``), which
+    reads each such value in full (``compute_hash``) so that the statements
+    of the passes after it see the change. A pass whose ``if`` runs no branch
+    changes nothing through it, so it reads nothing, and when the loop ends,
+    a variable only an ``if`` branch can change keeps its lineage unless such
+    a branch ran: ``for k in range(7):`` over ``if df.ss[k] is None:
+    df.ss[k] = ...`` reads the 1M-row frame zero times, not eight, while the
+    branch never runs.
+    """
+
+    def __init__(self) -> None:
+        self.fired: set[str] = set()
+
+    def branch_ran(self, shell, statement_processor, node: ast.If, body: list[ast.stmt]) -> None:
+        """The ``if`` *node* in the loop body ran the branch *body*."""
+        branch = ast.copy_location(ast.If(test=node.test, body=body, orelse=[]), node)
+        own = ast.copy_location(ast.If(test=node.test, body=_without_branches(body) or [ast.Pass()], orelse=[]), node)
+        self.fired |= structure_mutations(shell, statement_processor, own)
+        update_lineage_after_execution(shell, statement_processor, branch, ast.unparse(node))
+
+    def unchanged(self, shell, statement_processor, node: ast.For) -> set[str]:
+        """The variables only an ``if`` branch of *node*'s body may change,
+        and no such branch ran."""
+        stripped = ast.copy_location(
+            ast.For(
+                target=node.target,
+                iter=node.iter,
+                body=_without_branches(node.body),
+                orelse=node.orelse,
+                type_comment=None,
+            ),
+            node,
+        )
+        always = structure_mutations(shell, statement_processor, stripped)
+        conditional = structure_mutations(shell, statement_processor, node) - always
+        return conditional - self.fired
+
+
+def current_loop_pass(dispatcher: Any) -> LoopPass | None:
+    """The innermost decomposed loop the structure being run is in, if any."""
+    passes = getattr(dispatcher, "loop_passes", None)
+    return passes[-1] if isinstance(passes, list) and passes else None
 
 
 def inherit_body_file_deps(
@@ -435,6 +513,7 @@ def update_mutated_variable_lineages(
     iterable_lineage: str | None,
     loop_code: str,
     input_lineages: dict[str, str] | None = None,
+    unit_digest: str | None = None,
 ) -> None:
     """Give every variable the control structure mutated a new lineage.
 
@@ -450,6 +529,10 @@ def update_mutated_variable_lineages(
 
     Re-running an unchanged mutation does not churn: the statement restore
     puts the receiver's pre-loop lineage back before the loop mints the next.
+
+    *unit_digest*, when given, stands in for the value hash: what went into a
+    loop whose outcome is a function of its key, which names the value
+    without reading it.
     """
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
@@ -463,7 +546,7 @@ def update_mutated_variable_lineages(
 
         try:
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
-            value_hash = statement_processor.compute_hash(val)
+            value_hash = f"unit={unit_digest}" if unit_digest else statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
             prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)

@@ -238,7 +238,12 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
     if n_iterations is None:
         # Generators, iterators without __len__ — can't estimate
         return False
+    return worth_one_unit(node, n_iterations)
 
+
+def worth_one_unit(node: ast.For, n_iterations: int) -> bool:
+    """Whether *node* run *n_iterations* times goes as one unit
+    (:func:`should_run_as_single_unit`'s rule, for a known count)."""
     # What one pass of the body costs counts a loop inside it ten times over: a
     # loop of 40 over a body that loops over each log line's actions ran
     # 1,100 statements, 18 s of per-statement machinery around 5 ms of work.
@@ -271,6 +276,87 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
         PER_STMT_OVERHEAD_SEC * 1000,
     )
     return True
+
+
+def iterations_for_one_unit(node: ast.For) -> int | None:
+    """From how many iterations :func:`worth_one_unit` runs *node* as one
+    unit; None when it never does (its body writes files).
+
+    For a loop over an iterator of unknown length: once it has run that
+    many passes, it is at least that long, and the rest of it goes as one
+    unit.
+    """
+    if writes_files(node.body):
+        return None
+    n_body_stmts = max(1, count_body_statements(node.body, nested_loop_factor=ASSUMED_INNER_ITERATIONS))
+    factor = ASSUMED_INNER_ITERATIONS if _holds_a_loop(node.body) else 1
+    n = max(
+        1, MIN_ITERATIONS_FOR_SINGLE_UNIT // factor, int(MIN_OVERHEAD_SEC / (n_body_stmts * PER_STMT_OVERHEAD_SEC)) - 1
+    )
+    while n * factor <= MIN_ITERATIONS_FOR_SINGLE_UNIT or n * n_body_stmts * PER_STMT_OVERHEAD_SEC < MIN_OVERHEAD_SEC:
+        n += 1
+    return n
+
+
+def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:
+    """Whether the header is a bare name holding *iterable*, an iterator.
+
+    ``it = filter(...)`` then ``for x in it:``. Evaluating the header again
+    is a lookup that hands back the same iterator, still where the loop
+    left it, so the loop may continue as one unit from source: the iterator
+    is drawn from once, item by item, as plain Python draws from it. The
+    unit reads an iterator, so it is never stored or served from the cache
+    (``drawn_stream_inputs``).
+    """
+    if not isinstance(iter_node, ast.Name) or user_ns.get(iter_node.id) is not iterable:
+        return False
+    if not hasattr(type(iterable), "__next__"):
+        return False  # not an iterator; asked without running its __iter__
+    try:
+        return iter(iterable) is iterable
+    except Exception:  # a user __iter__ can raise anything; the loop re-raises it
+        logger.debug("[FAST_LOOP] iter() on the loop's iterable raised", exc_info=True)
+        return False
+
+
+def _is_own_iterator(value: Any) -> bool:
+    """``iter(value) is value``, asked without running a user ``__iter__``
+    when it cannot be so: ``iter`` refuses a result with no ``__next__``,
+    so a value whose type has none is never its own iterator."""
+    return hasattr(type(value), "__next__") and iter(value) is value
+
+
+#: Stands for the loop's iterable when the header has not been evaluated:
+#: it has no length and cannot be iterated, so only the header's text and
+#: the names it reads decide.
+_UNEVALUATED = object()
+
+
+def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
+    """Whether *node* goes as one unit, decided without evaluating its header.
+
+    The unit runs the loop from source, which evaluates the header. Deciding
+    first on a header evaluated for the purpose built it twice:
+    ``for a, b in tqdm(list(zip(actions, next_actions))):`` over 2M pairs
+    built the list twice and drew a second bar, 3.4 s plain against 8.2 s.
+    A header that is a call to a pure builtin producer or a progress bar is
+    sized from what it wraps (:func:`estimated_iterations` reads the names'
+    lengths) and judged safe from its text and the names it reads
+    (:func:`header_safe_to_reevaluate`), so it is evaluated once, by the
+    unit, as plain Python evaluates it. Anything else is evaluated first, as
+    before.
+    """
+    call = node.iter
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return False
+    name = call.func.id
+    builtin = getattr(_builtins, name, None)
+    pure = name in PURE_ITER_PRODUCERS and user_ns.get(name, builtin) is builtin
+    if not (pure or _is_progress_bar(name, user_ns)):
+        return False
+    return header_safe_to_reevaluate(call, _UNEVALUATED, user_ns) and should_run_as_single_unit(
+        node, _UNEVALUATED, user_ns
+    )
 
 
 def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:
@@ -313,7 +399,7 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
         or _opens_for_reading(iter_node, user_ns)
     )
     try:
-        if not fresh and iter(iterable) is iterable:
+        if not fresh and _is_own_iterator(iterable):
             return False
     except TypeError:
         pass  # not iterable: the loop itself will say so
@@ -331,7 +417,7 @@ def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[s
             value = user_ns.get(sub.id)
             if value is not None:
                 try:
-                    if iter(value) is value:
+                    if _is_own_iterator(value):
                         return False
                 except TypeError:
                     pass  # not iterable: cannot be drained
@@ -405,11 +491,17 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
                 return len(owner.columns)
             return base
         if isinstance(func, ast.Name) and node.args:
-            if func.id in ("enumerate", "reversed", "sorted", "list", "tuple") or _is_progress_bar(func.id, user_ns):
+            if func.id in ("enumerate", "reversed", "sorted", "list", "tuple", "iter") or _is_progress_bar(
+                func.id, user_ns
+            ):
                 return length_of(node.args[0])
-            if func.id == "zip":
-                lengths = [length_of(a) for a in node.args]
-                return None if any(n is None for n in lengths) else min(lengths)
+            if func.id in ("zip", "map"):
+                # `map(f, a, b)` stops at the shortest, as `zip` does.
+                lengths = [length_of(a) for a in (node.args if func.id == "zip" else node.args[1:])]
+                return None if not lengths or any(n is None for n in lengths) else min(lengths)
+            if func.id == "filter" and len(node.args) == 2:
+                # At most this many: enough to decide how the loop runs.
+                return length_of(node.args[1])
         return None
 
     try:

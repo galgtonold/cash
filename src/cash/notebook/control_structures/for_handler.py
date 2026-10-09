@@ -33,7 +33,7 @@ from ...lineage_tag import own_tag
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
 from ..cache_status import CacheStatus
-from ..loop_split import split_nodes
+from ..loop_split import loop_source_hash, split_nodes
 from . import helpers as _helpers
 from . import single_unit_policy
 from .common import (
@@ -166,6 +166,7 @@ class ForLoopHandler:
         """
 
         all_metrics: list[ProcessResult] = []
+        rest_metrics: list[ProcessResult] = []
         target_names = extract_target_names(node.target)
 
         # A directive on the loop HEADER scopes to the loop, so it flows down
@@ -180,6 +181,17 @@ class ForLoopHandler:
         logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
+            if self._whole_before_evaluating(node):
+                # The unit evaluates the header, once (`runs_whole_unevaluated`).
+                logger.debug("[CONTROL] Fast-loop: executing as single unit, header unevaluated")
+                return self.dispatcher.execute_as_single_unit(
+                    node,
+                    ttl,
+                    silent,
+                    raw_cell,
+                    inherited_annotation,
+                    force_outputs=self._single_unit_outputs(node, prev_node),
+                )
             iter_code = ast.unparse(node.iter)
             iterable, header_files = self._evaluate_iterable(iter_code)
 
@@ -206,11 +218,14 @@ class ForLoopHandler:
                 parent_context,
                 raw_cell,
                 loop_annotation,
+                inherited_annotation,
+                rest_metrics,
             )
 
             for m in all_metrics:
                 if isinstance(m, dict):
                     _stamp_loop_header(m, loop_header)
+            all_metrics.extend(rest_metrics)
 
             return ControlStructureResult(
                 success=True,
@@ -224,11 +239,28 @@ class ForLoopHandler:
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.
             logger.debug("[CONTROL] Error in for loop: %s", e, exc_info=True)
+            all_metrics.extend(rest_metrics)  # a failure in the unit that ran the rest
             return ControlStructureResult(success=False, metrics=all_metrics, error=e)
 
     # ------------------------------------------------------------------
     # The steps of process()
     # ------------------------------------------------------------------
+
+    def _whole_before_evaluating(self, node: ast.For) -> bool:
+        """Whether the loop runs as one unit with its header left to the unit
+        (`single_unit_policy.runs_whole_unevaluated`). A loop with a recorded
+        split verdict is evaluated first: `_run_whole` splits it."""
+        user_ns = getattr(self.shell, "user_ns", None) or {}
+        if not single_unit_policy.runs_whole_unevaluated(node, user_ns):
+            return False
+        store = self._split_policy.store()
+        if store is None:
+            return True
+        try:
+            return store.get(loop_source_hash(node)) is None
+        except (OSError, ValueError, RecursionError):
+            logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
+            return False
 
     def _evaluate_iterable(self, iter_code: str) -> tuple[Any, set[str]]:
         """Evaluate the loop's iterator, and the files evaluating it read.
@@ -300,12 +332,27 @@ class ForLoopHandler:
         #
         # The header's safety is asked first: it is the cheaper question, and
         # sizing a file loop reads the start of the file.
+        #
+        # A header that only names an iterator (`for x in it:`) is evaluated
+        # again too, but that is a lookup: the unit gets the same iterator,
+        # not yet drawn from (`header_names_the_iterator`).
+        names_iterator = single_unit_policy.header_names_the_iterator(node.iter, iterable, user_ns)
         if not (
-            single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns)
+            (names_iterator or single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns))
             and single_unit_policy.should_run_as_single_unit(node, iterable, user_ns)
         ):
             return None
         logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
+        if names_iterator:
+            # The user's own iterator, handle or bar: the unit draws from it.
+            return self.dispatcher.execute_as_single_unit(
+                node,
+                ttl,
+                silent,
+                raw_cell,
+                inherited_annotation,
+                force_outputs=self._single_unit_outputs(node, prev_node),
+            )
         # `for line in open(path)` was opened here and will be opened again by
         # the unit: this handle is never read, so it is closed rather than
         # left for the collector.
@@ -359,12 +406,22 @@ class ForLoopHandler:
         parent_context: dict[str, Any] | None,
         raw_cell: str | None,
         loop_annotation,
+        inherited_annotation=None,
+        rest_metrics: list | None = None,
     ) -> tuple[int, int]:
         """Run the loop iteration by iteration, each body statement its own
         cache entry; returns ``(iterations, fully cached iterations)``.
 
         Also measures the first iterations for a later split verdict, and
         gives the variables the loop changed the files it read.
+
+        A loop over an iterator of unknown length that its header only names
+        (``for x in it:``) runs its first passes one by one; once it has run
+        as many as :func:`single_unit_policy.iterations_for_one_unit` asks,
+        the rest runs as one unit from source, which draws the rest from the
+        same iterator (its metrics go to *rest_metrics*). Before, every pass
+        of `for (name, act) in parsed:` over 87,464 items went through the
+        per-statement machinery: 21.9 s against 0.19 s plain.
         """
         iterable_lineage = _helpers.get_iterable_lineage(self.shell, self.statement_processor, node.iter)
         logger.debug("[CONTROL] Iterable lineage: %s...", iterable_lineage[:20] if iterable_lineage else "None")
@@ -382,34 +439,67 @@ class ForLoopHandler:
         # is as much a read as the body is.
         body_files: set[str] = set(header_files)
 
+        rest_after = None
+        if (
+            single_unit_policy.header_names_the_iterator(node.iter, iterable, user_ns)
+            and single_unit_policy.estimated_iterations(node.iter, iterable, user_ns) is None
+        ):
+            rest_after = single_unit_policy.iterations_for_one_unit(node)
+        run_rest = False
+
         total_iterations = 0
         cached_iterations = 0
-        for idx, iteration_value in enumerate(iterable):
+        loop_pass = _helpers.LoopPass()
+        passes = getattr(self.dispatcher, "loop_passes", None)
+        if isinstance(passes, list):
+            passes.append(loop_pass)
+        try:
+            for idx, iteration_value in enumerate(iterable):
+                total_iterations += 1
+                iter_started = _time.perf_counter()
+                if self._process_one_iteration(
+                    node,
+                    iteration_value,
+                    iterable_lineage,
+                    target_names,
+                    ttl,
+                    silent,
+                    all_metrics,
+                    parent_context,
+                    raw_cell,
+                    loop_annotation,
+                ):
+                    cached_iterations += 1
+                if probe_n is not None and idx < _SPLIT_PROBE_ITERS:
+                    probe_elapsed += _time.perf_counter() - iter_started
+                # A name the body rebinds (`d = pd.read_csv(f)`) holds only its
+                # latest iteration's file, so the accumulator's inheritance is
+                # gathered as the loop goes. One changed in place
+                # (`parts.append(d)`) keeps every file and is read once at the
+                # end: read per iteration, its growing set would make the
+                # gathering quadratic.
+                for name in body_names:
+                    body_files.update(file_deps.get(name, ()))
+                if rest_after is not None and total_iterations >= rest_after:
+                    # Still the very iterator this loop draws from: the unit
+                    # evaluates the header again.
+                    run_rest = user_ns.get(node.iter.id) is iterable
+                    if run_rest:
+                        break
+        finally:
+            if isinstance(passes, list) and passes and passes[-1] is loop_pass:
+                passes.pop()
+
+        if run_rest:
+            logger.debug("[CONTROL] %d passes over an iterator: the rest runs as one unit", total_iterations)
+            rest = self.dispatcher.execute_as_single_unit(
+                node, ttl, silent, raw_cell, inherited_annotation, update_lineage=False
+            )
+            if rest_metrics is not None:
+                rest_metrics.extend(rest.metrics)
+            if not rest.success:
+                raise rest.error or RuntimeError("Error in the rest of the loop")
             total_iterations += 1
-            iter_started = _time.perf_counter()
-            if self._process_one_iteration(
-                node,
-                iteration_value,
-                iterable_lineage,
-                target_names,
-                ttl,
-                silent,
-                all_metrics,
-                parent_context,
-                raw_cell,
-                loop_annotation,
-            ):
-                cached_iterations += 1
-            if probe_n is not None and idx < _SPLIT_PROBE_ITERS:
-                probe_elapsed += _time.perf_counter() - iter_started
-            # A name the body rebinds (`d = pd.read_csv(f)`) holds only its
-            # latest iteration's file, so the accumulator's inheritance is
-            # gathered as the loop goes. One changed in place
-            # (`parts.append(d)`) keeps every file and is read once at the
-            # end: read per iteration, its growing set would make the
-            # gathering quadratic.
-            for name in body_names:
-                body_files.update(file_deps.get(name, ()))
 
         if probe_n is not None:
             self._split_policy.record_verdict(node, probe_elapsed, probe_n)
@@ -421,6 +511,7 @@ class ForLoopHandler:
             node,
             ast.unparse(node),
             body_files=body_files,
+            unchanged=loop_pass.unchanged(self.shell, self.statement_processor, node),
         )
         return total_iterations, cached_iterations
 
