@@ -249,10 +249,14 @@ def interceptable(fn) -> bool:
     floor kept it uncached on an idle machine; under load the call crossed it,
     the handle was stored, and the next run was handed the one a reader had
     already drained. ``is_cash_instrumentation`` is the test the key already
-    applies to both.
+    applies to both. Nor ``copy.copy`` / ``copy.deepcopy``: restoring a stored
+    copy costs about as much as making one, and keeping it meant hashing,
+    walking and pickling a value as large as the argument (an 87,000-session
+    log: 11 s plain, 51 s with the copy kept).
     """
     return (
         isinstance(fn, types.FunctionType)
+        and fn.__module__ != "copy"
         and not getattr(fn, "_cash_cached", False)
         and not getattr(fn, "_cash_stateful", False)
         and not is_cash_instrumentation(fn)

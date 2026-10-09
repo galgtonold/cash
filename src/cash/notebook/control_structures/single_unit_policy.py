@@ -162,6 +162,18 @@ def _is_progress_bar(name: str, user_ns: dict[str, Any]) -> bool:
     return callable(func) and str(getattr(func, "__module__", "")).partition(".")[0] == "tqdm"
 
 
+def file_in_progress_bar(iterable: Any) -> io.IOBase | None:
+    """The open file a progress bar wraps (``tqdm(open(path))``), else None.
+
+    The bar has no length of its own and the header's ``open(...)`` call
+    cannot be evaluated to size it, so the file it was handed is read for it.
+    """
+    if str(type(iterable).__module__).partition(".")[0] != "tqdm":
+        return None
+    inner = getattr(iterable, "iterable", None)
+    return inner if isinstance(inner, io.IOBase) else None
+
+
 def _opens_for_reading(call: ast.Call, user_ns: dict[str, Any]) -> bool:
     """Is *call* the builtin ``open`` in a read-only mode?
 
@@ -459,6 +471,9 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
         pass
     if isinstance(iterable, io.IOBase):
         return _lines_in_file(iterable)
+    wrapped = file_in_progress_bar(iterable)
+    if wrapped is not None:
+        return _lines_in_file(wrapped)
 
     def length_of(node: ast.AST) -> int | None:
         if isinstance(node, ast.Name):

@@ -29,6 +29,7 @@ __all__ = [
     "called_dotted_names",
     "called_names",
     "copy_tree",
+    "handed_names",
     "parse_cached",
     "resolve_callee",
     "resolve_dotted_name",
@@ -223,17 +224,17 @@ def called_dotted_names(tree: ast.AST | None) -> frozenset[str]:
     return frozenset(out)
 
 
-def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:
-    """The bare names called as ``name(...)`` in *tree*, within *scope*."""
+def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
+    """The names *pick* takes from each ``Call`` in *tree*, within *scope*."""
     if tree is None:
         return frozenset()
     if scope == "all":
-        return frozenset(n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name))
+        return frozenset(name for n in ast.walk(tree) if isinstance(n, ast.Call) for name in pick(n))
     out: set[str] = set()
 
     def visit(node: ast.AST, top: bool) -> None:
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            out.add(node.func.id)
+        if isinstance(node, ast.Call):
+            out.update(pick(node))
         for field, value in ast.iter_fields(node):
             if scope == "no_control_bodies" and isinstance(node, _CONTROL_STATEMENTS) and field in _CONTROL_BODY_FIELDS:
                 continue
@@ -248,6 +249,27 @@ def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[st
 
     visit(tree, True)
     return frozenset(out)
+
+
+def _called_name(call: ast.Call) -> tuple[str, ...]:
+    return (call.func.id,) if isinstance(call.func, ast.Name) else ()
+
+
+def _handed_names(call: ast.Call) -> tuple[str, ...]:
+    args = [*call.args, *(kw.value for kw in call.keywords)]
+    return tuple(a.id for a in args if isinstance(a, ast.Name))
+
+
+def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:
+    """The bare names called as ``name(...)`` in *tree*, within *scope*."""
+    return _call_names(tree, scope, _called_name)
+
+
+def handed_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:
+    """The bare names passed as an argument to a call in *tree*, within *scope*
+    (``s.apply(f)``, ``map(f, data)``): a function handed over this way is
+    called by the callee, so what it does counts like a call by name."""
+    return _call_names(tree, scope, _handed_names)
 
 
 def bytecode_global_refs(func: Any) -> list[tuple[str, ...]]:

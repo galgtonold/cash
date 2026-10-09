@@ -739,6 +739,7 @@ class StatementProcessor:
                 f"a cache hit would not advance it, so the statement runs every time"
             )
             run.skip_cache = True
+            run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
 
     def _lookup(
         self, run: StatementRun, analysis_time: float, hash_time: float
@@ -1209,10 +1210,14 @@ class StatementProcessor:
         )
 
     def _binds_a_stream(self, run: StatementRun) -> bool:
-        """Whether the statement bound an open file: a handle is a new stream
-        at its start on every run, which its lineage alone cannot tell, so a
-        reader below (``lines = fh.readlines()``) would be served what it
-        computed from an earlier handle, left at its end."""
+        """Whether the statement bound an open file, or read from one: a
+        handle is a new stream at its start on every run, and a read leaves it
+        elsewhere, which a lineage made of the code and the handle's cannot
+        tell, so a reader below (``lines = fh.readlines()``, ``n = text.count(x)``
+        after ``text = fh.read()``) would be served what it computed from an
+        earlier handle or an earlier read."""
+        if run.drew_from_stream:
+            return True
         user_ns = self.shell.user_ns
         return any(isinstance(user_ns.get(name), io.IOBase) for name in run.outputs)
 
