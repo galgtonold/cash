@@ -9,8 +9,6 @@ does read a global is still folded, and a default lambda's reads still key.
 
 from __future__ import annotations
 
-import pytest
-
 from cash.decorator.globals_fold import GlobalsFold
 
 RATE = 2

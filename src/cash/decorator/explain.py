@@ -21,7 +21,7 @@ from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
-from .call_state import PROCESS_STARTED, BuiltKey, KeyBuildFailed, UnhashableArgs, UnhashableDefault
+from .call_state import BuiltKey, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 from .iterators import is_one_shot_iterator
 
 if TYPE_CHECKING:
