@@ -344,8 +344,14 @@ class TieredBackend(CacheBackend):
         metadata: MetadataDict,
         serializer: Serializer | None,
         cap_size: int,
+        *,
+        private: bool = False,
     ) -> _TierWrites:
-        """Write to every tier past RAM that takes an entry this size."""
+        """Write to every tier past RAM that takes an entry this size.
+
+        *private*: *value* is the RAM tier's own copy, which nothing changes;
+        a tier that `takes_private_values` serializes it in the background
+        instead of copying it first (``FileBackend.set``)."""
         stored_destinations: list[str] = []
         errors: list[str] = []
         size_refused = False  # a tier skipped this object because it's too big
@@ -381,7 +387,10 @@ class TieredBackend(CacheBackend):
                     refusing_caps.append(int(cap))
                     continue
             try:
-                backend.set(key, value, metadata, serializer)
+                if private and getattr(backend, "takes_private_values", False):
+                    backend.set(key, value, metadata, serializer, private=True)
+                else:
+                    backend.set(key, value, metadata, serializer)
                 stored_destinations.append(backend.source_label)
             except Exception as e:  # noqa: BLE001 - backend errors must not propagate
                 logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
@@ -432,7 +441,9 @@ class TieredBackend(CacheBackend):
         entry = self.backends[0].peek_entry(key)
         if entry is None or entry[0] is not stored_metadata:
             return False  # gone or replaced meanwhile
-        writes = self._write_persistent_tiers(key, entry[1], metadata, None, stored_metadata.get("size") or size)
+        writes = self._write_persistent_tiers(
+            key, entry[1], metadata, None, stored_metadata.get("size") or size, private=True
+        )
         if not writes.stored:
             if writes.size_refused:
                 self.notices.too_big(key, writes.refused_size, writes.refusing_caps)

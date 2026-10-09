@@ -242,8 +242,10 @@ class SQLiteBackend(CacheBackend):
 
         meta_bytes = pickle.dumps(metadata)
 
-        self._writes.submit(
+        self._writes.submit_sized(
             key,
+            len(serialized_value),
+            True,
             self._do_set_sync,
             key,
             serialized_value,

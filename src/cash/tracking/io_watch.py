@@ -10,7 +10,9 @@ share this module instead of each installing their own interception.
 ``open`` (``builtins.open``, ``io.open``, ``pathlib``, ``os.open``, and C code
 that opens through ``io``), directory listings (``os.listdir``,
 ``os.scandir``, ``glob.glob``), ``socket.connect`` and ``subprocess.Popen``,
-whoever calls them and however they were imported. The hook is installed once
+whoever calls them and however they were imported. One more consumer listens
+whatever is being observed: the background cache writes finish before this
+process starts another (``subscribe_always``). The hook is installed once
 and cannot be removed, so it is gated: it dispatches only the events some
 consumer currently needs, and one dictionary lookup decides that for every
 other audited event in the process.
@@ -30,7 +32,16 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-__all__ = ["Patches", "add_patcher", "hold", "holding", "release", "subscribe", "watch_outside_scopes"]
+__all__ = [
+    "Patches",
+    "add_patcher",
+    "hold",
+    "holding",
+    "release",
+    "subscribe",
+    "subscribe_always",
+    "watch_outside_scopes",
+]
 
 #: A consumer receives the event's argument tuple. The Python frame that made
 #: the audited call is ``sys._getframe(CALLER_DEPTH)`` from inside it.
@@ -40,6 +51,8 @@ CALLER_DEPTH = 2
 _lock = threading.RLock()
 #: event -> [(consumer, also outside scopes?)], in subscription order.
 _subscribers: dict[str, list[tuple[Consumer, bool]]] = {}
+#: event -> [consumer], delivered whether or not anything is being observed.
+_always: dict[str, list[Consumer]] = {}
 #: (install, remove) pairs, run when the first scope opens / the last closes.
 _patchers: list[tuple[Callable[[], None], Callable[[], None]]] = []
 _holds = 0
@@ -68,12 +81,18 @@ def _hook(event: str, args: tuple) -> None:
 
 def _rebuild() -> None:
     global _held_table, _idle_table
-    _held_table = {event: tuple(consumer for consumer, _ in subs) for event, subs in _subscribers.items() if subs}
+    held: dict[str, tuple[Consumer, ...]] = {}
     idle: dict[str, tuple[Consumer, ...]] = {}
-    for event, subs in _subscribers.items():
-        chosen = tuple(consumer for consumer, outside in subs if outside and _outside)
+    for event in {*_subscribers, *_always}:
+        subs = _subscribers.get(event, ())
+        always = tuple(_always.get(event, ()))
+        chosen = always + tuple(consumer for consumer, _ in subs)
+        if chosen:
+            held[event] = chosen
+        chosen = always + tuple(consumer for consumer, outside in subs if outside and _outside)
         if chosen:
             idle[event] = chosen
+    _held_table = held
     _idle_table = idle
     _switch()
 
@@ -98,6 +117,18 @@ def subscribe(event: str, consumer: Consumer, *, outside_scopes: bool = False) -
     """
     with _lock:
         _subscribers.setdefault(event, []).append((consumer, outside_scopes))
+        _rebuild()
+
+
+def subscribe_always(event: str, consumer: Consumer) -> None:
+    """Deliver *event* to *consumer* from now on, scope or no scope.
+
+    For what must happen whatever the process is doing: the write queues
+    finishing their writes before a child process starts (``_writes``).
+    """
+    with _lock:
+        _ensure_hook()
+        _always.setdefault(event, []).append(consumer)
         _rebuild()
 
 

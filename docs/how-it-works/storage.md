@@ -158,8 +158,9 @@ notice, not a warning: a cache at its cap is doing its job.
 
 === "Notebook"
 
-    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._flush_pending_writes @52688dae -->
-    A line at the end of the cell whose results filled the cache:
+    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._after_cell @8784ece9 -->
+    A line at the end of the first cell to finish after the write that
+    filled the cache:
 
     ```text title="Output"
     [cash] The cache in /work/.cash reached its 26.0 GiB cap, so cash removed 41 entries (2.6 GiB), ...
@@ -183,6 +184,39 @@ Each process enforces the cap on its own writes, so several processes sharing
 one folder can together go over it before one of them evicts. A long-running
 process re-measures the disk about once a minute while it writes. A re-run
 notebook statement also drops its older versions when the new one is written.
+
+## When a result reaches the disk
+
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @49460812, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @3267884e -->
+The disk write runs on a background thread, and your code carries on while it
+does. cash waits for a write only when something needs it on disk:
+
+- a read of that result in the same process,
+- code in the same process listing the cache folder,
+- another process this one starts (`subprocess`, `os.system`, a `!` line in
+  a notebook, a forked worker), for up to 30 seconds,
+- the end of the process, for up to `shutdown_write_timeout`
+  ([`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned)).
+
+A process this one did not start, reading the same folder at the same time,
+finds a result once its write has finished, and computes it until then.
+
+=== "Decorator"
+
+    A call returns as soon as its result is computed; the write follows.
+
+=== "Notebook"
+
+    A cell does not wait for its writes either: they finish while the next
+    cell runs. It waits only for what would take more than about two
+    seconds more to write. That bounds what a restart can lose, since
+    Jupyter gives the kernel a few seconds to exit before it stops it, and
+    what a crash or a killed kernel can lose.
+
+<!-- claim: cash/backends/file_backend.py:FileBackend._write_new_in_place @88db24c4, cash/backends/file_backend.py:FileBackend._atomic_write @1d55d3e9 -->
+A write cut short never leaves a readable entry: a new entry's header is
+written last, and a replaced one goes to a temporary file first. What a
+killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 

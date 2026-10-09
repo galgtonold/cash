@@ -175,8 +175,10 @@ class S3Backend(CacheBackend):
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
-        self._writes.submit(
+        self._writes.submit_sized(
             key,
+            len(serialized_value),
+            True,
             self._do_set_sync,
             obj_key,
             pack_entry(dict(metadata), serialized_value),

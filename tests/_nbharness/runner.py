@@ -502,9 +502,13 @@ class NotebookTestRunner:
         each free to get the re-injection wrong. Re-injects the notebook path
         afterwards ONLY if this runner was started with injection, so a
         no-path run stays a no-path run across the restart.
+
+        Graceful, as JupyterLab's and VS Code's restart is: the kernel is asked
+        to exit and runs its own shutdown, which is where cash finishes the
+        cache writes still running in the background.
         """
         try:
-            self._run_async(self.client.km._async_restart_kernel(now=True))
+            self._run_async(self.client.km._async_restart_kernel(now=False))
             self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
         except Exception:  # replaced below, whatever the failure
             self._replace_kernel()

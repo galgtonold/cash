@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import time
 import weakref
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
@@ -18,7 +19,7 @@ from IPython.core.magic import Magics, line_magic, magics_class
 from ... import _log
 from ..._clock import perf_counter as _perf_counter
 from ..._console import safe_text
-from ...backends._writes import all_pending_writes
+from ...backends._writes import MAX_BACKLOG_S, shutdown_write_timeout, all_pending_writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
 from ...tracking import io_watch
@@ -201,16 +202,15 @@ class CashMagics(Magics):
         """
         remove_previous_hooks(shell)
 
-        # Durability checkpoint. Registered on IPython's own event rather
-        # than inside CellExecutor: the pipeline has several exit paths, and
-        # post_run_cell fires for every cell however it finished.
+        # Registered on IPython's own event rather than inside CellExecutor:
+        # the pipeline has several exit paths, and post_run_cell fires for
+        # every cell however it finished.
         register_event(
             shell,
             "post_run_cell",
-            self._flush_pending_writes,
-            "Could not register post_run_cell handler: %s. Cached results "
-            "will still be written, but a kernel killed (rather than shut "
-            "down) may lose writes that were still queued.",
+            self._after_cell,
+            "Could not register post_run_cell handler: %s. Notices about the "
+            "disk cache (evictions, its cap) will not be shown.",
         )
         register_event(
             shell,
@@ -242,7 +242,7 @@ class CashMagics(Magics):
             shell,
             original_run_cell=self._original_run_cell,
             capture_cell_id=self._capture_cell_id,
-            flush_pending_writes=self._flush_pending_writes,
+            after_cell=self._after_cell,
             original_run_cell_async=self._original_run_cell_async,
         )
 
@@ -660,36 +660,34 @@ class CashMagics(Magics):
             logger.debug("[PROXY_CELL_ID] Could not capture cell_id early: %s", e)
         return self.current_cell_id
 
-    def _flush_pending_writes(self, result: Any = None) -> None:
-        """Make this cell's cached results durable, on ``post_run_cell``.
+    def _after_cell(self, result: Any = None) -> None:
+        """Bound the cache writes left running, and show what the disk cache
+        has to say, on ``post_run_cell``.
 
-        Cache writes are asynchronous. Nothing drains the queue when the kernel
-        is *killed* rather than shut down — a crash, an OOM, a force-quit, or a
-        tool that terminates the process instead of asking it to exit. Anything
-        still queued at that moment is lost: the badge reported the result as
-        cached, and after the restart it is not there. A graceful shutdown does
-        drain (measured), so this closes the violent paths only.
+        The cell does not wait for its cache writes: they finish in the
+        background while the next cell runs. Only what would take longer
+        than ``MAX_BACKLOG_S`` to write is waited for here, so a restart
+        right after the cell (Jupyter gives the kernel 2.5 s to exit) or a
+        killed kernel loses at most that: entries still being written are
+        clean misses, computed again. Anything that reads the disk copy waits
+        for its writes (``backends._writes``).
 
-        Drains every live queue in the process, not just this instance's
-        backend: a notebook routinely has more than one Cash — the ``%cash_on``
-        instance plus any ``Cash(...)`` built in a cell — and decorator writes
-        go to the latter.
+        Every live queue in the process, not just this instance's backend: a
+        notebook routinely has more than one Cash -- the ``%cash_on``
+        instance plus any ``Cash(...)`` built in a cell.
 
-        Hooked to IPython's event rather than to the end of ``CellExecutor``'s
-        pipeline. The pipeline has several exit paths, and a drain placed after
-        its final phase fired for only one cell in three, missing exactly the
-        cells that do the caching.
+        The notices are the background writes' (an eviction, the cap), so one
+        shows after the cell during which its write finished.
 
-        Never raises: a failed write is already reported by the backend, and a
-        durability best-effort must not turn a working cell into an error.
+        Never raises: a failed write is reported by the backend, and a
+        cosmetic notice must not turn a working cell into an error.
         """
         try:
+            deadline = time.monotonic() + shutdown_write_timeout()
             for queue in all_pending_writes():
-                queue.wait_all()
+                queue.wait_for_backlog(MAX_BACKLOG_S, deadline)
         except Exception:  # best-effort, must not break the cell
-            logger.debug("Flushing pending cache writes failed", exc_info=True)
-        # The writes just drained are what evicts, so the cell that caused the
-        # first eviction is the one that reports it.
+            logger.debug("Bounding pending cache writes failed", exc_info=True)
         try:
             self._show_storage_notices()
         except Exception:  # cosmetic, must not break the cell

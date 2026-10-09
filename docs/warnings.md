@@ -471,7 +471,7 @@ decorated function, `f.cache_info()` shows whether you get any hits.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/config/schema.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @298bbecd, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
+<!-- claim: cash/config/schema.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_writes.py:PendingWrites.shutdown @8bf24fea, cash/backends/_writes.py:_DaemonWriterPool.shutdown @814ad0be, cash/backends/_writes.py:PendingWrites._warn_abandoned_writes @e502ed89 -->
 **What happened.** At exit, cash waited for its background writes (60 s by
 default) and some were still running, so the process exited without them. The
 message says how many. With `shutdown_write_timeout=0`, which asks not to

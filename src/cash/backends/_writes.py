@@ -1,8 +1,23 @@
 """Background cache writes: the per-backend write queue and its thread pool.
 
 Backends whose writes touch a disk or a network (File, SQLite, Redis, S3)
-serialize a value on the caller's thread and hand the bytes to a
-`PendingWrites` queue, so a slow write never blocks the user's code.
+hand their writes to a `PendingWrites` queue, so a slow write never blocks
+the user's code. Nothing waits for a write except what needs it on disk:
+
+* a read of that key, in this process (the backends' ``get``);
+* a listing, a clear, the end of the process (``shutdown``, from ``atexit``);
+* a child process about to start (`_finish_before_child`), which may read
+  the cache directory itself.
+
+And two bounds keep what is queued small. A queue holds at most
+`MAX_QUEUED_BYTES` of copies (`PendingWrites.submit_sized` waits), and a
+notebook cell ends with at most `MAX_BACKLOG_S` of writing left
+(`PendingWrites.wait_for_backlog`): little enough to finish in the time
+Jupyter gives a kernel to exit on a restart, and all that a killed kernel
+can lose. A process killed while a write runs loses those entries, never
+more: entries are written header last or renamed into place
+(``FileBackend``), so what the kill leaves is a clean miss and the value is
+computed again.
 """
 
 from __future__ import annotations
@@ -32,6 +47,7 @@ __all__ = [
     "all_pending_writes",
     "discarded_writes",
     "in_multiprocessing_child",
+    "shutdown_write_timeout",
 ]
 
 # Marks any thread currently running a PendingWrites task, for ANY instance.
@@ -93,12 +109,97 @@ def discarded_writes() -> list[tuple[str, str]]:
         return list(_DISCARDED_WRITES)
 
 
-#: Fallback for `_shutdown_write_timeout` when no config can be read: the
+#: Bytes of writes a queue may hold unfinished before the next `submit_sized`
+#: waits for the oldest: what is queued is a copy of the value, so a run of
+#: cells each storing a large result must not pile copies up in memory faster
+#: than the disk takes them. One write is always accepted, whatever its size.
+MAX_QUEUED_BYTES = 512 * 1024 * 1024
+
+#: Seconds of writing a queue may still have to do when a notebook cell ends.
+#: Jupyter gives a kernel asked to exit (a restart) 2.5 s before it sends
+#: SIGTERM, which ends the process without its exit drain: what is queued
+#: past this would be lost on every quick restart.
+MAX_BACKLOG_S = 2.0
+#: What a write is assumed to cost until this queue has timed one: generous,
+#: for a disk this process has not measured yet.
+_DEFAULT_SECONDS_PER_BYTE = 1.0 / (100 * 1024 * 1024)
+_DEFAULT_SECONDS_PER_WRITE = 0.01
+#: A write at least this big times the per-byte cost, a smaller one the
+#: per-write cost.
+_TIMED_PER_BYTE_FROM = 1024 * 1024
+
+#: Audit events of this process starting another. The child may read the
+#: cache directory, so every write already queued lands first. (``os.exec``
+#: replaces this process, which would lose them outright.)
+_CHILD_PROCESS_EVENTS = (
+    "subprocess.Popen",
+    "os.system",
+    "os.fork",
+    "os.forkpty",
+    "os.posix_spawn",
+    "os.spawn",
+    "os.exec",
+    "os.startfile",
+    "_posixsubprocess.fork_exec",
+    "_winapi.CreateProcess",
+)
+
+
+#: Seconds a process about to start another waits for its queued writes.
+#: Past it the child starts anyway and reads a miss for what is not on disk
+#: yet: a stalled cache directory must not stall every ``subprocess.run``.
+CHILD_WAIT_S = 30.0
+
+#: Writes a child-process start already gave up waiting for: the next start
+#: does not wait for them again.
+_GIVEN_UP: weakref.WeakSet = weakref.WeakSet()
+
+
+def _finish_before_child(_args: tuple = ()) -> None:
+    """Wait for every queued cache write: this process is starting another.
+
+    For at most `CHILD_WAIT_S` in all. Not on a write worker, which never
+    waits on another queue (see ``_WORKER_THREAD``). Never raises: it runs
+    inside the audit hook of the user's own ``subprocess.run``.
+    """
+    if getattr(_WORKER_THREAD, "active", False):
+        return
+    try:
+        deadline = time.monotonic() + CHILD_WAIT_S
+        for pending in all_pending_writes():
+            if not pending.wait_all(deadline=deadline, skip=_GIVEN_UP):
+                with pending._lock:
+                    _GIVEN_UP.update(f for f in pending._pending.values() if not f.done())
+                logger.debug("Started a child process with cache writes still running")
+    except Exception:  # noqa: BLE001 - must never fail the user's call
+        logger.debug("Finishing cache writes before a child process failed", exc_info=True)
+
+
+_child_watch_installed = False
+_child_watch_lock = threading.Lock()
+
+
+def _watch_child_processes() -> None:
+    """Subscribe `_finish_before_child` to the process-start events, once."""
+    global _child_watch_installed
+    if _child_watch_installed:
+        return
+    with _child_watch_lock:
+        if _child_watch_installed:
+            return
+        from ..tracking import io_watch
+
+        for event in _CHILD_PROCESS_EVENTS:
+            io_watch.subscribe_always(event, _finish_before_child)
+        _child_watch_installed = True
+
+
+#: Fallback for `shutdown_write_timeout` when no config can be read: the
 #: configured default.
 _DEFAULT_SHUTDOWN_WRITE_TIMEOUT = CashConfig.shutdown_write_timeout
 
 
-def _shutdown_write_timeout() -> float:
+def shutdown_write_timeout() -> float:
     """Seconds a finished process will wait for its cache writes.
 
     Read per call so a value set after import applies. Falls back to the
@@ -213,8 +314,11 @@ class PendingWrites:
     """Per-backend background-write scheduler.
 
     * One worker per backend, so writes to that backend are serialized.
-    * The caller serializes the value before submitting, so a mutation after
-      ``set()`` cannot reach the cached bytes; this class only runs the write.
+    * The caller hands over bytes, or a value nobody changes any more, so a
+      mutation after ``set()`` cannot reach the cached bytes; this class only
+      runs the write.
+    * Nothing waits for a write but a read of its key, a listing, the end of
+      the process or a child process starting (module docstring).
     * ``submit(key, fn, ...)`` records the future under *key*; a second submit
       for the same key waits for the first, so "set k=a; set k=b" lands in order.
     * ``wait(key)`` blocks until that key's write resolves. A failure is warned
@@ -235,7 +339,18 @@ class PendingWrites:
         # eviction deciding to drop the entry being written) does not wait on
         # itself.
         self._tls = threading.local()
+        #: future -> (bytes it writes, are they a copy it holds), for the
+        #: writes `submit_sized` sized. In submission order.
+        self._sizes: dict[concurrent.futures.Future, tuple[int, bool]] = {}
+        #: What a write costs here, measured (`_timed`).
+        self._seconds_per_byte = _DEFAULT_SECONDS_PER_BYTE
+        self._seconds_per_write = _DEFAULT_SECONDS_PER_WRITE
+        #: ``(perf_counter at start, bytes)`` of the sized write running now.
+        self._running: tuple[float, int] | None = None
+        #: Has a sized write finished here, so the costs above are measured?
+        self._measured = False
         _LIVE_WRITE_QUEUES.add(self)
+        _watch_child_processes()
 
     def _after_fork_in_child(self) -> None:
         """Start this queue afresh in a forked child.
@@ -251,6 +366,8 @@ class PendingWrites:
         self._lock = threading.Lock()
         self._executor = _DaemonWriterPool(max_workers=self._executor._max_workers)
         self._pending = {}
+        self._sizes = {}
+        self._running = None
         self._tls = threading.local()
 
     def is_shutdown(self) -> bool:
@@ -312,6 +429,124 @@ class PendingWrites:
         # has already finished, and it takes ``_lock`` itself.
         future.add_done_callback(lambda f, k=key: self._forget_if_succeeded(k, f))
         return future
+
+    def submit_sized(
+        self, key: str, nbytes: int, copied: bool, fn: Callable[..., Any], *args: Any
+    ) -> concurrent.futures.Future:
+        """`submit`, for a write of *nbytes*: timed, and counted against the bounds.
+
+        *copied*: the bytes are a copy this write holds in memory until it is
+        done. Then it waits first, oldest write first, while the unfinished
+        writes and this one would hold more than `MAX_QUEUED_BYTES`.
+        """
+        if copied:
+            self._make_room(nbytes)
+        future = self.submit(key, self._timed, nbytes, fn, *args)
+        if not future.done():
+            with self._lock:
+                self._sizes[future] = (nbytes, copied)
+            future.add_done_callback(self._forget_size)
+        return future
+
+    def _timed(self, nbytes: int, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run one sized write, and learn from how long it took."""
+        start = time.perf_counter()
+        self._running = (start, nbytes)
+        try:
+            return fn(*args)
+        finally:
+            took = time.perf_counter() - start
+            self._running = None
+            with self._lock:
+                if nbytes >= _TIMED_PER_BYTE_FROM:
+                    self._seconds_per_byte = took / nbytes
+                else:
+                    self._seconds_per_write = took
+                self._measured = True
+
+    def _forget_size(self, future: concurrent.futures.Future) -> None:
+        with self._lock:
+            self._sizes.pop(future, None)
+
+    def _unfinished_sized(self) -> list[tuple[concurrent.futures.Future, int, bool]]:
+        with self._lock:
+            return [(f, n, copied) for f, (n, copied) in self._sizes.items() if not f.done()]
+
+    def _make_room(self, nbytes: int) -> None:
+        if getattr(self._tls, "current_key", None) is not None:
+            return  # the worker cannot wait for the writes queued behind it
+        while True:
+            live = [(f, n) for f, n, copied in self._unfinished_sized() if copied]
+            held = sum(n for _, n in live)
+            if not live or held + nbytes <= MAX_QUEUED_BYTES:
+                return
+            try:
+                live[0][0].result()
+            except BaseException:  # noqa: BLE001 - reported via wait(key)
+                pass
+            self._forget_size(live[0][0])
+
+    def backlog_seconds(self) -> float:
+        """About how long the sized writes still queued will take, by what
+        the writes timed so far took.
+
+        A write running longer than that is evidence too: the writes behind
+        it are taken to cost at least what it has taken so far, so a disk
+        slower than assumed is noticed before its first write finishes.
+        """
+        live = self._unfinished_sized()
+        if not live:
+            return 0.0
+        per_byte, per_write = self._seconds_per_byte, self._seconds_per_write
+        running = self._running
+        elapsed = 0.0
+        if running is not None:
+            elapsed = time.perf_counter() - running[0]
+            if running[1] >= _TIMED_PER_BYTE_FROM:
+                per_byte = max(per_byte, elapsed / running[1])
+            else:
+                per_write = max(per_write, elapsed)
+
+        def estimate(nbytes: int) -> float:
+            return nbytes * per_byte if nbytes >= _TIMED_PER_BYTE_FROM else per_write
+
+        total = sum(estimate(n) for _, n, _ in live)
+        if running is not None:
+            total -= min(elapsed, estimate(running[1]))
+        return max(total, 0.0)
+
+    def wait_for_backlog(self, max_seconds: float, deadline: float | None = None) -> bool:
+        """Wait until at most *max_seconds* of writing is left
+        (`backlog_seconds`). False when *deadline* (``time.monotonic``)
+        passed first. Never on the worker, which would wait for itself."""
+        if getattr(self._tls, "current_key", None) is not None:
+            return True
+        live = self._unfinished_sized()
+        if live and not self._measured:
+            # Nothing timed here yet: the first write says what this disk
+            # costs, so let it finish (for up to the bound) before judging.
+            step = max_seconds if deadline is None else min(max_seconds, deadline - time.monotonic())
+            try:
+                live[0][0].result(timeout=max(step, 0.0))
+            except BaseException:  # noqa: BLE001 - a timeout, or reported via wait(key)
+                pass
+        while self.backlog_seconds() > max_seconds:
+            live = self._unfinished_sized()
+            if not live:
+                return True
+            # Re-judged every tenth of a second: the running write's time is
+            # evidence about the ones behind it.
+            step = 0.1 if deadline is None else min(0.1, deadline - time.monotonic())
+            if step <= 0:
+                return False
+            try:
+                live[0][0].result(timeout=step)
+            except concurrent.futures.TimeoutError:
+                continue
+            except BaseException:  # noqa: BLE001 - reported via wait(key)
+                pass
+            self._forget_size(live[0][0])
+        return True
 
     def _run_inline(self, key: str, fn: Callable[..., Any], args: tuple, kwargs: dict) -> concurrent.futures.Future:
         """Write on the calling thread, as part of a ``multiprocessing`` task.
@@ -424,22 +659,32 @@ class PendingWrites:
         with self._lock:
             return sum(1 for f in self._pending.values() if not f.done())
 
-    def wait_all(self) -> None:
+    def wait_all(self, deadline: float | None = None, skip: Any = ()) -> bool:
         """Block until every pending write completes (skipped on the worker).
 
         Used by bulk reads and ``clear`` so they see every write already
         submitted. Failures are logged, not raised: one bad entry must not fail
         a listing, and ``wait(key)`` still reports it.
+
+        *deadline* (``time.monotonic``) bounds the wait, and the writes in
+        *skip* are not waited for: then the answer is False when a write is
+        still running.
         """
         if getattr(self._tls, "current_key", None) is not None:
-            return
+            return True
         with self._lock:
             futures = list(self._pending.values())
         for f in futures:
+            if f in skip:
+                continue
+            timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
             try:
-                f.result()
+                f.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                return False
             except Exception as exc:  # noqa: BLE001 - re-raising would punish the wrong caller
                 logger.debug("Pending write failed (surfaced via wait(key)): %s", exc)
+        return not any(f in skip and not f.done() for f in futures)
 
     def failed_writes(self) -> list[tuple[str, BaseException]]:
         """Keys whose write raised and was never observed by a ``wait(key)``."""
@@ -485,7 +730,7 @@ class PendingWrites:
                 return
             self._shutdown = True
         if timeout is None:
-            timeout = _shutdown_write_timeout()
+            timeout = shutdown_write_timeout()
         finished = self._executor.shutdown(wait=wait, timeout=timeout)
         if wait:
             if not finished:

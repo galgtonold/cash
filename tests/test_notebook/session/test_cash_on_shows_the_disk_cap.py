@@ -54,7 +54,8 @@ def test_the_cell_that_first_evicts_says_so_once(disk_magics, capsys):
 
     def store(key):
         disk.set(key, b"x" * MB, {"execution_time": 1.0})
-        magics._flush_pending_writes()  # what post_run_cell does after every cell
+        disk._writes.wait_all()  # the write lands while the cell runs ...
+        magics._after_cell()  # ... and post_run_cell shows what it said
 
     for i in range(4):  # 4 MB and the headers: under the cap
         store(f"k{i}")
