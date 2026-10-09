@@ -498,6 +498,9 @@ class StoredKeyRecord:
             else:
                 if self._writes is None:
                     self._writes = PendingWrites(max_workers=1)
+                    # A drain of the write queues (after a notebook cell, or
+                    # before a listing) also writes what is held back.
+                    self._writes.on_drain(self._submit_held)
                 queue = self._writes
                 self._scheduled.add(path)
         if queue is None:
@@ -516,6 +519,26 @@ class StoredKeyRecord:
             if self._timers.pop(path, None) is None:
                 return  # flushed meanwhile
         self._schedule(path)
+
+    def _submit_held(self) -> None:
+        """Drain hook: submit every write held back by `WRITE_INTERVAL` now."""
+        with self._lock:
+            timers, self._timers = self._timers, {}
+            queue = self._writes
+        for path, timer in timers.items():
+            timer.cancel()
+            with self._lock:
+                if path in self._scheduled:
+                    continue  # a queued write takes it
+                self._scheduled.add(path)
+            try:
+                if queue is None:
+                    raise RuntimeError("closed")
+                queue.submit(f"stored-keys:{path}", self._write_while_pending, path)
+            except RuntimeError:
+                with self._lock:
+                    self._scheduled.discard(path)
+                self._write_now(path)
 
     def _write_while_pending(self, path: str) -> None:
         """Writer task: write *path*.

@@ -235,6 +235,9 @@ class PendingWrites:
         # eviction deciding to drop the entry being written) does not wait on
         # itself.
         self._tls = threading.local()
+        # Called by `wait_all` before it waits: a submitter that holds work
+        # back for a while (a timer) submits it now, so a drain still covers it.
+        self._drain_hooks: list[Callable[[], None]] = []
         _LIVE_WRITE_QUEUES.add(self)
 
     def _after_fork_in_child(self) -> None:
@@ -434,12 +437,24 @@ class PendingWrites:
         if getattr(self._tls, "current_key", None) is not None:
             return
         with self._lock:
+            hooks = list(self._drain_hooks)
+        for hook in hooks:
+            try:
+                hook()
+            except Exception as exc:  # noqa: BLE001 - a drain must not fail on one submitter
+                logger.debug("Releasing held writes failed: %s", exc)
+        with self._lock:
             futures = list(self._pending.values())
         for f in futures:
             try:
                 f.result()
             except Exception as exc:  # noqa: BLE001 - re-raising would punish the wrong caller
                 logger.debug("Pending write failed (surfaced via wait(key)): %s", exc)
+
+    def on_drain(self, hook: Callable[[], None]) -> None:
+        """Have `wait_all` call *hook* first, to submit work held back."""
+        with self._lock:
+            self._drain_hooks.append(hook)
 
     def failed_writes(self) -> list[tuple[str, BaseException]]:
         """Keys whose write raised and was never observed by a ``wait(key)``."""

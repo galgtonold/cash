@@ -95,7 +95,9 @@ def test_a_record_is_written_at_most_once_per_interval(tmp_path, monkeypatch):
     monkeypatch.setattr(stored_keys, "replace_with_retry", counting_replace)
     for i in range(10):
         record.note_stored("mod.f", f"mod.f:s:{i}:d", None, _no_ledger)
-        record._writes.wait_all()  # each store lands after the last write ended
+        # Each store lands after the last write ended. (Not `wait_all`: a
+        # drain writes what is held back.)
+        record._writes.wait(f"stored-keys:{record.path('mod.f')}")
     assert len(writes) == 1  # the first; the rest are held for the interval
     assert set(record.read("mod.f")["keys"]) == {f"mod.f:s:{i}:d" for i in range(10)}  # answered from memory
     record.close()
@@ -113,6 +115,23 @@ def test_a_held_write_is_made_once_the_interval_has_passed(tmp_path, monkeypatch
     while not _written(tmp_path, "mod.f:s:1:d") and time.monotonic() < deadline:
         time.sleep(0.05)
     assert _written(tmp_path, "mod.f:s:1:d"), "a held write never happened without a flush"
+    record.close()
+
+
+def test_a_drain_of_the_write_queues_writes_a_held_change(tmp_path, monkeypatch):
+    """What a notebook cell's end (or a test) drains is on disk after it,
+    held back by the interval or not."""
+    from cash.backends._writes import all_pending_writes
+
+    monkeypatch.setattr(StoredKeyRecord, "WRITE_INTERVAL", 3600)
+    record = StoredKeyRecord(lambda: str(tmp_path))
+    record.note_stored("mod.f", "mod.f:s:0:d", None, _no_ledger)
+    record._writes.wait_all()
+    record.note_stored("mod.f", "mod.f:s:1:d", None, _no_ledger)
+    assert not _written(tmp_path, "mod.f:s:1:d")
+    for queue in all_pending_writes():
+        queue.wait_all()
+    assert _written(tmp_path, "mod.f:s:1:d"), "a drain left a held change unwritten"
     record.close()
 
 
