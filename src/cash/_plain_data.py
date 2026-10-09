@@ -25,9 +25,10 @@ import operator
 import pickle
 import random
 import sys
+from bisect import bisect_right
 from collections import deque
 from collections.abc import Mapping
-from itertools import chain, compress, repeat
+from itertools import accumulate, chain, compress, islice, repeat
 from typing import Any, NamedTuple
 
 from . import kept_state
@@ -251,6 +252,159 @@ def held_only_by_parents(value: Any, leaves: tuple) -> bool:
     except (_NotPlain, TypeError):
         return False
     return True
+
+
+def held_beyond_parents(value: Any, leaves: tuple, limit: int) -> list | None:
+    """The dicts, lists and tuples below *value* that something besides
+    their parent references, or their parent more than once: ``[]`` when
+    there are none (`held_only_by_parents`). None when *value* is not an
+    exact list or dict of JSON-like data over *leaves* (`tree_levels`), or
+    when more than *limit* are found.
+
+    Read at C speed a level at a time, as `held_only_by_parents` reads it.
+    The answer can only list a container too many, never leave one out:
+    every container below *value* it does not list has exactly one
+    reference, from its parent. ``for r in recs:`` leaves one record held
+    by ``r`` too; this names that record, where `held_only_by_parents` only
+    says "not all".
+    """
+    if type(value) not in (list, dict):
+        return None
+    facts = _looked_at(value, leaves)
+    if facts is not _UNKNOWN:
+        if facts is None or not facts.leaves_within(leaves):
+            return None
+        if facts.held_once:
+            return []
+    found: list = []
+    # Tuples held besides their parent, on a level of tuples alone: kept
+    # until the level below says whether they hold leaves alone.
+    pending: list = []
+    try:
+        for flat, types in tree_levels(value, leaves):
+            if pending:
+                if not types <= frozenset(leaves):
+                    found.extend(_without_leaf_tuples(pending, leaves))
+                pending = []
+                if len(found) > limit:
+                    return None
+            if types.isdisjoint(_NODES):
+                continue
+            if types <= _NODES:
+                items, extra = flat, 0
+            else:
+                items, extra = list(compress(flat, map(_NODES.__contains__, map(type, flat)))), 1
+            base = _unshared_refs() + extra
+            refs = list(map(sys.getrefcount, items))
+            if refs and max(refs) > base:
+                more = list(compress(items, map(base.__lt__, refs)))
+                if types == _TUPLE_ONLY:
+                    pending = more
+                else:
+                    found.extend(_without_leaf_tuples(more, leaves) if tuple in types else more)
+                del more
+                if len(found) > limit:
+                    return None
+            del items, refs
+    except (_NotPlain, TypeError):
+        return None
+    return found
+
+
+_TUPLE_ONLY = frozenset({tuple})
+
+
+def _without_leaf_tuples(items: list, leaves: tuple) -> list:
+    """*items* but the tuples holding leaves alone: unchangeable, and holding
+    nothing that can change, they have no identity a holder could rely on.
+    The RAM tier's copy of parsed ``(action, time)`` pairs shares them with
+    the variable's, all 450,000 of them: when every such tuple holds leaves
+    alone, they are dropped at C speed."""
+    is_tuple = _of_kind(items, tuple)
+    tuples = list(compress(items, is_tuple))
+    if not tuples:
+        return items
+    allowed = frozenset(leaves)
+    rest = list(compress(items, map(operator.not_, is_tuple)))
+    if allowed.issuperset(map(type, chain.from_iterable(tuples))):
+        return rest
+    return rest + [t for t in tuples if not allowed.issuperset(map(type, t))]
+
+
+def _ordered_levels(value: Any, leaves: frozenset):
+    """Yield ``(level, flat, positions)`` for JSON-like *value*: each level's
+    containers, everything they hold in order (a dict's values), and where
+    in the level above's *flat* each container of *level* sits (None for the
+    top). Raises `_NotPlain` for anything else, as `tree_levels` does."""
+    level: list = [value]
+    positions: list | None = None
+    for _ in range(MAX_LEVELS):
+        is_dict = _of_kind(level, dict)
+        if any(is_dict):
+            dicts = list(compress(level, is_dict))
+            if not leaves.issuperset(map(type, chain.from_iterable(dicts))):
+                raise _NotPlain
+            held = list(level)
+            _put_at(held, is_dict, map(dict.values, dicts))
+            flat = list(chain.from_iterable(held))
+            del held, dicts
+        else:
+            flat = list(chain.from_iterable(level))
+        kinds = set(map(type, flat))
+        if not kinds <= leaves | _NODES:
+            raise _NotPlain
+        yield level, flat, positions
+        if kinds.isdisjoint(_NODES):
+            return
+        is_node = list(map(_NODES.__contains__, map(type, flat)))
+        positions = list(compress(range(len(flat)), is_node))
+        level = list(compress(flat, is_node))
+    raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
+
+
+def tree_paths(value: Any, wanted: set[int], leaves: tuple) -> dict[int, list[tuple]] | None:
+    """Every place below *value* that holds a dict, list or tuple of
+    *wanted* ids, as ``id -> [path, ...]``: a path is ``(("key", k) |
+    ("item", i), ...)`` from *value* down, ``()`` for *value* itself. Found
+    a level at a time; None when *value* is not an exact list or dict of
+    JSON-like data over *leaves* (`tree_levels`)."""
+    if type(value) not in (list, dict):
+        return None
+    allowed = frozenset(leaves)
+    found: dict[int, list[tuple]] = {}
+    levels: list[list] = []
+    try:
+        for level, _flat, positions in _ordered_levels(value, allowed):
+            levels.append([level, positions, None])
+            hits = list(compress(range(len(level)), map(wanted.__contains__, map(id, level))))
+            for at in hits:
+                found.setdefault(id(level[at]), []).append(_path_to(levels, at))
+    except (_NotPlain, TypeError):
+        return None
+    return found
+
+
+def _path_to(levels: list[list], at: int) -> tuple:
+    """The path to the container at *at* in the last of *levels*, each
+    ``[containers, positions, ends]``: where each container sits in the flat
+    list of the level above, and that level's running item counts (filled
+    in on first use)."""
+    steps = []
+    for depth in range(len(levels) - 1, 0, -1):
+        flat_at = levels[depth][1][at]
+        above = levels[depth - 1]
+        if above[2] is None:
+            above[2] = list(accumulate(map(len, above[0])))
+        ends = above[2]
+        parent = bisect_right(ends, flat_at)
+        offset = flat_at - (ends[parent - 1] if parent else 0)
+        container = above[0][parent]
+        if type(container) is dict:
+            steps.append(("key", next(islice(iter(container), offset, None))))
+        else:
+            steps.append(("item", offset))
+        at = parent
+    return tuple(reversed(steps))
 
 
 #: What a tree nests in (`tree_levels`): exact dicts, lists and tuples.

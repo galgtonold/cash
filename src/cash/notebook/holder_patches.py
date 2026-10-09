@@ -23,7 +23,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .shared_objects import VALUE_TYPES, attributes_of, children_of, is_value, library_value_types
+from .. import _plain_data
+from .shared_objects import _TREE_LEAVES, VALUE_TYPES, attributes_of, children_of, is_value, library_value_types
 
 __all__ = ["HolderPatch", "apply_patch", "holder_patches"]
 
@@ -66,6 +67,13 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
 
 def _reachable(roots: list[Any], value_types: tuple[type, ...]) -> set[int]:
     """The ids of everything a walk reaches from *roots*."""
+    seen = _reachable_within(roots, value_types, None)
+    assert seen is not None
+    return seen
+
+
+def _reachable_within(roots: list[Any], value_types: tuple[type, ...], limit: int | None) -> set[int] | None:
+    """`_reachable`, or None when that is more than *limit* objects."""
     seen: set[int] = set()
     stack = list(roots)
     while stack:
@@ -73,6 +81,8 @@ def _reachable(roots: list[Any], value_types: tuple[type, ...]) -> set[int]:
         if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
+        if limit is not None and len(seen) > limit:
+            return None
         stack.extend(children_of(obj) or ())
     return seen
 
@@ -95,12 +105,22 @@ def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[in
     return found
 
 
+#: Most objects `holder_patches` walks in the holders to look them up in
+#: outputs of JSON-like data a level at a time; past it, the outputs are
+#: walked as before.
+_HELD_MAX = 20_000
+
+
 def holder_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) -> dict[str, HolderPatch] | None:
     """A `HolderPatch` for each of *holders*, or None when one of them holds
     an object of the outputs where a patch cannot put it back."""
     value_types = VALUE_TYPES + library_value_types()
-    group = _paths(outputs, value_types)
-    targets = _reachable(list(outputs.values()), value_types)
+    group = _tree_group(holders, outputs, value_types)
+    if group is None:
+        group = _paths(outputs, value_types)
+        targets = _reachable(list(outputs.values()), value_types)
+    else:
+        targets = set(group)
     patches: dict[str, HolderPatch] = {}
     for name, value in holders.items():
         places = _places(value, targets, value_types)
@@ -108,6 +128,40 @@ def holder_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) -> di
             return None
         patches[name] = HolderPatch(tuple((path, *group[key]) for path, key in places))
     return patches
+
+
+def _tree_group(
+    holders: Mapping[str, Any], outputs: Mapping[str, Any], value_types: tuple[type, ...]
+) -> dict[int, tuple[str, Path]] | None:
+    """`_paths` of the objects of the outputs that the holders reach, found
+    a level at a time when each output is a value or JSON-like data
+    (`_plain_data.tree_paths`); None otherwise, when the holders reach more
+    than `_HELD_MAX` objects, or when one of those sits in more than one
+    place, where which path `_paths` names depends on the order it walks in.
+
+    `_places` asks only of objects the holders reach whether they are the
+    outputs', so these are all it needs: re-sorting a list of 450,000 parsed
+    pairs a loop variable still held one list of walked every pair, twice,
+    for that one place.
+    """
+    roots = [root for root in outputs.values() if not is_value(root, value_types)]
+    if not all(type(root) in (list, dict) for root in roots):
+        return None
+    held = _reachable_within(list(holders.values()), value_types, _HELD_MAX)
+    if held is None:
+        return None
+    found: dict[int, tuple[str, Path]] = {}
+    for name, root in outputs.items():
+        if is_value(root, value_types):
+            continue
+        places = _plain_data.tree_paths(root, held, _TREE_LEAVES)
+        if places is None:
+            return None
+        for key, paths in places.items():
+            if len(paths) > 1:
+                return None
+            found.setdefault(key, (name, paths[0]))
+    return found
 
 
 def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> list[tuple[Path, int]] | None:
