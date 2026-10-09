@@ -134,3 +134,15 @@ def test_a_tier_that_does_not_take_private_values_gets_the_callers_value():
     value = [{"id": i} for i in range(10_000)]
     tiers.set("k", value, dict(_KEEP))
     assert calls == [value] and calls[0] is value
+
+
+def test_a_value_marked_no_private_copy_goes_to_disk_as_the_caller_gave_it():
+    """A stored closed file copies back into a closed file, which does not
+    pickle: the disk must get the stored form the caller handed over."""
+    from cash.backends.memory_backend import NO_PRIVATE_COPY
+
+    tiers, disk = _tiers()
+    value = {"rows": list(range(100))}
+    tiers.set("k", value, {**_KEEP, NO_PRIVATE_COPY: True})
+    (_key, written, private), = disk.calls
+    assert not private and written is value

@@ -30,7 +30,13 @@ psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["InMemoryBackend"]
+__all__ = ["NO_PRIVATE_COPY", "InMemoryBackend"]
+
+#: Metadata key: this tier's copy of the value is not a stand-in for the
+#: value the caller stored (a closed file, stored by name, copies back into
+#: a closed file, which does not pickle), so `InMemoryBackend.private_copy`
+#: never offers it to another tier.
+NO_PRIVATE_COPY = "no_private_copy"
 
 
 #: A list or tuple with at most this many items has the frames in it
@@ -832,14 +838,15 @@ class InMemoryBackend(CacheBackend):
 
         Every stored value is that -- a hit copies it, or shares a frozen
         table (`frame_sharing`) -- except one kept by reference (it could not
-        be copied: the caller holds it) and one holding parts kept as bytes
-        (reading those out is a full copy). A value kept whole as bytes is
+        be copied: the caller holds it), one holding parts kept as bytes
+        (reading those out is a full copy), and one whose metadata says
+        `NO_PRIVATE_COPY` (its copy is not what the caller's value stores as). A value kept whole as bytes is
         read out into a new object, which no one else holds.
         """
         with self._lock:
             entry = self._store.get(key)
             holds_bytes = key in self._holds_bytes
-        if entry is None or holds_bytes or entry[0].get("by_reference"):
+        if entry is None or holds_bytes or entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
             return default
         if metadata is not None and entry[0] is not metadata:
             return default

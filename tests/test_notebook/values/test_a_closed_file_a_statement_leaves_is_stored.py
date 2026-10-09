@@ -51,3 +51,33 @@ def test_a_hit_restores_the_closed_file(cash_magics, mock_shell, tmp_path, monke
     fh = mock_shell.user_ns["fh"]
     assert isinstance(fh, io.TextIOWrapper) and fh.closed and fh.name == "data.txt"
     assert mock_shell.user_ns["text"] == "hello world\n"
+
+
+def test_the_disk_write_gets_the_stored_form_not_the_ram_copy(cash_magics, cash_instance, tmp_path, monkeypatch):
+    """The RAM tier's copy of the stored form is the closed file again, which
+    does not pickle; handed to the disk write in place of the payload, it made
+    the entry miss the disk (and the cell run again after a restart)."""
+    from cash.backends.memory_backend import NO_PRIVATE_COPY
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data.txt").write_text("hello world\n", encoding="utf-8")
+    written = []
+    real_set = cash_instance.backend.set
+
+    def recording_set(key, value, metadata=None, *args, **kwargs):
+        written.append((value, dict(metadata or {})))
+        return real_set(key, value, metadata, *args, **kwargs)
+
+    monkeypatch.setattr(cash_instance.backend, "set", recording_set)
+    run_cash_cell(
+        cash_magics,
+        f"import time\nwith open('data.txt') as fh:\n    text = fh.read()\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})",
+    )
+    stored = [(v, m) for v, m in written if isinstance(v, dict) and "fh" in v.get("variables", {})]
+    assert stored, written
+    value, metadata = stored[-1]
+    assert metadata.get(NO_PRIVATE_COPY) is True
+    pickle.dumps(value)  # what the disk is handed pickles
+    # Positive control: a statement leaving no closed file is not marked.
+    run_cash_cell(cash_magics, f"y = len(text)\ntime.sleep({ABOVE_PERSISTENCE_FLOOR_S})")
+    assert not written[-1][1].get(NO_PRIVATE_COPY)

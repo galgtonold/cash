@@ -36,7 +36,7 @@ from cash.tracking.randomness import capture_object_rng_states, capture_rng_stat
 
 from ..call_key import holds_a_closure_with_state
 from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, CallRef
-from ..closed_stream import stored_form
+from ..closed_stream import ClosedStream, stored_form
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -437,6 +437,10 @@ class StatementStore:
             **cost_fields,
         )
         wire = self._wire(run, metadata, referenced)
+        if any(type(v) is ClosedStream for v in payload["variables"].values()):
+            # The RAM tier's copy of a stored closed file is the closed file
+            # again, which does not pickle: the disk gets this payload.
+            wire[memory_backend.NO_PRIVATE_COPY] = True
         self._write(run, payload, wire, prediction)
 
         store_time = _perf_counter() - t_store
