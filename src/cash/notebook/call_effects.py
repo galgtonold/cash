@@ -14,6 +14,7 @@ function it was made in (:func:`rebinds_its_closure`).
 
 from __future__ import annotations
 
+import ast
 import collections
 import copy as _copy
 import dis as _dis
@@ -23,7 +24,7 @@ import logging
 import sys
 import types as _types
 import weakref
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash.decorator.arg_hashing import (
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "UNWRAP_FAILED",
     "ArgFingerprints",
+    "DigestHandoff",
     "call_capturing_output",
     "capture_globals",
     "closure_cells",
@@ -313,7 +315,11 @@ class ArgFingerprints:
             return None
         ref, held, signature, digest, since = entry
         try:
-            if ref() is value and not frame_borrows_its_data(value, held, since) and frame_signature(value) == signature:
+            if (
+                ref() is value
+                and not frame_borrows_its_data(value, held, since)
+                and frame_signature(value) == signature
+            ):
                 return digest
         except Exception:  # noqa: BLE001 - a pandas internals change: hash again
             logger.debug("call unit: could not check a remembered frame", exc_info=True)
@@ -339,7 +345,146 @@ class ArgFingerprints:
         self._memo[key] = (ref, held, signature, digest, since)
 
 
-def hash_args(args: tuple, kwargs: dict, fingerprints: ArgFingerprints | None = None) -> tuple:
+def _call_shape(tree: ast.Module | None) -> tuple[bool, bool]:
+    """``(nothing_runs_before, nothing_runs_after)`` the one call *tree* is.
+
+    *nothing_runs_before*: the statement is one call of a bare name on bare
+    names and constants (``y = f(x, 3, k=z)``, or ``f(x)`` alone), so until
+    that call starts only names are read. *nothing_runs_after*: besides,
+    its result is bound to one name and nothing else, so once it returns
+    only the binding happens -- not a display, not an unpacking that
+    iterates the result, not an attribute or item store, not an annotation.
+    """
+    if tree is None or len(tree.body) != 1:
+        return False, False
+    node = tree.body[0]
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        call, after = node.value, True
+    elif isinstance(node, ast.Expr):
+        call, after = node.value, False
+    else:
+        return False, False
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return False, False
+    simple = (ast.Name, ast.Constant)
+    if not all(isinstance(a, simple) for a in call.args):
+        return False, False
+    if not all(k.arg is not None and isinstance(k.value, simple) for k in call.keywords):
+        return False, False
+    return True, after
+
+
+class DigestHandoff:
+    """The content digests of one statement's arguments, handed from one
+    check that reads them to the next, so a big argument is hashed once
+    before its call and once after.
+
+    ``y = normalize(x)`` hashed ``x`` four times on a first run: the
+    statement's in-place-change fingerprint before it ran
+    (`MutationClassifier.classify`), the call's argument hash before and
+    after the call (`hash_args`), and the statement's fingerprint after
+    (`MutationClassifier.observed_mutations`) -- 19.1 s where plain Python
+    took 0.89 s over a 257 MB frame. Between the first two only names are
+    read, and between the last two only a name is bound, when the statement
+    is nothing but that call (`_call_shape`); there the digest taken by one
+    is the digest the other would take. Anywhere else each takes its own.
+
+    Every digest goes through *fingerprints* (`ArgFingerprints`), so a
+    frame under copy-on-write that provably has not changed since it was
+    hashed is not read again, whichever check asks.
+
+    Held per statement (`begin_statement`); a statement that runs another
+    statement inside its call (a nested ``run_cell``) starts a new
+    generation, and nothing from the older one is handed on.
+    """
+
+    def __init__(self) -> None:
+        self.fingerprints = ArgFingerprints()
+        self._generation = 0
+        self._before_ok = False
+        self._after_ok = False
+        #: ``id(value) -> (value, digest)``: what the statement's fingerprint
+        #: read before it ran, for its call's hash before the call; and what
+        #: the call's hash read after it, for the statement's fingerprint.
+        #: Each holds its values, so an id cannot be reused meanwhile.
+        self._before: dict[int, tuple[Any, str]] = {}
+        self._after: dict[int, tuple[Any, str]] = {}
+        #: Calls through the call cache started in this generation, and their
+        #: count when `_after` was filled.
+        self._started = 0
+        self._after_at = -1
+
+    def begin_cell(self) -> None:
+        self.fingerprints.clear()
+
+    def begin_statement(self) -> None:
+        """A statement starts: nothing earlier is handed on."""
+        self._generation += 1
+        self._before_ok = self._after_ok = False
+        self._before.clear()
+        self._after.clear()
+        self._started = 0
+        self._after_at = -1
+
+    def watch(self, tree: ast.Module | None) -> None:
+        """The statement *tree* is about to have its arguments fingerprinted."""
+        self._before_ok, self._after_ok = _call_shape(tree)
+
+    def digest(self, value: Any) -> str:
+        """`compute_hash` of *value*, kept for the call's hash before the
+        call when nothing can run in between."""
+        digest = self.fingerprints.digest(value)
+        if self._before_ok and self._started == 0 and not is_identity_fallback_hash(value, digest):
+            self._before[id(value)] = (value, digest)
+        return digest
+
+    def call_started(self) -> tuple[int, int]:
+        """A call through the call cache starts; its ticket for
+        `digest_before` and `note_after`."""
+        self._started += 1
+        if self._started > 1:
+            self._before.clear()
+        return self._generation, self._started
+
+    def digest_before(self, ticket: tuple[int, int]) -> Callable[[Any], str]:
+        """How the call holding *ticket* hashes an argument before it runs."""
+        if ticket != (self._generation, 1) or not self._before:
+            return self.fingerprints.digest
+        before = self._before
+
+        def digest(value: Any) -> str:
+            found = before.get(id(value))
+            if found is not None and found[0] is value:
+                return found[1]
+            return self.fingerprints.digest(value)
+
+        return digest
+
+    def note_after(self, ticket: tuple[int, int], values: tuple, digests: tuple) -> None:
+        """The call holding *ticket* returned and hashed *values* to
+        *digests*: kept for the statement's fingerprint after it, when the
+        call is the whole statement and only its result's binding follows."""
+        if ticket[0] != self._generation or ticket[1] != 1 or not self._after_ok:
+            return
+        self._after = {id(v): (v, d) for v, d in zip(values, digests) if isinstance(d, str)}
+        self._after_at = self._started
+
+    def digest_after(self, value: Any) -> str:
+        """`compute_hash` of *value* for the statement's fingerprint after
+        it ran: the call's own when no other call started since."""
+        if self._after and self._after_at == self._started:
+            found = self._after.get(id(value))
+            if found is not None and found[0] is value:
+                return found[1]
+        return self.fingerprints.digest(value)
+
+
+def hash_args(
+    args: tuple,
+    kwargs: dict,
+    fingerprints: ArgFingerprints | None = None,
+    digest: Callable[[Any], str] | None = None,
+) -> tuple:
     """Content hashes of the live arguments, for mutation detection.
 
     Every byte of every argument (`compute_hash`): a callee that edits a
@@ -348,7 +493,8 @@ def hash_args(args: tuple, kwargs: dict, fingerprints: ArgFingerprints | None = 
     the miss path, twice per argument; a site whose keying and hashing cost
     more than the call is run plain by the call-site guard. With
     *fingerprints*, a pandas frame that provably has not changed since it
-    was last hashed is not read again (`ArgFingerprints`).
+    was last hashed is not read again (`ArgFingerprints`). *digest*, when
+    given, hashes each value in their place (`DigestHandoff.digest_before`).
 
     An argument whose content cannot be read at all fails closed:
 
@@ -373,7 +519,10 @@ def hash_args(args: tuple, kwargs: dict, fingerprints: ArgFingerprints | None = 
     out = []
     for value in (*args, *kwargs.values()):
         try:
-            h = compute_hash(value) if fingerprints is None else fingerprints.digest(value)
+            if digest is not None:
+                h = digest(value)
+            else:
+                h = compute_hash(value) if fingerprints is None else fingerprints.digest(value)
         except Exception:  # noqa: BLE001 - see the comment below
             # This branch IS live, on every Python before 3.14: hashing an
             # instance of a locally-defined class raises
