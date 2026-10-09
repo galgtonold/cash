@@ -1554,7 +1554,7 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
     try:
         if _is_pandas_frame(kind):
             dtypes = [value.dtype] if value.ndim == 1 else list(value.dtypes)
-            if any(dtype == object for dtype in dtypes):
+            if any(str(dtype) == "object" for dtype in dtypes):
                 return None  # its cells decide (`_holds_mutable_cells`): not scanned here
             if frame_sharing.enabled() and frame_sharing.freezable(value):
                 return SHARED_HIT_SECONDS
