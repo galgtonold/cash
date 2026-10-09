@@ -144,6 +144,15 @@ A file that was read but cannot be stat'ed when the result is stored (a
 permission error, a name the file system rejects) is recorded as never fresh:
 the call recomputes each time rather than lose the dependency.
 
+<!-- claim: cash/tracking/pending_digest.py:PendingDigest @?, cash/tracking/file_tracker.py:BACKGROUND_DIGEST_MIN_BYTES == 4194304, cash/tracking/digest_table.py:DigestTable @? -->
+A file of 4 MiB or more that the function reads itself is hashed beside it:
+the hash starts when the function opens the file, runs while it reads and
+computes, and is waited for before the result is stored, or before anything
+in the process opens the file to write. A file that had settled before it
+was hashed has its hash kept in the cache directory under its size,
+timestamps and identity, so a new process does not read it again while
+those are unchanged.
+
 Every file is hashed in full, whatever its size. The one edit the checks
 miss is on Windows: a same-size write that puts the old modification time
 back, or a write through `np.memmap`, which moves no timestamp. See
