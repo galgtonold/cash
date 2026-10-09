@@ -29,6 +29,11 @@ behave as on any other, they just copy first. A table frozen this way pickles
 as a writable one (`_install_pickling`): a disk entry, or a table the user
 pickles themselves, loads as an ordinary table.
 
+Only a table cash owns is frozen: its own copy made when storing, or a
+table it has just unpickled from disk. A table the caller holds is never
+frozen -- cash does not change what an object of the caller's allows -- so
+the store copies it once, and every hit shares that copy.
+
 Used only where pandas has copy-on-write (pandas 3, or opted in before) and
 these internals behave as described (`enabled`, checked once). Otherwise the
 tier copies as it always has.
@@ -45,7 +50,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["adopt", "enabled", "freeze", "hand_out", "is_frozen", "is_pin"]
+__all__ = ["enabled", "freeze", "frozen_already", "hand_out", "is_frozen", "is_pin"]
 
 
 class _Pin:
@@ -138,7 +143,7 @@ def _self_test(pd: Any) -> bool:
         }
     )
     stored = df.copy(deep=True)
-    if not _freeze(stored, own=True):
+    if not _freeze(stored):
         return False
     hit = hand_out(stored)
     other = hand_out(stored)
@@ -264,49 +269,63 @@ def _freeze_values(values: Any) -> Any:
     return values if frozen is values._ndarray else values._from_backing_data(frozen)
 
 
-def _freeze_index(index: Any) -> None:
-    """Make an index's labels read-only. An index is never written through
-    pandas; its arrays only through a handle (``index.array``)."""
+def _frozen_index(index: Any) -> Any:
+    """A new index with *index*'s labels, copied and made read-only; *index*
+    itself when it holds no array (a range). An index is never written
+    through pandas, only through a handle (``index.array``). Copied, because
+    a deep pandas copy of a table may keep the caller's label array, and the
+    caller's index must stay as writable as it was."""
     import pandas as pd
 
     if isinstance(index, pd.RangeIndex):
-        return
+        return index
     data = index._data
-    frozen = _freeze_values(data)
-    if frozen is not data:
-        index._data = frozen
+    if not _ndarray_parts(data):
+        return index  # Arrow labels: immutable memory (`_private_axes`)
+    return type(index)._simple_new(_freeze_values(data.copy()), name=index.name)
 
 
-def _frozen_already(frame: Any) -> bool:
-    """Is all of *frame*'s data frozen by cash already (a hit, a restored
-    value)? Then whoever else holds it can no more write it than *frame*."""
-    for blk in frame._mgr.blocks:
-        if not any(ref is _PIN for ref in blk.refs.referenced_blocks):
-            return False
-        parts = _ndarray_parts(blk.values)
-        if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
-            return False
-    return True
+def frozen_already(frame: Any) -> bool:
+    """Is all of *frame*'s data frozen by cash already (a hit, a table cash
+    froze after unpickling it)? Then it can be kept as it is, by a shallow
+    copy (`hand_out`): no holder can write that data, and storing it changes
+    nothing any holder may do."""
+    try:
+        for blk in frame._mgr.blocks:
+            if not any(ref is _PIN for ref in blk.refs.referenced_blocks):
+                return False
+            parts = _ndarray_parts(blk.values)
+            if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
+                return False
+        axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
+        for axis in axes:
+            parts = _ndarray_parts(getattr(axis, "_data", None)) if not _is_range(axis) else []
+            if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
+                return False
+        return type(frame).__module__.startswith("pandas") and freezable(frame, cells_known=True)
+    except Exception:  # noqa: BLE001 - unknown internals: not frozen
+        return False
 
 
-def freeze(frame: Any, *, own: bool = False, cells_known: bool = False) -> bool:
+def _is_range(index: Any) -> bool:
+    import pandas as pd
+
+    return isinstance(index, pd.RangeIndex)
+
+
+def freeze(frame: Any, *, cells_known: bool = False) -> bool:
     """Make *frame*'s data immutable in place (see the module docstring), and
-    every pandas object's that shares its blocks. False, with nothing done,
-    when *frame* is not `freezable` or, unless *own* (cash made *frame* and
-    no one else holds it), when something outside pandas may hold its memory.
+    every pandas object's that shares its blocks. *frame* must be cash's
+    own: a copy no caller holds, or a table just unpickled. False, with
+    nothing done, when *frame* is not `freezable`.
     """
-    return enabled() and _freeze(frame, own=own, cells_known=cells_known)
+    return enabled() and _freeze(frame, cells_known=cells_known)
 
 
-def _freeze(frame: Any, *, own: bool, cells_known: bool = False) -> bool:
+def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
     try:
         if not freezable(frame, cells_known=cells_known):
             return False
-        if not own and not _frozen_already(frame):
-            from ..decorator.arg_hashing import frame_borrows_its_data
-
-            if frame_borrows_its_data(frame, since=sys.maxsize):
-                return False
         _install_pickling()
         frame._consolidate_inplace()
         for blk in frame._mgr.blocks:
@@ -321,33 +340,16 @@ def _freeze(frame: Any, *, own: bool, cells_known: bool = False) -> bool:
                     other.values = frozen
             if not any(ref is _PIN for ref in refs.referenced_blocks):
                 refs.referenced_blocks.append(_PIN)
-        axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
-        for axis in axes:
-            _freeze_index(axis)
+        for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
+            axis = getattr(frame, name)
+            frozen = _frozen_index(axis)
+            if frozen is not axis:
+                setattr(frame, name, frozen)
         _private_axes(frame)
         return True
     except Exception:  # noqa: BLE001 - a pandas internals change: copy instead
         logger.debug("cash: could not freeze a %s", type(frame).__name__, exc_info=True)
         return False
-
-
-def adopt(frame: Any, *, cells_known: bool = False) -> Any | None:
-    """A frozen table holding *frame*'s data, without copying it, for the RAM
-    tier to keep; None when that cannot be (copy it instead).
-
-    *frame* is the caller's: it is frozen too (`freeze`), since the two share
-    their memory. To pandas nothing changes; a write through a handle to the
-    memory itself (``s.array[0] = 1``) raises, as on a read-only array.
-    """
-    if not enabled() or not freezable(frame, cells_known=cells_known):
-        return None
-    try:
-        stored = frame.copy(deep=False)
-    except Exception:  # noqa: BLE001 - copy instead
-        return None
-    if not freeze(stored, cells_known=cells_known):
-        return None
-    return stored
 
 
 def hand_out(stored: Any) -> Any:
