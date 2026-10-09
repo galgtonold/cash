@@ -20,6 +20,9 @@ def test_in_and_underscore_i_hold_the_cells_source(nb_runner):
     assert nb_runner.peek("[s for s in In if s in ('k = 2', 'k * 10')]") == repr(["k = 2", "k * 10"])
 
 
+# %save writes the kernel's whole input history; a kernel reused from an
+# earlier test would add that test's cells to the file.
+@pytest.mark.fresh_kernel
 def test_save_writes_the_cells_source(nb_runner):
     nb_runner.create_notebook(["k = 2", "k * 10", "%save -f saved.py 1-99999\nsaved = open('saved.py').read()"])
     nb_runner.start_kernel()
