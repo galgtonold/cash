@@ -40,9 +40,9 @@ def remove_previous_hooks(shell: Any) -> None:
             shell.run_cell_async = prior["original_run_cell_async"]
         except (KeyError, AttributeError):
             pass
-    if prior.get("flush_pending_writes") is not None:
+    if prior.get("after_cell") is not None:
         try:
-            shell.events.unregister("post_run_cell", prior["flush_pending_writes"])
+            shell.events.unregister("post_run_cell", prior["after_cell"])
         except (ValueError, KeyError, AttributeError, TypeError):
             pass
 
@@ -98,7 +98,7 @@ def stash_hooks(
     *,
     original_run_cell: Any,
     capture_cell_id: Callable[..., Any],
-    flush_pending_writes: Callable[..., Any],
+    after_cell: Callable[..., Any],
     original_run_cell_async: Any = None,
 ) -> None:
     """Keep on *shell* what :func:`remove_previous_hooks` needs to undo."""
@@ -106,7 +106,7 @@ def stash_hooks(
         shell._cash_hooks = {
             "original_run_cell": original_run_cell,
             "capture_cell_id": capture_cell_id,
-            "flush_pending_writes": flush_pending_writes,
+            "after_cell": after_cell,
         }
         if original_run_cell_async is not None:
             shell._cash_hooks["original_run_cell_async"] = original_run_cell_async

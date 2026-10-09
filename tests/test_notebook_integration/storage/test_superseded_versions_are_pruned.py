@@ -78,6 +78,7 @@ def test_a_big_cheap_value_keeps_one_old_version_a_small_costly_one_keeps_all(nb
         nb_runner.run_all()
     assert "X 5.0 score 10.0" in nb_runner.get_output(6)
 
+    nb_runner.settle_writes()
     assert _versions_on_disk(nb_runner.work_dir, "X") == 2
     assert _versions_on_disk(nb_runner.work_dir, "score") == 5
 

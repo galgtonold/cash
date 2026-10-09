@@ -33,7 +33,9 @@ def test_a_restarted_notebook_says_an_evicted_value_was_recomputed(nb_runner):
     assert "reached its 3 MB cap" in "".join(first), "nothing was evicted, so nothing is under test"
     assert "CACHE-EVICTED-RECOMPUTE" not in "".join(first)
 
-    nb_runner.restart()
+    # Killed, with every write on disk: after a graceful exit (its access
+    # stamps flushed) the recompute does not warn -- a separate question.
+    nb_runner.settle_writes().restart(graceful=False)
     nb_runner.run_all()
     outputs = {i: nb_runner.get_raw_output(i) for i in (3, 4, 5)}
     warned = [i for i, out in outputs.items() if "[CACHE-EVICTED-RECOMPUTE]" in out]

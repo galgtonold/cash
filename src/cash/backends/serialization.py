@@ -51,22 +51,25 @@ class PickleSerializer(Serializer):
     def deserialize(self, data: bytes) -> Any:
         return pickle.loads(data)
 
-    def serialize_split(self, data: Any) -> tuple[bytes, list[bytes]]:
+    def serialize_split(self, data: Any, *, copy: bool = True) -> tuple[bytes, list[Any]]:
         """The pickle stream and, apart from it, the large buffers it refers to.
 
         What the file backend writes (``entry_format.MAGIC_SPLIT``): a large
         array is copied once, here, instead of into the stream, then into a
-        joined blob, then out of it. Copied at all because the write runs
-        later, on another thread, and the caller may change the value in the
-        meantime.
+        joined blob, then out of it. Copied because the write runs later, on
+        another thread, and the caller may change the value in the meantime.
+
+        ``copy=False`` hands each buffer out as a view of the value's own
+        memory, for a value nobody changes until the write is done (the file
+        backend's ``private`` values), where the copy would be pure cost.
         """
-        buffers: list[bytes] = []
+        buffers: list[Any] = []
 
         def take(buffer: pickle.PickleBuffer) -> bool:
             raw = buffer.raw()
             if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
                 return True  # in band
-            buffers.append(raw.tobytes())
+            buffers.append(raw.tobytes() if copy else raw)
             return False
 
         stream = kept_state.dumps(data, protocol=5, buffer_callback=take)

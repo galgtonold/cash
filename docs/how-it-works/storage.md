@@ -158,8 +158,9 @@ notice, not a warning: a cache at its cap is doing its job.
 
 === "Notebook"
 
-    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._flush_pending_writes @52688dae -->
-    A line at the end of the cell whose results filled the cache:
+    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._after_cell @db14623f -->
+    A line at the end of the first cell to finish after the write that
+    filled the cache:
 
     ```text title="Output"
     [cash] The cache in /work/.cash reached its 26.0 GiB cap, so cash removed 41 entries (2.6 GiB), ...
@@ -184,6 +185,39 @@ one folder can together go over it before one of them evicts. A long-running
 process re-measures the disk about once a minute while it writes. A re-run
 notebook statement also drops its older versions when the new one is written.
 
+## When a result reaches the disk
+
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @1faf5bd4, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
+The disk write runs on a background thread, and your code carries on while it
+does. cash waits for a write only when something needs it on disk:
+
+- a read of that result in the same process,
+- code in the same process listing the cache folder,
+- another process this one starts (`subprocess`, `os.system`, a `!` line in
+  a notebook, a forked worker), for up to 30 seconds,
+- the end of the process, for up to `shutdown_write_timeout`
+  ([`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned)).
+
+A process this one did not start, reading the same folder at the same time,
+finds a result once its write has finished, and computes it until then.
+
+=== "Decorator"
+
+    A call returns as soon as its result is computed; the write follows.
+
+=== "Notebook"
+
+    A cell does not wait for its writes either: they finish while the next
+    cell runs. It waits only for what would take more than about two
+    seconds more to write. That bounds what a restart can lose, since
+    Jupyter gives the kernel a few seconds to exit before it stops it, and
+    what a crash or a killed kernel can lose.
+
+<!-- claim: cash/backends/file_backend.py:FileBackend._write_new_in_place @88db24c4, cash/backends/file_backend.py:FileBackend._atomic_write @1d55d3e9 -->
+A write cut short never leaves a readable entry: a new entry's header is
+written last, and a replaced one goes to a temporary file first. What a
+killed process was still writing is missing, and is computed again.
+
 ## Turning objects into bytes
 
 <!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1, cash/backends/serialization.py:PickleSerializer.serialize @5b9d05cd -->
@@ -194,6 +228,16 @@ write and read. Parquet files are smaller for columns with few distinct values
 (small integers, repeated strings, mostly missing values); if disk space
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
+
+<span id="compression"></span>
+
+<!-- claim: cash/backends/compression.py:ZSTD_LEVEL == 3, cash/backends/compression.py:ZLIB_LEVEL == 1, cash/backends/compression.py:MIN_SAVING == 0.1, cash/backends/compression.py:compress @9df58020 -->
+With `compress` on, each entry is compressed on the background writer: with
+zstd on Python 3.14 and later, with zlib before, both at fast settings. cash
+first tries the first megabyte; an entry that does not shrink by a tenth
+(random floats, images already compressed) is stored as it is. An entry
+compressed with zstd reads as missing on an older Python, and is recomputed
+there.
 
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or
@@ -215,7 +259,7 @@ restart, an out-of-memory kill) leaves that file behind. The first write of a
 later process on the same machine removes it; one left by another machine
 goes once nobody has written to it for a day.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @3267884e -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

@@ -93,7 +93,7 @@ When the folder passes
 byte first: cheap to recompute, large, and rarely read go first.
 
 **Key parameters:** `cache_dir`, `max_size_bytes` (None: unlimited),
-`compress` (gzip; worth it mostly for text), `flush_interval`, `default_ttl`.
+`compress` (zstd or zlib; worth it mostly for text), `flush_interval`, `default_ttl`.
 
 ## `SQLiteBackend`
 

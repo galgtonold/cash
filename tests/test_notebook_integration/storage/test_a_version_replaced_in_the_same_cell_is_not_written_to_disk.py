@@ -56,6 +56,7 @@ def test_only_the_cells_final_version_reaches_disk_and_restores(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "ARR 6.0" in nb_runner.get_output(4)
+    nb_runner.settle_writes()
     assert _on_disk(nb_runner.work_dir, "arr") == 1
 
     before = len(_runs(nb_runner.work_dir))
@@ -73,4 +74,5 @@ def test_persist_annotation_still_writes_an_intermediate(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "ARR 6.0" in nb_runner.get_output(4)
+    nb_runner.settle_writes()
     assert _on_disk(nb_runner.work_dir, "arr") >= 2

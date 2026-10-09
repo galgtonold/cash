@@ -7,7 +7,9 @@ of that key waits for it: a ``multiprocessing`` pool forked while a large
 value was still being written hung with every worker blocked.
 
 The write is the parent's to finish. The child reads what is on disk: the
-entry, or a miss while it is not there yet.
+entry, or a miss while it is not there yet. (The parent waits for its writes
+before it forks, but only for so long: here the write never finishes, so the
+wait is cut short and the fork goes ahead with the write in flight.)
 """
 
 from __future__ import annotations
@@ -18,10 +20,17 @@ import time
 
 import pytest
 
+from cash.backends import _writes
 from cash.backends._writes import PendingWrites
 from cash.backends.file_backend import FileBackend
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+
+
+@pytest.fixture(autouse=True)
+def _short_wait_before_a_fork(monkeypatch):
+    """The held writes below never finish: fork after a short wait for them."""
+    monkeypatch.setattr(_writes, "CHILD_WAIT_S", 0.2)
 
 
 def _in_child(body) -> int:

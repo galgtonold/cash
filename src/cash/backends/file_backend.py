@@ -7,11 +7,11 @@ directory-wide files are `cache_dir`'s.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import logging
 import os
 import pickle
+import sys
 import threading
 import time
 import weakref
@@ -25,6 +25,7 @@ from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
 from ._base import CacheBackend, MetadataDict, entry_expired
+from . import compression
 from ._writes import PendingWrites
 from .cache_dir import (
     CacheDirStamp,
@@ -110,6 +111,77 @@ def _writer_scope(cache_dir: str) -> str:
         return os.path.abspath(cache_dir)
 
 
+#: Modules a listing passes through on its way from the code that asked for
+#: it: ``glob.glob`` and ``Path.glob`` list with ``os.scandir`` themselves.
+_LISTING_HELPERS = ("glob", "_glob", "pathlib", "os", "posixpath", "ntpath", "fnmatch", "shutil")
+
+
+def _asked_by_storage() -> bool:
+    """Did the storage code itself list the directory?
+
+    It waits for the writes it needs to see (``list_entries``, ``clear``),
+    and an eviction scan must not wait for the writes behind it. Past the
+    stdlib's helpers and cash's own wrappers of them (the file tracker's
+    ``glob``): those list for the user's code. Called from the audit
+    consumer below, whose caller is the audit hook; the code that listed is
+    two frames up.
+    """
+    frame = sys._getframe(3)
+    for _ in range(12):
+        if frame is None:
+            return False
+        name = frame.f_globals.get("__name__", "") or ""
+        if name.startswith("cash.backends."):
+            return True
+        top = name.partition(".")[0]
+        if top != "cash" and top not in _LISTING_HELPERS:
+            return False
+        frame = frame.f_back
+    return False
+
+
+def _finish_before_listing(args: tuple) -> None:
+    """A listing of a cache directory sees every write already queued for it.
+
+    The ``os.scandir`` / ``os.listdir`` audit events: code in this process
+    looking at the folder itself (``glob('.cash/*.entry')`` in a later cell)
+    reads it from disk, so the writes queued for it land first. The storage
+    code's own listings wait where they need to (``list_entries``,
+    ``clear``), and the write workers never wait. Never raises.
+    """
+    try:
+        if PendingWrites.in_worker_thread():
+            return
+        with _WRITERS_LOCK:
+            busy = {scope: list(b) for scope, b in _WRITERS_BY_DIR.items() if any(w.pending_count() for w in b)}
+        if not busy:
+            return
+        path = args[0] if args else None
+        if isinstance(path, int):
+            return  # a directory descriptor: no name to compare
+        scope = _writer_scope(os.fsdecode(os.fspath(path)) if path is not None else os.curdir)
+        writers = busy.get(scope)
+        if writers and not _asked_by_storage():
+            for writer in writers:
+                writer.wait_all()
+    except Exception:  # noqa: BLE001 - must never fail the user's listing
+        logger.debug("Finishing cache writes before a listing failed", exc_info=True)
+
+
+_listing_watched = False
+
+
+def _watch_listings() -> None:
+    global _listing_watched
+    if _listing_watched:
+        return
+    from ..tracking import io_watch
+
+    for event in ("os.scandir", "os.listdir"):
+        io_watch.subscribe_always(event, _finish_before_listing)
+    _listing_watched = True
+
+
 def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     """Register *writes* under *cache_dir*'s scope, and return the scope."""
     scope = _writer_scope(cache_dir)
@@ -120,6 +192,8 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
     except Exception:  # tracking is best-effort, storage is not
         logger.debug("Could not register %s with the file tracker", cache_dir, exc_info=True)
     with _WRITERS_LOCK:
+        if not _listing_watched:
+            _watch_listings()
         bucket = _WRITERS_BY_DIR.get(scope)
         if bucket is None:
             bucket = weakref.WeakSet()
@@ -161,6 +235,8 @@ class FileBackend(CacheBackend):
     """
 
     source_label: str = "DISK"
+    #: `set` takes ``private=True`` (see there).
+    takes_private_values: bool = True
 
     def __init__(
         self,
@@ -174,7 +250,9 @@ class FileBackend(CacheBackend):
         """
         Args:
             cache_dir: Directory for cache files.
-            compress: Whether to gzip-compress data files.
+            compress: Whether to compress each entry's payload (zstd on
+                Python 3.14+, else zlib; see ``compression``). A payload that
+                does not shrink is stored as it is.
             max_size_bytes: Byte cap. A write that goes over it evicts the
                 entries worth least per byte. ``None``: no cap.
             flush_interval: Seconds between writes of access statistics.
@@ -198,7 +276,8 @@ class FileBackend(CacheBackend):
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
 
-        # Values are serialized on the caller's thread; the disk I/O runs here.
+        # The disk I/O runs here; values are serialized on the caller's
+        # thread, unless they are `set` ``private``.
         self._writes = PendingWrites()
         self._writer_scope = _register_writer(self.cache_dir, self._writes)
         self.stamp = CacheDirStamp(self.cache_dir, _untracked)
@@ -383,8 +462,9 @@ class FileBackend(CacheBackend):
         if self._unusable:
             return None
         # Wait for any in-flight write so the metadata we report reflects
-        # the most recent ``set()`` for this key.
-        self._writes.wait(key)
+        # the most recent ``set()`` for this key, by any backend over this
+        # directory.
+        self._wait_for_writes(key)
         cached_meta = self._touched.metadata(key)
 
         path = self._get_path(key)
@@ -474,13 +554,15 @@ class FileBackend(CacheBackend):
             self._read_keys.add(key)
             self.evictor.note_read(key)
 
-            if metadata.get("compressed", False):
+            codec = metadata.get("compressed", False)
+            if codec:
                 try:
-                    payload = gzip.decompress(payload)
-                except (OSError, gzip.BadGzipFile, EOFError):
-                    # Flag says compressed but the bytes are not: the raw
-                    # bytes are the payload.
-                    logger.debug("Entry for %r flagged compressed but is not", key)
+                    payload = compression.decompress(codec, payload)
+                except Exception as exc:  # noqa: BLE001 - every codec raises its own
+                    # A codec this Python lacks, or bytes it cannot inflate:
+                    # a miss, computed again, never the raw bytes unpickled.
+                    logger.debug("Cache get for %r: cannot decompress (%s): %s", key, codec, exc)
+                    return None, None
 
             if isinstance(payload, SplitPayload):
                 # Written only for a PickleSerializer value (`set`).
@@ -613,8 +695,13 @@ class FileBackend(CacheBackend):
         if isinstance(serialized_value, SplitPayload):
             chunks = split_chunks(serialized_value.stream, serialized_value.buffers)
             split = True
+            metadata["compressed"] = False
         else:
-            chunks = [gzip.compress(serialized_value) if self.compress else serialized_value]
+            codec = None
+            if self.compress:
+                codec, serialized_value = compression.compress(serialized_value)
+            metadata["compressed"] = codec or False
+            chunks = [serialized_value]
             split = False
         # The bytes the value occupies on disk, after compression.
         metadata["size"] = sum(len(c) for c in chunks)
@@ -656,11 +743,22 @@ class FileBackend(CacheBackend):
             self.evictor.record_rank(key, path, metadata, entry.size)
 
     def set(
-        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+        self,
+        key: str,
+        value: Any,
+        metadata: MetadataDict | None = None,
+        serializer: Serializer | None = None,
+        *,
+        private: bool = False,
     ) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
-        a subsequent ``get(key)`` waits for the write."""
+        a subsequent ``get(key)`` waits for the write.
+
+        *private*: cash owns *value* and nothing changes it from now on (the
+        RAM tier's own copy). Then the background writer serializes it too,
+        using its buffers' memory as it is: the caller pays nothing, where a
+        caller's value has to be copied before ``set`` may return."""
         self._ensure_initialized()
         if self._unusable:
             return
@@ -675,23 +773,23 @@ class FileBackend(CacheBackend):
         if serializer is None:
             serializer = PickleSerializer()
 
-        # IMPORTANT: serialize on the calling thread so a post-set()
-        # mutation of `value` can't corrupt the cached bytes.
-        serialized_value: bytes | SplitPayload
-        if type(serializer) is PickleSerializer and not self.compress:
-            # Large buffers apart from the stream (``entry_format.MAGIC_SPLIT``).
-            stream, buffers = serializer.serialize_split(value)
-            serialized_value = SplitPayload(stream, buffers) if buffers else stream
-            nbytes = len(stream) + sum(len(b) for b in buffers)
+        if private:
+            # Serialized by the writer; the size known now is the caller's.
+            nbytes = int(metadata.get("size") or metadata.get("cost_model_size_bytes") or 0)
+            job: Callable[..., None] = self._serialize_and_write
+            work: Any = (value, serializer)
         else:
-            serialized_value = serializer.serialize(value)
-            nbytes = len(serialized_value)
+            # IMPORTANT: serialize on the calling thread so a post-set()
+            # mutation of `value` can't corrupt the cached bytes.
+            serialized_value = self._serialize(value, serializer, copy=True)
+            nbytes = self._payload_bytes(serialized_value)
+            job = self._do_set_sync
+            work = serialized_value
+            # Pre-compute size from the serialized bytes; the on-disk size
+            # may differ under compression but the user-facing metadata
+            # needs to be populated synchronously for the badge.
+            metadata["size"] = nbytes
 
-        metadata["compressed"] = self.compress
-        # Pre-compute size from the serialized bytes; the on-disk size
-        # may differ slightly under compression but the user-facing
-        # metadata needs to be populated synchronously for the badge.
-        metadata["size"] = nbytes
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
@@ -702,14 +800,9 @@ class FileBackend(CacheBackend):
         # can mutate the original after we return without affecting the
         # written entry.
         meta_for_write = dict(metadata)
-        self._writes.submit(
-            key,
-            self._do_set_sync,
-            key,
-            path,
-            meta_for_write,
-            serialized_value,
-        )
+        # A private value's memory is held by the RAM tier anyway: only the
+        # copies made here count against the queue's memory.
+        self._writes.submit_sized(key, nbytes, not private, job, key, path, meta_for_write, work)
         slot = metadata.get("version_slot")
         if slot:
             # A version whose values are references to call entries weighs
@@ -732,7 +825,13 @@ class FileBackend(CacheBackend):
         just queued, and make every write of a version synchronous."""
         try:
             versions = self._versions.record(slot, key, size, cost, time.time())
-            gone = [k for k in versions if k != key and not os.path.exists(self._get_path(k))]
+            # Gone: no write of it still queued and no file (asked in that
+            # order: a version stored a moment ago may not be on disk yet).
+            gone = [
+                k
+                for k in versions
+                if k != key and not self._writes.has_pending(k) and not os.path.exists(self._get_path(k))
+            ]
             for k in gone:
                 versions.pop(k)
             drop = superseded_to_drop(versions, key, self._read_keys)
@@ -751,6 +850,37 @@ class FileBackend(CacheBackend):
                 logger.debug("Pruned %d superseded version(s) of slot %s", len(drop), slot)
         except (OSError, CacheBackendError) as exc:
             logger.debug("Version pruning failed for %r: %s", key, exc)
+
+    def _serialize(self, value: Any, serializer: Serializer, *, copy: bool) -> bytes | SplitPayload:
+        """*value* as the bytes an entry stores.
+
+        A `PickleSerializer` value without compression keeps its large
+        buffers apart from the stream (``entry_format.MAGIC_SPLIT``), copied
+        unless *copy* is False. Compressed, it is one stream: the codec reads
+        it once, and the copy into the stream is what keeps a later mutation
+        out."""
+        if type(serializer) is PickleSerializer and not self.compress:
+            stream, buffers = serializer.serialize_split(value, copy=copy)
+            return SplitPayload(stream, buffers) if buffers else stream
+        return serializer.serialize(value)
+
+    @staticmethod
+    def _payload_bytes(serialized_value: bytes | SplitPayload) -> int:
+        if isinstance(serialized_value, SplitPayload):
+            return len(serialized_value.stream) + sum(memoryview(b).nbytes for b in serialized_value.buffers)
+        return len(serialized_value)
+
+    def _serialize_and_write(self, key: str, path: str, metadata: dict, work: tuple) -> None:
+        """`_do_set_sync` for a `set` ``private`` value: serialize it here, on
+        the writer, without copying its buffers."""
+        value, serializer = work
+        try:
+            serialized_value = self._serialize(value, serializer, copy=False)
+        except Exception as exc:  # noqa: BLE001 - whatever the value's pickling raises
+            logger.debug("Cache set failed for key %r: %s", key, exc)
+            raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
+        del value, work  # the buffers hold what the write needs
+        self._do_set_sync(key, path, metadata, serialized_value)
 
     def _call_refs_of(self, keys) -> set[str]:
         refs: set[str] = set()
@@ -797,7 +927,7 @@ class FileBackend(CacheBackend):
         # nothing, and clobbers the (more valuable) full entry with a
         # metadata-only one. get()/get_metadata()/delete() synchronise the
         # same way.
-        self._writes.wait(key)
+        self._wait_for_writes(key)
         path = self._get_path(key)
 
         # What this process last wrote there, when it was metadata only, needs

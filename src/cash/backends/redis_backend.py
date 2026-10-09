@@ -178,8 +178,10 @@ class RedisBackend(CacheBackend):
         meta_bytes = pickle.dumps(metadata)
         ttl = metadata.get("ttl")
 
-        self._writes.submit(
+        self._writes.submit_sized(
             key,
+            len(serialized_value),
+            True,
             self._do_set_sync,
             meta_key,
             data_key,
