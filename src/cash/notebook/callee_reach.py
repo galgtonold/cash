@@ -724,17 +724,33 @@ def _seeds_and_calls(source: str) -> tuple[frozenset[str], tuple[str, ...]]:
 
 
 def _function_body(fn: types.FunctionType) -> list[ast.stmt]:
-    """The statements of *fn*'s body, from its source; none when it has none."""
+    """The statements of *fn*'s body, from its source; none when it has none.
+
+    Read once per code object (`_code_body`): every statement that calls a
+    notebook function walks its body, for the module state and again for
+    the process state it sets, and reading the source is what costs."""
     try:
-        tree = parse_cached(textwrap.dedent(inspect.getsource(fn)))
-    except SOURCE_RETRIEVAL_ERRORS:
+        target = inspect.unwrap(fn)
+    except ValueError:  # a __wrapped__ cycle
+        target = fn
+    code = getattr(target, "__code__", None)
+    if not isinstance(code, types.CodeType):
         return []
+    return list(_code_body(code))
+
+
+@functools.lru_cache(maxsize=1024)
+def _code_body(code: types.CodeType) -> tuple[ast.stmt, ...]:
+    """The body statements of the function whose code is *code*: a def run
+    again makes a new code object, so an edited one is read again."""
+    source = _code_source(code)
+    tree = parse_cached(source) if source is not None else None
     if tree is None:
-        return []
+        return ()
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return list(node.body)
-    return []
+            return tuple(node.body)
+    return ()
 
 
 def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, structure: bool = False) -> frozenset[str]:
