@@ -444,7 +444,8 @@ pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
 `for x in rows:`).
 A header built by builtins or a progress bar
 (`tqdm(list(zip(a, b)))`) is evaluated once, by the unit, as plain Python
-evaluates it.
+evaluates it. An array built from a list (`enumerate(np.array(lines))`)
+counts as long as the list.
 
 The expensive call inside the loop body (`fetch(e)` in `out.append(fetch(e))`)
 is still cached, so usually there is nothing to do. **Fix** when it is not:
