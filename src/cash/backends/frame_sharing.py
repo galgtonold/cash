@@ -18,6 +18,12 @@ So a table the tier shares is *frozen* first (`freeze`):
   before writing, even once the stored table and every other hit are gone:
   a frozen block is never written in place, by pandas or anyone else.
 
+Only columns kept in plain numpy arrays (numbers, dates and times, object
+columns whose cells cannot change) and Arrow-backed ones are frozen. A
+nullable, categorical or period column hands out ``s.values`` as the
+extension array itself, writable by design, so a table holding one is not
+shared: the tier copies it.
+
 The data a table reads stays where it is; pandas writes to a frozen table
 behave as on any other, they just copy first. A table frozen this way pickles
 as a writable one (`_install_pickling`): a disk entry, or a table the user

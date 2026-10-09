@@ -84,19 +84,38 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @06dea40d -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
 | Disk | the cache folder | Yes |
 
-A read tries memory first. A value found on disk is copied back into memory
-for the next read, unless it would take more than 90% of the memory cap.
+A read tries memory first. A pandas table found on disk is kept in memory for
+the next read without a copy (see below). Any other value found on disk is
+copied into memory on its second read from disk in the same process, so a
+value read once after a restart costs no extra copy. Neither is kept when it
+would take more than 90% of the memory cap.
+
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @cf69bfae, cash/backends/frame_sharing.py:_freeze @97192bc7, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+The memory tier keeps a copy of each value that only it holds, so nothing you
+do to a value you were handed reaches the stored one, or the other way round.
+Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
+on pandas 2), a table of numbers, dates and text is shared instead of copied:
+the store marks its data read-only and shared, and each hit is a shallow copy
+that costs microseconds whatever the table's size. pandas copies a column
+before any write you make through it (`df.loc[...] = ...`, `df["x"] = ...`,
+`inplace=True` methods), so the write stays in your table. A write that goes
+past pandas to the shared memory -- `df["x"].array[0] = ...`, or a NumPy view
+made writable again -- raises `ValueError: assignment destination is
+read-only`; write through `.loc` or `.iloc` instead. A table with nullable,
+categorical or period columns, a `MultiIndex`, or a subclass of `DataFrame` is
+copied on the store and on every hit. A column of lists or dicts is kept as
+compact bytes and read back into new lists on every hit.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @06dea40d, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -121,7 +140,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @66b71f6c -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @3abd8d84 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
