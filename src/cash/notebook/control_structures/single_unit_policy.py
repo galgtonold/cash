@@ -162,7 +162,7 @@ def _is_progress_bar(name: str, user_ns: dict[str, Any]) -> bool:
     return callable(func) and str(getattr(func, "__module__", "")).partition(".")[0] == "tqdm"
 
 
-def _file_in_progress_bar(iterable: Any) -> io.IOBase | None:
+def file_in_progress_bar(iterable: Any) -> io.IOBase | None:
     """The open file a progress bar wraps (``tqdm(open(path))``), else None.
 
     The bar has no length of its own and the header's ``open(...)`` call
@@ -385,7 +385,7 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
         pass
     if isinstance(iterable, io.IOBase):
         return _lines_in_file(iterable)
-    wrapped = _file_in_progress_bar(iterable)
+    wrapped = file_in_progress_bar(iterable)
     if wrapped is not None:
         return _lines_in_file(wrapped)
 

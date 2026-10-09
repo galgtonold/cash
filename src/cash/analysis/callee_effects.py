@@ -12,7 +12,7 @@ import functools
 import textwrap
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from .ast_util import CallScope, called_names
+from .ast_util import CallScope, called_names, handed_names
 from .mutations import MutationVisitor, iter_store_targets
 
 __all__ = [
@@ -577,7 +577,8 @@ def source_global_rebinds(source: str) -> frozenset[str]:
 
 @functools.lru_cache(maxsize=4096)
 def source_called_names(source: str) -> frozenset[str]:
-    """Free names the function defined by *source* calls as ``name(...)``.
+    """Free names the function defined by *source* calls as ``name(...)`` or
+    hands to a call as an argument (``map(f, rows)``).
 
     A name the function binds itself (a parameter, a local) is not a call to
     another module-level function, so it is left out.
@@ -585,7 +586,7 @@ def source_called_names(source: str) -> frozenset[str]:
     node = _parse_function(source)
     if node is None:
         return frozenset()
-    return called_names(node) - scope_locals(node)
+    return (called_names(node) | handed_names(node)) - scope_locals(node)
 
 
 def callee_global_mutations(
@@ -594,7 +595,9 @@ def callee_global_mutations(
     *,
     scope: CallScope = "all",
 ) -> frozenset[str]:
-    """Globals mutated in place by the functions *tree* calls by name.
+    """Globals mutated in place by the functions *tree* calls by name, or hands
+    to a call as an argument (``s.apply(f)``, ``map(f, rows)``): the callee
+    calls it, so a hit that skips the statement would skip its writes too.
 
     *resolve_source* maps a called name to its source (or None when it is not a
     user function); each resolved callee contributes
@@ -620,7 +623,7 @@ def callee_global_mutations(
     """
     out: set[str] = set()
     seen: set[str] = set()
-    pending = list(called_names(tree, scope))
+    pending = list(called_names(tree, scope) | handed_names(tree, scope))
     while pending:
         name = pending.pop()
         if name in seen:
