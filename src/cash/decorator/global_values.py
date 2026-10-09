@@ -4,6 +4,7 @@ identified by what calling it runs."""
 
 from __future__ import annotations
 
+import contextvars
 import functools
 import hashlib
 import pickle
@@ -53,6 +54,17 @@ LOG_METHOD_NAMES = frozenset(
         "log",
     }
 )
+
+
+#: ``(kind, id(value)) -> (value, digest)`` for the values hashed during one
+#: key build; None outside one. Set by `KeyBuilder.build` for the length of
+#: the build: nothing runs between two reads of a value there that could
+#: change it, so a module constant every helper of another module reads
+#: (``hm3.C1`` reached through fifty call sites) is hashed once, not once per
+#: call site, on every hit. Dropped when the build ends, so the next build --
+#: and the check after the call -- hashes the value as it is then. The value
+#: is held, so its id is not reused while the entry stands.
+KEY_BUILD_DIGESTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_key_build_digests", default=None)
 
 
 class GlobalValues:
@@ -131,22 +143,38 @@ class GlobalValues:
             entry = self._immutable_digests.get(id(value))
             if entry is not None and entry[0] is value:
                 return entry[1]
+        build = KEY_BUILD_DIGESTS.get()
+        if build is not None:
+            entry = build.get(("plain", id(value)))
+            if entry is not None and entry[0] is value:
+                return entry[1]
         digest = args.plain_value_digest(value)
         if digest is None:
             digest = args.hash_payload((value,), {})
         if memo:
             self._immutable_digests[id(value)] = (value, digest)
+        if build is not None:
+            build[("plain", id(value))] = (value, digest)
         return digest
 
     def data_digest(self, value: Any) -> str:
         """The digest of a data value that may hold code: each function in it
         by what calling it runs (`data_callable_identity`). Kept per version
-        of a table of plain functions (`table_digest`)."""
-        return self.table_digest(
+        of a table of plain functions (`table_digest`), and for the rest of
+        one key build (`KEY_BUILD_DIGESTS`)."""
+        build = KEY_BUILD_DIGESTS.get()
+        if build is not None:
+            entry = build.get(("data", id(value)))
+            if entry is not None and entry[0] is value:
+                return entry[1]
+        digest = self.table_digest(
             "data",
             value,
             lambda: self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {}),
         )
+        if build is not None:
+            build[("data", id(value))] = (value, digest)
+        return digest
 
     def table_digest(self, kind: str, value: Any, compute: Callable[[], str]) -> str:
         """*compute*'s digest of *value*, kept while *value* is a table of
