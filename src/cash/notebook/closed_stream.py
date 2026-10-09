@@ -22,7 +22,14 @@ _FILE_TYPES = (io.TextIOWrapper, io.BufferedReader, io.BufferedWriter, io.Buffer
 
 class ClosedStream:
     """What a closed file is stored as. Copied or unpickled, it is the
-    closed file again (:func:`_closed_file`)."""
+    closed file again (:func:`_closed_file`).
+
+    Nothing in it changes, and its copy is not it but the closed file, which
+    does not pickle: the RAM tier keeps it as it is when storing
+    (``_cash_stored_as_is``), so a later disk write of that entry gets the
+    stored form, and a hit still copies it into the closed file."""
+
+    _cash_stored_as_is = True
 
     def __init__(self, name: str | bytes, mode: str, encoding: str | None, errors: str | None) -> None:
         self.args = (name, mode, encoding, errors)

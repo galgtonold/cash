@@ -96,18 +96,20 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @46d7ef2b, cash/backends/frame_sharing.py:_freeze @55f09bbe, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @2790adb6, cash/backends/frame_sharing.py:_freeze @2e3125dc, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
-on pandas 2), a table of numbers, dates and text is shared instead of copied:
-the store marks its data read-only and shared, and each hit is a shallow copy
-that costs microseconds whatever the table's size. pandas copies a column
-before any write you make through it (`df.loc[...] = ...`, `df["x"] = ...`,
-`inplace=True` methods), so the write stays in your table. A write that goes
-past pandas to the shared memory -- `df["x"].array[0] = ...`, or a NumPy view
-made writable again -- raises `ValueError: assignment destination is
-read-only`; write through `.loc` or `.iloc` instead. A table with nullable,
+on pandas 2), a table of numbers, dates and text is copied once, when it is
+stored, and that copy is shared by every hit: cash marks it read-only and
+shared, and each hit is a shallow copy that costs microseconds whatever the
+table's size. The table you stored stays as writable as it was. pandas
+copies a column of a hit before any write you make through it
+(`df.loc[...] = ...`, `df["x"] = ...`, `inplace=True` methods), so the write
+stays in your table. A write to a hit that goes past pandas to the shared
+memory -- `df["x"].array[0] = ...`, or a NumPy view made writable again --
+raises `ValueError: assignment destination is read-only`; write through
+`.loc` or `.iloc` instead. A table read from disk is shared the same way. A table with nullable,
 categorical or period columns, a `MultiIndex`, or a subclass of `DataFrame` is
 copied on the store and on every hit. A column of lists or dicts is kept as
 compact bytes and read back into new lists on every hit.

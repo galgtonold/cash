@@ -488,17 +488,18 @@ class InMemoryBackend(CacheBackend):
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
-        Under pandas copy-on-write, a table of numbers, dates and text is not
-        copied at all: the store keeps its data frozen where it is and a hit
-        hands out a shallow copy (`frame_sharing`). A deep copy cost 0.2 s per
-        250 MB on every store and every hit, most of an unchanged Run All.
-        Copy-on-write alone is not enough -- ``s.array`` of any column and
-        ``s.values`` of a nullable or categorical column are writable handles
-        to the block itself -- so the frozen data is read-only and marked
-        shared for good. Any other table (nullable or categorical columns,
-        mutable labels, a subclass, data something outside pandas holds) is
-        copied deep, on the store and on every hit; its private copy is
-        frozen and shared when it can be.
+        Under pandas copy-on-write, a table of numbers, dates and text is
+        copied once, when stored, and that copy -- cash's own, which no caller
+        holds -- is frozen and shared: every hit hands out a shallow copy of
+        it (`frame_sharing`). A deep copy on every hit cost 0.2 s per 250 MB,
+        most of an unchanged Run All. Copy-on-write alone is not enough --
+        ``s.array`` of any column and ``s.values`` of a nullable or
+        categorical column are writable handles to the block itself -- so
+        the frozen data is read-only and marked shared for good. The
+        caller's own table is never frozen: cash does not change what an
+        object the caller holds allows. Any other table (nullable or
+        categorical columns, mutable labels, a subclass) is copied deep, on
+        the store and on every hit.
 
         A deep pandas copy does not copy the Python objects in an object
         column: a list, dict or array in a cell stayed one object shared by
@@ -520,14 +521,15 @@ class InMemoryBackend(CacheBackend):
             # Frozen when stored (`frame_sharing`): a shallow copy, which
             # pandas copies before any write, is as independent as a deep one.
             return frame_sharing.hand_out(frame)
+        if record_cells is not None and frame_sharing.enabled() and frame_sharing.frozen_already(frame):
+            # Stored: frozen by cash already (a hit, or a table just read
+            # from disk, `promote`), so no holder can write its data: kept
+            # by a shallow copy, nothing copied and nothing changed.
+            stored = frame_sharing.hand_out(frame)
+            record_cells[id(stored)] = _SHARED
+            return stored
         if mutable is None:
             mutable = _holds_mutable_cells(frame)
-        if record_cells is not None and mutable is False:
-            # Stored: kept as the caller's own data, frozen, not copied.
-            stored = frame_sharing.adopt(frame, cells_known=True)
-            if stored is not None:
-                record_cells[id(stored)] = _SHARED
-                return stored
         copied = None
         if mutable and record_cells is not None:
             # Stored: its columns of lists and dicts kept as bytes, the rest
@@ -549,7 +551,7 @@ class InMemoryBackend(CacheBackend):
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
-            if mutable is False and frame_sharing.freeze(copied, own=True, cells_known=True):
+            if mutable is False and frame_sharing.freeze(copied, cells_known=True):
                 mutable = _SHARED  # private, now frozen: hits share it
             record_cells[id(copied)] = mutable
         return copied
@@ -610,6 +612,13 @@ class InMemoryBackend(CacheBackend):
                 memo[key] = obj.read_out(known_cells)
                 alive.append(obj)
                 return key
+            if record_cells is not None and getattr(obj_type, "_cash_stored_as_is", False):
+                # Stored as it is: an immutable stand-in whose copy is
+                # something else (a closed file's `ClosedStream` copies into
+                # the closed file, which no disk tier can write). A hit
+                # copies it as usual.
+                memo[key] = obj
+                return key
             if frames and isinstance(obj, frames):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
@@ -634,7 +643,8 @@ class InMemoryBackend(CacheBackend):
         # that very class: once a notebook re-runs the cell defining it, a
         # stored instance's class is the old one. A disk hit looks the class
         # up by name and gets the new one; so does the second attempt here.
-        for hook in (persistent_id if memo or frames or ndarray else None, renamed_id):
+        stores = record_cells is not None  # `_cash_stored_as_is` is looked for
+        for hook in (persistent_id if memo or frames or ndarray or stores else None, renamed_id):
             try:
                 buffers: list[pickle.PickleBuffer] = []
                 stream = kept_state.dumps(
@@ -795,7 +805,7 @@ class InMemoryBackend(CacheBackend):
         if not _cheap_to_keep(value):
             return False
         for frame in _frames_in(value):
-            if not frame_sharing.freeze(frame, own=True):
+            if not frame_sharing.freeze(frame):
                 return False
         return self.set(key, value, metadata) is not False
 

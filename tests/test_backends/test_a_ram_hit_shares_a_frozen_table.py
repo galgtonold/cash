@@ -1,12 +1,13 @@
 """The RAM tier shares a pandas table's data instead of copying it.
 
-Under copy-on-write, the tier keeps the stored table's data where it is and
-hands out shallow copies: a store and a hit of a 250 MB table cost
-microseconds instead of a 250 MB copy each. The data is frozen first
+Under copy-on-write, the tier copies a table once, when storing it, and
+hands out shallow copies of that copy: a hit of a 250 MB table costs
+microseconds instead of a 250 MB copy. The copy is frozen first
 (`cash.backends.frame_sharing`): read-only, and marked shared for good, so
 pandas copies a block before every write. These tests pin that no holder of
 a stored or returned table -- the caller who stored it, a hit, another hit,
-a pickle of either -- can change what another holder sees.
+a pickle of either -- can change what another holder sees, and that the
+caller's own table is left as writable as it was.
 """
 
 from __future__ import annotations
@@ -37,11 +38,9 @@ def _frame(n: int = 1000) -> pd.DataFrame:
     )
 
 
-#: How the tier comes to hold a table: the caller's own data, frozen where it
-#: is (no object column), or a copy made once, then frozen (one with dates as
-#: Python objects: the store checks, not a reference count, that its cells
-#: cannot change).
-MAKERS = {"adopted": lambda: _frame().drop(columns=["day"]), "copied_once": _frame}
+#: Tables the tier copies once and shares: without and with an object column
+#: (dates as Python objects: the store checks that its cells cannot change).
+MAKERS = {"numbers_and_text": lambda: _frame().drop(columns=["day"]), "with_date_objects": _frame}
 
 
 @pytest.fixture(params=MAKERS, autouse=False)
@@ -57,13 +56,13 @@ def _hit(backend: InMemoryBackend):
     return backend.get("k")[1]
 
 
-class TestNothingIsCopied:
-    def test_a_store_keeps_the_callers_data_where_it_is(self):
-        df = _frame().drop(columns=["day"])  # an object column is copied once, then shared
+class TestOnlyTheStoreCopies:
+    def test_a_store_copies_the_callers_data_once(self):
+        df = _frame().drop(columns=["day"])
         backend = InMemoryBackend()
         _store(backend, df)
         stored = backend._store["k"][1]
-        assert np.shares_memory(stored["x"].to_numpy(), df["x"].to_numpy())
+        assert not np.shares_memory(stored["x"].to_numpy(), df["x"].to_numpy())
 
     def test_a_hit_shares_the_stored_data(self):
         backend = InMemoryBackend()
@@ -76,8 +75,9 @@ class TestNothingIsCopied:
         backend = InMemoryBackend()
         df = _frame().drop(columns=["day"])
         _store(backend, {"variables": {"df": df, "n": [1, 2]}, "rng": (1, 2, 3)})
-        got = _hit(backend)["variables"]["df"]
-        assert np.shares_memory(got["x"].to_numpy(), df["x"].to_numpy())
+        first, second = _hit(backend)["variables"]["df"], _hit(backend)["variables"]["df"]
+        assert np.shares_memory(first["x"].to_numpy(), second["x"].to_numpy())
+        assert not np.shares_memory(first["x"].to_numpy(), df["x"].to_numpy())
 
 
 #: Writes made through pandas, each of which must stay in the table written.
@@ -161,10 +161,13 @@ class TestAHandleWriteNeverReachesAnotherHolder:
         _store(backend, df)
         hit, other = _hit(backend), _hit(backend)
         target = hit if holder == "hit" else df
-        try:
-            write(target)
-        except ValueError:
-            pass  # read-only: the memory is shared
+        if holder == "hit":
+            try:
+                write(target)
+            except ValueError:
+                pass  # read-only: the memory is shared
+        else:
+            write(target)  # the caller's own table: as writable as before the store
         pd.testing.assert_frame_equal(other, make())
         pd.testing.assert_frame_equal(_hit(backend), make())
         if holder == "hit":
@@ -245,3 +248,32 @@ def test_a_frozen_table_is_still_checked_by_the_decorators_frame_memo():
     backend = InMemoryBackend()
     _store(backend, _frame().drop(columns=["day"]))
     assert not frame_borrows_its_data(_hit(backend), since=1 << 62)
+
+
+class TestTheCallersTableStaysAsItWas:
+    """Cash never changes what an object the caller holds allows: the table
+    stored, and every view of it, are as writable after the store as before."""
+
+    @pytest.mark.parametrize("make", MAKERS.values(), ids=MAKERS.keys())
+    def test_its_columns_and_views_stay_writable(self, make):
+        df = make()
+        series = df["k"]  # a view of the block, taken before the store
+        handles = [df["x"].to_numpy(), df["when"].to_numpy(), df.index.to_numpy(), df.values]
+        before = [h.flags.writeable for h in handles]
+        backend = InMemoryBackend()
+        _store(backend, df)
+        _store(backend, {"variables": {"df": df}})
+        assert [h.flags.writeable for h in handles] == before
+        df["x"].array[0] = -1.0
+        series.array[1] = -2
+        df["when"].array[0] = pd.Timestamp("1999-01-01")
+        df.index.array[0] = -4
+        assert df["x"].iloc[0] == -1.0 and df["k"].iloc[1] == -2 and df.index[0] == -4
+        pd.testing.assert_frame_equal(_hit(backend)["variables"]["df"], make())
+
+    def test_a_table_kept_with_bytes_leaves_the_callers_other_columns_writable(self):
+        df = pd.DataFrame({"tags": [[1], [2], [3]], "w": [1.0, 2.0, 3.0]})
+        backend = InMemoryBackend()
+        _store(backend, df)
+        df["w"].array[0] = -1.0
+        assert df["w"].iloc[0] == -1.0 and _hit(backend)["w"].iloc[0] == 1.0

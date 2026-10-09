@@ -73,13 +73,15 @@ def test_an_array_goes_to_disk_as_the_ram_copy():
 
 
 @pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
-def test_a_table_is_neither_copied_for_ram_nor_for_disk():
+def test_a_table_is_copied_once_for_ram_and_disk_alike():
     tiers, disk = _tiers()
     df = pd.DataFrame({"x": np.arange(1000, dtype=float)})
     tiers.set("k", df, dict(_KEEP))
     (_key, written, private), = disk.calls
-    assert private and np.shares_memory(written["x"].to_numpy(), df["x"].to_numpy())
-    df.loc[0, "x"] = -1.0  # copy-on-write: the frozen data stays as it was
+    stored = tiers.backends[0]._store["k"][1]
+    assert private and np.shares_memory(written["x"].to_numpy(), stored["x"].to_numpy())
+    assert not np.shares_memory(written["x"].to_numpy(), df["x"].to_numpy())
+    df["x"].array[0] = -1.0  # the caller's table is as writable as ever
     assert written["x"].iloc[0] == 0.0
 
 
