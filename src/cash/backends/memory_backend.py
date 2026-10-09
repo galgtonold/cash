@@ -850,8 +850,9 @@ class InMemoryBackend(CacheBackend):
         table (`frame_sharing`) -- except one kept by reference (it could not
         be copied: the caller holds it), one holding parts kept as bytes
         (reading those out is a full copy), and one whose metadata says
-        `NO_PRIVATE_COPY` (its copy is not what the caller's value stores as). A value kept whole as bytes is
-        read out into a new object, which no one else holds.
+        `NO_PRIVATE_COPY` (its copy is not what the caller's value stores
+        as). A value kept whole as bytes is read out into a new object,
+        which no one else holds.
         """
         with self._lock:
             entry = self._store.get(key)
