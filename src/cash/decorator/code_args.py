@@ -312,6 +312,16 @@ class CodeArgs:
         # two million rows to find that out was 14% of a warm hit.
         if _depth == 0 and type(value) in _plain_data.TREE_NODES and plain_census(value) is not None:
             return
+        # Below the top, the same answer read a level at a time: an
+        # object's ``self.data`` of 100,000 records was walked one dict at a
+        # time on every call of its cached method.
+        if (
+            _depth
+            and type(value) in _plain_data.TREE_NODES
+            and len(value) >= canonical_form.RECORDS_FROM
+            and _plain_data.is_tree(value)
+        ):
+            return
         # ``_seen`` is recorded on the paths that need it -- containers, for
         # cycle safety, and yielded carriers, to yield each once -- and NOT for
         # a leaf instance. A leaf cannot contain itself, and its class is
@@ -376,12 +386,14 @@ class CodeArgs:
             records = self._record_class(value)
             if records is not None:
                 # Records holding JSON-like data: their class is all the code
-                # they carry, looked at once (`canonical_form.record_class`).
+                # they carry, looked at once (`canonical_form.record_class`),
+                # and every other item is a primitive.
                 first = next(v for v in value if type(v) is records)
                 if not is_runtime_machinery(first):
                     cls = self._instance_class_carrier(first, _seen)
                     if cls is not None:
                         yield cls
+                return
             for v in value:
                 if type(v) not in CODELESS_PRIMS and type(v) is not records:
                     yield from self._walk_carriers(v, _depth + 1, _seen)

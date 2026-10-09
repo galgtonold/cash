@@ -610,6 +610,12 @@ of your own class that holds the big data, a
 [`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key) method
 that returns a version or id keys it without reading the data.
 
+A list of plain objects or dataclasses whose fields hold only values (numbers,
+strings, dates) is keyed by its class and one read of all their fields, not
+object by object. So is an object whose attributes hold JSON-like data, such as
+a `self.data` of records that a cached method reads. An object held twice in
+one call's arguments still keys apart from two equal copies.
+
 ## Side effects
 
 A hit returns the stored value without running the body. Anything else the body
