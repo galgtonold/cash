@@ -482,8 +482,16 @@ class TieredBackend(CacheBackend):
         entry = self.backends[0].peek_entry(key)
         if entry is None or entry[0] is not stored_metadata:
             return False  # gone or replaced meanwhile
+        # The RAM tier's own copy, which nothing changes -- unless it keeps
+        # the value by reference: the caller still holds that one and may
+        # change it while a background write serializes it.
         writes = self._write_persistent_tiers(
-            key, entry[1], metadata, None, stored_metadata.get("size") or size, private=True
+            key,
+            entry[1],
+            metadata,
+            None,
+            stored_metadata.get("size") or size,
+            private=not stored_metadata.get("by_reference"),
         )
         if not writes.stored:
             if writes.size_refused:

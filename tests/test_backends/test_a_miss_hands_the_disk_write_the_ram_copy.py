@@ -134,3 +134,32 @@ def test_a_tier_that_does_not_take_private_values_gets_the_callers_value():
     value = [{"id": i} for i in range(10_000)]
     tiers.set("k", value, dict(_KEEP))
     assert calls == [value] and calls[0] is value
+
+
+# A notebook value: it carries a cost-model family, so `persist_from_memory` considers it.
+_NOTEBOOK = {
+    "execution_time": 0.02,
+    "cost_model_family": "_GENERIC",
+    "cost_model_type_name": "dict",
+    "cost_model_size_bytes": 1000,
+}
+
+
+def test_a_later_persist_hands_the_ram_copy_as_private():
+    tiers, disk = _tiers()
+    value = {"rows": list(range(100))}
+    tiers.set("k", value, dict(_NOTEBOOK))
+    assert disk.calls == []  # cheap: kept in RAM only
+    assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
+    (_key, written, private), = disk.calls
+    assert private and written is not value and written == value
+
+
+def test_a_later_persist_of_a_value_kept_by_reference_is_not_private():
+    tiers, disk = _tiers()
+    lock_holder = {"lock": threading.Lock(), "n": 1}  # cannot be copied: the caller still holds it
+    tiers.set("k", lock_holder, dict(_NOTEBOOK))
+    assert disk.calls == []
+    assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
+    (_key, written, private), = disk.calls
+    assert written is lock_holder and not private
