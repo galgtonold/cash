@@ -454,7 +454,10 @@ class CodeSurface:
         # when a comment or blank line is added above it -- with no
         # code change at all. Skipping it is what keeps "comments do
         # not invalidate" (see _code_identity) true on 3.13+ too.
-        if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
+        # __slotnames__ is pickle's cache (`copyreg._slotnames`), set on the
+        # class the first time an instance is pickled: whether this process
+        # has pickled one yet is not code.
+        if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__", "__slotnames__"):
             return []
         # The class docstring is documentation, the same as a method's
         # (masked in `_code_object_identity`), so it is folded as if
