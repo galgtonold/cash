@@ -165,3 +165,32 @@ def test_a_notebooks_own_tqdm_gets_no_benefit_of_the_doubt():
 
     node = ast.parse("for x in tqdm(rows):\n    pass").body[0]
     assert not policy.header_safe_to_reevaluate(node.iter, [1, 2], {"tqdm": tqdm, "rows": [1, 2]})
+
+
+def test_a_progress_bar_around_an_opened_file_is_sized_from_the_file(path):
+    from tqdm import tqdm
+
+    node = ast.parse("for line in tqdm(open(path)):\n    n += 1").body[0]
+    bar = tqdm(open(path, encoding="utf-8"), disable=True)
+    try:
+        assert abs(policy.estimated_iterations(node.iter, bar, {"tqdm": tqdm, "path": path}) - 3000) <= 30
+        assert policy.should_run_as_single_unit(node, bar, {"tqdm": tqdm, "path": path})
+    finally:
+        bar.iterable.close()
+        bar.close()
+
+
+def test_a_progress_bar_loop_with_a_loop_inside_runs_as_one_unit(cash_magics, mock_shell, path):
+    code = (
+        "from tqdm import tqdm\nn = 0\nrows = []\n"
+        f"for line in tqdm(open({path!r}, 'r'), disable=True):\n"
+        "    user, log = line.strip().split(':', 1)\n"
+        "    for act in log.split('>'):\n"
+        "        if act.strip():\n"
+        "            n += 1\n"
+        "            rows.append((user, act))"
+    )
+    run_cash_cell(cash_magics, code)
+    assert mock_shell.user_ns["n"] == 3000 and len(mock_shell.user_ns["rows"]) == 3000
+    statements = cash_magics.cash_status("dict")["last_cell"].get("statements", [])
+    assert len(statements) < 10, f"one statement per line: {len(statements)} statements"

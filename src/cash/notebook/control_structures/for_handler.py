@@ -313,7 +313,10 @@ class ForLoopHandler:
             iterable.close()
         elif type(iterable).__module__.partition(".")[0] == "tqdm":
             iterable.leave = False  # a bar drawn here is never advanced: it is cleared, not left at 0%
+            wrapped = single_unit_policy._file_in_progress_bar(iterable)
             iterable.close()
+            if wrapped is not None:
+                wrapped.close()  # opened by the header, which the unit evaluates again
         # Single-unit mode makes the loop ONE cache entry, so the unit
         # annotation (whole range) is the right scope — a body directive has
         # no finer entry to attach to here.
