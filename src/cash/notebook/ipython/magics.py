@@ -19,7 +19,7 @@ from IPython.core.magic import Magics, line_magic, magics_class
 from ... import _log
 from ..._clock import perf_counter as _perf_counter
 from ..._console import safe_text
-from ...backends._writes import MAX_BACKLOG_S, shutdown_write_timeout, all_pending_writes
+from ...backends import _writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
 from ...tracking import io_watch
@@ -683,9 +683,9 @@ class CashMagics(Magics):
         cosmetic notice must not turn a working cell into an error.
         """
         try:
-            deadline = time.monotonic() + shutdown_write_timeout()
-            for queue in all_pending_writes():
-                queue.wait_for_backlog(MAX_BACKLOG_S, deadline)
+            deadline = time.monotonic() + _writes.shutdown_write_timeout()
+            for queue in _writes.all_pending_writes():
+                queue.wait_for_backlog(_writes.MAX_BACKLOG_S, deadline)
         except Exception:  # best-effort, must not break the cell
             logger.debug("Bounding pending cache writes failed", exc_info=True)
         try:

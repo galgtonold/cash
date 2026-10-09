@@ -37,7 +37,7 @@ def test_the_dict_restores_after_a_restart_without_a_second_copy(nb_runner):
     nb_runner.peek(
         "__import__('cash').get_default_cash().backend.flush() if hasattr(__import__('cash').get_default_cash().backend, 'flush') else None"
     )
-    size = _cache_bytes(nb_runner)
+    size = _cache_bytes(nb_runner.settle_writes())
     # Three 3 MB results, stored under their call keys, and not again in the dict.
     assert size < 3 * 3_000_000 * 1.5, f"{size / 1e6:.1f} MB on disk"
 

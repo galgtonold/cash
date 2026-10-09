@@ -124,6 +124,8 @@ MAX_BACKLOG_S = 2.0
 #: for a disk this process has not measured yet.
 _DEFAULT_SECONDS_PER_BYTE = 1.0 / (100 * 1024 * 1024)
 _DEFAULT_SECONDS_PER_WRITE = 0.01
+#: How long a cell waits for a queue's first write, to learn what writes cost.
+_FIRST_WRITE_WAIT_S = 0.5
 #: A write at least this big times the per-byte cost, a smaller one the
 #: per-write cost.
 _TIMED_PER_BYTE_FROM = 1024 * 1024
@@ -524,8 +526,11 @@ class PendingWrites:
         live = self._unfinished_sized()
         if live and not self._measured:
             # Nothing timed here yet: the first write says what this disk
-            # costs, so let it finish (for up to the bound) before judging.
-            step = max_seconds if deadline is None else min(max_seconds, deadline - time.monotonic())
+            # costs, so give it a moment to finish before judging. If it
+            # does not, its running time is the evidence (`backlog_seconds`).
+            step = min(max_seconds, _FIRST_WRITE_WAIT_S)
+            if deadline is not None:
+                step = min(step, deadline - time.monotonic())
             try:
                 live[0][0].result(timeout=max(step, 0.0))
             except BaseException:  # noqa: BLE001 - a timeout, or reported via wait(key)

@@ -40,7 +40,10 @@ def _chain_cells(cache_dir: str):
     setup = "import time\nfrom cash import Cash, FileBackend\n"
     setup += _HELD_WRITER.format(hold=30)
     setup += f"c = Cash(backend=FileBackend(cache_dir='{cdir}'))\n"
-    setup += "atexit.register(_gate.set)  # after Cash(): runs before its exit drain"
+    setup += "atexit.register(_gate.set)  # after Cash(): runs before its exit drain\n"
+    # A cell leaves at most MAX_BACKLOG_S of writing queued; lifted, so the
+    # held writes are all still queued when the shutdown comes.
+    setup += "import cash.backends._writes as _w\n_w.MAX_BACKLOG_S = float('inf')"
     return [
         setup,
         "def base(x):\n    return x + 1\n"

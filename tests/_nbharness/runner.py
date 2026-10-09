@@ -493,7 +493,7 @@ class NotebookTestRunner:
             )
         return self
 
-    def restart(self) -> "NotebookTestRunner":
+    def restart(self, graceful: bool = True) -> "NotebookTestRunner":
         """Restart the kernel in place, preserving the runner's wiring.
 
         Restart behaviour is a whole class of bug the suite was blind to:
@@ -505,10 +505,11 @@ class NotebookTestRunner:
 
         Graceful, as JupyterLab's and VS Code's restart is: the kernel is asked
         to exit and runs its own shutdown, which is where cash finishes the
-        cache writes still running in the background.
+        cache writes still running in the background. ``graceful=False``
+        kills it instead; call `settle_writes` first to keep its writes.
         """
         try:
-            self._run_async(self.client.km._async_restart_kernel(now=False))
+            self._run_async(self.client.km._async_restart_kernel(now=not graceful))
             self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
         except Exception:  # replaced below, whatever the failure
             self._replace_kernel()
@@ -736,6 +737,19 @@ from cash import Cash
     def get_raw_output(self, cell_num: int) -> str:
         """Get the raw output from a cell (no filtering)."""
         return self.get_output(cell_num, filter_debug=False)
+
+    def settle_writes(self) -> "NotebookTestRunner":
+        """Wait, in the kernel, until every cache write queued so far is on disk.
+
+        A cell does not wait for its writes; they finish in the background.
+        The test process is another process cash does not know about, so a
+        test that reads the cache folder itself calls this first, as a user
+        would wait before reading a cache another process is writing.
+        """
+        self.peek(
+            "[q.wait_all() for q in __import__('cash.backends._writes', fromlist=['_']).all_pending_writes()] and None"
+        )
+        return self
 
     def peek(self, expr: str) -> str:
         """Evaluate *expr* in the live kernel and return its ``repr``.

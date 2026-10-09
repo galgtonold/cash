@@ -158,7 +158,7 @@ notice, not a warning: a cache at its cap is doing its job.
 
 === "Notebook"
 
-    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._after_cell @8784ece9 -->
+    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._after_cell @db14623f -->
     A line at the end of the first cell to finish after the write that
     filled the cache:
 
@@ -187,7 +187,7 @@ notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk
 
-<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @49460812, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @1faf5bd4, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
 The disk write runs on a background thread, and your code carries on while it
 does. cash waits for a write only when something needs it on disk:
 

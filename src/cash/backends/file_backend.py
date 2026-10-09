@@ -825,7 +825,13 @@ class FileBackend(CacheBackend):
         just queued, and make every write of a version synchronous."""
         try:
             versions = self._versions.record(slot, key, size, cost, time.time())
-            gone = [k for k in versions if k != key and not os.path.exists(self._get_path(k))]
+            # Gone: no write of it still queued and no file (asked in that
+            # order: a version stored a moment ago may not be on disk yet).
+            gone = [
+                k
+                for k in versions
+                if k != key and not self._writes.has_pending(k) and not os.path.exists(self._get_path(k))
+            ]
             for k in gone:
                 versions.pop(k)
             drop = superseded_to_drop(versions, key, self._read_keys)
