@@ -198,12 +198,12 @@ def _cells_unchangeable(array: Any) -> bool:
     return infer_dtype(array.ravel(), skipna=True) in IMMUTABLE_CELLS
 
 
-def _freezable_values(values: Any) -> bool:
+def _freezable_values(values: Any, cells_known: bool = False) -> bool:
     parts = _ndarray_parts(values)
     if parts is None:
         return False
     for _name, array in parts:
-        if array.dtype.hasobject and not _cells_unchangeable(array):
+        if array.dtype.hasobject and not cells_known and not _cells_unchangeable(array):
             return False
     return True
 
@@ -218,15 +218,17 @@ def _freezable_index(index: Any) -> bool:
     return _freezable_values(index._data)
 
 
-def freezable(frame: Any) -> bool:
+def freezable(frame: Any, *, cells_known: bool = False) -> bool:
     """Is *frame* a plain pandas DataFrame or Series made only of columns and
     labels `freeze` knows (`_ndarray_parts`; Python objects only when nothing
-    can change them in place)?"""
+    can change them in place)? *cells_known*: the caller has just found that
+    no object column holds a changeable cell (``_holds_mutable_cells``), so
+    the columns are not scanned again."""
     import pandas as pd
 
     if type(frame) not in (pd.DataFrame, pd.Series):
         return False  # a subclass may keep state of its own
-    if not all(_freezable_values(blk.values) for blk in frame._mgr.blocks):
+    if not all(_freezable_values(blk.values, cells_known) for blk in frame._mgr.blocks):
         return False
     axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
     return all(_freezable_index(axis) for axis in axes)
@@ -287,18 +289,18 @@ def _frozen_already(frame: Any) -> bool:
     return True
 
 
-def freeze(frame: Any, *, own: bool = False) -> bool:
+def freeze(frame: Any, *, own: bool = False, cells_known: bool = False) -> bool:
     """Make *frame*'s data immutable in place (see the module docstring), and
     every pandas object's that shares its blocks. False, with nothing done,
     when *frame* is not `freezable` or, unless *own* (cash made *frame* and
     no one else holds it), when something outside pandas may hold its memory.
     """
-    return enabled() and _freeze(frame, own=own)
+    return enabled() and _freeze(frame, own=own, cells_known=cells_known)
 
 
-def _freeze(frame: Any, *, own: bool) -> bool:
+def _freeze(frame: Any, *, own: bool, cells_known: bool = False) -> bool:
     try:
-        if not freezable(frame):
+        if not freezable(frame, cells_known=cells_known):
             return False
         if not own and not _frozen_already(frame):
             from ..decorator.arg_hashing import frame_borrows_its_data
@@ -329,7 +331,7 @@ def _freeze(frame: Any, *, own: bool) -> bool:
         return False
 
 
-def adopt(frame: Any) -> Any | None:
+def adopt(frame: Any, *, cells_known: bool = False) -> Any | None:
     """A frozen table holding *frame*'s data, without copying it, for the RAM
     tier to keep; None when that cannot be (copy it instead).
 
@@ -337,13 +339,13 @@ def adopt(frame: Any) -> Any | None:
     their memory. To pandas nothing changes; a write through a handle to the
     memory itself (``s.array[0] = 1``) raises, as on a read-only array.
     """
-    if not enabled() or not freezable(frame):
+    if not enabled() or not freezable(frame, cells_known=cells_known):
         return None
     try:
         stored = frame.copy(deep=False)
     except Exception:  # noqa: BLE001 - copy instead
         return None
-    if not freeze(stored):
+    if not freeze(stored, cells_known=cells_known):
         return None
     return stored
 

@@ -518,7 +518,7 @@ class InMemoryBackend(CacheBackend):
             mutable = _holds_mutable_cells(frame)
         if record_cells is not None and mutable is False:
             # Stored: kept as the caller's own data, frozen, not copied.
-            stored = frame_sharing.adopt(frame)
+            stored = frame_sharing.adopt(frame, cells_known=True)
             if stored is not None:
                 record_cells[id(stored)] = _SHARED
                 return stored
@@ -543,7 +543,7 @@ class InMemoryBackend(CacheBackend):
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
-            if mutable is False and frame_sharing.freeze(copied, own=True):
+            if mutable is False and frame_sharing.freeze(copied, own=True, cells_known=True):
                 mutable = _SHARED  # private, now frozen: hits share it
             record_cells[id(copied)] = mutable
         return copied
