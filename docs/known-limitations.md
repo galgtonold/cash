@@ -314,7 +314,7 @@ functions that call it. A module-level read of a name bound only below raises
 <!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
 cash reads a cell's Python, not what IPython makes of its magics. A magic or a
 shell command runs every time, uncached, and cash never runs one for you.
-<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @5bfe5bec, cash/analysis/code_analyzer.py:magic_python @0ec0a1ce -->
+<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @5bfe5bec, cash/analysis/code_analyzer.py:magic_python @1a6291b3 -->
 The names it binds or changes (`files = !ls`, `t = %time f()`,
 `%time x = f()`, the receiver of `%time model.fit()`, an argument
 `%time train(model)` was seen changing in place) keep the value it left,
@@ -419,7 +419,7 @@ reads its content, and if it changed, everything that read it runs again.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @18708015, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @06e2db6f, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length (a loop
 inside the body counts each iteration ten times, as it usually runs about that
@@ -430,6 +430,18 @@ reads files qualifies: the unit depends on every file and folder it read, so
 an edited, added or deleted file runs it again. A loop that appends to a list
 is an in-place change, so as one unit it is not cached at all. The badge row
 then shows `In-place mutation on: out`.
+
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:iterations_for_one_unit @9bb4425c, cash/notebook/control_structures/single_unit_policy.py:header_names_the_iterator @c82c885c -->
+A loop over a named iterator of unknown length (`for row in parsed:` after
+`parsed = filter(...)`, or over a generator) runs its first passes one by one
+and, once it reaches the length that would have qualified, the rest as one
+unit drawing from the same iterator. Items are drawn exactly as plain Python
+draws them, so a generator's own side effects interleave with the body's, and
+an error leaves the iterator where Python would. Such a unit reads a stream,
+so it is never served from the cache. A loop over a call that cannot be
+evaluated twice and has no length (`for x in make_rows():`) still runs pass by
+pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
+`for x in rows:`).
 
 The expensive call inside the loop body (`fetch(e)` in `out.append(fetch(e))`)
 is still cached, so usually there is nothing to do. **Fix** when it is not:
