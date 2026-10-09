@@ -7,7 +7,7 @@ nearly all of it in the same place:
   inherited all 5,222, and each save, each lookup and each upstream simulation
   re-hashed every one: 19-108 s of hashing per cell, against a notebook that
   runs in about 25 s uncached. The digest memo gave up at that scale -- 4,096
-  entries, and a 5 s window shorter than one pass over the files.
+  entries, and a 5 s reuse window shorter than one pass over the files.
 * Another read 1,312 CSVs in a loop. ``d = pd.read_csv(f)`` rebinds ``d`` each
   iteration, but its recorded files were MERGED, so iteration k snapshotted all
   k files so far: 865,265 hashes in one cell.
@@ -15,7 +15,6 @@ nearly all of it in the same place:
 
 from __future__ import annotations
 
-import hashlib
 import os
 import types
 
@@ -25,7 +24,7 @@ from cash.notebook.restored_var import apply_restored_var
 from cash.notebook.statement import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.tracking_state import TrackingState
-from cash.tracking import file_dep_snapshot
+from cash.tracking import digest_table, file_dep_snapshot
 
 
 def _state():
@@ -89,17 +88,19 @@ def _no_cell_run_leaks(monkeypatch):
 @pytest.fixture
 def count_hashes(monkeypatch):
     hashed: list[int] = []
-    monkeypatch.setattr(
-        file_dep_snapshot, "hashlib", types.SimpleNamespace(sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a))
-    )
+    real = file_dep_snapshot.BulkHasher
+    monkeypatch.setattr(file_dep_snapshot, "BulkHasher", lambda: hashed.append(1) or real())
+    # Only this process's memo: no cache directory's table from another test.
+    monkeypatch.setattr(digest_table, "_TABLE", None)
     file_dep_snapshot._HASH_MEMO.clear()
     yield hashed
     file_dep_snapshot._HASH_MEMO.clear()
 
 
-def test_one_cell_run_hashes_each_file_once(tmp_path, monkeypatch, count_hashes):
-    """A pass over thousands of files outlasts the 5 s window; within one cell
-    run a digest stays good however long the run takes."""
+def test_an_unchanged_settled_file_is_hashed_once(tmp_path, monkeypatch, count_hashes):
+    """A pass over thousands of files outlasts any time window; a settled
+    file's digest stays good while its stat does, in one cell run, in the next
+    and outside any."""
     path = _aged(tmp_path, "a.csv")
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
@@ -107,29 +108,45 @@ def test_one_cell_run_hashes_each_file_once(tmp_path, monkeypatch, count_hashes)
     file_dep_snapshot.file_content_hash(path)
     clock[0] += 600  # ten minutes into the same cell
     file_dep_snapshot.file_content_hash(path)
-    assert len(count_hashes) == 1, "one cell run hashed an unchanged file twice"
     file_dep_snapshot.end_file_state_epoch()
+    file_dep_snapshot.begin_file_state_epoch()  # the next cell
+    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.end_file_state_epoch()
+    clock[0] += 600
+    file_dep_snapshot.file_content_hash(path)  # outside a cell run
+    assert len(count_hashes) == 1, "an unchanged settled file was hashed again"
 
-    file_dep_snapshot.begin_file_state_epoch()  # the next cell looks again
+
+def test_a_touched_file_is_hashed_again(tmp_path, count_hashes):
+    path = _aged(tmp_path, "a.csv")
+    file_dep_snapshot.file_content_hash(path)
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - 10**9))
     file_dep_snapshot.file_content_hash(path)
     assert len(count_hashes) == 2
-    file_dep_snapshot.end_file_state_epoch()
 
 
-def test_between_cell_runs_the_window_applies(tmp_path, monkeypatch, count_hashes):
-    """A cell run's digests end with it. Left current until the next cell,
-    anything running in between -- a thread the cell started, a cached
-    function called from a callback -- reused them indefinitely, and so did
-    every script-style test that ran after a notebook one in the same process."""
+def test_between_cell_runs_a_listed_stat_is_reused_for_a_window_only(tmp_path, monkeypatch, count_hashes):
+    """A stat with no file identity (``st_ino`` 0: a Windows directory
+    listing's) can lag a file edited through another hard link: its digest is
+    reused within a cell run or for a few seconds, never longer. A cell run's
+    digests end with it: anything running in between -- a thread the cell
+    started, a cached function called from a callback -- gets the window."""
     path = _aged(tmp_path, "a.csv")
+    fields = list(os.stat(path))
+    fields[1] = 0  # st_ino
+    listed = os.stat_result(fields)
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
     file_dep_snapshot.begin_file_state_epoch()
-    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.file_content_hash(path, st=listed)
+    clock[0] += 600
+    file_dep_snapshot.file_content_hash(path, st=listed)
+    assert len(count_hashes) == 1, "one cell run hashed an unchanged file twice"
     file_dep_snapshot.end_file_state_epoch()
     clock[0] += 60
-    file_dep_snapshot.file_content_hash(path)
-    assert len(count_hashes) == 2, "a digest from a finished cell run was reused a minute later"
+    file_dep_snapshot.file_content_hash(path, st=listed)
+    assert len(count_hashes) == 2, "a listed stat's digest was reused a minute after its cell run"
 
 
 def test_a_nested_cell_run_is_the_same_run(tmp_path, monkeypatch, count_hashes):
@@ -149,15 +166,20 @@ def test_a_nested_cell_run_is_the_same_run(tmp_path, monkeypatch, count_hashes):
     assert len(count_hashes) == 1
 
 
-def test_outside_a_cell_run_the_window_still_bounds_reuse(tmp_path, monkeypatch, count_hashes):
-    """Scripts never begin an epoch: the 5 s window is what they get."""
+def test_outside_a_cell_run_a_listed_stat_gets_the_window(tmp_path, monkeypatch, count_hashes):
+    """Scripts never begin an epoch: a listed stat's digest lasts 5 s."""
     path = _aged(tmp_path, "a.csv")
-    monkeypatch.setattr(file_dep_snapshot, "HASH_EPOCH", None)
+    fields = list(os.stat(path))
+    fields[1] = 0  # st_ino
+    listed = os.stat_result(fields)
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
-    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.file_content_hash(path, st=listed)
+    clock[0] += 1
+    file_dep_snapshot.file_content_hash(path, st=listed)
+    assert len(count_hashes) == 1
     clock[0] += 60
-    file_dep_snapshot.file_content_hash(path)
+    file_dep_snapshot.file_content_hash(path, st=listed)
     assert len(count_hashes) == 2
 
 
@@ -199,9 +221,14 @@ def test_without_a_file_identity_the_path_keeps_files_apart(tmp_path, count_hash
     assert file_dep_snapshot.file_content_hash(a, st=same) != file_dep_snapshot.file_content_hash(b, st=same)
 
 
+@pytest.mark.xfail(
+    os.name == "nt",
+    strict=True,
+    reason="Windows: an edit that keeps the size and puts the mtime back is not seen once the file had settled -- a documented limitation (known-limitations: an edit that keeps size and timestamps); Linux and macOS catch it through the inode change time",
+)
 def test_an_edit_between_cell_runs_is_seen(tmp_path, monkeypatch, count_hashes):
     """The control: a same-size edit with the mtime put back is caught by the
-    next cell run once the 5 s window has passed -- the bound it had before."""
+    next cell run: the inode change time moved."""
     path = _aged(tmp_path, "a.csv")
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])

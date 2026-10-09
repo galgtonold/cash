@@ -76,8 +76,11 @@ file's **content digest**, the same check an automatically tracked read gets:
 a `touch` that leaves the bytes alone keeps the entry, and an edit recomputes
 even when it leaves the timestamp where it was.
 
-The digest is remembered per
-file stat, so an unchanged file costs one `stat` per lookup.
+<!-- claim: cash/tracking/digest_table.py:DigestTable @?, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0 -->
+The digest is remembered per file stat, in the cache directory too, so an
+unchanged file costs one `stat` per lookup, in a new process as well. That
+holds for a file left alone for ten seconds before it was hashed; one written
+just before is read again.
 
 ## Cached functions that call it
 

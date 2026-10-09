@@ -1,7 +1,7 @@
 """A cell's file bookkeeping digests each input file about once, not once per use.
 
 Counted, not timed: content digests taken in the live kernel while one cell
-runs (``hashlib.sha256`` inside ``file_dep_snapshot``, so a memo hit does not
+runs (``BulkHasher`` inside ``file_dep_snapshot``, so a memo hit does not
 count). A profile of real notebooks put most of cash's notebook overhead
 here:
 
@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
 
 N = 80
 
-#: Counts lookups (``file_content_hash`` calls) and digests (``sha256``) per
+#: Counts lookups (``file_content_hash`` calls) and digests (``BulkHasher``) per
 #: cell run, and closes the 5 s reuse window: 80 small files are checked in
 #: well under five seconds, where 5,222 were not -- without this the
 #: fixture is served from the window and passes on code that re-hashed 5,222 files
@@ -53,15 +53,15 @@ _BUMP = (
 COUNTER = (
     "(lambda m, types: (lambda s: (setattr(m, '_test_saved', s), setattr(m, '_test_n', {}),"
     " setattr(m, '_HASH_MEMO_TTL_SECONDS', 0.0),"
-    " setattr(m, 'hashlib', types.SimpleNamespace(sha256=(lambda f: (lambda *a: "
-    f"({_BUMP.format(i=1)}, f(*a))[1]))(s[0].sha256))),"
+    " setattr(m, 'BulkHasher', (lambda f: (lambda *a: "
+    f"({_BUMP.format(i=1)}, f(*a))[1]))(s[0])),"
     " setattr(m, 'file_content_hash', (lambda f: (lambda *a, **k: "
     f"({_BUMP.format(i=0)}, f(*a, **k))[1]))(s[1]))))"
-    "(getattr(m, '_test_saved', None) or (m.hashlib, m.file_content_hash, m._HASH_MEMO_TTL_SECONDS)))"
+    "(getattr(m, '_test_saved', None) or (m.BulkHasher, m.file_content_hash, m._HASH_MEMO_TTL_SECONDS)))"
     f"({_M}, __import__('types'))"
 )
 UNINSTALL = (
-    "(lambda m: (lambda s: s and (setattr(m, 'hashlib', s[0]), setattr(m, 'file_content_hash', s[1]),"
+    "(lambda m: (lambda s: s and (setattr(m, 'BulkHasher', s[0]), setattr(m, 'file_content_hash', s[1]),"
     " setattr(m, '_HASH_MEMO_TTL_SECONDS', s[2]), delattr(m, '_test_saved')))"
     f"(getattr(m, '_test_saved', None)))({_M})"
 )
