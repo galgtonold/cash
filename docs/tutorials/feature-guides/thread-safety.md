@@ -71,6 +71,19 @@ dies, and a caller waits at most 10 seconds for it. See
 Leave locking off for single-threaded code and for cheap functions, where a
 duplicate computation costs less than the lock.
 
+## Cheap functions in a thread pool
+
+Cash's own work for a call -- building the key, looking it up, storing a
+result -- is Python code, and a Python process runs one thread's Python code
+at a time. In a thread pool that work does not overlap: eight threads pay it
+one after another. A hit costs about 0.2 ms of it and a miss 1 to 2 ms, so a
+function whose body only waits a few milliseconds (a quick HTTP request, a
+small database query) called from many threads at once runs slower cached
+than uncached, on hits too. Below about 5 ms of waiting per call, leave such a
+function uncached, cache the larger step that calls it, or run the calls in
+processes (`ProcessPoolExecutor`, `multiprocessing.Pool`), where each worker
+does its own share of cash's work in parallel.
+
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
 <!-- claim: cash/_paths.py:resolve_main_module @898a6a7a, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
