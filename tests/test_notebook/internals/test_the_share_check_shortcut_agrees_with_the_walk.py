@@ -200,3 +200,98 @@ def test_holder_patches_read_a_level_at_a_time_match_the_walk(seed, monkeypatch)
 
     assert fast == full
     assert names
+
+
+# -- what cash holds itself: walked only below what no variable is bound to --
+
+
+def _held(ns: dict, rng: random.Random) -> list:
+    """What cash holds itself, as IPython's ``Out`` and the RAM tier do: a
+    dict of some variables' values, and containers holding parts of them."""
+    out = {i: ns[name] for i, name in enumerate(ns) if rng.random() < 0.5}
+    inner = [v for v in ns["records"] if type(v) in (list, dict, tuple)]
+    parts = [rng.choice(inner)] if inner and rng.random() < 0.5 else []
+    return [out, parts]
+
+
+@pytest.fixture
+def no_cut(monkeypatch):
+    """`count_held` walking below every variable, as before."""
+
+    def off():
+        monkeypatch.setattr(shared_objects, "_bound_trees", lambda *args: set())
+
+    return off
+
+
+@pytest.mark.parametrize("seed", range(300))
+def test_cutting_the_held_walk_at_variables_counts_no_more_than_the_walk(seed):
+    ns, names, elsewhere = _namespace(seed)
+    held = _held(ns, random.Random(seed))
+    value_types = shared_objects.VALUE_TYPES + shared_objects.library_value_types()
+    roots = _roots(ns, names)
+    nodes, base = shared_objects._walk(roots, [ns], value_types, fast=False)[:2]
+    cut_counts, full_counts = dict(base), dict(base)
+    shared_objects.count_held(held, nodes, cut_counts, value_types, (), ns)
+    shared_objects.count_held(held, nodes, full_counts, value_types)
+
+    assert all(cut_counts[k] <= full_counts[k] for k in nodes)
+    assert elsewhere is not None
+
+
+@pytest.mark.parametrize("seed", range(300))
+def test_cutting_the_held_walk_at_variables_keeps_the_verdict(seed, no_cut):
+    ns, names, elsewhere = _namespace(seed)
+    held = _held(ns, random.Random(seed))
+    captured = _roots(ns, names)
+    cut = _verdict_held(names, captured, ns, held)
+    no_cut()
+    full = _verdict_held(names, captured, ns, held)
+
+    assert cut == full
+    assert elsewhere is not None
+
+
+def _verdict_held(names: list, captured: dict, ns: dict, held: list) -> tuple[list, set]:
+    holders, shared = share_group(names, captured, ns, held)
+    return sorted(holders), shared
+
+
+def test_a_statement_binding_a_value_does_not_walk_what_cash_holds(monkeypatch):
+    """``x = 0`` and ``d = defaultdict(list)`` beside a displayed list of
+    400,000 tuples: nothing is held beyond the statement's own names, so
+    what cash holds is not walked (it was, for every statement)."""
+    from collections import defaultdict
+
+    parsed = [(f"u{i}", [("a", datetime.datetime(2020, 1, 1))] * 3) for i in range(2_000)]
+    ns = {"parsed": parsed, "x": 0, "d": defaultdict(list), "empty": []}
+    walks = []
+    real = shared_objects._walk_held
+    monkeypatch.setattr(shared_objects, "_walk_held", lambda *a, **k: walks.append(1) or real(*a, **k))
+
+    for name in ("x", "d", "empty"):
+        assert share_group([name], {name: ns[name]}, ns, [{3: parsed}]) == ({}, set())
+    assert walks == []
+
+
+def test_an_output_another_variable_shares_does_not_walk_a_displayed_list(monkeypatch):
+    """``for k, acts in data.items():`` leaves ``acts`` inside ``data``; the
+    output history holds the displayed ``parsed``, a variable's own list:
+    its parts are not walked one at a time."""
+    ns = {"data": {f"u{i}": [("a", datetime.datetime(2020, 1, 1))] * 3 for i in range(2_000)}}
+    ns["parsed"] = list(ns["data"].items())
+    ns["acts"], ns["k"] = ns["data"]["u5"], "u5"
+    walked = []
+    real = shared_objects._walk_held
+
+    def walk_held(*args, **kwargs):
+        reach, refs, edges = real(*args, **kwargs)
+        walked.append(len(edges))
+        return reach, refs, edges
+
+    monkeypatch.setattr(shared_objects, "_walk_held", walk_held)
+
+    verdict = _verdict_held(["k", "acts"], {"k": "u5", "acts": ns["acts"]}, ns, [{3: ns["parsed"]}])
+
+    assert verdict == (["data", "parsed"], set())
+    assert walked and max(walked) < 10, f"walked {walked} containers of what cash holds"

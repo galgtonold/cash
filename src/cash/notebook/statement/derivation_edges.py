@@ -170,6 +170,8 @@ def _bases_are_live(views: list[Any], user_ns: dict, cash_held: list[Any]) -> bo
             base = getattr(base, "base", None)
     # No local reference to a base may be left while the counts are read.
     view = base = None
+    if not excess_refs(nodes, inbound, list(nodes)):
+        return False  # what cash holds only adds to the counts (`count_held`)
     count_held(cash_held, nodes, inbound, VALUE_TYPES + library_value_types())
     return bool(excess_refs(nodes, inbound, list(nodes)))
 
