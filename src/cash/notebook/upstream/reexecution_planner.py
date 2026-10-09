@@ -588,15 +588,17 @@ class ReexecutionPlanner:
         if last is not None and last[0] is simulation_trace and last[1] == len(simulation_trace):
             return list(last[2])
         found: list[int] = []
+        ran, writers = state.process_state_ran, state.process_state_writers
+        probe = self.probe if self.probe.cash_instance is not None else None
         for idx, entry in enumerate(simulation_trace):
             source_hash = statement_source_hash(entry.stmt_code)
-            if source_hash in state.process_state_ran:
+            if source_hash in ran:
                 continue
-            kinds = state.process_state_writers.get(source_hash)
-            if kinds is None and self.probe.cash_instance is not None:
-                kinds = self.probe.process_state(source_hash)
+            kinds = writers.get(source_hash)
+            if kinds is None and probe is not None:
+                kinds = probe.process_state(source_hash)
                 if kinds:
-                    state.process_state_writers[source_hash] = kinds
+                    writers[source_hash] = kinds
             if kinds:
                 found.append(idx)
                 trace_event("process_state_writer", stmt=entry.stmt_code[:80], kinds=sorted(kinds))

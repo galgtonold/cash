@@ -102,10 +102,11 @@ class UnsavedEdits:
         downstream or external mutation.
         """
         directly_mismatched: set[str] = set()
-        for vname in virtual_lineage:
-            if vname not in self.tracking_state.variable_lineage:
-                continue
-            if virtual_lineage[vname] == self.tracking_state.variable_lineage[vname]:
+        recorded = self.tracking_state.variable_lineage
+        # The names whose two lineages differ, found by one comparison of the
+        # two maps rather than a lookup per name the notebook binds.
+        for vname, _ in virtual_lineage.items() - recorded.items():
+            if vname not in recorded:
                 continue
             producing_code = self.tracking_state.executed_cell_codes.get(vname)
             if producing_code is None:

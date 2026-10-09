@@ -28,6 +28,7 @@ __all__ = [
     "MODULE_ANALYSES",
     "MODULE_READ_DIGESTS",
     "NOTEBOOK_FUNCTIONS",
+    "NOTEBOOK_STATEMENTS",
     "PATCH_SITES",
     "PRODUCER_SNAPSHOTS",
     "PURITY_REPORTS",
@@ -190,6 +191,12 @@ STATEMENTS = 4096
 #: and every edit adds one. Read again on every cell run, so a memo smaller
 #: than the notebook would be emptied before it is used.
 NOTEBOOK_CELLS = 8192
+
+#: One entry per statement text of the notebook, for the questions the
+#: upstream check asks of every statement above a cell on every cell run.
+#: Smaller than the notebook, a memo read in notebook order would drop each
+#: entry just before it is asked for again, and never hit.
+NOTEBOOK_STATEMENTS = 1 << 14
 
 #: One entry per version of the whole notebook: the checks of every cell run
 #: in a settled notebook read the same one.

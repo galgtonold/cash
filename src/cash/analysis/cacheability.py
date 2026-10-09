@@ -11,13 +11,14 @@ state into a verdict is :mod:`cash.analysis.cacheability_decision`.
 from __future__ import annotations
 
 import ast
+import functools
 import re
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .._memo import STATEMENTS, LruMemo
+from .._memo import NOTEBOOK_STATEMENTS, STATEMENTS, LruMemo
 from ..effects import EffectKind
 from .aliases import bare_alias_targets, reference_alias_targets
 from .ast_util import called_names
@@ -38,6 +39,20 @@ def statement_writes_files(code: str, tree: "ast.Module | None" = None) -> bool:
     """
     if not any(m in code for m in WRITE_TEXT_MARKERS):
         return False
+    if tree is None:
+        return _text_writes_files(code)
+    return _writes_files(code, tree)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _text_writes_files(code: str) -> bool:
+    """:func:`statement_writes_files` of *code* parsed from its text, which
+    alone decides it: the upstream check asks it of every statement above
+    the cell on every cell run."""
+    return _writes_files(code, None)
+
+
+def _writes_files(code: str, tree: "ast.Module | None") -> bool:
     try:
         analysis = analyze_statement(code, tree)
     except (SyntaxError, ValueError, TypeError):

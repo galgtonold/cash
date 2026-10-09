@@ -128,6 +128,8 @@ class LoopRules:
         their lineages disagree by construction.
         """
         changed: set[str] = set()
+        if not vars_mutated_by_loops:
+            return changed  # no statement has an accumulator to compare
         outcomes = self.tracking_state.control_outcomes
         for entry in simulation_trace:
             stmt_code, outputs, inputs, input_hashes = (
@@ -369,6 +371,8 @@ class LoopRules:
         producing code is unchanged on disk.
         """
         loop_var_input_lineages: dict[str, dict[str, str]] = {}
+        if not vars_derived_from_loops:
+            return loop_var_input_lineages  # no statement outputs one
         for entry in simulation_trace:
             for out in entry.outputs:
                 if out in vars_derived_from_loops:

@@ -12,8 +12,9 @@ import functools
 import hashlib
 import logging
 import types
+from collections.abc import Iterator, Set
 
-from ..._memo import NOTEBOOK_CELLS
+from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.ast_util import called_names
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
@@ -48,7 +49,7 @@ def _cell_writes(cell_code: str) -> frozenset[str]:
     return frozenset(writes)
 
 
-@functools.lru_cache(maxsize=1024)
+@functools.lru_cache(maxsize=NOTEBOOK_CELLS)
 def _cell_reads(cell_code: str) -> frozenset[str]:
     """The names a cell reads that it does not bind first (by its source)."""
     try:
@@ -57,6 +58,65 @@ def _cell_reads(cell_code: str) -> frozenset[str]:
     except (SyntaxError, ValueError, TypeError):
         return frozenset()
     return frozenset(inputs)
+
+
+class _NotebookText:
+    """What the vetting reads off the cells' text, once per notebook version:
+    every cell run asked it of every cell, so a check cost more the longer
+    the notebook (`_notebook_text`)."""
+
+    def __init__(self, cells: tuple[str, ...]) -> None:
+        #: Name -> the last cell that reads it (`ReadsBelow`).
+        self.last_reader: dict[str, int] = {}
+        for idx, cell in enumerate(cells):
+            for name in _cell_reads(cell):
+                self.last_reader[name] = idx
+        #: Index -> source digest of each cell that is code and does not parse.
+        self.broken: dict[int, str] = {}
+        for idx, raw in enumerate(cells):
+            try:
+                if not clean_cell_source(raw).strip():
+                    continue
+            except (ValueError, TypeError):
+                continue
+            if parse_cell_source(raw) is None:
+                self.broken[idx] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        #: Name -> the cells that bind or change it, in order; both None when
+        #: a cell does not parse, and nothing is decided from them.
+        self.binders: dict[str, list[int]] | None = {}
+        self.produced: frozenset[str] | None = None
+        try:
+            for idx, cell in enumerate(cells):
+                for name in _cell_writes(cell):
+                    self.binders.setdefault(name, []).append(idx)
+        except (SyntaxError, ValueError):
+            self.binders = None
+        else:
+            self.produced = frozenset(self.binders)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
+def _notebook_text(cells: tuple[str, ...]) -> _NotebookText:
+    return _NotebookText(cells)
+
+
+class ReadsBelow(Set):
+    """The names the cells below cell *index* read
+    (``TrackingState.read_by_later_cells``), answered from the last cell
+    reading each name rather than built as a set on every cell run."""
+
+    def __init__(self, last_reader: dict[str, int], index: int) -> None:
+        self._last_reader = last_reader
+        self._index = index
+
+    def __contains__(self, name: object) -> bool:
+        return self._last_reader.get(name, -1) > self._index  # type: ignore[call-overload]
+
+    def __iter__(self) -> Iterator[str]:
+        return (name for name, last in self._last_reader.items() if last > self._index)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
 
 
 def _bound_by(fn: "ast.AST") -> set[str]:
@@ -104,25 +164,26 @@ class NotebookVetter:
 
         Raises ForwardReferenceError for a name only a cell below binds.
         """
-        self.tracking_state.read_by_later_cells = frozenset().union(
-            *(_cell_reads(code) for code in notebook_cells[current_cell_idx + 1 :])
-        )
+        text = _notebook_text(tuple(notebook_cells))
+        self.tracking_state.read_by_later_cells = ReadsBelow(text.last_reader, current_cell_idx)
         # Disclose any unparseable UPSTREAM cell. The simulator skips such a
         # cell so unrelated downstream cells keep caching, but the user must be
         # told which cell is broken — otherwise caching degrades silently
         # mid-edit while the badge and auto_cache_enabled still say it is on.
-        self._warn_broken_upstream_cells(notebook_cells, current_cell_idx)
+        self._warn_broken_upstream_cells(notebook_cells, current_cell_idx, text)
         # A variable whose definition was removed/renamed across an edit is
         # orphaned — no cell produces it anymore. Evict it (and its transitive
         # consumers) so they re-run from the start and raise NameError like a
         # fresh kernel, instead of serving a stale value.
-        self._evict_orphaned_definitions(notebook_cells, cell_code)
+        self._evict_orphaned_definitions(notebook_cells, cell_code, text)
         # ...and the other half: a name only a cell BELOW binds. Same
         # invisible-while-it-works shape, but it raises.
-        self._refuse_forward_references(notebook_cells, cell_code, current_cell_idx, required_inputs)
+        self._refuse_forward_references(notebook_cells, cell_code, current_cell_idx, required_inputs, text)
         logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)
 
-    def _evict_orphaned_definitions(self, notebook_cells: list[str], cell_code: str) -> None:
+    def _evict_orphaned_definitions(
+        self, notebook_cells: list[str], cell_code: str, text: _NotebookText | None = None
+    ) -> None:
         """Evict variables whose producing definition no longer exists.
 
         A variable cash previously produced but that NO current cell statically
@@ -144,12 +205,14 @@ class NotebookVetter:
         notebook view may omit), and if any cell fails to parse the pass is
         skipped rather than risk a wrong eviction.
         """
-        produced: set[str] = set()
-        for cell in (*notebook_cells, cell_code):
-            try:
-                produced |= _cell_writes(cell)
-            except (SyntaxError, ValueError):
-                return  # can't be sure what is produced — do nothing
+        if text is None:
+            text = _notebook_text(tuple(notebook_cells))
+        if text.produced is None:
+            return  # can't be sure what is produced — do nothing
+        try:
+            produced = text.produced | _cell_writes(cell_code)
+        except (SyntaxError, ValueError):
+            return
 
         user_ns = self.shell.user_ns
         orphaned = {
@@ -284,6 +347,7 @@ class NotebookVetter:
         cell_code: str,
         current_cell_idx: int,
         required_inputs: set[str],
+        text: _NotebookText | None = None,
     ) -> None:
         """Raise when this cell reads a name only a LATER cell binds.
 
@@ -329,23 +393,26 @@ class NotebookVetter:
         required_inputs = required_inputs & reads
         if not required_inputs:
             return
-        above: set[str] = set()
+        if text is None:
+            text = _notebook_text(tuple(notebook_cells))
+        binders = text.binders
+        try:
+            own = _cell_writes(cell_code)
+        except (SyntaxError, ValueError):
+            return  # can't be sure what binds what — never refuse on a guess
+        if binders is None:
+            return
+        # Bound above: by a cell up to this one, or by the cell itself (its
+        # own bindings included). Below: the first cell after it to bind it.
         below: dict[str, int] = {}
-        for idx, cell in enumerate((*notebook_cells, cell_code)):
-            try:
-                outs = _cell_writes(cell)
-            except (SyntaxError, ValueError):
-                return  # can't be sure what binds what — never refuse on a guess
-            if idx <= current_cell_idx or idx >= len(notebook_cells):
-                above |= outs  # the current cell's own bindings included
-            else:
-                for name in outs:
-                    below.setdefault(name, idx)
+        for name in required_inputs:
+            cells = binders.get(name)
+            if not cells or name in own or cells[0] <= current_cell_idx:
+                continue
+            below[name] = cells[0]
 
         user_ns = self.shell.user_ns
-        forward = sorted(
-            (name, below[name]) for name in required_inputs if name in below and name not in above and name in user_ns
-        )
+        forward = sorted((name, idx) for name, idx in below.items() if name in user_ns)
         if not forward:
             return
         names = ", ".join(f"`{n}` (cell {i + 1})" for n, i in forward)
@@ -362,6 +429,7 @@ class NotebookVetter:
         self,
         notebook_cells: list[str],
         current_cell_idx: int,
+        text: _NotebookText | None = None,
     ) -> set[int]:
         """Emit a visible warning for any UPSTREAM cell that cannot be parsed.
 
@@ -382,16 +450,9 @@ class NotebookVetter:
         multi-line ``%``-format print — is never falsely
         flagged. Returns the set of broken cell indices (0-based).
         """
-        broken: dict[int, str] = {}
-        for idx in range(min(current_cell_idx, len(notebook_cells))):
-            raw = notebook_cells[idx]
-            try:
-                if not clean_cell_source(raw).strip():
-                    continue
-            except (ValueError, TypeError):
-                continue
-            if parse_cell_source(raw) is None:
-                broken[idx] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        if text is None:
+            text = _notebook_text(tuple(notebook_cells))
+        broken = {idx: digest for idx, digest in text.broken.items() if idx < current_cell_idx}
 
         for idx, cell_hash in broken.items():
             if self._warned_broken_cells.get(idx) == cell_hash:

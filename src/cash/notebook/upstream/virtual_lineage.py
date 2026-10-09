@@ -31,7 +31,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
 )
-from ..callee_reach import reached_user_code
+from ..callee_reach import one_walk, reached_user_code
 from ..magic_effects import (
     is_magic_statement,
     is_rerun_magic,
@@ -372,10 +372,13 @@ class VirtualLineage:
             virtual_lineage=dict(cached_entry.virtual_lineage),
             virtual_modules=set(cached_entry.virtual_modules),
         )
-        for ci in range(first_changed_cell):
-            sim.trace.extend(self.cache.entries[ci].trace_segment)
-            sim.vars_mutated_by_loops.update(self.cache.entries[ci].vars_mutated_by_loops)
-            sim.vars_with_stale_files.update(self.cache.entries[ci].vars_with_stale_files)
+        trace, looped, stale = sim.trace, sim.vars_mutated_by_loops, sim.vars_with_stale_files
+        for entry in self.cache.entries[:first_changed_cell]:
+            trace.extend(entry.trace_segment)
+            if entry.vars_mutated_by_loops:
+                looped.update(entry.vars_mutated_by_loops)
+            if entry.vars_with_stale_files:
+                stale.update(entry.vars_with_stale_files)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[UPSTREAM_DEBUG] Incremental simulation: reusing cache for cells 0-%d, simulating from cell %d",
@@ -485,8 +488,8 @@ class VirtualLineage:
         `_reaches_watched_module_data`."""
         # No code of the notebook runs while it simulates: module data read
         # by the look for outside changes and by the simulated keys is hashed
-        # once.
-        with one_reading():
+        # once, and each class a statement reaches is looked into once.
+        with one_reading(), one_walk():
             start = self.find_incremental_start(current_cell_idx, notebook_cells, required_inputs, cell_code)
             sim = start.simulation
             self.simulate_cells_pass1(

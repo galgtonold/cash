@@ -1374,7 +1374,7 @@ cell, that cell is never cached.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashUpstreamSyntaxWarning</span>
 
-<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._warn_broken_upstream_cells @6ebee167 -->
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._warn_broken_upstream_cells @9f38dbd3 -->
 **What happened.** An earlier cell in the notebook has a syntax error. The
 message gives its number (counting code cells from the top, not the `[7]`
 execution count) and quotes its first line.
