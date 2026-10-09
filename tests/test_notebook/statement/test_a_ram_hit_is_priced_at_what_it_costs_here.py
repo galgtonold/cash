@@ -87,7 +87,16 @@ class TestHitSeconds:
         memory_backend._copy_array(np.ones(1 << 18))  # 2 MB
         assert len(memory_backend._COPY_SPEED) == 1 and memory_backend._COPY_SPEED[0] > 0
 
+    def test_the_fastest_recent_copy_sets_the_price(self, copy_speed):
+        copy_speed(1e9)
+        for _ in range(3):
+            memory_backend._note_copy_speed(1_000_000, 0.01)  # 100 MB/s, a copy behind other work
+        assert memory_backend.copy_seconds(1_000_000_000) == pytest.approx(1.0)
+        for _ in range(memory_backend._COPY_READINGS):
+            memory_backend._note_copy_speed(1_000_000, 0.01)
+        assert memory_backend.copy_seconds(1_000_000_000) == pytest.approx(10.0)
+
     def test_nothing_measured_yet_is_probed_once(self, copy_speed):
         memory_backend._COPY_SPEED.clear()
         assert memory_backend.copy_seconds(1 << 20) > 0
-        assert len(memory_backend._COPY_SPEED) == 1
+        assert len(memory_backend._COPY_SPEED) == 2  # the probe copies twice

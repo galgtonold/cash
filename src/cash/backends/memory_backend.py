@@ -1500,9 +1500,9 @@ def _copy_array(array: Any) -> Any:
     if array.nbytes < _TIMED_COPY_BYTES:
         copied = array.copy(order="K")
     else:
-        started = time.perf_counter()
+        started = _copy_clock()
         copied = array.copy(order="K")
-        _note_copy_speed(array.nbytes, time.perf_counter() - started)
+        _note_copy_speed(array.nbytes, _copy_clock() - started)
     if not array.flags.writeable:
         copied.flags.writeable = False
     return copied
@@ -1510,20 +1510,39 @@ def _copy_array(array: Any) -> Any:
 
 #: An array copy at least this big is timed (`_note_copy_speed`).
 _TIMED_COPY_BYTES = 1 << 20
-#: Bytes per second this process copies an array at, as last measured: the
-#: copy speed of THIS machine under its current load, which a fitted model
-#: cannot know (a hit of an 80 MB array measured 0.02 s on a quiet machine
-#: and 0.2-0.8 s on a busy one, against 0.02 s fitted). Empty until measured.
+#: Bytes per second this process copied its last big arrays at, newest last
+#: (`_copy_clock`): the copy speed of THIS machine and its memory, which a
+#: fitted model cannot know (a hit of an 80 MB array measured 0.2-0.8 s on
+#: one machine, against 0.02 s fitted). Empty until measured.
 _COPY_SPEED: list[float] = []
+def _fine_thread_clock() -> Any:
+    """The clock a copy is timed with: this thread's CPU time, where it
+    resolves a microsecond; else the wall clock (Windows: 15.6 ms ticks).
+
+    CPU time, because a copy that waited for a core says nothing about the
+    copy: the wall time of the cell it would replace waited too.
+    """
+    try:
+        if time.get_clock_info("thread_time").resolution <= 1e-6:
+            return time.thread_time
+    except (AttributeError, ValueError, OSError):
+        pass
+    return time.perf_counter
+
+
+_copy_clock = _fine_thread_clock()
+
+#: How many readings `copy_seconds` takes the fastest of. The fastest, not
+#: the mean: one copy caught behind other work says little about the next,
+#: and a cell's caching should not flip with every burst of load.
+_COPY_READINGS = 8
 
 
 def _note_copy_speed(nbytes: int, seconds: float) -> None:
     if seconds <= 0:
         return
-    speed = nbytes / seconds
-    # Half the old reading, half the new: the speed follows the machine's
-    # load within a few copies, and one outlier moves it by half.
-    _COPY_SPEED[:] = [speed if not _COPY_SPEED else (_COPY_SPEED[0] + speed) / 2]
+    _COPY_SPEED.append(nbytes / seconds)
+    del _COPY_SPEED[:-_COPY_READINGS]
 
 
 def copy_seconds(nbytes: int) -> float:
@@ -1535,7 +1554,7 @@ def copy_seconds(nbytes: int) -> float:
         probe = np.ones(_PROBE_BYTES // 8)
         for _ in range(2):  # the first touches fresh pages
             _copy_array(probe)
-    return nbytes / _COPY_SPEED[0]
+    return nbytes / max(_COPY_SPEED)
 
 
 _PROBE_BYTES = 8 << 20
