@@ -319,6 +319,34 @@ def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[s
         return False
 
 
+def _numpy_array_of_a_sequence(call: ast.Call, user_ns: dict[str, Any]) -> bool:
+    """``np.array(x)`` / ``np.asarray(x)`` with *x* a name bound to a list,
+    tuple, range or array: an array as long as *x* along its first axis.
+
+    ``for n, line in tqdm(enumerate(np.array(lines))):`` over 87k lines could
+    not be sized, so it ran pass by pass, about 0.3 s a line against 6-9 s
+    for the whole loop plain. Only a sequence counts: ``np.array("abc")`` or
+    of a set is a 0-d array, which has no length.
+    """
+    func = call.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and func.attr in ("array", "asarray", "asanyarray")
+        and isinstance(func.value, ast.Name)
+        and len(call.args) == 1
+        and isinstance(call.args[0], ast.Name)
+        and not any(kw.arg in (None, "ndmin") for kw in call.keywords)  # `ndmin=2` adds a leading axis
+    ):
+        return False
+    module = user_ns.get(func.value.id)
+    if getattr(module, "__name__", None) != "numpy" or not isinstance(module, type(_builtins)):
+        return False
+    value = user_ns.get(call.args[0].id)
+    return isinstance(value, (list, tuple, range, module.ndarray)) and (
+        not isinstance(value, module.ndarray) or value.ndim > 0
+    )
+
+
 def _is_own_iterator(value: Any) -> bool:
     """``iter(value) is value``, asked without running a user ``__iter__``
     when it cannot be so: ``iter`` refuses a result with no ``__next__``,
@@ -490,6 +518,9 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
             if func.attr in ("items", "iteritems") and hasattr(owner, "columns"):
                 return len(owner.columns)
             return base
+        if _numpy_array_of_a_sequence(node, user_ns):
+            # `np.array(lines)`: as long as the list along its first axis.
+            return len(user_ns[node.args[0].id])
         if isinstance(func, ast.Name) and node.args:
             if func.id in ("enumerate", "reversed", "sorted", "list", "tuple", "iter") or _is_progress_bar(
                 func.id, user_ns
