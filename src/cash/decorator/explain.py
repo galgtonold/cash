@@ -461,10 +461,12 @@ class MissHistory:
         cf = self._cached.get(func_name)
         previous = cf.last_key if cf is not None else None
         since = "since the last call"
-        doc = self._stored_keys.read(func_name)
-        record = doc["keys"]
-        if cache_key in record:
-            stored_at, written_ttl = record[cache_key][:2]
+        # What the record says, asked of an index of it: reading the whole
+        # record and walking every key cost more than the miss of a cheap
+        # function's body. The whole record only for "what changed".
+        facts = self._stored_keys.miss_facts(func_name, cache_key)
+        if facts.stored is not None:
+            stored_at, written_ttl = facts.stored[:2]
             age = time.time() - stored_at
             if ttl_expired(stored_at, written_ttl):
                 return MissReason(MissKind.TTL, f"stored {age:.0f}s ago by an earlier run, with ttl={written_ttl}s")
@@ -472,8 +474,8 @@ class MissHistory:
             if evicted is not None:
                 return MissReason(MissKind.GONE, f"an earlier run stored it; it was {_EVICTED}", evicted=evicted)
             return MissReason(MissKind.GONE, "an earlier run stored it; it has since been evicted or cleared")
-        if cache_key in doc["ram_only"]:
-            why = doc["ram_only"][cache_key][1]
+        if facts.ram_only is not None:
+            why = facts.ram_only[1]
             return MissReason(
                 MissKind.NOT_STORED,
                 f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it",
@@ -489,38 +491,31 @@ class MissHistory:
         # call of a loop but the first.
         new_parts = cache_key.rsplit(":", 3)
         if len(new_parts) == 4:
-            for key in reversed([*record, *doc["ram_only"]]):
-                old_parts = key.rsplit(":", 3)
-                if len(old_parts) == 4 and old_parts[2:] == new_parts[2:] and old_parts[1] != new_parts[1]:
-                    return self._code_changed(
-                        func_name, old_parts[1], new_parts[1], doc, "since an earlier run stored it"
-                    )
+            if facts.same_arguments is not None:
+                return self._code_changed(
+                    func_name,
+                    facts.same_arguments.rsplit(":", 3)[1],
+                    new_parts[1],
+                    self._stored_keys.read(func_name),
+                    "since an earlier run stored it",
+                )
             # Earlier runs stored entries, and none under the state this
             # process computes: every one of them is out of date, whatever the
             # arguments. A changed DEFAULT moves the arguments too (they are
             # keyed with defaults applied), so the match above cannot see it,
             # and the call-to-call comparison below called 3 of 4 such misses
             # "new arguments".
-            earlier = {
-                key: value
-                for kind in ("keys", "ram_only")
-                for key, value in doc[kind].items()
-                if value and isinstance(value[0], (int, float)) and value[0] < PROCESS_STARTED
-            }
-            states = {key.rsplit(":", 3)[1] for key in earlier if key.count(":") >= 3}
-            if states and new_parts[1] not in states:
-                newest = max(earlier, key=lambda key: earlier[key][0])
+            if facts.newest_earlier is not None:
                 return self._code_changed(
                     func_name,
-                    newest.rsplit(":", 3)[1],
+                    facts.newest_earlier.rsplit(":", 3)[1],
                     new_parts[1],
-                    doc,
+                    self._stored_keys.read(func_name),
                     "since an earlier run stored its entries, so none of them applies",
                 )
         if previous is None or previous == cache_key:
-            others = [key for key in record if key != cache_key]
-            if previous is None and others:
-                previous = others[-1]
+            if previous is None and facts.last_other is not None:
+                previous = facts.last_other
                 since = "since an earlier run stored it"
             if previous is None or previous == cache_key:
                 return MissReason(
@@ -535,7 +530,7 @@ class MissHistory:
         what = None
         if old[1] != new[1]:
             moved.append((MissKind.CODE, f"{_CODE_CHANGED} {since}"))
-            what = self._what_changed(func_name, old[1], new[1], doc)
+            what = self._what_changed(func_name, old[1], new[1], self._stored_keys.read(func_name))
         if old[2] != new[2]:
             moved.append((MissKind.DYNAMIC, "a dynamic_depends_on source changed"))
         if old[3] != new[3]:
