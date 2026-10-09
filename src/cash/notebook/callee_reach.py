@@ -21,10 +21,12 @@ import sqlite3
 import sys
 import textwrap
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from itertools import repeat
 from typing import Any, NamedTuple
 
+from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.mutations import MUTATING_METHODS
@@ -45,6 +47,7 @@ __all__ = [
     "module_state_names",
     "import_state_writes",
     "module_state_writes",
+    "one_walk",
     "process_state_writes",
     "reached_user_code",
     "rebound_modules",
@@ -71,6 +74,29 @@ class Reach(NamedTuple):
 
 
 _EMPTY = Reach((), frozenset())
+
+#: Inside `one_walk`: what each class was found to be (`_Found._class`),
+#: keyed by the class and the namespace asked from. Empty outside it.
+_WALKS: list[dict[tuple[str, type, int], bool]] = []
+
+
+@contextmanager
+def one_walk() -> Iterator[None]:
+    """Decide each class a walk meets at most once inside the block.
+
+    For a stretch where no code of the notebook runs -- the upstream
+    simulation, which asks every cell above the one being checked what it
+    reaches. A cell reading a pandas frame meets ``DataFrame``, whose 500
+    members `_Found._users_class` reads for a function of the notebook's:
+    in a 300-cell notebook of such cells that was 66-80 ms before every cell.
+    Outside the block every walk decides again, as a cell may have given a
+    class a method since (``pd.DataFrame.report = report``)."""
+    _WALKS.append(_WALKS[-1] if _WALKS else {})
+    try:
+        yield
+    finally:
+        _WALKS.pop()
+
 
 
 def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: bool = True) -> Reach:
@@ -138,7 +164,7 @@ def _inert(value: Any) -> bool:
     return value is None or type(value) in _FOREIGN_C_TYPES or inspect.isroutine(value)
 
 
-@functools.lru_cache(maxsize=4096)
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
 def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """What :func:`reached_user_code` looks up for *code*, in the order its
     walk meets it: ``(name, ())`` for a name read, ``(root, attrs)`` for
@@ -1007,7 +1033,9 @@ class _Found:
             if label is not None and _is_data(value):
                 self.data.setdefault(label, value)
             cls = type(value)
-            if value is not None and cls not in _FOREIGN_C_TYPES and not inspect.isroutine(value):
+            if value is None or cls in _FOREIGN_C_TYPES or self._known_to_lead_nowhere(cls):
+                return
+            if not inspect.isroutine(value):
                 # An instance: its methods run when the statement calls them.
                 self._class(cls)
 
@@ -1026,6 +1054,29 @@ class _Found:
         ``Model.predict``, and what that reads), and when it is a local
         module's, the data it holds (``Settings.scale``), which its methods
         read through ``self``."""
+        memo = _WALKS[-1] if _WALKS else None
+        if memo is not None:
+            # Whether the class leads anywhere, told by a walk of its own: one
+            # that finds nothing finds nothing in this walk either, which
+            # only holds more already.
+            key = ("leads", cls, id(self.namespace))
+            leads = memo.get(key)
+            if leads is None:
+                # Taken to lead somewhere while it is told, so that a class
+                # met again inside its own walk is walked, not told again.
+                memo[key] = True
+                alone = _Found(self.namespace)
+                alone._walk_class(cls)
+                leads = memo[key] = bool(alone.functions or alone.modules or alone.data or alone.written)
+            if not leads:
+                return
+        self._walk_class(cls)
+
+    def _known_to_lead_nowhere(self, cls: type) -> bool:
+        """Inside `one_walk`: *cls* is known to add nothing to a walk."""
+        return bool(_WALKS) and _WALKS[-1].get(("leads", cls, id(self.namespace))) is False
+
+    def _walk_class(self, cls: type) -> None:
         if not self._users_class(cls):
             self.value(vars(cls).get("__init__"))
             return
@@ -1046,7 +1097,18 @@ class _Found:
                     self.value(fn)
 
     def _users_class(self, cls: type) -> bool:
-        """Defined in a local module, or in a cell: its methods' globals are the namespace."""
+        """Defined in a local module, or in a cell: its methods' globals are
+        the namespace. Once per class inside `one_walk`."""
+        memo = _WALKS[-1] if _WALKS else None
+        if memo is None:
+            return self._decide_users_class(cls)
+        key = ("users", cls, id(self.namespace))
+        known = memo.get(key)
+        if known is None:
+            known = memo[key] = self._decide_users_class(cls)
+        return known
+
+    def _decide_users_class(self, cls: type) -> bool:
         home = _loaded(getattr(cls, "__module__", None))
         if home is not None and _is_local(home):
             return True

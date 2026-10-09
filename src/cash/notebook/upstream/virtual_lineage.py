@@ -31,7 +31,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
 )
-from ..callee_reach import reached_user_code
+from ..callee_reach import one_walk, reached_user_code
 from ..magic_effects import (
     is_magic_statement,
     is_rerun_magic,
@@ -485,8 +485,8 @@ class VirtualLineage:
         `_reaches_watched_module_data`."""
         # No code of the notebook runs while it simulates: module data read
         # by the look for outside changes and by the simulated keys is hashed
-        # once.
-        with one_reading():
+        # once, and each class a statement reaches is looked into once.
+        with one_reading(), one_walk():
             start = self.find_incremental_start(current_cell_idx, notebook_cells, required_inputs, cell_code)
             sim = start.simulation
             self.simulate_cells_pass1(
