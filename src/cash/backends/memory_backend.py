@@ -610,6 +610,13 @@ class InMemoryBackend(CacheBackend):
                 memo[key] = obj.read_out(known_cells)
                 alive.append(obj)
                 return key
+            if record_cells is not None and getattr(obj_type, "_cash_stored_as_is", False):
+                # Stored as it is: an immutable stand-in whose copy is
+                # something else (a closed file's `ClosedStream` copies into
+                # the closed file, which no disk tier can write). A hit
+                # copies it as usual.
+                memo[key] = obj
+                return key
             if frames and isinstance(obj, frames):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
@@ -634,7 +641,8 @@ class InMemoryBackend(CacheBackend):
         # that very class: once a notebook re-runs the cell defining it, a
         # stored instance's class is the old one. A disk hit looks the class
         # up by name and gets the new one; so does the second attempt here.
-        for hook in (persistent_id if memo or frames or ndarray else None, renamed_id):
+        stores = record_cells is not None  # `_cash_stored_as_is` is looked for
+        for hook in (persistent_id if memo or frames or ndarray or stores else None, renamed_id):
             try:
                 buffers: list[pickle.PickleBuffer] = []
                 stream = kept_state.dumps(

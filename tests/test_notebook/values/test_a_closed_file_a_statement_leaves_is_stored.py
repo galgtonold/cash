@@ -81,3 +81,35 @@ def test_the_disk_write_gets_the_stored_form_not_the_ram_copy(cash_magics, cash_
     # Positive control: a statement leaving no closed file is not marked.
     run_cash_cell(cash_magics, f"y = len(text)\ntime.sleep({ABOVE_PERSISTENCE_FLOOR_S})")
     assert not written[-1][1].get(NO_PRIVATE_COPY)
+
+
+def test_a_later_persist_writes_the_stored_form_and_restores_the_closed_file(tmp_path):
+    """The end-of-cell pass writes an entry only RAM holds (`persist_from_memory`)
+    from the RAM tier's own copy. That copy of a stored closed file was the
+    closed file again, which does not pickle: the write failed, and the cell
+    ran again after a restart."""
+    from cash.backends.file_backend import FileBackend
+    from cash.backends.memory_backend import NO_PRIVATE_COPY, InMemoryBackend
+    from cash.backends.tiered_backend import TieredBackend
+
+    path = tmp_path / "data.txt"
+    path.write_text("hello\n", encoding="utf-8")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    tiers = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "cache"), flush_interval=0)])
+    cheap = {  # a notebook value cheap to run itself: kept in RAM, for the end-of-cell pass
+        "execution_time": 0.02,
+        "cost_model_family": "_GENERIC",
+        "cost_model_type_name": "dict",
+        "cost_model_size_bytes": 1000,
+        NO_PRIVATE_COPY: True,
+    }
+    tiers.set("k", {"variables": {"fh": stored_form(fh), "text": text}}, cheap)
+    assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
+    tiers.shutdown()
+    _meta, back = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "cache"))]).get("k")
+    restored = back["variables"]["fh"]
+    assert type(restored) is type(fh) and restored.closed and restored.name == fh.name
+    assert back["variables"]["text"] == "hello\n"
+    _meta, from_ram = tiers.backends[0].get("k")
+    assert type(from_ram["variables"]["fh"]) is type(fh)  # a RAM hit hands the closed file back
