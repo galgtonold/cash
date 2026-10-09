@@ -21,6 +21,7 @@ import pickle
 from typing import Any
 
 from . import _plain_data
+from .bulk_digest import fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
 from .sizing import SPARSE_PARTS
 from .value_types import LEAF_TYPES
@@ -362,6 +363,15 @@ def array_layout(value: Any) -> str:
     return "K" + ",".join(map(str, perm))
 
 
+def _raw_view(array: Any) -> Any:
+    """*array*'s buffer as something ``memoryview`` takes: datetimes and
+    timedeltas, which the buffer protocol refuses, as their int64 counts
+    (their unit is in the dtype the key holds)."""
+    if array.dtype.kind in "mM":
+        return array.view("i8")
+    return array
+
+
 def hash_numpy(value: Any) -> str | None:
     """Hash a numpy ndarray over its FULL contents.
 
@@ -370,8 +380,8 @@ def hash_numpy(value: Any) -> str | None:
     return a wrong cached result (a silent data-corruption bug, especially for
     the large ML/data arrays caching targets). Shape and dtype are folded in
     so a reshape or retype of the same bytes does not collide. Uses a
-    zero-copy ``memoryview`` for contiguous arrays and falls back to
-    ``tobytes()`` (C-order copy) otherwise.
+    zero-copy ``memoryview`` for contiguous arrays and a C-order copy
+    otherwise; a big buffer is hashed on several threads (`fold_buffer`).
 
     The LAYOUT is folded in too -- the order the axes sit in memory, see
     `array_layout` -- because the C-order fallback above erases it. Without
@@ -394,9 +404,10 @@ def hash_numpy(value: Any) -> str | None:
             h.update(_object_items_bytes(value.tolist()))
             return h.hexdigest()
         try:
-            h.update(memoryview(value).cast("B"))  # no copy if C-contiguous
+            data = memoryview(_raw_view(value))  # no copy if C-contiguous
         except (TypeError, ValueError):
-            h.update(value.tobytes())  # non-contiguous / odd layout
+            data = value.tobytes()  # a dtype the buffer protocol refuses
+        fold_buffer(h, data)
         return h.hexdigest()
     except (TypeError, ValueError, AttributeError, MemoryError, pickle.PicklingError):
         logger.debug("Failed to hash numpy ndarray")

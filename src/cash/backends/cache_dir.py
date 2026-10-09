@@ -55,13 +55,19 @@ __all__ = [
 ]
 
 #: Version of the on-disk cache format (the ``*.entry`` layout in
-#: ``entry_format``). Bump it only when a change makes entries written by an
-#: older build undecodable by this one: a directory stamped with another
-#: version is cleared on open, and those results are lost. A new entry layout
-#: this build still reads alongside the old ones (``entry_format.MAGICS``: the
-#: split payloads of ``MAGIC_SPLIT``) needs no bump; an older build reads the
-#: unknown magic as a miss.
-CACHE_FORMAT_VERSION = 2
+#: ``entry_format``, and the digests keys and file records are made of).
+#: Bump it when a change makes entries written by an older build undecodable
+#: by this one, or makes its keys and records unreadable alongside the new
+#: ones: a directory stamped with another version is cleared on open, and
+#: those results are lost. A new entry layout this build still reads
+#: alongside the old ones (``entry_format.MAGICS``: the split payloads of
+#: ``MAGIC_SPLIT``) needs no bump; an older build reads the unknown magic as
+#: a miss.
+#:
+#: 3: arrays, columns and files are digested by `cash.bulk_digest`. An old
+#: entry could never match a new key -- every digest of the new scheme is
+#: taken over different bytes -- but it would never be used again either.
+CACHE_FORMAT_VERSION = 3
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
