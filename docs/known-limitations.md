@@ -175,7 +175,7 @@ rebind with `df = df.assign(...)`.
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @808ed15a -->
+<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @57645727 -->
 A function that changes a global (`LOG.append(v)`, `counter["n"] += 1`), itself
 or through a helper it calls, is handled: the statement calling it runs every time so the change really happens,
 while the call inside it is served from the cache together with its effect on
