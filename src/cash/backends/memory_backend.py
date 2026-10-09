@@ -19,6 +19,7 @@ from typing import Any
 from cash.exceptions import CacheBackendError
 
 from .. import _plain_data, kept_state
+from . import frame_sharing
 from .._lazy_module import LazyModule
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
@@ -35,6 +36,11 @@ __all__ = ["InMemoryBackend"]
 #: A list or tuple with at most this many items has the frames in it
 #: copied as `_copy_frame` copies them, not deep (`_safe_deep_copy`).
 _PREMADE_ITEMS_MAX = 64
+
+
+#: `InMemoryBackend._frame_cells` verdict for a pandas table stored frozen
+#: (`frame_sharing`): a hit hands out a shallow copy of it.
+_SHARED = "shared"
 
 
 #: `InMemoryBackend._copy_plans` value for an entry the first hit plans.
@@ -168,7 +174,8 @@ def _reaches_marshalled(value: Any) -> bool:
 class InMemoryBackend(CacheBackend):
     """Entries held in this process's memory, gone when the process ends.
 
-    A hit returns a copy, so changing it does not change the entry. Entries
+    A hit returns a copy, so changing it does not change the entry (a pandas
+    table: a shallow copy of frozen data, `frame_sharing`). Entries
     are evicted when the byte cap or the entry cap is reached, or when the
     machine runs short of memory.
     """
@@ -365,12 +372,17 @@ class InMemoryBackend(CacheBackend):
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
-        Deep, on every store and every hit. A shallow copy is not enough even
-        under pandas copy-on-write: copy-on-write covers writes made through
-        pandas, but ``s.array`` of any column and ``s.values`` of a nullable
-        or categorical column are writable handles to the block itself, so
-        ``df["score"].values[0] = 100`` on a returned frame would land in the
-        stored entry and in every later hit.
+        Under pandas copy-on-write, a table of numbers, dates and text is not
+        copied at all: the store keeps its data frozen where it is and a hit
+        hands out a shallow copy (`frame_sharing`). A deep copy cost 0.2 s per
+        250 MB on every store and every hit, most of an unchanged Run All.
+        Copy-on-write alone is not enough -- ``s.array`` of any column and
+        ``s.values`` of a nullable or categorical column are writable handles
+        to the block itself -- so the frozen data is read-only and marked
+        shared for good. Any other table (nullable or categorical columns,
+        mutable labels, a subclass, data something outside pandas holds) is
+        copied deep, on the store and on every hit; its private copy is
+        frozen and shared when it can be.
 
         A deep pandas copy does not copy the Python objects in an object
         column: a list, dict or array in a cell stayed one object shared by
@@ -388,8 +400,18 @@ class InMemoryBackend(CacheBackend):
         copied: a cell list returned beside its frame stays the frame's.
         """
         mutable = known_cells.get(id(frame)) if known_cells is not None else None
+        if mutable is _SHARED:
+            # Frozen when stored (`frame_sharing`): a shallow copy, which
+            # pandas copies before any write, is as independent as a deep one.
+            return frame_sharing.hand_out(frame)
         if mutable is None:
             mutable = _holds_mutable_cells(frame)
+        if record_cells is not None and mutable is False:
+            # Stored: kept as the caller's own data, frozen, not copied.
+            stored = frame_sharing.adopt(frame)
+            if stored is not None:
+                record_cells[id(stored)] = _SHARED
+                return stored
         copied = None
         if mutable:
             copied = InMemoryBackend._copy_cells(frame, memo)
@@ -404,6 +426,8 @@ class InMemoryBackend(CacheBackend):
         if copied is None:
             copied = frame.copy(deep=True)
         if record_cells is not None:
+            if mutable is False and frame_sharing.freeze(copied, own=True):
+                mutable = _SHARED  # private, now frozen: hits share it
             record_cells[id(copied)] = mutable
         return copied
 

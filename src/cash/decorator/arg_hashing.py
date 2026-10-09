@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
+from ..backends.frame_sharing import is_pin
 from ..canonical_form import (
     NOT_HOOKED,
     ContentHashing,
@@ -471,7 +472,7 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
             return None
         for ref in shared:
             other = ref()
-            if other is not None:
+            if other is not None and not is_pin(other):  # the RAM tier's mark on a frozen block
                 hold(other)
     return arrays, pandas_refs
 
