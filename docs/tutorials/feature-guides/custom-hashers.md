@@ -151,7 +151,7 @@ the hasher return something that changes with it, or name it with
   identity only if it really identifies the value, such as a version you
   control.
 
-<!-- claim: cash/content_hashers.py:hash_numpy @f6df9c37 -->
+<!-- claim: cash/content_hashers.py:hash_numpy @b22b90f7 -->
 To check a hasher, call it on two equal but separately built instances. The
 strings must match. `evaluate.explain(model, data).cache_key` shows the key a
 call would use.

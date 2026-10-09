@@ -26,7 +26,6 @@ recorded, and that had settled before it was hashed, is not read again
 
 from __future__ import annotations
 
-import hashlib
 import io
 import logging
 import os
@@ -37,8 +36,10 @@ from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
 from cash._memo import FILE_DIGESTS, LruMemo
+from cash.bulk_digest import BulkHasher
 from cash._paths import normalize_path, resolve_file_dep_path
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
+from cash.tracking.digest_table import current_table
 from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
 
@@ -93,28 +94,28 @@ _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #: stat fields: ``(path, st_dev, st_ino, size, mtime_ns, ctime_ns)``.
 #:
 #: File dependencies propagate, so one burst of cached calls checks the same
-#: inputs many times; with the memo later checks are one ``stat`` each. Any write moves ``mtime``, and
-#: on POSIX ``ctime`` too; on Windows a same-size edit that RESTORES the mtime
-#: leaves every key field identical. Three rules bound that (a fully-hashed
-#: file must still catch it: ``test_same_size_edit_under_identical_mtime_
-#: invalidates``):
+#: inputs many times; with the memo later checks are one ``stat`` each. Only
+#: a file UNTOUCHED for ``_HASH_MEMO_MIN_AGE_SECONDS`` before it is hashed is
+#: memoized -- the rule a stored entry's dependency skips its read by
+#: (``_unchanged_since_hashed``): a file written moments ago may still be
+#: being written, within one timestamp tick. Any later write moves ``mtime``,
+#: and on POSIX ``ctime`` too, which no tool puts back. On Windows a
+#: same-size edit that RESTORES the mtime leaves every key field identical
+#: and is not seen -- a documented limitation ("an edit that keeps size and
+#: timestamps"), the same one a stored entry's check has.
 #:
-#: 1. Only a file UNTOUCHED for ``_HASH_MEMO_MIN_AGE_SECONDS`` is memoized --
-#:    a file written moments ago may still be being written.
-#: 2. A digest is reused for ``_HASH_MEMO_TTL_SECONDS`` from when it was
-#:    computed (not refreshed on use, so it ends on schedule).
-#:    Within that window such an edit is not seen -- a documented limitation
-#:    ("an edit that keeps size and timestamps, in a running process"), and
-#:    one that never reaches a stored entry, whose fingerprint is taken when
-#:    the body reads the file. Without it a loop over a large input would
-#:    re-hash it on every call.
-#: 3. In a notebook a digest also holds for the rest of the CELL RUN
-#:    (``begin_file_state_epoch`` .. ``end_file_state_epoch``): a cell over
-#:    thousands of files outlasts the window on its own, and must not re-hash
-#:    them for every derived statement. The next cell run
-#:    falls back to the window; between cells only the window applies.
+#: The digests are kept for the next process too, in the cache directory
+#: (`cash.tracking.digest_table`), under the same key and rule. A stat with
+#: no file identity is the exception (`_LISTED_STAT_TTL_SECONDS`). In a
+#: notebook a digest so bounded also holds for the rest of the CELL RUN
+#: (``begin_file_state_epoch`` .. ``end_file_state_epoch``): a cell over
+#: thousands of files outlasts the bound on its own, and must not re-hash
+#: them for every derived statement.
 _HASH_MEMO: LruMemo[tuple[str, int, int, int, int, int], tuple[float, str, int | None]] = LruMemo(FILE_DIGESTS)
-_HASH_MEMO_TTL_SECONDS = 5.0
+#: How long a remembered digest is reused, or None for as long as its key
+#: holds. A number turns the cross-process table off and bounds the memo
+#: (a test that must see every read sets 0).
+_HASH_MEMO_TTL_SECONDS: float | None = None
 _HASH_MEMO_MIN_AGE_SECONDS = 10.0
 #: The current cell run's number, or None between runs.
 HASH_EPOCH: int | None = None
@@ -241,70 +242,139 @@ def file_content_hash(
 
     Every byte, whatever the size: a hash of a few regions of a big file read
     an edit between them as no change. The byte length is folded in too.
+    The digest is `cash.bulk_digest`'s, so a big file is hashed on several
+    threads.
 
     Determinism is the contract: given the same bytes and size, this returns
     the same digest at snapshot time and at every later freshness check.
 
-    Memoized per process on the file's stat fields — see ``_HASH_MEMO`` for what
-    that costs and what it saves.
+    Remembered, in this process and the next, on the file's stat fields --
+    see ``_HASH_MEMO`` for when.
 
     *st* is the caller's stat of *path*, when it has just taken one.
     """
     memo_key = None
+    hashed_at = time.time()
     try:
         if st is None:
             st = os.stat(path)
         if size is None:
             size = st.st_size
-        memoizable = (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
-        if memoizable:
-            # st_dev/st_ino: the FILE's identity, not only the path's. A path
-            # through a re-pointed junction names a different file with the same
-            # path, and two release copies laid down by one deploy can share
-            # size and timestamps exactly. Where
-            # the filesystem gives an identity, it is the whole key: a relative
-            # read is recorded under both spellings (``FileAccessTracker.track_path``)
-            # and was hashed once for each. Where it gives none (st_ino 0 --
-            # including every stat a Windows directory listing returns), the
-            # absolute path stands in for it, so both spellings still share.
-            memo_key = (
-                os.path.normcase(os.path.abspath(path)) if not st.st_ino else "",
-                st.st_dev,
-                st.st_ino,
-                size,
-                st.st_mtime_ns,
-                getattr(st, "st_ctime_ns", 0),
-            )
-            cached = _HASH_MEMO.get(memo_key)
-            if cached is not None and (
-                (cached[2] is not None and cached[2] == HASH_EPOCH)
-                or time.monotonic() - cached[0] < _HASH_MEMO_TTL_SECONDS
-            ):
-                return cached[1]
+        if (hashed_at - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS:
+            memo_key = _stat_memo_key(path, st, size)
+            remembered = _remembered_digest(memo_key)
+            if remembered is not None:
+                return remembered
     except OSError:
         logger.debug("[FILE_DEP] Could not stat file for freshness: %s", path)
         return None
     try:
-        h = hashlib.sha256()
-        h.update(str(size).encode("ascii"))
-        # Untracked: cash's own read of a file must not be tracked as a read
-        # by the cached call it is checking on behalf of (which then hashed
-        # the file a second time to fingerprint that "read").
-        with untracked(), io.FileIO(path, "rb") as f:
+        digest = _read_digest(path, size)
+    except OSError:
+        logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)
+        return None
+    if memo_key is not None:
+        _HASH_MEMO[memo_key] = (time.monotonic(), digest, HASH_EPOCH)
+        table = current_table() if _reuse_seconds(memo_key) is None else None
+        if table is not None:
+            table.put(memo_key, digest, hashed_at)
+    return digest
+
+
+#: How long a digest is reused under a stat with no file identity (``st_ino``
+#: 0): a Windows directory listing's (`stats_from_listings`), which can lag a
+#: file edited through another hard link. Bounded, and never kept on disk.
+_LISTED_STAT_TTL_SECONDS = 5.0
+
+
+def _reuse_seconds(memo_key: tuple[str, int, int, int, int, int]) -> float | None:
+    """How long a digest remembered under *memo_key* is reused; None: while the key holds."""
+    ttl = _HASH_MEMO_TTL_SECONDS
+    if not memo_key[2]:
+        return _LISTED_STAT_TTL_SECONDS if ttl is None else min(ttl, _LISTED_STAT_TTL_SECONDS)
+    return ttl
+
+
+def remembered_file_digest(path: str) -> str | None:
+    """The digest `file_content_hash` would return for *path* without reading
+    it -- remembered in this process or the cache directory -- else None."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS:
+        return None
+    return _remembered_digest(_stat_memo_key(path, st, st.st_size))
+
+
+def _stat_memo_key(path: str, st: os.stat_result, size: int) -> tuple[str, int, int, int, int, int]:
+    """A settled file's digest is remembered under ``_HASH_MEMO``'s key.
+
+    st_dev/st_ino: the FILE's identity, not only the path's. A path through
+    a re-pointed junction names a different file with the same path, and two
+    release copies laid down by one deploy can share size and timestamps
+    exactly. Where the filesystem gives an identity, it is the whole key: a
+    relative read is recorded under both spellings
+    (``FileAccessTracker.track_path``) and was hashed once for each. Where it
+    gives none (st_ino 0 -- including every stat a Windows directory listing
+    returns), the absolute path stands in for it, so both spellings still
+    share.
+    """
+    return (
+        os.path.normcase(os.path.abspath(path)) if not st.st_ino else "",
+        st.st_dev,
+        st.st_ino,
+        size,
+        st.st_mtime_ns,
+        getattr(st, "st_ctime_ns", 0),
+    )
+
+
+def _remembered_digest(memo_key: tuple[str, int, int, int, int, int]) -> str | None:
+    """The digest remembered for a settled file under *memo_key*: this
+    process's, else the cache directory's (`digest_table`)."""
+    cached = _HASH_MEMO.get(memo_key)
+    ttl = _reuse_seconds(memo_key)
+    if cached is not None and (
+        ttl is None or (cached[2] is not None and cached[2] == HASH_EPOCH) or time.monotonic() - cached[0] < ttl
+    ):
+        return cached[1]
+    table = current_table() if ttl is None else None
+    found = table.get(memo_key) if table is not None else None
+    if found is None:
+        return None
+    _HASH_MEMO[memo_key] = (time.monotonic(), found[0], HASH_EPOCH)
+    return found[0]
+
+
+#: How much of a big file one read takes: enough for every hashing thread
+#: to get leaves (`bulk_digest.PARALLEL_MIN_BYTES` each).
+_HASH_READ_BLOCK = 32 * 1024 * 1024
+
+
+def _read_digest(path: str, size: int) -> str:
+    """`bulk_digest` of the file's bytes as they are now (`file_content_hash`)."""
+    hasher = BulkHasher()
+    # Untracked: cash's own read of a file must not be tracked as a read
+    # by the cached call it is checking on behalf of (which then hashed
+    # the file a second time to fingerprint that "read").
+    with untracked(), io.FileIO(path, "rb") as f:
+        if size < _HASH_READ_CHUNK:
             # ``FileIO.read(n)`` allocates n bytes before it reads, so a
             # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
             # ~400us a file against ~60us reading size + 1 (the +1 finds EOF
             # in the first read; a file that grew is still read to its end).
-            want = min(size + 1, _HASH_READ_CHUNK)
-            for chunk in iter(lambda: f.read(want), b""):
-                h.update(chunk)
-        digest = h.hexdigest()
-        if memo_key is not None:
-            _HASH_MEMO[memo_key] = (time.monotonic(), digest, HASH_EPOCH)
-        return digest
-    except OSError:
-        logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)
-        return None
+            for chunk in iter(lambda: f.read(size + 1), b""):
+                hasher.update(chunk)
+        else:
+            block = bytearray(min(size + 1, _HASH_READ_BLOCK))
+            view = memoryview(block)
+            while True:
+                n = f.readinto(block)
+                if not n:
+                    break
+                hasher.update(view[:n])
+    return hasher.hexdigest()
 
 
 def snapshot_file_deps(
@@ -551,7 +621,9 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     a second hard link, edited through the other name, until something opens
     this one. ``file_dep_is_fresh`` takes a listed stat only for a file it
     hashes in full, where content decides and a lagging size or time can at
-    most reuse a digest within the window it already reuses one.
+    most reuse a digest for ``_LISTED_STAT_TTL_SECONDS``: a listed stat has
+    no file identity (``st_ino`` 0), and a digest taken under one is never
+    reused longer, nor kept on disk.
 
     Listed untracked: the file tracker records a directory listed while it is
     active as a read, and this one is cash's, not the user's.

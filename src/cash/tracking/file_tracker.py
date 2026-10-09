@@ -24,7 +24,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
 from cash.tracking import io_watch
-from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run
+from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run, remembered_file_digest
 from cash.tracking.read_classification import (
     RUNTIME_CACHE_SEGMENT,
     RUNTIME_CACHE_SUFFIXES,
@@ -35,6 +35,7 @@ from cash.tracking.read_classification import (
     regular_file_stat,
     stat_key,
 )
+from cash.tracking.pending_digest import PendingDigest
 from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
 from cash.tracking.reader_patches import install_patches, patch_reader_aliases, remove_patches
@@ -55,6 +56,11 @@ def install_read_watch() -> None:
     a C-level reader outside every cached call is not seen.
     """
     io_watch.watch_outside_scopes()
+
+
+#: A file at least this big is hashed beside the body (`PendingDigest`)
+#: rather than before it reads it: below, the thread costs more than it saves.
+BACKGROUND_DIGEST_MIN_BYTES = 4_194_304  # 4 MiB
 
 
 class FileAccessTracker:
@@ -101,7 +107,8 @@ class FileAccessTracker:
         # to every later process. Moving the hash here costs
         # nothing extra: the snapshot reuses it while the stat is unchanged.
         self._hash_on_read = hash_on_read
-        self.read_digests: dict[str, str] = {}
+        # Each digest, or the `PendingDigest` still taking it (``read_digests``).
+        self._read_digests: dict[str, str | PendingDigest] = {}
         # When each of those digests was taken (``file_dep_is_fresh`` trusts an
         # unchanged file only if it had settled by then).
         self.read_hashed_at: dict[str, float] = {}
@@ -449,7 +456,24 @@ class FileAccessTracker:
             # stats the file itself.
             digest = tracker._add_tracked_here(abs_path, digest, lstat if tracker is self else None)
 
-    def _add_tracked_here(self, abs_path: str, digest: str | None, lstat: Any) -> str | None:
+    @property
+    def read_digests(self) -> dict[str, str]:
+        """Each file's content hash as the body first read it (see
+        ``__init__``), waiting for any still being taken (`PendingDigest`)."""
+        digests: dict[str, str] = {}
+        for path, digest in list(self._read_digests.items()):
+            if isinstance(digest, PendingDigest):
+                digest = digest.result()
+                if digest is None:
+                    del self._read_digests[path]
+                    continue
+                self._read_digests[path] = digest
+            digests[path] = digest
+        return digests
+
+    def _add_tracked_here(
+        self, abs_path: str, digest: str | PendingDigest | None, lstat: Any
+    ) -> str | PendingDigest | None:
         """`add_tracked` on this tracker alone; returns the digest to hand up."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
@@ -464,15 +488,24 @@ class FileAccessTracker:
                         self.read_hashed_at[abs_path] = time.time()
                         digest = self._digest_now(abs_path, st[0])
                     if digest is not None:
-                        self.read_digests[abs_path] = digest
+                        self._read_digests[abs_path] = digest
         elif digest is None:
-            digest = self.read_digests.get(abs_path)
+            digest = self._read_digests.get(abs_path)
         return digest
 
-    def _digest_now(self, abs_path: str, size: int) -> str | None:
-        """The file's content hash as the body is about to read it."""
+    def _digest_now(self, abs_path: str, size: int) -> str | PendingDigest | None:
+        """The file's content hash as the body is about to read it.
+
+        A big file the process does not know yet is hashed on a thread of its
+        own (`PendingDigest`) while the body reads and computes; the digest
+        is waited for when the entry is stored (``read_digests``), and before
+        anything in this process opens the file to write (`settle_before_write`).
+        """
         t0 = _perf_counter()
         try:
+            if size >= BACKGROUND_DIGEST_MIN_BYTES:
+                known = remembered_file_digest(abs_path)
+                return known if known is not None else PendingDigest(abs_path, size, file_content_hash)
             return file_content_hash(abs_path, size)
         finally:
             self.read_hash_seconds += _perf_counter() - t0

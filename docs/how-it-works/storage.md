@@ -285,7 +285,7 @@ stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 2, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 3, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
 The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.

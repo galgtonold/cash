@@ -602,7 +602,7 @@ class TestDataFrameLibraryOnboarding:
     """Test hashing and lineage attachment for multiple DataFrame libraries."""
 
     def test_polars_dataframe_hash(self):
-        """polars DataFrame should be hashable via hash_rows."""
+        """polars DataFrame is keyed by its column buffers."""
         pytest.importorskip("polars")
         import polars as pl
 

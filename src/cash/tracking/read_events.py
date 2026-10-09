@@ -20,6 +20,7 @@ from typing import Any
 # module, so this cannot cycle.
 from cash.effect_observer import active_observer as _active_effect_observer
 from cash.tracking import io_watch
+from cash.tracking.pending_digest import PENDING, settle_before_write
 from cash.tracking.read_classification import is_cash_internal
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
@@ -97,6 +98,8 @@ def _on_open(args: tuple) -> None:
     path, mode, flags = args
     if not isinstance(path, (str, bytes, os.PathLike)):
         return
+    if PENDING and _opens_to_write(mode, flags):
+        settle_before_write(path)
     if not isinstance(mode, str):
         # ``os.open``: not watched as a read, but a file it creates
         # (``tempfile.mkstemp``) is the block's own output.
@@ -147,6 +150,13 @@ def _on_open(args: tuple) -> None:
             tracker = active_tracker.get()
             if tracker is not None:
                 tracker.note_created(path)
+
+
+def _opens_to_write(mode: Any, flags: Any) -> bool:
+    """Does an ``open`` with *mode* (or ``os.open``'s *flags*) allow writing?"""
+    if isinstance(mode, str):
+        return any(ch in mode for ch in "wax+")
+    return isinstance(flags, int) and bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_TRUNC))
 
 
 def _creates(flags: int) -> bool:

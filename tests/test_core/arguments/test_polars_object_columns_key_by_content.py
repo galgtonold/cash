@@ -66,7 +66,7 @@ def _panic(*_args, **_kwargs):
 
 def test_a_panic_while_hashing_runs_the_call_uncached(tmp_path, monkeypatch):
     """Whatever polars panics on, the call returns its result and warns."""
-    monkeypatch.setattr(pl.DataFrame, "hash_rows", _panic)
+    monkeypatch.setattr(pl.DataFrame, "to_arrow", _panic)
     monkeypatch.setattr(pl.DataFrame, "__getstate__", _panic)
     c = _cash(tmp_path)
 
@@ -82,7 +82,7 @@ def test_a_panic_while_hashing_runs_the_call_uncached(tmp_path, monkeypatch):
 
 
 def test_a_panic_never_escapes_the_notebook_hashes(monkeypatch):
-    monkeypatch.setattr(pl.DataFrame, "hash_rows", _panic)
+    monkeypatch.setattr(pl.DataFrame, "to_arrow", _panic)
     monkeypatch.setattr(pl.DataFrame, "__getstate__", _panic)
     frame = pl.DataFrame({"a": [1]})
     assert hash_polars(frame) is None

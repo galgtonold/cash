@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.__main__ import cmd_clear, cmd_inspect, notebook_cache_dir
 from cash.backends.file_backend import FileBackend
 from tests._cli_args import cli_args
@@ -33,7 +34,7 @@ def project(tmp_path, monkeypatch):
     store.shutdown()
     stray = root / "analysis" / ".cash"
     stray.mkdir()
-    (stray / "CACHE_VERSION").write_text("2", encoding="utf-8")
+    (stray / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION), encoding="utf-8")
     monkeypatch.chdir(tmp_path)  # the CLI is run from elsewhere
     return SimpleNamespace(root=root, nb=nb, cache=cache, stray=stray)
 

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from ..backends._base import effective_ttl
 from ..backends.factory import build_backend_from_config
 from ..exceptions import CacheBackendError
+from ..tracking.digest_table import use_digest_table
 
 if TYPE_CHECKING:
     from ..backends import CacheBackend
@@ -35,16 +36,31 @@ class BackendSlot:
     def backend(self) -> CacheBackend:
         """The backend, built from the config on first access."""
         backend = self._backend
-        if backend is not None:
+        if backend is not None and self._table_dir_set:
             return backend
         with self._lock:
             if self._backend is None:
                 self._backend = build_backend_from_config(self._config)
+            self._use_digest_table()
             return self._backend
 
     @backend.setter
     def backend(self, value: CacheBackend) -> None:
         self._backend = value
+        self._table_dir_set = False
+
+    _table_dir_set = False
+
+    def _use_digest_table(self) -> None:
+        """Keep the file digests this process takes in the backend's
+        directory, if it has one (`digest_table`)."""
+        if self._table_dir_set:
+            return
+        self._table_dir_set = True
+        try:
+            use_digest_table(self._backend.local_dir if self._backend is not None else None)
+        except Exception:  # noqa: BLE001 - a backend without a usable dir: no table
+            logger.debug("No file digest table for this backend", exc_info=True)
 
     def read(self, key: str) -> tuple[Any, Any]:
         """``backend.get(key)``, with a backend that cannot read (a server

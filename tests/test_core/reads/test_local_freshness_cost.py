@@ -21,9 +21,9 @@ functions inherits their inputs -- so ten hits pay it ten times.
 The memo's own guard rails are pinned in
 ``test_file_dep_content_freshness_decorator.py`` and
 ``test_sampled_file_freshness_backstops.py``: a file is memoized only once it
-has been untouched for a while, and a digest is reused for a few seconds only,
-so "write it then read it twice" and "raise the threshold to be certain" both
-still behave.
+had been untouched for a while before it was hashed, and a digest is reused
+only while the file's stat is exactly as it was, so "write it then read it
+twice" and "raise the threshold to be certain" both still behave.
 """
 
 from __future__ import annotations
@@ -63,9 +63,6 @@ def test_a_burst_of_checks_shares_a_digest(disk_cash, tmp_path, monkeypatch):
     aggregate whose cached helpers all depend on one input hashes it at most
     once, not once per helper (the motivating pipeline: fifty inputs, ten
     helpers)."""
-    import hashlib
-    import types
-
     path = _aged_file(tmp_path)
     runs: list[str] = []
     read = _reader(disk_cash, runs, path)
@@ -77,9 +74,8 @@ def test_a_burst_of_checks_shares_a_digest(disk_cash, tmp_path, monkeypatch):
     aggregate(3)  # cold: computes and snapshots
     aggregate.cache_clear()  # the aggregate misses, its helpers hit
     hashed: list[int] = []
-    monkeypatch.setattr(
-        file_dep_snapshot, "hashlib", types.SimpleNamespace(sha256=lambda *a: hashed.append(1) or hashlib.sha256(*a))
-    )
+    real = file_dep_snapshot.BulkHasher
+    monkeypatch.setattr(file_dep_snapshot, "BulkHasher", lambda: hashed.append(1) or real())
     aggregate(3)
     assert len(runs) == 3, "the helpers did not hit"
     assert len(hashed) <= 1, f"one burst hashed its one input {len(hashed)} times"

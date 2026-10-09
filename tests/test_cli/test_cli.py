@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.__main__ import (
     HOOK_FILENAME,
     HOOK_MARKER,
@@ -492,7 +493,7 @@ class TestInspectNamesWhatItWasGiven:
     def test_a_missing_path_is_not_silently_replaced(self, tmp_path, monkeypatch, capsys):
         cache = tmp_path / ".cash"
         cache.mkdir()
-        (cache / "CACHE_VERSION").write_text("2", encoding="utf-8")
+        (cache / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION), encoding="utf-8")
         (cache / f"abc{ENTRY_SUFFIX}").write_bytes(pack_entry({"key": "k"}, b"v"))
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CASH_CACHE_DIR", str(cache))

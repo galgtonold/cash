@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from cash.__main__ import cmd_clear, main
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.backends.entry_format import ENTRY_SUFFIX
 from tests._cli_args import cli_args
 
@@ -23,7 +24,7 @@ from tests._cli_args import cli_args
 def _cache_with(tmp_path, *foreign):
     cache = tmp_path / "shared_data"
     (cache / "raw").mkdir(parents=True)
-    (cache / "CACHE_VERSION").write_text("2", encoding="utf-8")
+    (cache / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION), encoding="utf-8")
     (cache / f"abc{ENTRY_SUFFIX}").write_bytes(b"entry")
     (cache / "_rank.log").write_text("", encoding="utf-8")
     for name in foreign:
