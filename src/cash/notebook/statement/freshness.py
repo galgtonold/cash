@@ -30,9 +30,11 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ... import _plain_data
 from ..._clock import perf_counter as _perf_counter
 from ...backends._base import ttl_expired
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
+from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
 from ._metadata import StatementCacheMetadata
 
@@ -46,6 +48,19 @@ _ANSWERS_LAST_S = 2.0
 
 #: Below this many dependencies the per-file answers are cheap enough.
 _SET_MEMO_MIN = 64
+
+
+def _copies(value: Any) -> bool:
+    """Does ``copy.deepcopy(value)`` succeed, known without making the copy?
+
+    For a number, a string, a date and the like, and for JSON-like data --
+    exact dicts, lists and tuples over leaves `_plain_data.tree_levels`
+    accepts, with no loop -- it does: each part is a builtin container or a
+    value deepcopy copies or shares.
+    """
+    if type(value) in IMMUTABLE_LEAF_TYPES:
+        return True
+    return type(value) in _plain_data.TREE_NODES and _plain_data.is_tree(value)
 
 
 class CacheFreshnessChecker:
@@ -184,10 +199,17 @@ class CacheFreshnessChecker:
         where running the statement builds a fresh one. A closed file a
         ``with open(...) as f`` left behind is the exception: nothing about it
         can change.
+
+        Asked by copying each variable. JSON-like data -- the records the
+        ``with`` block read -- copies by construction: its copy was thrown
+        away on every hit, 50 us a record, 9 s of a hit on 300,000 records
+        after a restart. Read a level at a time instead (`_copies`).
         """
         variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
         for name, value in (variables or {}).items():
             if isinstance(value, io.IOBase) and value.closed:
+                continue
+            if _copies(value):
                 continue
             try:
                 copy.deepcopy(value)
