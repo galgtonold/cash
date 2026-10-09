@@ -929,7 +929,7 @@ class CallUnit:
             self._running -= 1
         elapsed = _perf_counter() - started
         # Read while `result` is this frame's only reference of its own.
-        result_held = refs_beyond(result) > ONE_LOCAL
+        result_held = refs_beyond([result]) > ONE_LOCAL
         stored = False
         if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before) or _rebound_unwatched(
             call, module_before

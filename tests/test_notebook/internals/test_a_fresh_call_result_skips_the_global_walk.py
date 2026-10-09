@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 import cash
 from cash.notebook import call_entries
 from cash.notebook.call_interception import CallSite
@@ -23,6 +25,14 @@ RECORDS = [{"a": i} for i in range(1000)]
 def fresh(i):
     time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
     return {"row": dict(RECORDS[i]), "n": len(RECORDS)}
+
+
+CONFIG = {"rate": 3}
+
+
+def config(i):
+    time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
+    return CONFIG
 
 
 def shared(i):
@@ -48,3 +58,28 @@ def test_a_fresh_result_does_not_walk_the_globals(tmp_path, monkeypatch):
 
 def test_a_result_holding_a_global_item_walks_them(tmp_path, monkeypatch):
     assert _walks(tmp_path, monkeypatch, shared) == [shared]
+
+
+def test_a_result_that_is_a_global_walks_them(tmp_path, monkeypatch):
+    assert _walks(tmp_path, monkeypatch, config) == [config]
+
+
+def _after_try(make):
+    # A name assigned inside ``try`` may be unbound after it: Python 3.14
+    # loads it as a new reference there, not a borrowed one.
+    try:
+        value = make()
+    finally:
+        pass
+    return call_entries.refs_beyond([value])
+
+
+def _plain(make):
+    value = make()
+    return call_entries.refs_beyond([value])
+
+
+@pytest.mark.parametrize("read", [_after_try, _plain], ids=["after_try", "plain"])
+def test_the_reference_count_does_not_depend_on_how_the_caller_loads_its_local(read):
+    assert read(object) == call_entries.ONE_LOCAL
+    assert read(lambda: CONFIG) > call_entries.ONE_LOCAL

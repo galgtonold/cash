@@ -187,6 +187,18 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     return own if type(own) is dict else None
 
 
+def _values_only(value: Any, exact: frozenset[type]) -> bool:
+    """Is *value* an exact list, tuple, set, frozenset or dict whose items
+    (a dict's keys and values) are all of the *exact* value types? What
+    `_walk`'s first step finds for it, without copying the items out."""
+    kind = type(value)
+    if kind is dict:
+        return exact.issuperset(map(type, value)) and exact.issuperset(map(type, value.values()))
+    if kind is list or kind is tuple or kind is set or kind is frozenset:
+        return exact.issuperset(map(type, value))
+    return False
+
+
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
     if isinstance(value, dict):
@@ -763,6 +775,11 @@ def _walk(
         nodes[key] = root
         owner[key] = name
         order.append(key)
+        if _values_only(root, exact):
+            # A flat list or dict of values (``[f(i) for i in ...]``): nothing
+            # below the root to count, asked at C speed. Before the tree
+            # check, which also sizes every item for the facts it keeps.
+            continue
         if _plain_data.held_only_by_parents(root, _TREE_LEAVES):
             # Records as a parser returns them: no container below the root
             # has a holder besides its parent, read a level at a time at C
