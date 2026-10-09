@@ -8,7 +8,10 @@ hashes (directly, and inside containers through `BUILTIN_CONTENT` or its own
 memo around it), and the notebook's value hash (`cash.value_hash`) uses
 them for every frame, array and table it meets.
 
-Python objects held inside one (an object column, ``attrs``) are hashed in
+The bytes themselves -- array buffers, columns -- go through
+`cash.bulk_digest`, which hashes a big buffer on several threads. Python
+objects held inside one (an object column, ``attrs``) are hashed as a typed
+buffer when a column holds only floats, only bools or only ints, else in
 their canonical key form (`cash.canonical_form.canonical_bytes`).
 `builtin_family_of` remembers per type which hasher claims it.
 """
@@ -21,7 +24,7 @@ import pickle
 from typing import Any
 
 from . import _plain_data
-from .bulk_digest import fold_buffer
+from .bulk_digest import BulkHasher, fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
 from .sizing import SPARSE_PARTS
 from .value_types import LEAF_TYPES
@@ -154,17 +157,21 @@ def hash_pandas(value: Any) -> str | None:
 def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     """Fold a frame's or series' values, then its index's, into *h*.
 
+    Column by column and index level by index level, each in the form that
+    keeps it exact and reads it fastest (`_pandas_value_route`): numbers,
+    booleans and dates from their own buffer, a nullable column from its
+    values and its mask, an Arrow-backed column (pandas' ``str`` among them)
+    from its Arrow buffers, a categorical by its codes (the categories are
+    in the schema).
+
     ``hash_pandas_object`` keys an array of Python objects by ``str()`` of
     each: when one value is not a string it stringifies the whole column, so
     ``1`` and ``'1'``, ``True`` and ``'True'``, ``b'a'`` and ``'a'``, or a date
     and its ISO string hashed alike, and ``s * 2`` was served ``2`` for
-    ``'11'``. The same held for an index of them. Such an array -- object
-    dtype, and pandas' string dtypes, whose values are Python strings -- is
-    keyed by its items' pickled form instead (`_object_items_bytes`), which is
-    also several times faster than ``hash_pandas_object`` on strings. A
-    categorical is keyed by its codes, the categories being in the schema.
-    Everything else keeps ``hash_pandas_object``'s per-value hash, which reads
-    the raw bits of numbers and dates.
+    ``'11'``. The same held for an index of them. Such an array is keyed by
+    its items (`_fold_object_items`) instead. Only what no route reads --
+    periods, intervals, sparse columns -- keeps ``hash_pandas_object``'s
+    per-value hash.
     """
     if type(value).__name__ == "DataFrame":
         rest = []
@@ -176,7 +183,8 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
                 _fold_pandas_array(h, value.iloc[:, pos], pd)
         if rest:
             others = value if len(rest) == value.shape[1] else value.iloc[:, rest]
-            h.update(_np_bytes(pd.util.hash_pandas_object(others, index=False)))
+            h.update(b"|others|")
+            fold_buffer(h, _np_array(pd.util.hash_pandas_object(others, index=False)))
     else:
         _fold_pandas_array(h, value, pd)
     index = value.index
@@ -185,7 +193,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
         for level, codes in zip(index.levels, index.codes):
             h.update(b"|level|")
             _fold_pandas_array(h, level, pd)
-            h.update(codes.tobytes())
+            fold_buffer(h, _np_array(codes))
     elif isinstance(index, pd.RangeIndex):
         h.update(f"|range({index.start}, {index.stop}, {index.step})".encode())
     else:
@@ -233,44 +241,185 @@ def immutable_labels(values: Any) -> bool:
     return infer_dtype(values, skipna=False) in _IMMUTABLE_LABEL_KINDS
 
 
+#: numpy dtype kinds whose buffer IS the values: bool, integers, floats,
+#: complex numbers, datetimes and timedeltas.
+_RAW_KINDS = frozenset("biufcmM")
+
+
 def _pandas_value_route(dtype: Any, pd: Any) -> str | None:
-    """How `_fold_pandas_array` keys values of *dtype*: ``"objects"``,
-    ``"codes"``, or None for ``hash_pandas_object``."""
+    """How `_fold_pandas_array` keys values of *dtype*: ``"raw"``,
+    ``"datetimetz"``, ``"masked"``, ``"arrow"``, ``"objects"``, ``"codes"``,
+    or None for ``hash_pandas_object``."""
     if isinstance(dtype, pd.CategoricalDtype):
         return "codes"
-    if str(dtype) == "object" or isinstance(dtype, pd.StringDtype):
-        return "objects"
+    if isinstance(dtype, _numpy().dtype):
+        kind = dtype.kind
+        # Not an extended-precision float: its padding bytes hold garbage.
+        if kind in _RAW_KINDS and dtype.itemsize <= (16 if kind == "c" else 8):
+            return "raw"
+        if str(dtype) == "object":
+            return "objects"
+        return None
+    if isinstance(dtype, pd.DatetimeTZDtype):
+        return "datetimetz"
+    if isinstance(dtype, pd.StringDtype):
+        return "arrow" if str(getattr(dtype, "storage", "")).startswith("pyarrow") else "objects"
     if isinstance(dtype, getattr(pd, "ArrowDtype", ())):
         return "arrow"
+    if type(dtype).__name__ in _MASKED_DTYPES:
+        return "masked"
     return None
+
+
+#: pandas' nullable dtypes: a numpy array of values beside a mask of the
+#: missing ones.
+_MASKED_DTYPES = frozenset(
+    {
+        *(f"{base}{bits}Dtype" for base in ("Int", "UInt") for bits in (8, 16, 32, 64)),
+        "Float32Dtype",
+        "Float64Dtype",
+        "BooleanDtype",
+    }
+)
+
+
+def _numpy() -> Any:
+    import numpy
+
+    return numpy
 
 
 def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     """Fold one Series' or Index's values into *h* (`_fold_pandas_values`)."""
     route = _pandas_value_route(values.dtype, pd)
+    if route == "raw":
+        fold_buffer(h, _raw_view(_np_array(values)))
+        return
+    if route == "datetimetz":
+        asi8 = getattr(values.array, "asi8", None)
+        if asi8 is not None:
+            fold_buffer(h, _raw_view(asi8))
+            return
+        route = None
+    elif route == "masked":
+        array = values.array
+        data, mask = getattr(array, "_data", None), getattr(array, "_mask", None)
+        if data is not None and mask is not None:
+            # The values under a missing one are whatever was there: two equal
+            # columns can differ in them, and only hash apart -- never alike.
+            h.update(b"|masked|")
+            fold_buffer(h, _raw_view(data))
+            fold_buffer(h, _raw_view(mask))
+            return
+        route = None
     if route == "codes":
-        h.update(_np_bytes(values.codes if isinstance(values, pd.Index) else values.cat.codes))
+        fold_buffer(h, _np_array(values.codes if isinstance(values, pd.Index) else values.cat.codes))
     elif route == "objects":
-        h.update(_object_items_bytes(_np_array(values, object).tolist()))
+        _fold_object_items(h, _np_array(values, object))
     elif route == "arrow":
-        _fold_arrow_array(h, values)
+        fold_arrow_column(h, values.array.__arrow_array__())
     else:
-        h.update(_np_bytes(pd.util.hash_pandas_object(values, index=False)))
+        fold_buffer(h, _np_array(pd.util.hash_pandas_object(values, index=False)))
 
 
-def _fold_arrow_array(h: Any, values: Any) -> None:
-    """Fold a pyarrow-backed Series' or Index's values into *h*, as Arrow.
+def _raw_view(array: Any) -> Any:
+    """*array*'s buffer as something ``memoryview`` takes: datetimes and
+    timedeltas, which the buffer protocol refuses, as their int64 counts
+    (their unit is in the dtype the key holds)."""
+    if array.dtype.kind in "mM":
+        return array.view("i8")
+    return array
 
-    ``hash_pandas_object`` reads them through ``to_numpy()``: an integer
-    column with a missing value becomes float64, so ids beyond 2**53 that
-    differ hashed alike, and a float null and a NaN both became NaN; list
-    and struct columns lost the same. The column is written as an Arrow IPC
-    stream instead, as `hash_pyarrow` writes a table: the validity bitmap
-    and the values as they are, in every type.
+
+def fold_arrow_column(h: Any, column: Any) -> None:
+    """Fold a pyarrow Array or ChunkedArray's values into *h*, exactly.
+
+    Numbers, dates and times by their values buffer, strings and binaries
+    by each value's length and their data buffer, booleans byte by byte,
+    and the positions of the missing values: read from each chunk's own
+    offset, so a slice keys as its rows, and the same rows in any chunking
+    key alike. Each part is hashed as one stream (`BulkHasher`), on several
+    threads when it is big. A dictionary column is read by its values.
+    Other types -- lists, structs, decimals -- are written as an Arrow IPC
+    stream, which carries the validity bitmap and the values as they are,
+    and each chunk's rows from its offset (`_fold_arrow_ipc`).
+
+    The values under a missing one are whatever the buffer holds there: two
+    equal columns can differ in them, and only hash apart, never alike.
     """
+    import numpy as np
     import pyarrow as pa
 
-    table = pa.table({"v": values.array.__arrow_array__()})
+    chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
+    if pa.types.is_dictionary(column.type):
+        # By the values: which index stands for which value is the
+        # dictionary's order, which one process builds as it meets them.
+        h.update(f"|dictionary:{column.type}|".encode())
+        chunks = [chunk.dictionary_decode() for chunk in chunks]
+        column = pa.chunked_array(chunks, type=column.type.value_type)
+    kind, width = _arrow_layout(column.type)
+    if kind is None:
+        _fold_arrow_ipc(h, column)
+        return
+    nulls, lengths, values = BulkHasher(), BulkHasher(), BulkHasher()
+    base = 0
+    for chunk in chunks:
+        n = len(chunk)
+        if not n:
+            continue
+        if chunk.null_count:
+            missing = np.flatnonzero(~chunk.is_valid().to_numpy(zero_copy_only=False)) + base
+            nulls.update(missing.astype("<i8"))
+        buffers = chunk.buffers()
+        if kind == "fixed":
+            values.update(memoryview(buffers[1])[chunk.offset * width : (chunk.offset + n) * width])
+        elif kind == "bool":
+            filled = chunk.fill_null(False) if chunk.null_count else chunk
+            values.update(np.asarray(filled.to_numpy(zero_copy_only=False), dtype=np.bool_))
+        else:  # offsets + data
+            offsets = np.frombuffer(buffers[1], dtype=f"<i{width}", count=n + 1, offset=chunk.offset * width)
+            lengths.update(np.diff(offsets))
+            if buffers[2] is not None and offsets[-1] > offsets[0]:
+                values.update(memoryview(buffers[2])[int(offsets[0]) : int(offsets[-1])])
+        base += n
+    h.update(f"|arrow:{column.type}:{kind}:{base}|".encode())
+    h.update(nulls.digest() + lengths.digest() + values.digest())
+
+
+def _arrow_layout(arrow_type: Any) -> tuple[str | None, int]:
+    """How `fold_arrow_column` reads values of *arrow_type*: ``("fixed",
+    bytes per value)``, ``("bool", 1)``, ``("offsets", bytes per offset)``,
+    or ``(None, 0)`` for the IPC stream."""
+    import pyarrow as pa
+
+    t = pa.types
+    if t.is_boolean(arrow_type):
+        return "bool", 1
+    if t.is_string(arrow_type) or t.is_binary(arrow_type):
+        return "offsets", 4
+    if t.is_large_string(arrow_type) or t.is_large_binary(arrow_type):
+        return "offsets", 8
+    if (
+        t.is_integer(arrow_type)
+        or t.is_floating(arrow_type)
+        or t.is_timestamp(arrow_type)
+        or t.is_date(arrow_type)
+        or t.is_time(arrow_type)
+        or t.is_duration(arrow_type)
+    ):
+        bits = arrow_type.bit_width
+        if bits % 8 == 0:
+            return "fixed", bits // 8
+    return None, 0
+
+
+def _fold_arrow_ipc(h: Any, column: Any) -> None:
+    """Fold a pyarrow column into *h* as an Arrow IPC stream: the validity
+    bitmap and the values as they are, in every type."""
+    import pyarrow as pa
+
+    table = pa.table({"v": column})
+    h.update(b"|ipc|")
     with pa.ipc.new_stream(pa.PythonFile(_HashSink(h), mode="w"), table.schema) as writer:
         writer.write(table)
 
@@ -286,6 +435,73 @@ def _np_array(values: Any, dtype: Any = None) -> Any:
 
 def _np_bytes(values: Any) -> bytes:
     return _np_array(values).tobytes()
+
+
+#: Python types a column of which is keyed by the numpy array it converts
+#: to: its buffer holds every value exactly, and reads ~10x faster than
+#: pickling them one by one. Exact types: an ``np.float64`` is a ``float``
+#: subclass and stays on the pickled path.
+_TYPED_ITEMS = {float: "<f8", bool: "?", int: "<i8"}
+
+
+def _fold_object_items(h: Any, array: Any) -> None:
+    """Fold a 1-d object array's items into *h*: as a typed buffer when
+    every item is a ``float``, every one a ``bool`` or every one an ``int``
+    that fits 64 bits (`_fold_typed_items`), else pickled
+    (`_object_items_bytes`)."""
+    items = array.tolist()
+    if not _fold_typed_items(h, array, items):
+        h.update(_object_items_bytes(items))
+
+
+def _fold_typed_items(h: Any, array: Any, items: list) -> bool:
+    """Fold *items* (the items of the 1-d object *array*) into *h* as the
+    numpy array of one `_TYPED_ITEMS` type they convert to; False, folding
+    nothing, when they are not all of one such type."""
+    kinds = set(map(type, items))
+    if len(kinds) != 1:
+        return False
+    kind = kinds.pop()
+    dtype = _TYPED_ITEMS.get(kind)
+    if dtype is None:
+        return False
+    try:
+        typed = array.astype(dtype)
+    except (OverflowError, ValueError, TypeError):  # an int beyond 64 bits
+        return False
+    h.update(f"|items:{kind.__name__}|".encode())
+    fold_buffer(h, typed)
+    return True
+
+
+def _fold_object_array(h: Any, value: Any) -> None:
+    """Fold an object-dtype ndarray's items into *h*.
+
+    Its buffer holds raw ``PyObject`` pointers, not content: identical
+    content in fresh objects would never hash alike (permanent misses,
+    unstable across processes) and a reused address could alias distinct
+    content onto one key. So the items are read. A table of them (2-d, a
+    ``DataFrame.to_numpy()`` of mixed columns) column by column, each column
+    of floats, bools or ints as its typed buffer (`_fold_typed_items`) and
+    the other columns pickled together, so an object held in two of them is
+    still seen held twice.
+    """
+    if value.ndim == 2 and value.shape[0] and value.shape[1] > 1:
+        rest = []
+        for j in range(value.shape[1]):
+            column = value[:, j]
+            items = column.tolist()
+            h.update(f"|col {j}|".encode())
+            if not _fold_typed_items(h, column, items):
+                h.update(b"|later|")
+                rest.append(items)
+        if rest:
+            h.update(b"|rest|")
+            h.update(_object_items_bytes(rest))
+        return
+    flat = value.reshape(-1)
+    if not _fold_typed_items(h, flat, flat.tolist()):
+        h.update(_object_items_bytes(value.tolist()))
 
 
 def _object_items_bytes(items: list) -> bytes:
@@ -363,15 +579,6 @@ def array_layout(value: Any) -> str:
     return "K" + ",".join(map(str, perm))
 
 
-def _raw_view(array: Any) -> Any:
-    """*array*'s buffer as something ``memoryview`` takes: datetimes and
-    timedeltas, which the buffer protocol refuses, as their int64 counts
-    (their unit is in the dtype the key holds)."""
-    if array.dtype.kind in "mM":
-        return array.view("i8")
-    return array
-
-
 def hash_numpy(value: Any) -> str | None:
     """Hash a numpy ndarray over its FULL contents.
 
@@ -382,6 +589,7 @@ def hash_numpy(value: Any) -> str | None:
     so a reshape or retype of the same bytes does not collide. Uses a
     zero-copy ``memoryview`` for contiguous arrays and a C-order copy
     otherwise; a big buffer is hashed on several threads (`fold_buffer`).
+    An object array is keyed by its items (`_fold_object_array`).
 
     The LAYOUT is folded in too -- the order the axes sit in memory, see
     `array_layout` -- because the C-order fallback above erases it. Without
@@ -394,14 +602,10 @@ def hash_numpy(value: Any) -> str | None:
     try:
         h = hashlib.sha256(f"{value.shape}:{value.dtype}:{array_layout(value)}:".encode())
         if getattr(value.dtype, "hasobject", False):
-            # object-dtype arrays: the buffer holds raw PyObject *pointers*,
-            # not content, so tobytes() hashes memory addresses - identical
-            # content in fresh objects never collides (permanent misses,
-            # cross-process-unstable) and address reuse could alias distinct
-            # content onto one key. Hash the elements' stable representation
-            # instead (canonicalising nested sets/dicts so the key is order-
-            # and PYTHONHASHSEED-independent).
-            h.update(_object_items_bytes(value.tolist()))
+            if value.dtype == object:
+                _fold_object_array(h, value)
+            else:  # a structured dtype with an object field
+                h.update(_object_items_bytes(value.tolist()))
             return h.hexdigest()
         try:
             data = memoryview(_raw_view(value))  # no copy if C-contiguous
@@ -417,9 +621,11 @@ def hash_numpy(value: Any) -> str | None:
 def hash_polars(value: Any) -> str | None:
     """Hash a polars DataFrame, Series, or LazyFrame, schema included.
 
-    ``hash_rows()`` and ``hash()`` see the values only: an ``Int32`` and an
-    ``Int64`` column holding the same numbers, or a renamed column, would
-    collide. The schema -- names and dtypes -- is folded in ahead of them.
+    Each column is read from its Arrow buffers (`fold_arrow_column`), with no
+    copy for numbers, and the schema -- names and dtypes -- is folded in
+    ahead of them, so an ``Int32`` and an ``Int64`` column holding the same
+    numbers, or a renamed column, key apart. Polars' own ``hash_rows()`` is
+    a 64-bit hash per row: not a key, and slower.
 
     An ``Object`` column is keyed by its items' content
     (`_object_items_bytes`). Polars hashes Object values with Python's
@@ -452,7 +658,10 @@ def hash_polars(value: Any) -> str | None:
             objects = [name for name, dtype in value.schema.items() if dtype == pl.Object]
             rest = value.drop(objects) if objects else value
             if rest.width:
-                h.update(rest.hash_rows().to_numpy().tobytes())
+                table = _polars_to_arrow(rest, pl)
+                for name, column in zip(table.column_names, table.columns):
+                    h.update(f"|{name!r}|".encode("utf-8"))
+                    fold_arrow_column(h, column)
             for name in objects:
                 h.update(f"|{name!r}|".encode("utf-8"))
                 h.update(_object_items_bytes(value.get_column(name).to_list()))
@@ -462,7 +671,7 @@ def hash_polars(value: Any) -> str | None:
             if value.dtype == pl.Object:
                 h.update(_object_items_bytes(value.to_list()))
             else:
-                h.update(value.hash().to_numpy().tobytes())
+                fold_arrow_column(h, _polars_to_arrow(value, pl))
             return h.hexdigest()
         if isinstance(value, pl.LazyFrame):
             try:
@@ -477,6 +686,19 @@ def hash_polars(value: Any) -> str | None:
             raise
         logger.debug("polars panicked hashing a %s: %s", type(value).__name__, exc)
     return None
+
+
+def _polars_to_arrow(value: Any, pl: Any) -> Any:
+    """A polars DataFrame or Series as Arrow, strings as ``large_string``
+    (the oldest compat level) rather than the views newer polars hands out,
+    which `fold_arrow_column` would have to write as an IPC stream."""
+    compat = getattr(pl, "CompatLevel", None)
+    if compat is not None:
+        try:
+            return value.to_arrow(compat_level=compat.oldest())
+        except TypeError:
+            pass
+    return value.to_arrow()
 
 
 def held_objects(value: Any) -> list | None:
@@ -545,25 +767,25 @@ class _HashSink:
 
 
 def hash_pyarrow(value: Any) -> str | None:
-    """Hash a PyArrow Table or RecordBatch by what it holds, not its buffers.
+    """Hash a PyArrow Table or RecordBatch by what it holds, schema included.
 
-    The table is written as an Arrow IPC stream into the hash, never into
-    memory. The raw buffers are not the content: a slice (``t.slice(2, 2)``,
-    each batch of ``to_batches()``) shares its parent's buffers and differs
-    only in an offset they do not show, so every equal-length slice of one
-    table hashed alike and was served the first one's result. A dictionary
-    column's buffers hold only the indices, so ``["red", "blue"]`` and
-    ``["cat", "dog"]`` hashed alike too. The IPC stream carries the schema,
-    each batch's rows from its offset, and every dictionary.
+    Column by column (`fold_arrow_column`). The whole buffers are not the
+    content: a slice (``t.slice(2, 2)``, each batch of ``to_batches()``)
+    shares its parent's buffers and differs only in an offset they do not
+    show, so every equal-length slice of one table would hash alike; each
+    chunk is read from its offset. A dictionary column's buffers hold only
+    the indices, so ``["red", "blue"]`` and ``["cat", "dog"]`` would hash
+    alike too; its values are read.
     """
     try:
         import pyarrow as pa
 
         if isinstance(value, (pa.Table, pa.RecordBatch)):
             h = hashlib.sha256(f"{type(value).__name__}:{value.num_rows}:".encode())
-            sink = pa.PythonFile(_HashSink(h), mode="w")
-            with pa.ipc.new_stream(sink, value.schema) as writer:
-                writer.write(value)
+            fold_buffer(h, value.schema.serialize())
+            for column in value.columns:
+                h.update(b"|column|")
+                fold_arrow_column(h, column)
             return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, MemoryError, NotImplementedError):
         logger.debug("Failed to hash PyArrow %s", type(value).__name__)
