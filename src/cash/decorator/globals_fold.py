@@ -208,14 +208,11 @@ class GlobalsFold:
         purity analyzer / dependency graph), and classes are excluded; unhashable
         data globals warn once and are skipped.
         """
-        if (
-            seen is not None
-            and not extra_names
-            and isinstance(func, types.FunctionType)
-            and not self._reads.may_read_data(func)
-        ):
-            # A helper that reads no data (most methods, every one a dataclass
-            # generates): the fold would find nothing.
+        if not extra_names and isinstance(func, types.FunctionType) and not self._reads.may_read_data(func):
+            # A function that reads no data (most methods, every one a
+            # dataclass generates, a cached function that works on its
+            # arguments alone): the fold would find nothing. Asked of the
+            # code, once per code object, instead of on every hit.
             return state_hash
         folded = READS_FOLDED.get() if seen is not None else None
         if folded is None:
