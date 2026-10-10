@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import functools
 import textwrap
+from collections.abc import Iterable
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .ast_util import CallScope, called_names, handed_names
@@ -28,6 +29,7 @@ __all__ = [
     "scope_locals",
     "free_vars_mutated_in_function",
     "module_function_global_changes",
+    "parse_function_source",
     "source_global_mutations",
     "source_called_names",
     "source_global_rebinds",
@@ -531,7 +533,7 @@ def module_function_global_changes(tree: ast.Module, module_names: frozenset[str
     return frozenset(out)
 
 
-def _parse_function(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+def parse_function_source(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     try:
         parsed = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError, RecursionError):
@@ -549,7 +551,7 @@ def source_global_mutations(source: str) -> frozenset[str]:
     is purely syntactic (no namespace is consulted), so memoising on the
     source text is sound.
     """
-    node = _parse_function(source)
+    node = parse_function_source(source)
     if node is None:
         return frozenset()
     try:
@@ -563,7 +565,7 @@ def source_global_rebinds(source: str) -> frozenset[str]:
     """Names the function defined by *source* binds or deletes under a
     ``global`` declaration, at any depth. Empty for anything that is not a
     single function definition."""
-    node = _parse_function(source)
+    node = parse_function_source(source)
     if node is None:
         return frozenset()
     declared = {name for sub in ast.walk(node) if isinstance(sub, ast.Global) for name in sub.names}
@@ -583,7 +585,7 @@ def source_called_names(source: str) -> frozenset[str]:
     A name the function binds itself (a parameter, a local) is not a call to
     another module-level function, so it is left out.
     """
-    node = _parse_function(source)
+    node = parse_function_source(source)
     if node is None:
         return frozenset()
     return (called_names(node) | handed_names(node)) - scope_locals(node)
@@ -594,10 +596,14 @@ def callee_global_mutations(
     resolve_source,
     *,
     scope: CallScope = "all",
+    extra_sources: Iterable[str] = (),
 ) -> frozenset[str]:
     """Globals mutated in place by the functions *tree* calls by name, or hands
     to a call as an argument (``s.apply(f)``, ``map(f, rows)``): the callee
     calls it, so a hit that skips the statement would skip its writes too.
+    *extra_sources* are the sources of more functions the statement calls,
+    found some other way (`handed_callables`: ``s.apply(ops['dbl'])``); they
+    count as callees too.
 
     *resolve_source* maps a called name to its source (or None when it is not a
     user function); each resolved callee contributes
@@ -624,6 +630,9 @@ def callee_global_mutations(
     out: set[str] = set()
     seen: set[str] = set()
     pending = list(called_names(tree, scope) | handed_names(tree, scope))
+    for source in extra_sources:
+        out |= source_global_mutations(source)
+        pending.extend(source_called_names(source))
     while pending:
         name = pending.pop()
         if name in seen:

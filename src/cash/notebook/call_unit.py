@@ -41,6 +41,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
+from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -792,6 +793,10 @@ class CallUnit:
             if rebinds_its_closure(fn):
                 # `counter()` bumps a `nonlocal`: a hit would skip the bump
                 # and hand the next call the same count.
+                return fn(*args, **kwargs)
+            if hands_a_state_changing_callable(fn, args, kwargs):
+                # `run_steps(steps, data)` with `steps = [f]`, `f` appending
+                # to a list: the callee runs `f`, and a hit would skip it.
                 return fn(*args, **kwargs)
             # Globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
