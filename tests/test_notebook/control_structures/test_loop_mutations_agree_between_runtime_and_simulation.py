@@ -48,6 +48,14 @@ SHAPES = {
         "for i in range(3):\n    buf.write(str(i))\n    os.getcwd()\n    rows.copy()\n",
         {"buf"},
     ),
+    # A condition runs whichever branch is taken; a method whose result it
+    # uses changes its receiver only when known to (``pop``, not ``get``).
+    "what a condition changes": (
+        "stack = list(range(10))\nopts = {'a': 1}\nnames = ['x']",
+        "for i in range(3):\n    if stack.pop() > 7 and opts.get('a') and names[0].startswith('x'):\n        pass\n"
+        "    elif opts.pop('a', None):\n        pass\n    while stack.pop() > 100:\n        pass\n",
+        {"stack", "opts"},
+    ),
     # ``remove`` is a list method too; ``os`` is not a list.
     "a module function named like a list method": (
         "import os\ngone = []",

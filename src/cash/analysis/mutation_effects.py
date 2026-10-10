@@ -67,6 +67,7 @@ __all__ = [
     "captured_call_receiver_names",
     "captured_call_receivers",
     "classify_receivers",
+    "condition_mutations",
     "control_structure_mutations",
     "drawn_on_arguments",
     "is_module_name",
@@ -381,13 +382,46 @@ def control_structure_mutations(
     earlier version of the loop left. A module is never changed
     (*is_module*): ``os.remove(f)`` is not ``list.remove``. A loop target
     is a rebinding, not a mutation, so a loop's targets are left out within
-    its body, and so are names *is_builtin* says are builtins.
+    its body, and so are names *is_builtin* says are builtins. The condition
+    of an ``if`` or ``while`` counts too (``condition_mutations``): it runs
+    whichever branch is taken.
 
     The runtime (``update_lineage_after_execution``) and the simulation
     (``VirtualLineage``) both call this, each with its own builtin rule over
     the same lineage, so a loop bumps the same lineages on both sides.
     """
-    return _branch_mutations(_branches(node), _loop_targets(node), is_builtin, is_module)
+    targets = _loop_targets(node)
+    return _branch_mutations(_branches(node), targets, is_builtin, is_module) | _header_mutations(
+        node, targets, is_builtin, is_module
+    )
+
+
+def condition_mutations(test: ast.expr) -> frozenset[str]:
+    """Names the condition *test* of an ``if`` or ``while`` changes in place.
+
+    A condition is code that runs: ``if opts.pop('debug', False):`` removes
+    a key and ``if stack.pop() > 7:`` shortens the list, whichever branch is
+    taken. Its result is used, so it counts as the statement ``_ = test``
+    would: a method known to change its receiver (``pop``, ``add``,
+    ``setdefault``), not every method whose result is dropped -- ``if
+    name.startswith('a'):`` changes nothing.
+    """
+    try:
+        return analyze_statement(ast.unparse(test), None).all_mutated_vars
+    except (SyntaxError, ValueError, AttributeError, TypeError):
+        return frozenset()
+
+
+def _header_mutations(
+    node: ast.AST,
+    targets: set[str],
+    is_builtin: Callable[[str], bool],
+    is_module: Callable[[str], bool],
+) -> set[str]:
+    """What the condition of *node* (an ``if`` or ``while``) changes."""
+    if not isinstance(node, (ast.If, ast.While)):
+        return set()
+    return {v for v in condition_mutations(node.test) if not is_builtin(v) and not is_module(v)} - targets
 
 
 def _branch_mutations(
@@ -399,7 +433,9 @@ def _branch_mutations(
     mutated: set[str] = set()
     for stmt in stmts:
         if isinstance(stmt, _COMPOUND):
-            mutated |= _branch_mutations(_branches(stmt), targets | _loop_targets(stmt), is_builtin, is_module)
+            inner_targets = targets | _loop_targets(stmt)
+            mutated |= _branch_mutations(_branches(stmt), inner_targets, is_builtin, is_module)
+            mutated |= _header_mutations(stmt, inner_targets, is_builtin, is_module)
             continue
         try:
             mutated.update(analyze_statement(ast.unparse(stmt), None).all_mutated_vars)
