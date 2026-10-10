@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from tests._cell_driver import run_cash_cell
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
 SETUP = (
@@ -79,3 +80,28 @@ def test_a_variable_no_branch_changed_keeps_its_lineage(cash_magics):
     run_cash_cell(cash_magics, "trig = 4")
     run_cash_cell(cash_magics, "for k in range(5):\n    if k == trig:\n        data[k] = 100\n    other.append(k)")
     assert lineage["data"] != before
+
+
+def test_a_branch_first_taken_in_the_rest_run_as_one_unit_moves_the_lineage(cash_magics):
+    # A loop over a generator runs its first passes one by one and the rest
+    # as one unit, which reports no branch it ran: the branch first fires
+    # there, after the passes run one by one.
+    ns = cash_magics.shell.user_ns
+    lineage = cash_magics.tracking_state.variable_lineage
+    summary = "summary = summarize(errors)"
+    run_cash_cell(
+        cash_magics,
+        "import time\n"
+        "def summarize(v):\n"
+        f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+        "    return (len(v), sum(v))\n"
+        "lines = (n for n in range(400))\n"
+        "errors = []",
+    )
+    run_cash_cell(cash_magics, summary)
+    assert ns["summary"] == (0, 0)
+    before = lineage["errors"]
+    run_cash_cell(cash_magics, "for n in lines:\n    if n > 300:\n        errors.append(n)")
+    assert lineage["errors"] != before
+    run_cash_cell(cash_magics, summary)
+    assert ns["summary"] == (99, 34650)

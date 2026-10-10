@@ -601,14 +601,16 @@ class ForLoopHandler:
         if probe_n is not None:
             self._split_policy.record_verdict(node, probe_elapsed, probe_n)
 
-        # After all iterations, update lineage for mutated variables
+        # After all iterations, update lineage for mutated variables. The
+        # rest run as one unit reports no branch it ran, so a variable only an
+        # `if` branch changes may have changed there: nothing is left out.
         _helpers.update_lineage_after_execution(
             self.shell,
             self.statement_processor,
             node,
             ast.unparse(node),
             body_files=body_files,
-            unchanged=loop_pass.unchanged(self.shell, self.statement_processor, node),
+            unchanged=set() if run_rest else loop_pass.unchanged(self.shell, self.statement_processor, node),
         )
         return total_iterations, cached_iterations
 
