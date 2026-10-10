@@ -533,8 +533,14 @@ class NotebookTestRunner:
         return self
 
     def _kernel_pid(self) -> int | None:
-        """The live kernel process's own pid, or None when it cannot say."""
+        """The live kernel process's own pid, or None when it cannot say.
+
+        A kernel already dead is not asked: the request would wait for a
+        reply that never comes.
+        """
         try:
+            if not self._run_async(self.client.km._async_is_alive()):
+                return None
             return int(self.peek("__import__('os').getpid()"))
         except Exception:  # noqa: BLE001 - no answer: nothing to compare against
             return None
