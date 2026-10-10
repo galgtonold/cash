@@ -111,7 +111,12 @@ memory -- `df["x"].array[0] = ...`, or a NumPy view made writable again --
 raises `ValueError: assignment destination is read-only`; write through
 `.loc` or `.iloc` instead. A table read from disk is shared the same way. A table with nullable,
 categorical or period columns, a `MultiIndex`, or a subclass of `DataFrame` is
-copied on the store and on every hit. A column of lists or dicts is kept as
+copied on the store and on every hit. A subclass's own attributes (those it
+names in `_metadata`, such as a GeoDataFrame's `crs` or an `info` dict) are
+copied with it, so editing `df.info` on a result changes neither the stored
+table nor a later hit; when such an attribute can be neither deep-copied nor
+pickled, the decorator does not cache the table
+([`STORE-FAILED`](../warnings.md#store-failed)). A column of lists or dicts is kept as
 compact bytes and read back into new lists on every hit.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see

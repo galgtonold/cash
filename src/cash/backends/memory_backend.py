@@ -550,6 +550,14 @@ class InMemoryBackend(CacheBackend):
                     mutable = None
         if copied is None:
             copied = frame.copy(deep=True)
+        if not _own_metadata(frame, copied):
+            # An attribute deepcopy refuses: the pickle round trip copies it,
+            # as a disk hit would.
+            try:
+                copied = _round_trip(frame)
+            except Exception:  # noqa: BLE001 - shared: recorded so, as uncopiable cells are
+                logger.debug("could not copy the attributes of a %s", type(frame).__name__)
+                mutable = None
         if record_cells is not None:
             if mutable is False and frame_sharing.freeze(copied, cells_known=True):
                 mutable = _SHARED  # private, now frozen: hits share it
@@ -695,7 +703,9 @@ class InMemoryBackend(CacheBackend):
         for frame in frames:
             mutable = known_cells.get(id(frame)) if known_cells is not None else None
             cells[id(frame)] = _holds_mutable_cells(frame) if mutable is None else mutable
-        if not any(cells.values()):
+        # A subclass's attributes (`_own_metadata`): deepcopy's frame copy
+        # leaves them shared too.
+        if not any(cells.values()) and not any(_metadata_held(frame) for frame in frames):
             if record_cells is not None:
                 for frame in frames:
                     record_cells[id(memo[id(frame)])] = False
@@ -1095,7 +1105,7 @@ class InMemoryBackend(CacheBackend):
                 # A frame whose object cells pickle cannot copy (a worker
                 # holding a lock) would share those cells with every hit.
                 raise CacheBackendError(
-                    "the result holds a pandas frame whose object cells could not be copied, "
+                    "the result holds a pandas frame whose object cells or attributes could not be copied, "
                     "so caching it would hand every caller the same objects"
                 )
             if fell_back or None in frame_cells.values():
@@ -1483,6 +1493,40 @@ def _named_now(obj: Any) -> Any:
     if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
         return current
     return None
+
+
+def _metadata_held(frame: Any) -> list[str]:
+    """The ``_metadata`` attributes *frame* holds an object in that can be
+    changed in place (a subclass's ``info`` dict, geopandas' ``crs``).
+
+    pandas copies these by reference into every copy it makes, deep or not
+    (``__finalize__``): a stored table, every hit of it and the caller's
+    result held one dict between them.
+    """
+    names = getattr(type(frame), "_metadata", None)
+    if not names:
+        return []
+    own = getattr(frame, "__dict__", {})
+    return [name for name in names if name in own and type(own[name]) not in _ATOMS]
+
+
+def _own_metadata(frame: Any, copied: Any) -> bool:
+    """Give *copied* (a copy of *frame*) its own copy of each attribute
+    `_metadata_held` names that it still shares with *frame*, all from one
+    ``deepcopy`` memo (two names for one object stay one). False, with
+    *copied* unchanged, when one of them cannot be deep-copied."""
+    names = [name for name in _metadata_held(frame) if copied.__dict__.get(name) is frame.__dict__[name]]
+    if not names:
+        return True
+    memo: dict[int, Any] = {}
+    try:
+        fresh = {name: copy.deepcopy(frame.__dict__[name], memo) for name in names}
+    except Exception:  # noqa: BLE001 - the caller copies another way
+        logger.debug("could not deep-copy the attributes of a %s", type(frame).__name__, exc_info=True)
+        return False
+    for name, value in fresh.items():
+        object.__setattr__(copied, name, value)
+    return True
 
 
 def _round_trip(value: Any) -> Any:
