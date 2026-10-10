@@ -86,21 +86,21 @@ def _impl(k: int, cached: bool = True) -> str:
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 def test_editing_a_cached_callee_reached_through_a_property_recomputes(tmp_path, shape):
-    (tmp_path / "helpers.py").write_text(textwrap.dedent(SHAPES[shape]))
-    (tmp_path / "main.py").write_text(MAIN.format(call="ops.inner" if shape == "nested" else "inner"))
-    (tmp_path / "impl.py").write_text(_impl(2))
+    (tmp_path / "helpers.py").write_text(textwrap.dedent(SHAPES[shape]), encoding="utf-8")
+    (tmp_path / "main.py").write_text(MAIN.format(call="ops.inner" if shape == "nested" else "inner"), encoding="utf-8")
+    (tmp_path / "impl.py").write_text(_impl(2), encoding="utf-8")
     first = run_python("main.py", cwd=tmp_path)
     assert first.stdout.strip() == "11"
     assert "KEY-UNRESOLVED-CALL" not in first.stderr
-    (tmp_path / "impl.py").write_text(_impl(3))
+    (tmp_path / "impl.py").write_text(_impl(3), encoding="utf-8")
     assert run_python("main.py", cwd=tmp_path).stdout.strip() == "16"
 
 
 def test_a_plain_function_reached_through_a_property_warns(tmp_path):
     # The key follows a cached callee this way, not a plain one: say so.
-    (tmp_path / "helpers.py").write_text(textwrap.dedent(SHAPES["property"]))
-    (tmp_path / "main.py").write_text(MAIN.format(call="inner"))
-    (tmp_path / "impl.py").write_text(_impl(2, cached=False))
+    (tmp_path / "helpers.py").write_text(textwrap.dedent(SHAPES["property"]), encoding="utf-8")
+    (tmp_path / "main.py").write_text(MAIN.format(call="inner"), encoding="utf-8")
+    (tmp_path / "impl.py").write_text(_impl(2, cached=False), encoding="utf-8")
     done = run_python("main.py", cwd=tmp_path)
     assert done.stdout.strip() == "11"
     assert "KEY-UNRESOLVED-CALL" in done.stderr
@@ -121,7 +121,8 @@ def test_a_library_property_does_not_warn(tmp_path):
                 return here.parent.joinpath(x).name
 
             print(outer("d"))
-        """)
+        """),
+        encoding="utf-8",
     )
     done = run_python("main.py", cwd=tmp_path)
     assert done.stdout.strip() == "d"

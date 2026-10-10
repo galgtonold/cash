@@ -1344,6 +1344,10 @@ it on the decorator: `@cash.cache(depends_on=[impl.inner])`.
 **When it is safe to ignore.** When the property hands out library code, or
 code you do not edit while results are cached.
 
+**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
+not `with cash.assume_safe():`, not `assume_safe=True`. Filter it by code if
+you must. See [Silencing one code](#silencing-one-code).
+
 ## Notebook {#notebook-codes}
 
 Notebook-wide machinery rather than one statement. Every code here starts `NOTEBOOK-`.

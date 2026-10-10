@@ -41,7 +41,7 @@ SAME_RUN = textwrap.dedent("""
 
 
 def test_a_global_bound_after_the_first_call_is_keyed_in_the_same_run(tmp_path):
-    (tmp_path / "same.py").write_text(SAME_RUN)
+    (tmp_path / "same.py").write_text(SAME_RUN, encoding="utf-8")
     out = run_python("same.py", cwd=tmp_path).stdout.split()
     assert out == ["2", "3", "100"]
 
@@ -64,9 +64,9 @@ def _script(k: int) -> str:
 
 def test_editing_a_global_bound_after_the_first_call_recomputes(tmp_path):
     script = tmp_path / "script.py"
-    script.write_text(_script(2))
+    script.write_text(_script(2), encoding="utf-8")
     assert run_python("script.py", cwd=tmp_path).stdout.strip() == "2"
-    script.write_text(_script(3))
+    script.write_text(_script(3), encoding="utf-8")
     assert run_python("script.py", cwd=tmp_path).stdout.strip() == "3"
 
 
@@ -74,7 +74,7 @@ def test_an_unchanged_late_global_is_still_a_hit(tmp_path):
     # Positive control: the late global is keyed, not keyed differently on
     # every run -- a second run of the same script is served from the cache.
     script = tmp_path / "script.py"
-    script.write_text(_script(2) + 'print(scale.cache_info()["hits"])\n')
+    script.write_text(_script(2) + 'print(scale.cache_info()["hits"])\n', encoding="utf-8")
     assert run_python("script.py", cwd=tmp_path).stdout.split() == ["2", "0"]
     assert run_python("script.py", cwd=tmp_path).stdout.split() == ["2", "2"]
 
@@ -100,7 +100,7 @@ def _helper_script(k: int) -> str:
 
 def test_editing_a_helper_defined_after_the_first_call_recomputes(tmp_path):
     script = tmp_path / "script.py"
-    script.write_text(_helper_script(2))
+    script.write_text(_helper_script(2), encoding="utf-8")
     assert run_python("script.py", cwd=tmp_path).stdout.strip() == "2"
-    script.write_text(_helper_script(3))
+    script.write_text(_helper_script(3), encoding="utf-8")
     assert run_python("script.py", cwd=tmp_path).stdout.strip() == "3"

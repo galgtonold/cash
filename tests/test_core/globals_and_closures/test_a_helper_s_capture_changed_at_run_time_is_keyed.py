@@ -69,7 +69,7 @@ SCRIPT = textwrap.dedent("""
 
 
 def test_a_helper_s_capture_or_default_changed_at_run_time_recomputes(tmp_path):
-    (tmp_path / "t.py").write_text(SCRIPT)
+    (tmp_path / "t.py").write_text(SCRIPT, encoding="utf-8")
     out = run_python("t.py", cwd=tmp_path).stdout.strip()
     assert out == "[10, 10, 10, 10] [15, 15, 15, 15] [15, 15, 15, 15]"
 
@@ -105,5 +105,5 @@ IMMUTABLE = textwrap.dedent("""
 def test_an_unchanged_capture_is_still_a_hit(tmp_path):
     # Positive control: hashing a mutable capture on every call keys it,
     # it does not make every call miss.
-    (tmp_path / "t.py").write_text(IMMUTABLE)
+    (tmp_path / "t.py").write_text(IMMUTABLE, encoding="utf-8")
     assert run_python("t.py", cwd=tmp_path).stdout.split() == ["10", "10", "10", "10", "1", "1"]
