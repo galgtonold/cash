@@ -144,7 +144,7 @@ def _seed_split_verdict(work_dir, loop_src, k=_K):
     cache_dir = work_dir / ".cash"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "_loop_split.json").write_text(
-        json.dumps({"version": 1, "splits": {source_hash: k}}), encoding="utf-8"
+        json.dumps({"version": 2, "splits": {source_hash: k}}), encoding="utf-8"
     )
     return source_hash
 

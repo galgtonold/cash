@@ -137,9 +137,9 @@ class TestLoopSplitStore:
         [
             "{ not json at all",
             json.dumps({"version": 999, "splits": {"abc": 5}}),
-            json.dumps({"version": 1, "splits": "not a dict"}),
-            json.dumps({"version": 1, "splits": {"abc": -1}}),
-            json.dumps({"version": 1, "splits": {"abc": "five"}}),
+            json.dumps({"version": LoopSplitStore.VERSION, "splits": "not a dict"}),
+            json.dumps({"version": LoopSplitStore.VERSION, "splits": {"abc": -1}}),
+            json.dumps({"version": LoopSplitStore.VERSION, "splits": {"abc": "five"}}),
         ],
     )
     def test_a_broken_store_means_no_split_not_a_crash(self, tmp_path, payload):
