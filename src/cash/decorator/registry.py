@@ -539,7 +539,7 @@ class FunctionRegistry:
                     continue
                 seen.add(name)
                 report = self.report_for(f, name)
-                if report is not None and report.helper_bindings and bindings_changed(report):
+                if report is not None and (report.helper_bindings or report.unbound_names) and bindings_changed(report):
                     with self.analysis_lock:
                         self.populate(f, name)
                     report = self.report_for(f, name)

@@ -131,6 +131,12 @@ class PurityReport:
     helper_objects: dict[str, Any] = field(default_factory=dict)
     opaque_callees: tuple[str, ...] = ()
     helper_bindings: tuple[tuple[str, tuple[str, ...], Any], ...] = ()
+    #: ``(module_name, name)`` for each name a call site looks up in its
+    #: module that the module had not bound when analysed: a builtin
+    #: (``len``), or a helper defined further down the file than the first
+    #: call. ``bindings_changed`` reports a change once the module binds one,
+    #: so the function is analysed again and the new helper is keyed.
+    unbound_names: tuple[tuple[str, str], ...] = ()
     unkeyable: tuple[str, ...] = ()
     #: Binding paths every call site of which is on a ``# @cash:assume-safe``
     #: line (``LEDGER.record(r)  # @cash:assume-safe``). The code is still
