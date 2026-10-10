@@ -16,10 +16,15 @@ from ..consumables import is_consumable_unrestorable
 from ..shared_objects import output_history, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
 
-__all__ = ["live_shared_reason", "unrestorable_output_reason"]
+__all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
 
 #: IPython's own names for its input and output history.
 _HISTORY_NAMES = re.compile(r"_+|_i+|_\d+|_i\d+|_[iod]h|In|Out")
+
+
+def is_history_name(name: str) -> bool:
+    """Whether *name* is one of IPython's history names (``_``, ``_3``, ``Out``)."""
+    return _HISTORY_NAMES.fullmatch(name) is not None
 
 
 def _alias_refusal(name: str, value: Any, user_ns: dict[str, Any], cash_held: Iterable[Any] = ()) -> str | None:
@@ -141,7 +146,7 @@ def shared_output_reason(
             user_ns,
             [*cash_held, *history],
             named,
-            foreign=lambda name: name in hidden or _HISTORY_NAMES.fullmatch(name) is not None,
+            foreign=lambda name: name in hidden or is_history_name(name),
         )
         holders.update(found)
         del found

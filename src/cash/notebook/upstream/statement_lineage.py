@@ -554,9 +554,12 @@ class StatementLineage:
         virtual_lineage: dict[str, str],
         is_import: bool,
         output_lineages: dict[str, str],
+        moved: set[str] | frozenset[str] = frozenset(),
     ) -> set[str]:
         """Take a valid cache entry's *output_lineages* into *virtual_lineage*,
-        and return the aliases the write bumps."""
+        and return the aliases the write bumps. The variables in *moved* are
+        the entry's holders, moved on already (`_move_holders`): not bumped
+        again, as the runtime's hit does not bump them."""
         logger.debug("[UPSTREAM] Forward propagating cached lineages for %s...", stmt_code[:30])
         for var, h in output_lineages.items():
             virtual_lineage[var] = h
@@ -572,6 +575,7 @@ class StatementLineage:
             inputs,
             record=lambda t, h: virtual_lineage.__setitem__(t, h),
             present=lambda t: True,
+            skip=moved,
         )
         if is_import:
             for out in outputs:
@@ -654,12 +658,15 @@ class StatementLineage:
                     moved = holders if metadata.get("holders_moved") else {}
 
                 if files_valid and output_lineages and self._holders_current(holders, virtual_lineage):
-                    bumped = self._take_cached_lineages(
-                        stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages
-                    )
                     # The variables stored with the outputs move on as the
-                    # runtime moves them (`apply_held_var`).
-                    bumped |= self._move_holders(moved, cache_key, virtual_lineage)
+                    # runtime moves them (`apply_held_var`), from where they
+                    # were before the statement; then what changed through an
+                    # alias, past them, as the runtime's hit does.
+                    held = self._move_holders(moved, cache_key, virtual_lineage)
+                    bumped = self._take_cached_lineages(
+                        stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages, held
+                    )
+                    bumped |= held
                     hit_file_deps = CacheProbe.stat_file_deps(hist_files)
                     return _CacheLookup(True, lookup_time, False, hit_file_deps, set(), bumped, carriers)
 
@@ -894,7 +901,8 @@ class StatementLineage:
 
         virtual_lineage.update(lineage_by_out)
         self._note_made_generators(stmt_code, outputs, virtual_lineage)
-        outputs = outputs | advanced | lookup.bumped
+        written = outputs | advanced
+        outputs = written | lookup.bumped
         self._register_callables(stmt_code, tree, virtual_lineage, is_import)
 
         # Mirror the runtime derivation-alias bump: when
@@ -910,10 +918,11 @@ class StatementLineage:
         bumped = bump_derived_lineages(
             self.tracking_state.derivation_edges,
             virtual_lineage,
-            outputs,
+            written,
             inputs,
             record=lambda t, h: virtual_lineage.__setitem__(t, h),
             present=lambda t: True,
+            skip=lookup.bumped,
         )
         outputs = outputs | bumped
 

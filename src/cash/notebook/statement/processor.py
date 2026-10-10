@@ -51,11 +51,12 @@ from cash.notebook.statement.imports import (
     redundant_import_names,
 )
 from cash.notebook.statement.input_change import input_change_reason
-from cash.notebook.statement.lineage import StatementLineageBuilder
+from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
 from cash.notebook.statement.mutations import MutationClassifier
-from cash.notebook.statement.output_refusals import live_shared_reason, unrestorable_output_reason
+from cash.notebook.statement.derivation_edges import record_shared_object_edges
+from cash.notebook.statement.output_refusals import is_history_name, live_shared_reason, unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
@@ -108,6 +109,7 @@ from ..magic_effects import (
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
+from ..shared_objects import VALUE_TYPES, is_value, library_value_types, output_history, share_group
 from ..write_observer import observe_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
@@ -772,6 +774,11 @@ class StatementProcessor:
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        # What changed through an alias moves on as a run moves it, past the
+        # variables the entry restored with its outputs (moved on already).
+        moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
+        clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns)
+        self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
         self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
@@ -1261,12 +1268,15 @@ class StatementProcessor:
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
             no_cache=(run.annotation is not None and run.annotation.no_cache) or self._binds_a_stream(run),
+            replay_bumps=False,
         )
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.
         with _plain_data.one_look(captured_vars):
+            holders = None
             if not run.skip_cache:
-                self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
+                holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
+            self._record_shared_object_edges(run, captured_vars, holders, execution.echo)
             self._record_file_effects(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
@@ -1286,7 +1296,11 @@ class StatementProcessor:
                 )
             else:
                 logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
-        self._move_holders(run, saved_metadata)
+        moved = self._move_holders(run, saved_metadata)
+        # After the holders moved: a variable the entry stores moves as a hit
+        # of it moves it (`held_lineage`), not through its edges, so a hit,
+        # a run and the simulation leave it alike.
+        self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
@@ -1306,7 +1320,7 @@ class StatementProcessor:
 
     def _refuse_unrestorable_outputs(
         self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = ()
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Skip-cache *run* when one of its output values cannot be stored and
         restored faithfully (:func:`unrestorable_output_reason`).
 
@@ -1332,12 +1346,67 @@ class StatementProcessor:
         if reason is None and echo:
             reason = identity_coupled_reason("the value it echoes", echo[0])
         if reason is None and holders:
+            found = dict(holders)
             reason = self._take_holders(run, captured_vars, holders)
+            if reason is None:
+                return found
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
+            return None
+        return holders
 
-    def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> None:
+    def _record_shared_object_edges(
+        self,
+        run: StatementRun,
+        captured_vars: dict[str, Any],
+        holders: dict[str, Any] | None,
+        echo: tuple[Any, ...] = (),
+    ) -> None:
+        """Record an edge between each output and every other variable bound
+        to its object, holding it or held in it (`record_shared_object_edges`),
+        so a later change through one name moves the other's lineage too.
+
+        *holders* is what the share check of a stored statement found
+        already (`_refuse_unrestorable_outputs`); for any other statement --
+        one that re-executes every run, like ``raw.append(x)`` -- the same
+        check (`share_group`) is asked here. A loop or branch body is left
+        to its structure, which moves what it changed when it ends
+        (``update_lineage_after_execution``).
+        """
+        if is_control_body(run.code):
+            return
+        if holders is None:
+            holders = self._holders_of(run.outputs, captured_vars, echo, run.metrics)
+        if holders:
+            record_shared_object_edges(
+                self.tracking_state.derivation_edges,
+                [name for name in run.outputs if name in captured_vars],
+                list(holders),
+            )
+
+    def _holders_of(
+        self, outputs: set[str], captured_vars: dict[str, Any], echo: tuple[Any, ...], metrics: Any
+    ) -> dict[str, Any]:
+        """The variables holding an object of *outputs* too (`share_group`).
+        Keeps no output value in a local: the check counts references."""
+        value_types = VALUE_TYPES + library_value_types()
+        names = [name for name in outputs if not is_value(captured_vars.get(name), value_types)]
+        if not names:
+            return {}
+        history, named = output_history(self.shell.user_ns, self.shell)
+        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        found, _shared = share_group(
+            names,
+            captured_vars,
+            self.shell.user_ns,
+            [*self._calls.held_call_results(), echo, metrics, *history],
+            named,
+            foreign=lambda name: name in hidden or is_history_name(name),
+        )
+        return found
+
+    def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores
         with its outputs (`held_lineage`), as a hit of it does, once the entry
         holds them; and record that for the simulation (``held_with``).
@@ -1358,7 +1427,7 @@ class StatementProcessor:
         if holders or run.entry_holders or cache_key in self.tracking_state.held_with:
             self.tracking_state.held_with[cache_key] = dict(holders or {})
         if not holders:
-            return
+            return set()
         for name, before in holders.items():
             apply_held_var(
                 self.tracking_state,
@@ -1367,6 +1436,7 @@ class StatementProcessor:
                 held_lineage(before, cache_key),
                 compute_hash=self.compute_hash,
             )
+        return set(holders)
 
     def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
         """Store *holders*, the variables holding an output's object too, with

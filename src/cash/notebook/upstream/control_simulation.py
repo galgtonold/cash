@@ -22,6 +22,7 @@ from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
 from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
+from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
 from ._types import SimulationResult, TraceEntry
@@ -104,6 +105,18 @@ class ControlSimulation:
                     mv,
                     new_lineage[:12],
                 )
+        # What the structure changed through another name moves on with it,
+        # through the edges the runtime recorded, as the runtime's
+        # ``update_mutated_variable_lineages`` moves it.
+        if extra_outputs:
+            extra_outputs |= bump_derived_lineages(
+                self.tracking_state.derivation_edges,
+                virtual_lineage,
+                set(extra_outputs),
+                set(mutated_vars),
+                record=virtual_lineage.__setitem__,
+                present=lambda _name: True,
+            )
         return extra_outputs
 
     def simulate(self, node: ast.AST, sim: SimulationResult) -> None:

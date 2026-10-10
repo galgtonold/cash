@@ -533,7 +533,14 @@ def update_mutated_variable_lineages(
     *unit_digest*, when given, stands in for the value hash: what went into a
     loop whose outcome is a function of its key, which names the value
     without reading it.
+
+    Then every other variable bound to, holding or held in what moved
+    (``data = raw`` before ``for x in xs: raw.append(x)``) moves on with
+    it, through the edges the statements recorded (`bump_derived_lineages`),
+    as after a single statement. What the structure moved itself is not
+    moved again.
     """
+    moved: set[str] = set()
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
             continue
@@ -561,11 +568,16 @@ def update_mutated_variable_lineages(
             new_lineage = hashlib.sha256(":".join(lineage_components).encode()).hexdigest()
 
             statement_processor.tracking_state.lineage.record(var_name, new_lineage, value=val)
+            moved.add(var_name)
 
             logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 
         except (TypeError, ValueError, AttributeError) as e:
             logger.debug("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
+    if moved and statement_processor.tracking_state.derivation_edges:
+        statement_processor.lineage_builder.replay_derivation_bumps(
+            statement_processor.tracking_state, moved, set(mutated_vars)
+        )
 
 
 # ---------------------------------------------------------------------------
