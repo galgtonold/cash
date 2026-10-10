@@ -8,6 +8,7 @@ import dis
 import functools
 import hashlib
 import inspect
+import operator
 import pickle
 import textwrap
 import types
@@ -16,6 +17,7 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._plain_data import identity_changed, identity_snapshot
 from ..analysis.annotations import assume_safe_block_lines
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..effect_observer import line_waived
@@ -105,13 +107,17 @@ def unsafe_uses_of(
             continue
         if isinstance(node, ast.Call):
             f = node.func
+            # The receiver's root: `cfg.calls.append(x)` writes to what `cfg`
+            # holds as surely as `cfg.append(x)` does.
+            receiver = f.value if isinstance(f, ast.Attribute) else None
+            while isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                receiver = receiver.value
             if (
-                isinstance(f, ast.Attribute)
-                and isinstance(f.value, ast.Name)
-                and f.value.id in names
+                isinstance(receiver, ast.Name)
+                and receiver.id in names
                 and (not mutating_methods_only or f.attr in write_methods)
             ):
-                unsafe.add(f.value.id)
+                unsafe.add(receiver.id)
             if bare_args:
                 for a in list(node.args) + [kw.value for kw in node.keywords]:
                     if isinstance(a, ast.Starred):
@@ -421,6 +427,94 @@ def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyB
 # dataclass -- ran uncached.
 _CLASS_BODY_CELLS = frozenset({"__class__", "__classdict__", "__classdictcell__"})
 
+#: Stands for a cell that holds nothing yet, in `HelperIdentity._read_cells`.
+_EMPTY_CELL = object()
+
+#: How many containers `_snapshot_of` follows inside one value before it
+#: gives up (the value is then hashed on every call instead).
+_SNAPSHOT_CONTAINERS = 10_000
+
+
+def _snapshot_of(value: Any) -> tuple | None:
+    """What could change in *value* without changing its identity, as object
+    identities; None when that cannot be watched this way.
+
+    A list or tuple of plain data is `_plain_data.identity_snapshot` (one
+    pass of ``is`` at C speed, however long). A dict or a set is watched by
+    the identities of its keys and values, and each value that can change
+    is watched in turn. Anything else -- an instance, a ``bytearray``, an
+    array -- gives None.
+    """
+    budget = [_SNAPSHOT_CONTAINERS]
+
+    def snap(v: Any) -> tuple | None:
+        budget[0] -= 1
+        if budget[0] < 0:
+            return None
+        t = type(v)
+        if t is list or t is tuple:
+            levels = identity_snapshot(v)
+            return None if levels is None else ("seq", v, levels)
+        if t is dict:
+            keys = list(v)
+            values = list(v.values())
+            inner = []
+            for item in values:
+                if _cannot_change(item):
+                    continue
+                sub = snap(item)
+                if sub is None:
+                    return None
+                inner.append(sub)
+            return ("dict", v, keys, values, inner)
+        if t is set or t is frozenset:
+            items = list(v)
+            if not all(map(_cannot_change, items)):
+                return None
+            return ("set", v, items)
+        return None
+
+    found = snap(value)
+    if found is None:
+        # A dispatch table or a step list of plain functions: what it holds
+        # is keyed by their code, which `CodeTable` watches by identity.
+        from .code_tables import CodeTable
+
+        table = CodeTable.of(value)
+        if table is not None:
+            return ("table", value, table)
+    return found
+
+
+def _snapshot_moved(snap: tuple) -> bool:
+    """Has the value `_snapshot_of` took *snap* of changed since?"""
+    kind, value = snap[0], snap[1]
+    if kind == "table":
+        return not snap[2].holds(value)
+    if kind == "seq":
+        return identity_changed(value, snap[2])
+    if kind == "dict":
+        keys, values = snap[2], snap[3]
+        if len(value) != len(keys):
+            return True
+        if not all(map(operator.is_, value, keys)) or not all(map(operator.is_, value.values(), values)):
+            return True
+        return any(map(_snapshot_moved, snap[4]))
+    items = snap[2]
+    return len(value) != len(items) or not all(map(operator.is_, value, items))
+
+
+def _cannot_change(value: Any) -> bool:
+    """Is *value* keyed the same for as long as it is the same object? An
+    immutable value, or one keyed by its code or name (a function, a class,
+    a module), or one never keyed (a lock)."""
+    return (
+        is_immutable_capture(value)
+        or isinstance(value, IMMUTABLE_VALUE_TYPES)
+        or isinstance(value, SYNC_TYPES)
+        or isinstance(value, (types.FunctionType, types.BuiltinFunctionType, types.ModuleType, type))
+    )
+
 
 class HelperIdentity:
     """A helper's identity for the key: its code, its parameter defaults and
@@ -429,12 +523,36 @@ class HelperIdentity:
     def __init__(self, args: ArgHasher, captures: CaptureAnalysis) -> None:
         self._args = args
         self._captures = captures
-        # id(helper) -> (helper, __defaults__, __kwdefaults__, identity); see
-        # `identity`. Holding the helper keeps its id from being recycled while
-        # the entry lives.
-        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, str]] = LruMemo(CODE_OBJECTS)
+        # id(helper) -> (helper, __defaults__, __kwdefaults__, what its read
+        # cells held, identity snapshots of the mutable values it keyed,
+        # identity); see `identity`. Holding the helper keeps its id from
+        # being recycled while the entry lives. A helper that keyed a mutable
+        # value no snapshot can watch has no entry and is hashed per call.
+        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str]] = LruMemo(CODE_OBJECTS)
+
+    def _read_cells(self, fn: Callable) -> tuple:
+        """What each closure cell *fn* reads (not writes) holds now, in order:
+        a ``nonlocal`` setter in a sibling closure re-sets one without
+        touching *fn* itself."""
+        closure = getattr(fn, "__closure__", None)
+        code = getattr(fn, "__code__", None)
+        if not closure or code is None:
+            return ()
+        written = self._captures.written_freevars(code)
+        held = []
+        for name, cell in zip(code.co_freevars, closure):
+            if name in written or name in _CLASS_BODY_CELLS:
+                continue
+            try:
+                held.append(cell.cell_contents)
+            except ValueError:
+                held.append(_EMPTY_CELL)
+        return tuple(held)
 
     def _capture_part(self, fn: Callable) -> str:
+        return self._captures_of(fn)[0]
+
+    def _captures_of(self, fn: Callable) -> tuple[str, list]:
         """Digest of the values a helper's closure captured and only reads, or "".
 
         A decorator's arguments live there: ``@scale(10)`` builds a wrapper
@@ -449,11 +567,15 @@ class HelperIdentity:
         FUNCTIONS are followed as helpers in their own right, not here. A
         value that cannot be hashed raises KEY-UNHASHABLE-CAPTURE
         (`unhashable_capture`), rather than being left out of the key.
+
+        Returns the digest and the values it keyed that can change in place
+        (a config dict the helper only reads), which `identity` watches.
         """
         closure = getattr(fn, "__closure__", None)
         code = getattr(fn, "__code__", None)
         if not closure or code is None:
-            return ""
+            return "", []
+        mutable: list = []
         written = self._captures.written_freevars(code)
         unsafe: frozenset | None = None
         captures = []
@@ -474,6 +596,7 @@ class HelperIdentity:
                     captures.append((name, self._args.hash_payload((value,), {})))
                 except _UNHASHABLE_CAPTURE_ERRORS as e:
                     raise unhashable_capture(fn, name, value, e) from e
+                mutable.append(value)
                 continue
             if isinstance(value, SYNC_TYPES):
                 continue
@@ -501,9 +624,13 @@ class HelperIdentity:
                 captures.append((name, capture_digest(self._args, value)))
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(fn, name, value, e) from e
+            if not _cannot_change(value):
+                # A config dict the helper only reads: `weights["a"] = 3`
+                # changes it under the same object.
+                mutable.append(value)
         if not captures:
-            return ""
-        return hashlib.sha256(repr(captures).encode("utf-8")).hexdigest()
+            return "", mutable
+        return hashlib.sha256(repr(captures).encode("utf-8")).hexdigest(), mutable
 
     def identity(self, fn: Callable) -> str:
         """A helper's identity for the key: its code, AND its parameter defaults.
@@ -545,16 +672,37 @@ class HelperIdentity:
         defaults = None if is_class else getattr(fn, "__defaults__", None)
         kwdefaults = None if is_class else getattr(fn, "__kwdefaults__", None)
         memo_key = id(fn)
+        cells = () if is_class else self._read_cells(fn)
         cached = self._defaults_memo.get(memo_key)
-        if cached is not None and cached[0] is fn and cached[1] is defaults and cached[2] is kwdefaults:
-            return cached[3]
+        if (
+            cached is not None
+            and cached[0] is fn
+            and cached[1] is defaults
+            and cached[2] is kwdefaults
+            and len(cached[3]) == len(cells)
+            and all(map(operator.is_, cached[3], cells))
+            and not any(map(_snapshot_moved, cached[4]))
+        ):
+            return cached[5]
         # After the memo: its entry already holds the captures, and hashing
         # a captured object on every call only to throw the digest away cost
-        # as much as the object is large.
-        captured = "" if is_class else self._capture_part(fn)
+        # as much as the object is large. What can change in place under the
+        # same objects -- a dict the helper reads, a list default -- is
+        # watched by identity snapshot (`_snapshot_of`); one that cannot be
+        # watched leaves no entry, and is hashed on every call, as a data
+        # global is.
+        captured, mutable = ("", []) if is_class else self._captures_of(fn)
         if captured:
             source = f"{source}:captures:{captured}"
         pos, kwd = ((), {}) if is_class else defaults_of(fn)
+        mutable.extend(v for v in (*pos, *kwd.values()) if not _cannot_change(v))
+        snapshots: list | None = []
+        for value in mutable:
+            snap = _snapshot_of(value)
+            if snap is None:
+                snapshots = None
+                break
+            snapshots.append(snap)
         try:
             digest = self._args.hash_payload(pos, kwd)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
@@ -577,7 +725,10 @@ class HelperIdentity:
                     f"cash.register_hasher({bad_type}, ...).",
                 ) from e
         identity = f"{source}:defaults:{digest}"
-        self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, identity)
+        if snapshots is not None:
+            self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, cells, snapshots, identity)
+        else:
+            self._defaults_memo.pop(memo_key, None)
         return identity
 
     def fingerprint_default(self, v: Any) -> Any:
