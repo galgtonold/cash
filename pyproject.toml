@@ -135,6 +135,9 @@ dev = [
     "matplotlib>=3.5,<4",
     "pydantic>=2,<3",
     "ipywidgets>=7.0,<9",
+    # Loop handling sizes progress bars around a loop's iterable (tqdm is the
+    # commonest loop header in notebooks); those tests import it.
+    "tqdm",
     # The Redis backend tests run against fakeredis, which needs redis itself.
     "redis>=4.0,<6",
     "fakeredis>=2.0",

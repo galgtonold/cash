@@ -16,6 +16,7 @@ import time
 
 import pytest
 
+from cash._paths import normalize_path
 from cash.tracking import file_dep_snapshot, file_tracker
 from cash.tracking.file_tracker import FileAccessTracker
 
@@ -60,7 +61,7 @@ def test_the_open_does_not_wait_for_the_digest(tmp_path, monkeypatch):
     assert threads and threads[0] != threading.current_thread().name, threads
     assert opened < 0.8, f"the open waited {opened:.2f} s for the digest"
     expected = file_dep_snapshot.file_content_hash(path)
-    assert tracker.read_digests[os.path.realpath(path)] == expected
+    assert tracker.read_digests[normalize_path(os.path.realpath(path))] == expected
 
 
 def test_a_write_waits_for_the_digest_of_the_file_as_read(tmp_path, monkeypatch):
@@ -78,7 +79,7 @@ def test_a_write_waits_for_the_digest_of_the_file_as_read(tmp_path, monkeypatch)
         with open(path, "r+b") as fh:
             fh.write(b"Z")
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
-    assert tracker.read_digests[os.path.realpath(path)] == original, "the digest saw the write"
+    assert tracker.read_digests[normalize_path(os.path.realpath(path))] == original, "the digest saw the write"
 
 
 def test_a_small_file_is_hashed_at_the_open(tmp_path, monkeypatch):
@@ -89,7 +90,7 @@ def test_a_small_file_is_hashed_at_the_open(tmp_path, monkeypatch):
         with open(path, "rb") as fh:
             fh.read()
     assert threads == [threading.current_thread().name]
-    assert tracker.read_digests[os.path.realpath(path)]
+    assert tracker.read_digests[normalize_path(os.path.realpath(path))]
 
 
 def test_a_cached_body_over_a_big_file_hits_and_sees_an_edit(disk_cash, tmp_path):
