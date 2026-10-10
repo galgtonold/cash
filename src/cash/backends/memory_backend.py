@@ -353,6 +353,9 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value holds parts kept as marshal bytes
         #: (`_marshal_parts`): only a copy reads them out.
         self._holds_bytes: builtins.set[str] = set()
+        #: Keys whose stored value is cash's own by construction: nothing
+        #: in it is an object the caller's value also holds (`private_copy`).
+        self._own: builtins.set[str] = set()
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -391,6 +394,7 @@ class InMemoryBackend(CacheBackend):
         by_spine: list[bool] | None = None,
         walk: list | None = None,
         premade: dict[int, Any] | None = None,
+        by_deepcopy: list[bool] | None = None,
     ) -> Any:
         """Copy *value* so the caller cannot reach the stored entry.
 
@@ -418,6 +422,8 @@ class InMemoryBackend(CacheBackend):
         *walk* is `_plain_data.tree_walk` of *value*, when the caller has it.
         *premade* is what to put in the copy for parts of a dict *value*,
         ``id(part) -> what``: the parts kept as marshal bytes (`_marshal_parts`).
+        *by_deepcopy* gets True when the copy fell back to ``deepcopy``
+        (`_deep_copy`), which trusts what a class's ``__deepcopy__`` returns.
         """
         try:
             value_type = type(value)
@@ -454,14 +460,14 @@ class InMemoryBackend(CacheBackend):
                 # for one object still come back as one object.
                 memo: dict[int, Any] = dict(premade) if premade else {}
                 InMemoryBackend._premade_copies(value, memo, known_cells, record_cells)
-                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
+                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells, by_deepcopy)
             if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
                 # ``frame, summary, n = build()``: a call's result is a tuple;
                 # its frames are copied as `_copy_frame` copies them.
                 memo = {}
                 InMemoryBackend._premade_copies(dict(enumerate(value)), memo, known_cells, record_cells)
-                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells)
-            return InMemoryBackend._deep_copy(value, {}, known_cells, record_cells)
+                return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells, by_deepcopy)
+            return InMemoryBackend._deep_copy(value, {}, known_cells, record_cells, by_deepcopy)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
             if required:
                 # Storing it would hand every caller the SAME object: a caller
@@ -550,6 +556,14 @@ class InMemoryBackend(CacheBackend):
                     mutable = None
         if copied is None:
             copied = frame.copy(deep=True)
+        if not _own_metadata(frame, copied):
+            # An attribute deepcopy refuses: the pickle round trip copies it,
+            # as a disk hit would.
+            try:
+                copied = _round_trip(frame)
+            except Exception:  # noqa: BLE001 - shared: recorded so, as uncopiable cells are
+                logger.debug("could not copy the attributes of a %s", type(frame).__name__)
+                mutable = None
         if record_cells is not None:
             if mutable is False and frame_sharing.freeze(copied, cells_known=True):
                 mutable = _SHARED  # private, now frozen: hits share it
@@ -562,6 +576,7 @@ class InMemoryBackend(CacheBackend):
         memo: dict[int, Any],
         known_cells: dict[int, bool] | None,
         record_cells: dict[int, bool] | None,
+        by_deepcopy: list[bool] | None = None,
     ) -> Any:
         """A copy of *value* as a disk hit hands it back: a pickle round trip.
 
@@ -583,7 +598,8 @@ class InMemoryBackend(CacheBackend):
         the frame's), a polars one cloned.
 
         A value pickle refuses (a lambda, a lock: no disk tier can hold it
-        either) is copied by ``deepcopy`` (`_deepcopy_with_frames`).
+        either) is copied by ``deepcopy`` (`_deepcopy_with_frames`), and
+        *by_deepcopy*, when given, gets True.
         """
         frames = _frame_types()
         ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
@@ -664,6 +680,8 @@ class InMemoryBackend(CacheBackend):
             except Exception:  # noqa: BLE001 - whatever pickle refuses, deepcopy may copy
                 logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
                 break
+        if by_deepcopy is not None:
+            by_deepcopy.append(True)
         return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
 
     @staticmethod
@@ -695,7 +713,9 @@ class InMemoryBackend(CacheBackend):
         for frame in frames:
             mutable = known_cells.get(id(frame)) if known_cells is not None else None
             cells[id(frame)] = _holds_mutable_cells(frame) if mutable is None else mutable
-        if not any(cells.values()):
+        # A subclass's attributes (`_own_metadata`): deepcopy's frame copy
+        # leaves them shared too.
+        if not any(cells.values()) and not any(_metadata_held(frame) for frame in frames):
             if record_cells is not None:
                 for frame in frames:
                     record_cells[id(memo[id(frame)])] = False
@@ -840,24 +860,39 @@ class InMemoryBackend(CacheBackend):
             return None if copied is _UNSERVABLE else (entry[0], copied)
         return entry
 
+    def holds_own_copy(self, key: str) -> bool:
+        """Is the value stored for *key* cash's own by construction, so that
+        nothing the caller does to its value can change it?
+
+        Only when every part of it was copied in a way that keeps nothing of
+        the caller's: plain data, data kept as bytes, a pickle round trip,
+        arrays, and frozen tables (`frame_sharing`). Not a table copied deep
+        by pandas (a subclass, a nullable, categorical or object column: its
+        Python objects stay the caller's), nor what ``deepcopy`` copied, nor
+        a value kept by reference. A background write of a value that is
+        not would serialize what the caller did to it after the call.
+        """
+        with self._lock:
+            return key in self._own
+
     def private_copy(self, key: str, default: Any = None, metadata: MetadataDict | None = None) -> Any:
         """The stored value for *key* to write to another tier, when it is a
         copy only this tier holds, which nothing changes; else *default*.
         With *metadata*, only the value stored with that very dict (the
         write that just stored it, not an earlier or a later one).
 
-        Every stored value is that -- a hit copies it, or shares a frozen
-        table (`frame_sharing`) -- except one kept by reference (it could not
-        be copied: the caller holds it), one holding parts kept as bytes
-        (reading those out is a full copy), and one whose metadata says
-        `NO_PRIVATE_COPY` (its copy is not what the caller's value stores
-        as). A value kept whole as bytes is read out into a new object,
-        which no one else holds.
+        Only a value `holds_own_copy` vouches for, and not one holding parts
+        kept as bytes (reading those out is a full copy), nor one whose
+        metadata says `NO_PRIVATE_COPY` (its copy is not what the caller's
+        value stores as). A value kept whole as bytes is read out into a
+        new object, which no one else holds. *default* tells the caller to
+        serialize its own value before it returns.
         """
         with self._lock:
             entry = self._store.get(key)
             holds_bytes = key in self._holds_bytes
-        if entry is None or holds_bytes or entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
+            own = key in self._own
+        if entry is None or not own or holds_bytes or entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
             return default
         if metadata is not None and entry[0] is not metadata:
             return default
@@ -1046,6 +1081,8 @@ class InMemoryBackend(CacheBackend):
         frame_cells: dict[int, bool | None] = {}
         plan = None
         holds_bytes = False
+        #: Is the stored value cash's own by construction (`private_copy`)?
+        own = True
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
@@ -1073,6 +1110,7 @@ class InMemoryBackend(CacheBackend):
             required = bool((metadata or {}).get("copy_required"))
             fell_back: list[bool] = []
             by_spine: list[bool] = []
+            by_deepcopy: list[bool] = []
             stored = self._safe_deep_copy(
                 value,
                 key,
@@ -1082,8 +1120,17 @@ class InMemoryBackend(CacheBackend):
                 by_spine=by_spine,
                 walk=walk,
                 premade=premade,
+                by_deepcopy=by_deepcopy,
             )
             holds_bytes = (bool(premade) or _BYTES in frame_cells.values()) and not fell_back
+            # Its own only when every part was copied in a way that leaves
+            # nothing of the caller's in it: a pickle round trip, a spine
+            # copy, arrays, parts read out of bytes, and frozen tables. A
+            # deep pandas copy keeps the Python objects of its object cells
+            # (a str subclass with attributes), and ``deepcopy`` trusts a
+            # class's ``__deepcopy__``: such a value may still share a part
+            # with the caller's.
+            own = not fell_back and not by_deepcopy and all(cells in (_SHARED, _BYTES) for cells in frame_cells.values())
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
                 # each on its own, each the fastest way it allows. Planned
@@ -1095,7 +1142,7 @@ class InMemoryBackend(CacheBackend):
                 # A frame whose object cells pickle cannot copy (a worker
                 # holding a lock) would share those cells with every hit.
                 raise CacheBackendError(
-                    "the result holds a pandas frame whose object cells could not be copied, "
+                    "the result holds a pandas frame whose object cells or attributes could not be copied, "
                     "so caching it would hand every caller the same objects"
                 )
             if fell_back or None in frame_cells.values():
@@ -1137,6 +1184,10 @@ class InMemoryBackend(CacheBackend):
                 self._holds_bytes.add(key)
             else:
                 self._holds_bytes.discard(key)
+            if own:
+                self._own.add(key)
+            else:
+                self._own.discard(key)
             self._current_size_bytes += size
 
             # Check max_entries limit
@@ -1160,6 +1211,7 @@ class InMemoryBackend(CacheBackend):
         self._frame_cells.pop(key, None)
         self._copy_plans.pop(key, None)
         self._holds_bytes.discard(key)
+        self._own.discard(key)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
         entry = self._store.pop(key, None)
@@ -1178,6 +1230,7 @@ class InMemoryBackend(CacheBackend):
             self._frame_cells.clear()
             self._copy_plans.clear()
             self._holds_bytes.clear()
+            self._own.clear()
             self._gdsf_base.clear()
             self._seq_by_key.clear()
             self._current_size_bytes = 0
@@ -1483,6 +1536,40 @@ def _named_now(obj: Any) -> Any:
     if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
         return current
     return None
+
+
+def _metadata_held(frame: Any) -> list[str]:
+    """The ``_metadata`` attributes *frame* holds an object in that can be
+    changed in place (a subclass's ``info`` dict, geopandas' ``crs``).
+
+    pandas copies these by reference into every copy it makes, deep or not
+    (``__finalize__``): a stored table, every hit of it and the caller's
+    result held one dict between them.
+    """
+    names = getattr(type(frame), "_metadata", None)
+    if not names:
+        return []
+    own = getattr(frame, "__dict__", {})
+    return [name for name in names if name in own and type(own[name]) not in _ATOMS]
+
+
+def _own_metadata(frame: Any, copied: Any) -> bool:
+    """Give *copied* (a copy of *frame*) its own copy of each attribute
+    `_metadata_held` names that it still shares with *frame*, all from one
+    ``deepcopy`` memo (two names for one object stay one). False, with
+    *copied* unchanged, when one of them cannot be deep-copied."""
+    names = [name for name in _metadata_held(frame) if copied.__dict__.get(name) is frame.__dict__[name]]
+    if not names:
+        return True
+    memo: dict[int, Any] = {}
+    try:
+        fresh = {name: copy.deepcopy(frame.__dict__[name], memo) for name in names}
+    except Exception:  # noqa: BLE001 - the caller copies another way
+        logger.debug("could not deep-copy the attributes of a %s", type(frame).__name__, exc_info=True)
+        return False
+    for name, value in fresh.items():
+        object.__setattr__(copied, name, value)
+    return True
 
 
 def _round_trip(value: Any) -> Any:

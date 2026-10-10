@@ -96,7 +96,7 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @2790adb6, cash/backends/frame_sharing.py:_freeze @2e3125dc, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @53ddf8d3, cash/backends/frame_sharing.py:_freeze @2e3125dc, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -111,7 +111,12 @@ memory -- `df["x"].array[0] = ...`, or a NumPy view made writable again --
 raises `ValueError: assignment destination is read-only`; write through
 `.loc` or `.iloc` instead. A table read from disk is shared the same way. A table with nullable,
 categorical or period columns, a `MultiIndex`, or a subclass of `DataFrame` is
-copied on the store and on every hit. A column of lists or dicts is kept as
+copied on the store and on every hit. A subclass's own attributes (those it
+names in `_metadata`, such as a GeoDataFrame's `crs` or an `info` dict) are
+copied with it, so editing `df.info` on a result changes neither the stored
+table nor a later hit; when such an attribute can be neither deep-copied nor
+pickled, the decorator does not cache the table
+([`STORE-FAILED`](../warnings.md#store-failed)). A column of lists or dicts is kept as
 compact bytes and read back into new lists on every hit.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see
@@ -221,6 +226,15 @@ does. cash waits for a write only when something needs it on disk:
 
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
+
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc -->
+The disk entry is the result as it was computed: a change you make to it
+after the call never reaches the disk. The background write takes the memory
+tier's copy when that copy keeps nothing of yours (numbers, plain data, a
+table shared as above, anything copied through pickle). A table copied with
+pandas' deep copy (nullable or categorical columns, a subclass), whose
+Python objects in object columns stay yours, is serialized before the call
+returns instead, which costs that copy's pickle time on a miss.
 
 === "Decorator"
 
