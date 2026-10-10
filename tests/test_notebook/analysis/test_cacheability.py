@@ -531,11 +531,13 @@ class TestSideEffects:
         kinds = {e.kind for e in _analyze("plt.savefig('out.png')").side_effects}
         assert "file_write" in kinds and "display" not in kinds
 
-    def test_pyplot_figure_creation_left_to_identity_coupling(self):
-        # Figure creation/access returns identity-coupled objects, refused (and
-        # explained) by that path; not relabelled a generic display side-effect.
-        for code in ("fig, ax = plt.subplots()", "plt.figure()", "ax = plt.gca()"):
-            assert not any(e.kind == "display" for e in _analyze(code).side_effects), code
+    def test_pyplot_figure_creation_is_a_display_side_effect(self):
+        # Making or fetching pyplot's current figure changes what the next
+        # drawing lands on. Bound or not: an unbound `plt.figure()` returns
+        # nothing for the identity-coupling refusal to see, and a hit of it
+        # left the next cell drawing on the previous figure.
+        for code in ("fig, ax = plt.subplots()", "plt.figure()", "ax = plt.gca()", "plt.subplot(2, 1, 1)"):
+            assert any(e.kind == "display" for e in _analyze(code).side_effects), code
 
     def test_non_pyplot_calls_not_display_side_effects(self):
         # An arbitrary obj.show(), a receiver-bound plot, or an Axes method must

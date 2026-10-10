@@ -76,7 +76,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @98ce202f, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60 -->
+<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @a69ccc3e, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @98ce202f, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
@@ -84,7 +84,7 @@ they talk to the outside world.
 | writes to a database (`INSERT`, `commit`, `df.to_sql`) | runs every time |
 | starts a process (`subprocess.run`, `os.system`) | runs every time |
 | reads the clock (`datetime.now()`, `time.time()`, `uuid4()`) or asks for `input()` | runs every time |
-| draws on the current pyplot figure (`plt.plot`, `plt.show`) | runs every time |
+| makes, picks or draws on the current pyplot figure (`plt.figure`, `plt.subplots`, `plt.subplot`, `plt.plot`, `plt.show`), directly or through a library or a function you wrote (`sns.barplot(...)`, `s.plot()`) | runs every time: a hit would leave the next drawing on another figure. Cash compares pyplot's open figures, the current one and what its axes hold before and after the statement |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
 | sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps, `importlib.reload(mylib)`) | runs every time |

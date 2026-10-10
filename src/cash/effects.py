@@ -97,7 +97,8 @@ class EffectKind(str, Enum):
     ENVIRONMENT = "environment"
     #: Writes to the console: ``print``, ``logging.info``, ``sys.stdout.write``.
     CONSOLE = "console"
-    #: Draws on or shows pyplot's current figure: ``plt.plot``, ``plt.show``.
+    #: Makes, draws on or shows pyplot's current figure: ``plt.figure``,
+    #: ``plt.plot``, ``plt.show``.
     DISPLAY = "display"
     #: Talks to the person at the keyboard: ``input``, ``getpass``.
     INTERACTIVE = "interactive"
@@ -436,28 +437,14 @@ _HELPER_READS: dict[str, tuple[str, str | None]] = {
 }
 
 # matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
-# pyplot's PROCESS-GLOBAL current figure -- drawing (``plt.plot``, ``plt.hist``),
-# styling (``plt.title``, ``plt.legend``) or displaying (``plt.show``) -- state
-# cash does not track. ``plt.savefig`` is a file write (a method verb), not a
-# display.
+# pyplot's PROCESS-GLOBAL current figure -- making a new current figure or axes
+# (``plt.figure``, ``plt.subplots``, ``plt.subplot``, ``plt.axes``), fetching
+# one to draw on (``plt.gca().plot(...)``), drawing (``plt.plot``,
+# ``plt.hist``), styling (``plt.title``, ``plt.legend``) or displaying
+# (``plt.show``) -- state cash does not track, so a hit that skips the call
+# leaves the next drawing on another figure than plain Python's. They all
+# always run. ``plt.savefig`` is a file write (a method verb), not a display.
 PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({"plt", "pyplot", "matplotlib.pyplot"})
-
-# pyplot calls that CREATE or FETCH a Figure/Axes rather than draw on / style the
-# current one. They return identity-coupled objects, which the notebook refuses
-# (and explains) on their own, so they are not a display effect.
-PYPLOT_FIGURE_ACCESSORS: frozenset[str] = frozenset(
-    {
-        "figure",
-        "subplots",
-        "subplot",
-        "subplot_mosaic",
-        "subplot2grid",
-        "axes",
-        "gca",
-        "gcf",
-        "get_current_fig_manager",
-    }
-)
 
 #: The kinds a namespace is consulted for: a call to one is recognised through
 #: what its names are bound to (``from time import time as now; now()``), not
@@ -977,7 +964,7 @@ def classify_call(call: ast.Call, namespace: Mapping[str, Any] | None = None) ->
         return None
     method = func.attr
     base = dotted_name(func.value)
-    if base in PYPLOT_MODULE_ALIASES and method not in METHOD_VERBS and method not in PYPLOT_FIGURE_ACCESSORS:
+    if base in PYPLOT_MODULE_ALIASES and method not in METHOD_VERBS:
         return Effect(EffectKind.DISPLAY, f"{base}.{method}")
     kind = METHOD_VERBS.get(method)
     if kind is None:

@@ -57,6 +57,12 @@ def test_each_policy_decides_every_kind(policy):
         ("sys.stderr.write(x)", EffectKind.CONSOLE),
         ("os.write(2, b)", EffectKind.CONSOLE),
         ("plt.plot(x)", EffectKind.DISPLAY),
+        # Making or fetching pyplot's current figure changes what the next
+        # drawing lands on, which a hit would not do.
+        ("plt.figure()", EffectKind.DISPLAY),
+        ("plt.subplots()", EffectKind.DISPLAY),
+        ("plt.subplot(2, 1, 1)", EffectKind.DISPLAY),
+        ("plt.gca()", EffectKind.DISPLAY),
         ("input()", EffectKind.INTERACTIVE),
     ],
 )
@@ -73,7 +79,6 @@ def test_classify_call(src, kind):
         "d.get(k)",  # `get` is not a verb: dict.get
         "s.replace('a', 'b')",  # nor is `replace`: str.replace
         "lst.append(x)",  # a mutation, not an effect
-        "plt.figure()",  # creates a figure: judged as the object it returns
     ],
 )
 def test_not_an_effect(src):
