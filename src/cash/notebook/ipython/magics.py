@@ -683,9 +683,13 @@ class CashMagics(Magics):
         cosmetic notice must not turn a working cell into an error.
         """
         try:
-            deadline = time.monotonic() + _writes.shutdown_write_timeout()
-            for queue in _writes.all_pending_writes():
-                queue.wait_for_backlog(_writes.MAX_BACKLOG_S, deadline)
+            # Most cells leave nothing queued: then the configured deadline
+            # (a resolve of every config layer) is not worth reading.
+            busy = [queue for queue in _writes.all_pending_writes() if queue.pending_count()]
+            if busy:
+                deadline = time.monotonic() + _writes.shutdown_write_timeout()
+                for queue in busy:
+                    queue.wait_for_backlog(_writes.MAX_BACKLOG_S, deadline)
         except Exception:  # best-effort, must not break the cell
             logger.debug("Bounding pending cache writes failed", exc_info=True)
         try:
