@@ -182,7 +182,7 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @bcbe5092, cash/analysis/handed_callables.py:hands_a_state_changing_callable @dc85c3c3 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @9327197c, cash/analysis/handed_callables.py:hands_a_state_changing_callable @dc85c3c3 -->
 A function handed to a call counts as called, however it is handed: by name
 (`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
 as a method that changes its object (`s.apply(tracker.record)`), as an object
