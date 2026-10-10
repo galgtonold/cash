@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from cash.control_markers import strip_markers
 
 from ...analysis.cacheability_decision import is_lineage_exempt
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
@@ -475,6 +475,7 @@ class MismatchClassifier:
             for rule in (
                 self._own_call_explains_lineage,
                 self._reject_read_only_input,
+                self._rebuild_after_a_gone_change,
                 self._keep_valid_extension,
                 self._rerun_on_stale_files,
                 self._rerun_single_unit_loop_output,
@@ -521,6 +522,23 @@ class MismatchClassifier:
             "[UPSTREAM_DEBUG]   -> '%s' is a READ-ONLY required input "
             "(not in current cell outputs). Rejecting downstream extension "
             "to force restoration to upstream state.",
+            m.var_name,
+        )
+        m.broken_vars.add(m.var_name)
+        return True
+
+    def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:
+        """A required input the cell also writes, last changed by a statement
+        no cell holds any more: the cell's earlier text (``df.loc[0, 'a'] =
+        -1`` edited out), or a deleted cell. No run of the notebook as it
+        stands makes the live value, so it is rebuilt before the cell runs.
+        Kept, the cell copied or read the changed value and the check before
+        the next cell rebuilt the input without it, leaving the copy behind.
+        (A read-only input is rebuilt by ``_reject_read_only_input``.)"""
+        if not (m.required and m.cell_output) or self._last_change_still_in_notebook(m):
+            return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> '%s' was last changed by a statement no cell holds any more. Marking broken.",
             m.var_name,
         )
         m.broken_vars.add(m.var_name)
@@ -597,6 +615,24 @@ class MismatchClassifier:
         )
         self.tracking_state.lineage.reset_to(m.var_name, m.final_virtual_hash)
         return True
+
+    def _last_change_still_in_notebook(self, m: _Mismatch) -> bool:
+        """Whether a cell of the notebook, the running one included, holds
+        the statement that last changed *m*'s variable
+        (``TrackingState.executed_cell_codes``); True when none is recorded."""
+        last = self.tracking_state.executed_cell_codes.get(m.var_name)
+        code = normalize_stmt(last) if last else ""
+        if not code:
+            return True
+        running = m.check.cell_code or ""
+        if code in running:
+            return True
+        cells = list(m.check.notebook_cells or [])
+        if running:
+            cells.append(running)
+        if any(code in cell for cell in cells):
+            return True
+        return any(code in _statements_of(cell) for cell in cells)
 
     def _current_cell_reproduces(
         self,
@@ -1180,3 +1216,19 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
+
+
+def _statements_of(cell_code: str) -> set[str]:
+    """Every statement of *cell_code*, nested ones too, as
+    ``normalize_stmt(ast.unparse(...))`` gives it; empty when it does not parse."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            try:
+                found.add(normalize_stmt(ast.unparse(node)))
+            except (ValueError, TypeError, RecursionError):
+                continue
+    return found
