@@ -29,6 +29,7 @@ from ..source_reading import getsource
 from .ast_util import bytecode_global_refs, copy_tree, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
+from .handed_callables import handed_callables
 from .helper_code import is_user_code
 from .namespace_effects import capturable_globals, notebook_global_rebinds
 
@@ -1131,9 +1132,12 @@ class CodeAnalyzer:
             # Raises when a callee cannot be analysed; the caller decides what
             # a statement it cannot see through means (``statement_effects``
             # runs it uncached).
-            extra = callee_global_mutations(tree, resolve_source)
             if user_ns is not None:
+                handed = handed_callables(tree, user_ns)
+                extra = callee_global_mutations(tree, resolve_source, extra_sources=handed.sources) | handed.receivers
                 extra = capturable_globals(extra, user_ns) | notebook_global_rebinds(tree, resolve_source, user_ns)
+            else:
+                extra = callee_global_mutations(tree, resolve_source)
             if extra:
                 outputs = outputs | set(extra)
         if user_ns is not None and outputs:

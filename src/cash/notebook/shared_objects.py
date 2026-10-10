@@ -20,7 +20,7 @@ never a wrong value.
 
 The walk goes through what restoring copies wholesale and what identity
 matters in: the builtin containers, and the attributes of objects of the
-notebook's own classes, of ``SimpleNamespace`` / dataclass instances and of
+notebook's own classes and of the classes of the user's own modules, of ``SimpleNamespace`` / dataclass instances and of
 estimators (a ``Pipeline`` holds the step objects it was built from), and
 the object a bound method is bound to and the cells a closure keeps
 (``hooks = {'log': tracker.log}``). Everything else is one leaf, whose own
@@ -47,8 +47,9 @@ from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _plain_data
+from cash.tracking.function_tracker import is_local_module
 
-__all__ = ["holds_part_of", "output_history", "share_group", "shared_names"]
+__all__ = ["holds_an_unopened_object", "holds_part_of", "output_history", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 VALUE_TYPES: tuple[type, ...] = (
@@ -170,16 +171,37 @@ def _is_estimator_class(cls: type) -> bool:
     return known
 
 
+_LOCAL_MODULE_CLASSES: dict[type, bool] = {}
+
+
+def _is_local_module_class(cls: type) -> bool:
+    """Whether *cls* was defined in one of the user's own modules (a
+    ``mylib.py`` next to the notebook, their package): its objects are the
+    user's as much as a class defined in a cell, and ``training_rows(ds)``
+    returning ``ds.rows`` hands back a list the argument holds."""
+    known = _LOCAL_MODULE_CLASSES.get(cls)
+    if known is None:
+        try:
+            module = sys.modules.get(cls.__module__)
+            known = isinstance(module, types.ModuleType) and is_local_module(module)
+        except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
+            known = False
+        _LOCAL_MODULE_CLASSES[cls] = known
+    return known
+
+
 def attributes_of(value: Any) -> dict[str, Any] | None:
     """The attributes a restore copies with *value* and the caller can reach,
-    for an object of the notebook's own classes, a ``SimpleNamespace``, a
-    dataclass or an estimator; ``None`` for anything else (a leaf)."""
+    for an object of the notebook's own classes or of a class from the
+    user's own modules, a ``SimpleNamespace``, a dataclass or an estimator;
+    ``None`` for anything else (a leaf)."""
     cls = type(value)
     if not (
         cls.__module__ == "__main__"
         or cls is types.SimpleNamespace
         or dataclasses.is_dataclass(cls)
         or _is_estimator_class(cls)
+        or _is_local_module_class(cls)
     ):
         return None
     try:
@@ -281,6 +303,26 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     if not own:
         return False
     return any(key in own for source in sources for key in _identities(source, value_types))
+
+
+def holds_an_unopened_object(sources: Iterable[Any]) -> bool:
+    """Whether *sources* are or hold an object `holds_part_of` cannot look
+    inside: not a value, not a builtin container, and no attributes it opens
+    (a library object, an object with ``__slots__``). Something in there may
+    hold a result that `holds_part_of` cannot see."""
+    value_types = VALUE_TYPES + library_value_types()
+    seen: set[int] = set()
+    stack = list(sources)
+    while stack:
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        children = children_of(obj)
+        if children is None:
+            return True
+        stack.extend(children)
+    return False
 
 
 def excess_refs(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:
