@@ -525,7 +525,7 @@ def _holds_artists(value: Any) -> bool:
         return False
     if isinstance(value, artist):
         return True
-    if getattr(value, "dtype", None) == object and getattr(value, "size", 0) <= 1024:
+    if getattr(getattr(value, "dtype", None), "kind", None) == "O" and getattr(value, "size", 0) <= 1024:
         return any(isinstance(item, artist) for item in value.flat)
     if isinstance(value, (list, tuple)) and len(value) <= 1024:
         return any(isinstance(item, artist) for item in value)
