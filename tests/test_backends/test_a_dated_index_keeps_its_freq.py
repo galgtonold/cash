@@ -15,12 +15,12 @@ import textwrap
 
 import pytest
 
+from cash.backends.memory_backend import InMemoryBackend
 from tests._scripts import run_python
 
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
-from cash.backends.memory_backend import InMemoryBackend  # noqa: E402
 
 TABLES = {
     "daily index": lambda: pd.DataFrame({"sales": np.arange(5.0)}, index=pd.date_range("2024-01-01", periods=5, freq="D")),
