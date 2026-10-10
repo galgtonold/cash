@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import os
 import shutil
+import sys
 import warnings
 from pathlib import Path
 from typing import List, Optional, Union
@@ -508,9 +509,17 @@ class NotebookTestRunner:
         cache writes still running in the background. ``graceful=False``
         kills it instead; call `settle_writes` first to keep its writes.
         """
+        old_pid = self._kernel_pid()
         try:
             self._run_async(self.client.km._async_restart_kernel(now=not graceful))
             self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
+            if old_pid is not None and self._kernel_pid() == old_pid:
+                # The old kernel still answers on the ports the restart reused:
+                # on Windows a venv's python.exe is a launcher, and killing it
+                # after a slow graceful exit can leave the real kernel running.
+                # Talking to it would run this test's cells in the old state.
+                sys.stderr.write(f"[nbharness] restart: the old kernel (pid {old_pid}) still answers; replacing it\n")
+                raise RuntimeError("old kernel still answering")
         except Exception:  # replaced below, whatever the failure
             self._replace_kernel()
         self._restore_working_directory()
@@ -522,6 +531,13 @@ class NotebookTestRunner:
         if self._inject_path:
             self._inject_notebook_path()
         return self
+
+    def _kernel_pid(self) -> int | None:
+        """The live kernel process's own pid, or None when it cannot say."""
+        try:
+            return int(self.peek("__import__('os').getpid()"))
+        except Exception:  # noqa: BLE001 - no answer: nothing to compare against
+            return None
 
     def _replace_kernel(self) -> None:
         """Stand in a new kernel, on fresh ports, for one that did not come back.
