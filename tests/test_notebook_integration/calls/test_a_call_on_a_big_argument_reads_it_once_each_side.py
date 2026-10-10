@@ -19,16 +19,18 @@ DEFS = (
     "def normalize(a):\n    time.sleep(0.25)\n    return (a - a.mean()) / a.std()\n"
     "def bump(a):\n    time.sleep(0.25)\n    a[0] += 1\n    return 0\n"
 )
+# Installed afresh on every use, over the real function, with a fresh count:
+# cash's modules outlive a test in a reused kernel.
 COUNT = (
     "import cash.content_hashers as ch\n"
-    "if not hasattr(ch, 'real_hash_numpy'):\n"
-    "    ch.real_hash_numpy = ch.hash_numpy\n"
-    "    ch.reads_of_x = []\n"
-    "    def counting(value, *a, ch=ch, **k):\n"
-    "        if value is get_ipython().user_ns.get('x'):\n"
-    "            ch.reads_of_x.append(1)\n"
-    "        return ch.real_hash_numpy(value, *a, **k)\n"
-    "    ch.hash_numpy = counting\n"
+    "ch.hash_numpy = getattr(ch, 'real_hash_numpy', ch.hash_numpy)\n"
+    "ch.real_hash_numpy = ch.hash_numpy\n"
+    "ch.reads_of_x = []\n"
+    "def counting(value, *a, ch=ch, **k):\n"
+    "    if value is get_ipython().user_ns.get('x'):\n"
+    "        ch.reads_of_x.append(1)\n"
+    "    return ch.real_hash_numpy(value, *a, **k)\n"
+    "ch.hash_numpy = counting\n"
 )
 READS = "len(__import__('cash.content_hashers').content_hashers.reads_of_x)"
 

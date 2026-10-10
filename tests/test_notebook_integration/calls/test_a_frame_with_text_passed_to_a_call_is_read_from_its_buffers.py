@@ -25,15 +25,17 @@ DEFS = (
     "def rename_first(d):\n    time.sleep(0.2)\n    d.loc[0, 's'] = 'renamed'\n    return len(d)\n"
     "def bump_first(d):\n    time.sleep(0.2)\n    d.loc[0, 'o'] = 99.5\n    return len(d)\n"
 )
+# Installed afresh on every use, over the real function, with a fresh count:
+# cash's modules outlive a test in a reused kernel.
 COUNT = (
     "import cash.content_hashers as ch\n"
-    "if not hasattr(ch, 'real_items'):\n"
-    "    ch.real_items = ch._object_items_bytes\n"
-    "    ch.pickled_items = []\n"
-    "    def counting(items, ch=ch):\n"
-    "        ch.pickled_items.append(len(items))\n"
-    "        return ch.real_items(items)\n"
-    "    ch._object_items_bytes = counting\n"
+    "ch._object_items_bytes = getattr(ch, 'real_items', ch._object_items_bytes)\n"
+    "ch.real_items = ch._object_items_bytes\n"
+    "ch.pickled_items = []\n"
+    "def counting(items, ch=ch):\n"
+    "    ch.pickled_items.append(len(items))\n"
+    "    return ch.real_items(items)\n"
+    "ch._object_items_bytes = counting\n"
 )
 PICKLED = "sum(__import__('cash.content_hashers').content_hashers.pickled_items)"
 

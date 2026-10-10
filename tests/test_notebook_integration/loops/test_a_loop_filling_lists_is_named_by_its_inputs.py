@@ -16,16 +16,24 @@ LOOP = (
     "user_lst, num_lst = [], []\n"
     "for s in sessions:\n    for (u, j) in s:\n        user_lst.append(u)\n        num_lst.append(j)"
 )
+# Installed afresh on every use, over the real function: cash's modules
+# outlive a test in a reused kernel, and a sibling test wraps the same one.
 COUNT = (
     "import cash.notebook.control_structures.helpers as h\n"
-    "if not hasattr(h, 'real_update'):\n"
-    "    h.real_update = h.update_mutated_variable_lineages\n"
-    "    h.read_back = []\n"
-    "    def counting(shell, sp, names, *a, h=h, **k):\n"
-    "        if not k.get('unit_digest'):\n"
-    "            h.read_back.extend(sorted(names))\n"
-    "        return h.real_update(shell, sp, names, *a, **k)\n"
-    "    h.update_mutated_variable_lineages = counting\n"
+    "h.update_mutated_variable_lineages = getattr(h, 'real_update', h.update_mutated_variable_lineages)\n"
+    "h.real_update = h.update_mutated_variable_lineages\n"
+    "h.read_back = []\n"
+    "def counting(shell, sp, names, *a, h=h, **k):\n"
+    "    if not k.get('unit_digest'):\n"
+    "        h.read_back.extend(sorted(names))\n"
+    "    return h.real_update(shell, sp, names, *a, **k)\n"
+    "h.update_mutated_variable_lineages = counting\n"
+)
+UNCOUNT = (
+    "import cash.notebook.control_structures.helpers as h\n"
+    "if hasattr(h, 'real_update'):\n"
+    "    h.update_mutated_variable_lineages = h.real_update\n"
+    "    del h.real_update\n"
 )
 READ_BACK = "__import__('cash.notebook.control_structures.helpers').notebook.control_structures.helpers.read_back"
 
@@ -35,10 +43,13 @@ def test_the_lists_are_named_by_the_key_and_follow_an_edit(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_cells([1, 2])
     nb_runner.peek(f"exec({COUNT!r})")
-    nb_runner.run_cells([3, 4])
-    assert "SUM 570000 60000" in nb_runner.get_output(4)
-    assert nb_runner.peek(f"len({READ_BACK})") == "0"
+    try:
+        nb_runner.run_cells([3, 4])
+        assert "SUM 570000 60000" in nb_runner.get_output(4)
+        assert nb_runner.peek(f"len({READ_BACK})") == "0"
 
-    nb_runner.set_cell_source(2, SESSIONS.format(k=2))
-    nb_runner.run_cells([2, 3, 4])
-    assert "SUM 1140000 60000" in nb_runner.get_output(4)
+        nb_runner.set_cell_source(2, SESSIONS.format(k=2))
+        nb_runner.run_cells([2, 3, 4])
+        assert "SUM 1140000 60000" in nb_runner.get_output(4)
+    finally:
+        nb_runner.peek(f"exec({UNCOUNT!r})")

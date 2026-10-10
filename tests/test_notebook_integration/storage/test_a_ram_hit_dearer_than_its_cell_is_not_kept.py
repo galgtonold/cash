@@ -58,11 +58,11 @@ def test_the_cell_is_kept_only_when_its_hit_is_cheaper(nb_runner, bytes_per_seco
     nb_runner.run_cell(1)
     nb_runner.run_cell(2)
     nb_runner.peek(f"exec({_TEE!r}, {{}})")
-    nb_runner.peek(f"{_SPEED}.__setitem__(slice(None), [{bytes_per_second!r}])")
-    for _ in range(2):
-        nb_runner.run_cell(3)
-        assert "y 435.0" in nb_runner.get_output(3)
     try:
+        nb_runner.peek(f"{_SPEED}.__setitem__(slice(None), [{bytes_per_second!r}])")
+        for _ in range(2):
+            nb_runner.run_cell(3)
+            assert "y 435.0" in nb_runner.get_output(3)
         counts = ast.literal_eval(nb_runner.peek(_COUNTS))
         assert counts == expected
     finally:
@@ -71,3 +71,6 @@ def test_the_cell_is_kept_only_when_its_hit_is_cheaper(nb_runner, bytes_per_seco
             "if hasattr(C, '_test_orig') else None)"
             "(__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor)"
         )
+        # Forget the pinned speed: a reused kernel would price every later
+        # test's RAM hits at it.
+        nb_runner.peek(f"{_SPEED}.clear()")
