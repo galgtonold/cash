@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @c4315362 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @7183d040 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1487,7 +1487,7 @@ file on disk is the one you want.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @252550ce, cash/notebook/shared_objects.py:referring_names @87cedd21 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @252550ce, cash/notebook/shared_objects.py:referring_names @5602736f -->
 **What happened.** After a statement ran, cash looked for the other variables
 that hold an object of its outputs, or are held in one (`data = raw`,
 `config = {"features": features}`), so that a later change through either

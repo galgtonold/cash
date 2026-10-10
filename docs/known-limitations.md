@@ -131,7 +131,7 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @34f97901 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16 -->
 When a statement leaves two names sharing an object, cash links them: an alias
 (`log = history`), a container holding another variable's object (`config =
 {"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
