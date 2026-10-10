@@ -96,7 +96,7 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @2790adb6, cash/backends/frame_sharing.py:_freeze @2e3125dc, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @53ddf8d3, cash/backends/frame_sharing.py:_freeze @2e3125dc, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
