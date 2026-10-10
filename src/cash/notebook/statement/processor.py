@@ -16,8 +16,10 @@ from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.control_markers import has_marker
+from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import (
     CacheKeyComputationError,
+    CashWarning,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.call_effects import DigestHandoff
@@ -110,13 +112,37 @@ from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..pyplot_draws import pyplot_draw_names
 from ..run_memo import forget_file_state_this_run
-from ..shared_objects import VALUE_TYPES, is_value, library_value_types, output_history, share_group
+from ..shared_objects import (
+    VALUE_TYPES,
+    WalkBudgetExceeded,
+    is_value,
+    library_value_types,
+    output_history,
+    referring_names,
+    share_group,
+    walk_budget,
+)
 from ..write_observer import observe_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
 # Debug log prefixes — module-level constants for filtering and consistency.
 _LOG_PROCESSOR = "[PROCESSOR]"
+
+#: How long the share check of a statement's outputs may take: a multiple of
+#: what the statement cost, but not less than a second.
+SHARE_CHECK_FACTOR = 2.0
+SHARE_CHECK_FLOOR_S = 1.0
+#: The least time the search for the variables sharing an object with a
+#: statement's outputs takes when the share check could not say
+#: (`referring_names`).
+SHARE_FALLBACK_FLOOR_S = 1.0
+
+
+def share_check_budget(cost: float) -> float:
+    """Seconds the share check of a statement that took *cost* may take."""
+    return max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+
 _LOG_DEBUG = "[DEBUG]"
 _LOG_MUTATION = "[MUTATION]"
 _LOG_CACHE_HIT = "[CACHE_HIT_DEBUG]"
@@ -164,6 +190,8 @@ class StatementProcessor:
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
 
         self._amplification = AmplificationGuard()
+        #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
+        self._share_unchecked_warned: set[str] = set()
 
         # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
         analytics = getattr(cash_instance, "analytics", None)
@@ -1278,8 +1306,8 @@ class StatementProcessor:
         with _plain_data.one_look(captured_vars):
             holders = None
             if not run.skip_cache:
-                holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
-            self._record_shared_object_edges(run, captured_vars, holders, execution.echo)
+                holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+            self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
             self._record_file_effects(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
@@ -1322,7 +1350,7 @@ class StatementProcessor:
         )
 
     def _refuse_unrestorable_outputs(
-        self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = ()
+        self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = (), cost: float = 0.0
     ) -> dict[str, Any] | None:
         """Skip-cache *run* when one of its output values cannot be stored and
         restored faithfully (:func:`unrestorable_output_reason`).
@@ -1338,21 +1366,34 @@ class StatementProcessor:
         reason to refuse.
         """
         holders: dict[str, Any] | None = None if is_control_body(run.code) else {}
-        reason = unrestorable_output_reason(
-            run.outputs - run.est_fit,
-            captured_vars,
-            self.shell.user_ns,
-            cash_held=[*self._calls.held_call_results(), echo, run.metrics],
-            shell=self.shell,
-            holders=holders,
-        )
-        if reason is None and echo:
-            reason = identity_coupled_reason("the value it echoes", echo[0])
-        if reason is None and holders:
-            found = dict(holders)
-            reason = self._take_holders(run, captured_vars, holders)
-            if reason is None:
-                return found
+        # The check may not take longer than the statement is worth: a hit
+        # saves `cost`, and finding the holders of a loop variable that is
+        # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
+        budget = share_check_budget(cost)
+        found: dict[str, Any] | None = None
+        try:
+            with walk_budget(budget):
+                reason = unrestorable_output_reason(
+                    run.outputs - run.est_fit,
+                    captured_vars,
+                    self.shell.user_ns,
+                    cash_held=[*self._calls.held_call_results(), echo, run.metrics],
+                    shell=self.shell,
+                    holders=holders,
+                )
+                if reason is None and echo:
+                    reason = identity_coupled_reason("the value it echoes", echo[0])
+                if reason is None and holders:
+                    found = dict(holders)
+                    reason = self._take_holders(run, captured_vars, holders)
+        except WalkBudgetExceeded:
+            run.share_unchecked = True
+            reason = (
+                f"finding which other variables hold objects of its outputs would take longer than "
+                f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
+            )
+        if reason is None and found is not None:
+            return found
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -1392,6 +1433,7 @@ class StatementProcessor:
         captured_vars: dict[str, Any],
         holders: dict[str, Any] | None,
         echo: tuple[Any, ...] = (),
+        cost: float = 0.0,
     ) -> None:
         """Record an edge between each output and every other variable bound
         to its object, holding it or held in it (`record_shared_object_edges`),
@@ -1400,41 +1442,83 @@ class StatementProcessor:
         *holders* is what the share check of a stored statement found
         already (`_refuse_unrestorable_outputs`); for any other statement --
         one that re-executes every run, like ``raw.append(x)`` -- the same
-        check (`share_group`) is asked here. A loop or branch body is left
-        to its structure, which moves what it changed when it ends
+        check (`share_group`) is asked here, within the same time budget.
+        When it cannot say, its budget spent or a holder not a variable, the
+        variables are looked for from the outputs up (`referring_names`);
+        when that is cut short too, some may be missing, and the
+        NOTEBOOK-SHARE-UNCHECKED warning says so. A loop or branch body is
+        left to its structure, which moves what it changed when it ends
         (``update_lineage_after_execution``).
         """
         if is_control_body(run.code):
             return
-        if holders is None:
-            holders = self._holders_of(run.outputs, captured_vars, echo, run.metrics)
-        if holders:
-            record_shared_object_edges(
-                self.tracking_state.derivation_edges,
-                [name for name in run.outputs if name in captured_vars],
-                list(holders),
-            )
+        outputs = [name for name in run.outputs if name in captured_vars]
+        if not outputs:
+            return
+        complete = True
+        if holders is not None:
+            names = set(holders)
+        else:
+            names, complete = self._holders_of(run, outputs, captured_vars, echo, cost)
+        if names:
+            record_shared_object_edges(self.tracking_state.derivation_edges, outputs, names)
+        if not complete:
+            self._warn_share_unchecked(run, outputs, cost)
 
     def _holders_of(
-        self, outputs: set[str], captured_vars: dict[str, Any], echo: tuple[Any, ...], metrics: Any
-    ) -> dict[str, Any]:
-        """The variables holding an object of *outputs* too (`share_group`).
-        Keeps no output value in a local: the check counts references."""
+        self, run: StatementRun, outputs: list[str], captured_vars: dict[str, Any], echo: tuple[Any, ...], cost: float
+    ) -> tuple[set[str], bool]:
+        """``(names, complete)``: the variables holding an object of *outputs*
+        too, or held in one. Keeps no output value in a local: the check
+        counts references."""
         value_types = VALUE_TYPES + library_value_types()
         names = [name for name in outputs if not is_value(captured_vars.get(name), value_types)]
         if not names:
-            return {}
-        history, named = output_history(self.shell.user_ns, self.shell)
+            return set(), True
+        user_ns = self.shell.user_ns
+        history, named = output_history(user_ns, self.shell)
         hidden = getattr(self.shell, "user_ns_hidden", None) or {}
-        found, _shared = share_group(
-            names,
-            captured_vars,
-            self.shell.user_ns,
-            [*self._calls.held_call_results(), echo, metrics, *history],
-            named,
-            foreign=lambda name: name in hidden or is_history_name(name),
+        cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
+
+        def foreign(name: str) -> bool:
+            return name in hidden or is_history_name(name)
+
+        budget = share_check_budget(cost)
+        if not run.share_unchecked:
+            try:
+                with walk_budget(budget):
+                    found, shared = share_group(names, captured_vars, user_ns, cash_held, named, foreign=foreign)
+                if not shared:
+                    return set(found), True
+            except WalkBudgetExceeded:
+                pass
+        found_names, complete = referring_names(
+            [captured_vars[name] for name in names],
+            user_ns,
+            max(budget, SHARE_FALLBACK_FLOOR_S),
+            skip_name=lambda name: foreign(name) or name in names,
+            ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        return found
+        return found_names, complete
+
+    def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
+        """Warn, once per statement, that the variables sharing an object
+        with *outputs* may not all be known (``NOTEBOOK-SHARE-UNCHECKED``)."""
+        if run.source_hash in self._share_unchecked_warned:
+            return
+        self._share_unchecked_warned.add(run.source_hash)
+        listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+        what = (
+            f"cash could not find, within {share_check_budget(cost):.1f}s, every other variable that holds "
+            f"an object of {listed} or is held in one. A later change made in place through such a variable "
+            f"may not re-run the cells that read {listed}, or the other way round."
+        )
+        fix = (
+            "if a later cell changes these objects in place through another name, rebind instead "
+            "(x = x + [v]) or re-run the cells that read them yourself."
+        )
+        log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
 
     def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores

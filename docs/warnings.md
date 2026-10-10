@@ -1334,6 +1334,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+| [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
@@ -1481,6 +1482,30 @@ fig.savefig("chart.png")
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
+
+### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @252550ce, cash/notebook/shared_objects.py:referring_names @87cedd21 -->
+**What happened.** After a statement ran, cash looked for the other variables
+that hold an object of its outputs, or are held in one (`data = raw`,
+`config = {"features": features}`), so that a later change through either
+name re-runs the cells reading the other. The search takes at most twice
+what the statement took (at least a second), and it ran out of time before
+it was sure it had found them all. The message names the outputs. It is
+shown once per statement.
+
+**Why it matters.** A later change made in place through a variable it
+missed (`raw.append(x)`) does not re-run the cells that read the outputs,
+or the other way round, and they keep their cached results.
+
+**What to do.** If a later cell changes these objects in place through
+another name, rebind instead (`raw = raw + [x]`), or re-run the cells that
+read them yourself.
+
+**When it is safe to ignore.** When nothing below changes these objects in
+place, through any name.
 
 ### NOTEBOOK-SHARED-KEPT {#notebook-shared-kept}
 

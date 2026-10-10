@@ -24,7 +24,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _plain_data
-from .shared_objects import TREE_LEAVES, VALUE_TYPES, attributes_of, children_of, is_value, library_value_types
+from .shared_objects import (
+    TREE_LEAVES,
+    VALUE_TYPES,
+    attributes_of,
+    check_walk_budget,
+    children_of,
+    is_value,
+    library_value_types,
+)
 
 __all__ = ["HolderPatch", "apply_patch", "holder_patches"]
 
@@ -77,6 +85,8 @@ def _reachable_within(roots: list[Any], value_types: tuple[type, ...], limit: in
     seen: set[int] = set()
     stack = list(roots)
     while stack:
+        if not len(seen) & 1023:
+            check_walk_budget()
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in seen:
             continue
@@ -171,6 +181,8 @@ def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> lis
     seen: set[int] = set()
     stack: list[tuple[Any, Path, bool]] = [(value, (), False)]
     while stack:
+        if not len(seen) & 1023:
+            check_walk_budget()
         obj, at, in_tuple = stack.pop()
         if id(obj) in targets:
             if in_tuple:

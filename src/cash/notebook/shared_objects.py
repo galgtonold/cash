@@ -31,6 +31,7 @@ classes, functions bound to nothing, enum members, numpy scalars and dtypes,
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import datetime
 import decimal
@@ -41,12 +42,13 @@ import pathlib
 import sys
 import types
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _plain_data
 
-__all__ = ["holds_part_of", "output_history", "share_group", "shared_names"]
+__all__ = ["holds_part_of", "output_history", "referring_names", "share_group", "shared_names"]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 VALUE_TYPES: tuple[type, ...] = (
@@ -385,6 +387,118 @@ def shared_names(
     return shared
 
 
+class WalkBudgetExceeded(Exception):
+    """The share check ran past its time budget (:func:`walk_budget`)."""
+
+
+_DEADLINE: list[float | None] = [None]
+
+
+@contextlib.contextmanager
+def walk_budget(seconds: float) -> Iterator[None]:
+    """Let the walks below take at most *seconds* before they raise
+    :class:`WalkBudgetExceeded`.
+
+    The share check finds every variable holding an object of a statement's
+    outputs, which can mean walking everything a big list holds: 6 s after a
+    loop that ran 0.1 s, because its loop variable is an element of the list.
+    A statement whose result is refused when the check gives up simply runs
+    each time, so the budget costs the cache a store, never a wrong value.
+    """
+    before = _DEADLINE[0]
+    _DEADLINE[0] = _perf_counter() + seconds
+    try:
+        yield
+    finally:
+        _DEADLINE[0] = before
+
+
+def check_walk_budget() -> None:
+    """Raise :class:`WalkBudgetExceeded` when the budget of the walk in
+    progress is spent; nothing outside :func:`walk_budget`."""
+    deadline = _DEADLINE[0]
+    if deadline is not None and _perf_counter() > deadline:
+        raise WalkBudgetExceeded
+
+
+#: How many levels of referrers `referring_names` climbs, and how many
+#: objects it takes in, before it gives up.
+_REFERRER_DEPTH = 8
+_REFERRER_OBJECTS = 200_000
+
+
+def referring_names(
+    roots: Iterable[Any],
+    user_ns: Mapping[str, Any],
+    seconds: float,
+    skip_name: Callable[[str], bool] = lambda name: False,
+    ignore: Iterable[Any] = (),
+) -> tuple[set[str], bool]:
+    """``(names, complete)``: the variables of *user_ns* bound to one of
+    *roots*, holding one at any depth, or held inside one, found within
+    *seconds*.
+
+    The fallback for when `share_group` cannot say (its walk ran out of
+    budget, or a holder is not a variable): instead of walking what every
+    variable holds, it climbs from *roots* up their referrers
+    (`gc.get_referrers`, one heap scan per level) until it reaches the
+    namespace, and walks down what *roots* hold. Frames, modules and the
+    objects in *ignore* (cash's own references) are not climbed through.
+    *complete* is False when the climb or the walk was cut short -- by
+    *seconds*, depth or size -- so names may be missing.
+    """
+    import gc
+
+    deadline = _perf_counter() + seconds
+    value_types = VALUE_TYPES + library_value_types()
+    roots = [root for root in roots if not is_value(root, value_types)]
+    by_id: dict[int, list[str]] = {}
+    for name, value in list(user_ns.items()):
+        if not skip_name(name) and not is_value(value, value_types):
+            by_id.setdefault(id(value), []).append(name)
+    names: set[str] = set()
+    # Down: what the roots hold.
+    try:
+        with walk_budget(seconds):
+            for root in roots:
+                for key in _identities(root, value_types):
+                    names.update(by_id.get(key, ()))
+                    check_walk_budget()
+    except WalkBudgetExceeded:
+        return names, False
+    # Up: what holds the roots.
+    stop = {id(user_ns), id(roots)}
+    stop.update(id(obj) for obj in ignore)
+    stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
+    seen = {id(root) for root in roots}
+    frontier = list(roots)
+    stop.add(id(frontier))
+    taken = 0
+    for _level in range(_REFERRER_DEPTH):
+        if not frontier:
+            return names, True
+        if _perf_counter() > deadline or taken > _REFERRER_OBJECTS:
+            return names, False
+        # One tuple, passed on as the call's own arguments, so it is known.
+        args = tuple(frontier)
+        stop.add(id(args))
+        referrers = gc.get_referrers(*args)
+        stop.add(id(referrers))
+        following: list[Any] = []
+        stop.add(id(following))
+        for obj in referrers:
+            key = id(obj)
+            if key in seen or key in stop or isinstance(obj, (types.FrameType, types.ModuleType)):
+                continue
+            seen.add(key)
+            names.update(by_id.get(key, ()))
+            following.append(obj)
+        taken += len(following)
+        del referrers, args
+        frontier[:] = following
+    return names, not frontier
+
+
 def share_group(
     names: Iterable[str],
     values: Mapping[str, Any],
@@ -443,7 +557,11 @@ def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
     # the walk below takes a Python step per object -- most of re-sorting a
     # list of 450,000 parsed pairs a loop variable still held part of.
     stack = [root for root in group.values() if not _plain_data.is_tree(root, TREE_LEAVES)]
+    pops = 0
     while stack:
+        pops += 1
+        if not pops & 1023:
+            check_walk_budget()
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in seen:
             continue
@@ -966,7 +1084,11 @@ def _descend(
     each new node taken under *name*."""
     exact = EXACT_VALUE_TYPES
     containers = EXACT_CONTAINER_TYPES
+    pops = 0
     while stack:
+        pops += 1
+        if not pops & 1023:
+            check_walk_budget()
         children = children_of(stack.pop())
         # Nothing but values, by exact type: asked at C speed, where the
         # loop below takes a Python step per item -- 35 ms of storing a

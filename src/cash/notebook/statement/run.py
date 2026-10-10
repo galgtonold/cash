@@ -128,6 +128,10 @@ class StatementRun:
     #: statement drew through pyplot (``pyplot_draws``): outputs and inputs
     #: both, so their lineage folds in where they were.
     pyplot_drawn: frozenset[str] = frozenset()
+    #: The share check of its outputs ran out of time
+    #: (``StatementProcessor._refuse_unrestorable_outputs``), so which other
+    #: variables hold them is not known from it.
+    share_unchecked: bool = False
     #: The local modules running it was seen rebinding a global of
     #: (``callee_reach.rebound_modules``).
     rebound_modules: frozenset[str] = frozenset()
