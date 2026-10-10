@@ -60,6 +60,7 @@ from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
+from ..pyplot_draws import pyplot_draw_names
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
@@ -281,7 +282,21 @@ class StatementLineage:
             # A statement that sets state on a local module changes the
             # module, as the runtime routes it (``MutationRouting.route``).
             outputs |= self.module_state_outputs(stmt_code)
+            # One that draws through pyplot changes the current figure and
+            # axes, as the runtime took them (``pyplot_draws``).
+            drawn = self.pyplot_draw_outputs(stmt_code, tree)
+            outputs |= drawn
+            inputs |= drawn
         return effects, inputs, outputs
+
+    def pyplot_draw_outputs(self, stmt_code: str, tree: ast.AST | None) -> frozenset[str]:
+        """The names *stmt_code* changed by drawing through pyplot when the
+        runtime last ran it; else, where it has not, the names bound to the
+        current figure and axes now (`pyplot_draw_names`)."""
+        recorded = self.tracking_state.pyplot_draw_outputs.get(statement_source_hash(stmt_code))
+        if recorded is not None:
+            return recorded
+        return pyplot_draw_names(tree, self.shell.user_ns)
 
     def module_state_outputs(self, stmt_code: str) -> frozenset[str]:
         """The names that see the state of a local module *stmt_code* sets

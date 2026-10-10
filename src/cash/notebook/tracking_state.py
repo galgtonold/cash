@@ -206,6 +206,15 @@ class TrackingState:
     # after a restart). R: StatementLineage, ControlSimulation, UpstreamChecker.
     module_state_outputs: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
 
+    # Statement source hash -> the names bound to pyplot's current figure and
+    # axes (or to an array of Axes holding the current one) when the statement
+    # last drew through pyplot (``plt.plot(...)``, ``plt.title(...)``): the
+    # runtime took them for changed in place, and the simulation takes them
+    # for outputs of the statement as well (``pyplot_draws``).
+    # W: StatementProcessor, control structures. R: StatementLineage,
+    # ControlSimulation.
+    pyplot_draw_outputs: dict[str, frozenset[str]] = field(default_factory=dict)
+
     # Statement source hash -> (statement, modules) of an earlier kernel's
     # record of a statement that set state on local modules no name of the
     # notebook sees (``helper2.helper.set_k(5)``): the simulation cannot

@@ -29,8 +29,10 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
+from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
+from ..pyplot_draws import pyplot_draw_names
 from .common import extract_target_names
 
 logger = logging.getLogger(__name__)
@@ -290,6 +292,14 @@ def update_lineage_after_execution(
     state_names = module_state_names(code, user_ns, structure=True) | state_holders(seen, code, user_ns)
     mutated_vars |= state_names
     statement_processor.note_module_state(code, state_names, module_state_writes(code, user_ns) | seen)
+    # Drawing through pyplot changes the current figure and axes
+    # (``pyplot_draws``); recorded for the simulation as a statement's is.
+    drawn = pyplot_draw_names(node, user_ns)
+    draws = state.pyplot_draw_outputs
+    digest = statement_source_hash(ast.unparse(node))
+    if drawn or digest in draws:
+        draws[digest] = drawn
+    mutated_vars |= drawn
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)

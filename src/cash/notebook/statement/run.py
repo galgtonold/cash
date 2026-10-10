@@ -124,6 +124,10 @@ class StatementRun:
     #: outputs (``module_state_names``).
     state_modules: frozenset[str] = frozenset()
     state_names: frozenset[str] = frozenset()
+    #: The names bound to pyplot's current figure and axes, when the
+    #: statement drew through pyplot (``pyplot_draws``): outputs and inputs
+    #: both, so their lineage folds in where they were.
+    pyplot_drawn: frozenset[str] = frozenset()
     #: The local modules running it was seen rebinding a global of
     #: (``callee_reach.rebound_modules``).
     rebound_modules: frozenset[str] = frozenset()

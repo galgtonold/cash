@@ -108,6 +108,7 @@ from ..magic_effects import (
 )
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
+from ..pyplot_draws import pyplot_draw_names
 from ..run_memo import forget_file_state_this_run
 from ..shared_objects import VALUE_TYPES, is_value, library_value_types, output_history, share_group
 from ..write_observer import observe_writes
@@ -1257,6 +1258,7 @@ class StatementProcessor:
         self._records.persist_import_bindings(run.code, run.tree)
 
         self._key_a_newly_seen_draw(run)
+        self._route_pyplot_draws(run)
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
             run.outputs,
@@ -1269,6 +1271,7 @@ class StatementProcessor:
             accessed_remote=execution.accessed_remote,
             no_cache=(run.annotation is not None and run.annotation.no_cache) or self._binds_a_stream(run),
             replay_bumps=False,
+            lineage_reads=run.pyplot_drawn,
         )
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.
@@ -1355,6 +1358,33 @@ class StatementProcessor:
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
+
+    def _route_pyplot_draws(self, run: StatementRun) -> None:
+        """Take the names bound to pyplot's current figure and axes for
+        changed by *run* when it drew through pyplot (`pyplot_draw_names`):
+        outputs whose lineage folds in the one they had, so it moves with the
+        statement's code, as ``ax.plot(...)`` moves ``ax``'s. Recorded for the
+        simulation (``TrackingState.pyplot_draw_outputs``). A loop or branch
+        body is left to its structure (``update_lineage_after_execution``).
+        """
+        if is_control_body(run.code):
+            return
+        names = pyplot_draw_names(run.tree, self.shell.user_ns)
+        known = self.tracking_state.pyplot_draw_outputs
+        if names or run.source_hash in known:
+            known[run.source_hash] = names
+        if not names:
+            return
+        # Outputs, and inputs too, so their new lineage folds in the one
+        # they had and the simulation chains the draws of a figure in order.
+        run.outputs = run.outputs | names
+        run.inputs = run.inputs | names
+        run.pyplot_drawn = names
+        if not run.skip_cache:
+            run.skip_cache = True
+            run.metrics["uncacheable_reasons"].append(
+                f"Draws through pyplot on: {', '.join(sorted(names))} (statement re-executes)"
+            )
 
     def _record_shared_object_edges(
         self,

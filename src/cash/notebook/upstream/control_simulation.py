@@ -76,6 +76,10 @@ class ControlSimulation:
         # not trusted in memory as a loop's accumulator is: a reload drops
         # its state, which only its producers put back.
         code = ast.unparse(node)
+        # Drawing through pyplot changes the current figure and axes, as the
+        # runtime took them (``pyplot_draws``).
+        mutated_vars |= self.statements.pyplot_draw_outputs(code, node)
+        vars_mutated_by_loops.update(mutated_vars)
         recorded = self.statements.recorded_module_state(code)
         if recorded is not None:
             return mutated_vars | recorded[0]

@@ -138,7 +138,9 @@ When a statement leaves two names sharing an object, cash links them: an alias
 (`train = data["train"]`). A change made later through either name moves both,
 so the cells that read the other one re-run, on Run All and on a cell re-run
 alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)
-changes `rows`.
+changes `rows`, and a pyplot call that draws on the current figure
+(`plt.plot(...)`, `plt.title(...)`) changes the names bound to that figure and
+its axes; such a call runs every time.
 
 A change made through an object cash cannot link to a name is invisible, and
 the cells that read the name keep their cached results:
