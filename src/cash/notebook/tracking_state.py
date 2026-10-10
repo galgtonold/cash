@@ -72,6 +72,12 @@ class TrackingState:
     # W: CellExecutor. R: VirtualLineage.
     failed_cell_names: dict[str, frozenset[str]] = field(default_factory=dict)
 
+    # notebook position -> the text the cell there last ran with, as the
+    # upstream check saw it. A statement that text held and the cell's
+    # running text does not was edited out of the cell.
+    # W/R: NotebookSimulator (MismatchClassifier).
+    cell_text_at: dict[int, str] = field(default_factory=dict)
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.

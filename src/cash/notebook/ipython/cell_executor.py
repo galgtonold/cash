@@ -251,9 +251,7 @@ def _owed_by_skips(
                 producer = last_writer(name, step)
                 if producer in needed:
                     continue
-                if held_at_failure(name) != producer or any(
-                    k < step and name in writers[k] for k in needed
-                ):
+                if held_at_failure(name) != producer or any(k < step and name in writers[k] for k in needed):
                     if producer is None:
                         return [], wrong  # the value from before the cell is gone
                     needed.add(producer)

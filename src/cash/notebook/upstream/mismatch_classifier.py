@@ -529,20 +529,35 @@ class MismatchClassifier:
 
     def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:
         """A required input the cell also writes, last changed by a statement
-        no cell holds any more: the cell's earlier text (``df.loc[0, 'a'] =
-        -1`` edited out), or a deleted cell. No run of the notebook as it
-        stands makes the live value, so it is rebuilt before the cell runs.
-        Kept, the cell copied or read the changed value and the check before
-        the next cell rebuilt the input without it, leaving the copy behind.
-        (A read-only input is rebuilt by ``_reject_read_only_input``.)"""
-        if not (m.required and m.cell_output) or self._last_change_still_in_notebook(m):
+        edited out of this cell (``df.loc[0, 'a'] = -1``): the text the cell
+        last ran with held it (``TrackingState.cell_text_at``), and no cell
+        holds it now. No run of the notebook as it stands makes the live
+        value, so it is rebuilt before the cell runs. Kept, the cell copied
+        or read the changed value and the check before the next cell rebuilt
+        the input without it, leaving the copy behind. (A read-only input is
+        rebuilt by ``_reject_read_only_input``.)"""
+        if not (m.required and m.cell_output) or not self._edited_out_of_this_cell(m):
             return False
         logger.debug(
-            "[UPSTREAM_DEBUG]   -> '%s' was last changed by a statement no cell holds any more. Marking broken.",
+            "[UPSTREAM_DEBUG]   -> '%s' was last changed by a statement edited out of this cell. Marking broken.",
             m.var_name,
         )
         m.broken_vars.add(m.var_name)
         return True
+
+    def _edited_out_of_this_cell(self, m: _Mismatch) -> bool:
+        """Whether the statement that last changed *m*'s variable
+        (``TrackingState.executed_cell_codes``) was in the text this cell last
+        ran with and is in no cell now, the running one included."""
+        last = self.tracking_state.executed_cell_codes.get(m.var_name)
+        code = normalize_stmt(last) if last else ""
+        before = self.tracking_state.cell_text_at.get(m.check.current_cell_idx)
+        if not code or before is None or not _holds(before, code):
+            return False
+        cells = list(m.check.notebook_cells or [])
+        if m.check.cell_code:
+            cells.append(m.check.cell_code)
+        return not any(_holds(cell, code) for cell in cells)
 
     def _keep_valid_extension(self, m: _Mismatch) -> bool:
         """The live value is a valid extension of the notebook's state."""
@@ -615,24 +630,6 @@ class MismatchClassifier:
         )
         self.tracking_state.lineage.reset_to(m.var_name, m.final_virtual_hash)
         return True
-
-    def _last_change_still_in_notebook(self, m: _Mismatch) -> bool:
-        """Whether a cell of the notebook, the running one included, holds
-        the statement that last changed *m*'s variable
-        (``TrackingState.executed_cell_codes``); True when none is recorded."""
-        last = self.tracking_state.executed_cell_codes.get(m.var_name)
-        code = normalize_stmt(last) if last else ""
-        if not code:
-            return True
-        running = m.check.cell_code or ""
-        if code in running:
-            return True
-        cells = list(m.check.notebook_cells or [])
-        if running:
-            cells.append(running)
-        if any(code in cell for cell in cells):
-            return True
-        return any(code in _statements_of(cell) for cell in cells)
 
     def _current_cell_reproduces(
         self,
@@ -1220,6 +1217,11 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
+
+
+def _holds(cell_code: str, code: str) -> bool:
+    """Whether *cell_code* holds the statement *code* (normalized), nested or not."""
+    return code in cell_code or code in _statements_of(cell_code)
 
 
 def _statements_of(cell_code: str) -> set[str]:

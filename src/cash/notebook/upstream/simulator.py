@@ -336,6 +336,12 @@ class NotebookSimulator:
 
         result = self.classifier.classify(sim, check)
         broken_vars = result.broken_vars
+        # What the cell runs with now, for the next check of this cell to
+        # tell a statement edited out of it (read by the classification).
+        if cell_code is not None:
+            self.tracking_state.cell_text_at[current_cell_idx] = cell_code
+        elif 0 <= current_cell_idx < len(notebook_cells):
+            self.tracking_state.cell_text_at[current_cell_idx] = notebook_cells[current_cell_idx]
         trace_event("broken_after_pass2", broken=broken_vars, tainted=result.tainted_vars)
         if is_tracing():
             # Every variable the two engines disagree on, relevant or not. In a
