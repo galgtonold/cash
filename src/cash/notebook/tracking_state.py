@@ -65,6 +65,13 @@ class TrackingState:
     # W: CellExecutor. R: VirtualLineage.
     failed_cells: dict[str, int] = field(default_factory=dict)
 
+    # sha256(cell source) -> the names the statement that raised may have
+    # changed before it did, for a cell in ``failed_cells``: they hold what
+    # the failed run left, which no run of the cells makes, so the upstream
+    # check keeps them (and what is built from them) as they are.
+    # W: CellExecutor. R: VirtualLineage.
+    failed_cell_names: dict[str, frozenset[str]] = field(default_factory=dict)
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.

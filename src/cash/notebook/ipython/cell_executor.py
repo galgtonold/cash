@@ -619,6 +619,7 @@ class CellExecutor:
             digest = exact_source_digest(raw_cell)
             state.executed_cell_source_hashes.add(digest)
             state.failed_cells.pop(digest, None)
+            state.failed_cell_names.pop(digest, None)
             changed, pre, post = self._statement_processor.cell_rng_observation()
             self.record_cell_rng(raw_cell, changed, pre, post, self._statement_processor.cell_rng_lineage())
         except (AttributeError, TypeError):  # pragma: no cover - defensive
@@ -1038,12 +1039,16 @@ class CellExecutor:
                 )
             except BaseException:
                 # What follows never ran; the upstream check must not credit it.
-                self.tracking_state.failed_cells[exact_source_digest(raw_cell)] = i
+                digest = exact_source_digest(raw_cell)
+                self.tracking_state.failed_cells[digest] = i
                 # What the statement changed before it raised was recorded
                 # against no lineage, so each name it may have changed no longer
-                # matches the run that made it: a re-run must rebuild it.
-                for name in _changed_by_a_failed_step(node):
+                # matches the run that made it: a re-run must rebuild it, and
+                # a cell below keeps it as the failed run left it.
+                left = _changed_by_a_failed_step(node)
+                for name in left:
                     self.tracking_state.lineage.discard(name)
+                self.tracking_state.failed_cell_names[digest] = frozenset(left)
                 # The plan skipped or restored statements by the version the
                 # whole cell ends with; a name a statement at or after this one
                 # writes holds a version a plain run never reached here.

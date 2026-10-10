@@ -27,6 +27,7 @@ from ...analysis.ast_util import resolve_callee
 from ...analysis.mutation_effects import CellEffects
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
+from ...source_norm import exact_source_digest
 from ...tracking.function_tracker import FunctionTracker, is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
@@ -88,6 +89,9 @@ class NotebookSimulator:
         self._adopt_untracked_pending = False
         #: ``(name, live lineage, in memory)`` already warned about (``_warn_stale_magic``).
         self._warned_stale_magic: set[tuple[str, str | None, bool]] = set()
+        #: ``(name, failed cell, statement it raised at)`` already warned about
+        #: (``_warn_failed_run_left``).
+        self._warned_failed_run: set[tuple[str, int, int | None]] = set()
         #: The previous simulation's per-cell snapshots, where the next one starts.
         self.cache = SimulationCache()
 
@@ -436,6 +440,15 @@ class NotebookSimulator:
                 v for v in magic_bound if self.tracking_state.variable_lineage.get(v) != sim.virtual_lineage[v]
             }
 
+        # Nor is a name a cell that raised part way left changed, or one built
+        # from it: no run of the cells above makes what it holds, and running
+        # the lines before the error again would wipe what the run had done.
+        left = {v for v in broken_vars if v in sim.vars_left_by_failed_runs}
+        if left:
+            broken_vars -= left
+            result.failed_run_vars |= left
+        result.failed_run_vars |= {v for v in required_inputs or () if v in sim.vars_left_by_failed_runs}
+
         if broken_vars:
             # A current-cell statement that is a cache hit restores what it
             # reads as well as what it writes: a broken ``df`` that the cell's
@@ -457,6 +470,7 @@ class NotebookSimulator:
 
         if not broken_vars and not has_stale_file_writers and not has_process_writers:
             self._warn_stale_magic(result.stale_magic_vars, check)
+            self._warn_failed_run_left(result.failed_run_vars, sim, check)
             return ReexecutionPlan([], [], 0.0)
 
         plan = self.planner.plan(
@@ -467,7 +481,45 @@ class NotebookSimulator:
             relevant_read_paths_known=relevant_read_paths_known,
         )
         self._warn_stale_magic(result.stale_magic_vars, check)
+        self._warn_failed_run_left(result.failed_run_vars, sim, check)
         return plan
+
+    def _warn_failed_run_left(self, names: set[str], sim: SimulationResult, check: CellCheck) -> None:
+        """Warn that each of *names* is kept as a cell above that raised part
+        way left it, or was built from that (``NOTEBOOK-FAILED-CELL``). Once
+        per name and failed run."""
+        by_cell: dict[int, list[str]] = {}
+        for name in sorted(names):
+            cell = sim.vars_left_by_failed_runs[name]
+            state = (name, cell, self.tracking_state.failed_cells.get(_cell_digest(check, cell)))
+            if state in self._warned_failed_run:
+                continue
+            self._warned_failed_run.add(state)
+            by_cell.setdefault(cell, []).append(name)
+        for cell, held in by_cell.items():
+            direct = self.tracking_state.failed_cell_names.get(_cell_digest(check, cell), frozenset())
+            left = [n for n in held if n in direct]
+            built = [n for n in held if n not in direct and n in self.shell.user_ns]
+            gone = [n for n in held if n not in direct and n not in self.shell.user_ns]
+            parts = []
+            if left:
+                parts.append(f"{_names(left)} {'holds' if len(left) == 1 else 'hold'} what that run left")
+            if built:
+                parts.append(f"{_names(built)} {'was' if len(built) == 1 else 'were'} built from what it left")
+            if gone:
+                parts.append(
+                    f"{_names(gone)}, built from what it left, {'is' if len(gone) == 1 else 'are'} not in memory"
+                )
+            what = (
+                f"cell {cell + 1} raised part way when it last ran: {'; '.join(parts)}. No run of the "
+                "cells above gives those values, so cash keeps them as they are, as a plain kernel does: "
+                "it does not run the lines before the error again or restore them."
+            )
+            fix = f"fix the error and re-run cell {cell + 1}, then this cell."
+            log_diagnostic(logger, "NOTEBOOK-FAILED-CELL", what, fix)
+            warn_diagnostic(
+                CashWarning, "NOTEBOOK-FAILED-CELL", what, fix, location=("<cash>", check.current_cell_idx + 1)
+            )
 
     def _warn_stale_magic(self, names: set[str], check: CellCheck) -> None:
         """Warn that each of *names*, last bound or changed by a magic above,
@@ -871,3 +923,13 @@ def _binds_without_reading(code: str, user_ns: dict) -> bool:
             continue
         return False
     return True
+
+
+def _cell_digest(check: CellCheck, idx: int) -> str:
+    """The source digest of notebook cell *idx* as ``failed_cells`` keys it."""
+    cells = check.notebook_cells
+    return exact_source_digest(cells[idx].replace("\r\n", "\n")) if 0 <= idx < len(cells) else ""
+
+
+def _names(names: list[str]) -> str:
+    return ", ".join(f"'{n}'" for n in names)
