@@ -114,6 +114,7 @@ from ..magic_effects import (
     magic_rng_advances,
     simulation_cell,
 )
+from ..pyplot_state import CHANGED_PYPLOT_REASON, pyplot_state
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
@@ -918,6 +919,10 @@ class StatementProcessor:
         except Exception:  # noqa: BLE001 - an analysis of arbitrary code
             logger.debug("%s could not watch the modules %r reaches", _LOG_PROCESSOR, run.code[:80], exc_info=True)
             held = {}
+        # pyplot's figures, to see a statement change them through a name
+        # cash does not know (`pyplot_state`). Not read for one that already
+        # runs every time.
+        figures_before = None if run.skip_cache else pyplot_state()
         try:
             with (
                 self.watching_reads(run.code),
@@ -953,6 +958,9 @@ class StatementProcessor:
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
+        if figures_before is not None and execution.result.success and pyplot_state() != figures_before:
+            run.skip_cache = True
+            run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if held:

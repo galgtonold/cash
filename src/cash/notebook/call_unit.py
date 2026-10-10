@@ -66,6 +66,7 @@ from cash.notebook.call_refs import (
     SIZE_FIELD,
 )
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
+from cash.notebook.pyplot_state import pyplot_state
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
@@ -926,6 +927,7 @@ class CallUnit:
         # to the enclosing statement's tracker immediately, so the miss-path
         # "recorded for free" behaviour holds.
         rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
+        figures_before = pyplot_state()
         ticket = self._invocations[-1].ticket if self._invocations else (0, 0)
         arg_hashes_before = hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket))
         module_before = _module_globals(call.fn)
@@ -948,7 +950,9 @@ class CallUnit:
             call, module_before
         ):
             self._entries.refuse(call.key)
-        elif self._worth_storing(call, result, elapsed, result_held):
+        # Not stored when it made, picked or drew on a pyplot figure, which a
+        # hit would not: the next drawing would land on another figure.
+        elif pyplot_state() == figures_before and self._worth_storing(call, result, elapsed, result_held):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
         if stored:
             self._cached(
