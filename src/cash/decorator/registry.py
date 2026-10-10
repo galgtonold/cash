@@ -20,7 +20,7 @@ from ..analysis.purity_report import PurityReport
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic
-from ..exceptions import CashCacheIneffectiveWarning
+from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
 from .cached_function import CachedFunction, PurityMode
@@ -222,6 +222,8 @@ class FunctionRegistry:
         #: caller actually calls, which `reached_callee` compares with the
         #: one registered under that name.
         self.cached_callees: dict[str, dict[str, Any]] = {}
+        #: Functions already warned KEY-UNRESOLVED-CALL about (`populate`).
+        self._unresolved_warned: set[str] = set()
 
     def report_for(self, func: Callable[..., Any], func_name: str) -> PurityReport | None:
         """*func*'s own purity report: a closure's, else the one under *func_name*."""
@@ -573,10 +575,23 @@ class FunctionRegistry:
         """
         self.populated.add(func_name)
         try:
-            called_names = CodeAnalyzer.find_called_functions(func, self.functions, include_references=True)
+            called_names, gaps = CodeAnalyzer.find_called_functions_and_gaps(
+                func, self.functions, include_references=True
+            )
             for called in called_names:
                 if called != func_name:
                     self.graph.add_dependency(func_name, called)
+            if gaps and func_name not in self._unresolved_warned:
+                self._unresolved_warned.add(func_name)
+                warn_diagnostic(
+                    CashImpurityWarning,
+                    "KEY-UNRESOLVED-CALL",
+                    f"{func_name} calls {gaps[0]}(...) through a property or __getattr__, which cash does "
+                    "not run to find what it returns, so the function that call reaches is not in the key: "
+                    f"editing it will not invalidate {func_name}'s results.",
+                    f"call the function by its own name (module.function), or name it with depends_on=[...] "
+                    f"on {func_name}'s decorator.",
+                )
             with reach_pass():
                 report = get_analyzer().analyze(func)
         except Exception as e:

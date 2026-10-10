@@ -247,6 +247,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
         "KEY-UNHASHABLE-GLOBAL",  # a global the function reads could not be
         # hashed, so changing it invalidates nothing
+        "KEY-UNRESOLVED-CALL",  # a call goes through a property or __getattr__
+        # cash does not run, so the function it reaches is not in the key
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
         # ran the cell uncached
