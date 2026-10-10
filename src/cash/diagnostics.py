@@ -261,6 +261,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # kernel restarted, and cash cannot rebuild the state a cell set on it
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
+        "NOTEBOOK-SHARED-KEPT",  # a value another name below still shares
+        # is kept as it is rather than rebuilt for a cell re-run on its own
         # -- RANDOM: a cached value that randomness makes non-reproducible ------
         "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
         # draw, not a fresh one

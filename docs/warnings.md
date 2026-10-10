@@ -1334,6 +1334,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+| [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
 
@@ -1480,6 +1481,29 @@ fig.savefig("chart.png")
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
+
+### NOTEBOOK-SHARED-KEPT {#notebook-shared-kept}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+**What happened.** You re-ran on its own a cell that changes a value in place
+(`history.append(x)`), and a cell below makes another name share that value
+(`log = history`, `cfg = {"features": features}`). cash normally rebuilds the
+value as the cells above leave it before such a re-run, so the change is not
+applied twice. Here it kept the value as it is: the cell's change applies again
+on top of the one it made last time, as in a plain re-run.
+
+**Why it matters.** A rebuilt value would be a new object under the cell's own
+name only. The name below would keep the old one, and from then on a change
+made through either name would no longer reach the other, which no run of the
+notebook from the top does.
+
+**What to do.** For the value a run from the top gives, run the notebook from
+the top, or from the cell that creates the value.
+
+**When it is safe to ignore.** When the cell's change is meant to accumulate,
+or applying it twice does not change the result (`s.add(x)` on a set).
 
 ## Randomness {#random-codes}
 

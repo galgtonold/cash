@@ -151,6 +151,15 @@ get().append(5)        # changes x through a closure
 **Fix:** change the object through its own name (`x.append(5)`), or rebind
 (`x = x + [5]`).
 
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+A cell that changes a value in place (`history.append(x)`) and is re-run on its
+own normally starts from the value as the cells above leave it, so the change
+is not applied twice. When a cell below has made another name share that value
+(`log = history`), rebuilding it would leave the two names with different
+objects, so cash keeps the value as it is, applies the change on top of the
+last one, as a plain re-run does, and says so with
+[NOTEBOOK-SHARED-KEPT](warnings.md#notebook-shared-kept).
+
 ### Mutating an object created in an earlier cell
 
 <!-- test:skip reason="illustrative: contrasts in-place mutation with rebinding across cells" -->
