@@ -108,12 +108,18 @@ from ..magic_effects import (
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
+from ..shared_objects import WalkBudgetExceeded, walk_budget
 from ..write_observer import observe_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
 # Debug log prefixes — module-level constants for filtering and consistency.
 _LOG_PROCESSOR = "[PROCESSOR]"
+
+#: How long the share check of a statement's outputs may take: a multiple of
+#: what the statement cost, but not less than a second.
+SHARE_CHECK_FACTOR = 2.0
+SHARE_CHECK_FLOOR_S = 1.0
 _LOG_DEBUG = "[DEBUG]"
 _LOG_MUTATION = "[MUTATION]"
 _LOG_CACHE_HIT = "[CACHE_HIT_DEBUG]"
@@ -1266,7 +1272,7 @@ class StatementProcessor:
         # the outputs; JSON-like ones are walked once for all of them.
         with _plain_data.one_look(captured_vars):
             if not run.skip_cache:
-                self._refuse_unrestorable_outputs(run, captured_vars, execution.echo)
+                self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
             self._record_file_effects(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
@@ -1305,7 +1311,7 @@ class StatementProcessor:
         )
 
     def _refuse_unrestorable_outputs(
-        self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = ()
+        self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = (), cost: float = 0.0
     ) -> None:
         """Skip-cache *run* when one of its output values cannot be stored and
         restored faithfully (:func:`unrestorable_output_reason`).
@@ -1321,18 +1327,29 @@ class StatementProcessor:
         reason to refuse.
         """
         holders: dict[str, Any] | None = None if is_control_body(run.code) else {}
-        reason = unrestorable_output_reason(
-            run.outputs - run.est_fit,
-            captured_vars,
-            self.shell.user_ns,
-            cash_held=[*self._calls.held_call_results(), echo, run.metrics],
-            shell=self.shell,
-            holders=holders,
-        )
-        if reason is None and echo:
-            reason = identity_coupled_reason("the value it echoes", echo[0])
-        if reason is None and holders:
-            reason = self._take_holders(run, captured_vars, holders)
+        # The check may not take longer than the statement is worth: a hit
+        # saves `cost`, and finding the holders of a loop variable that is
+        # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
+        budget = max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+        try:
+            with walk_budget(budget):
+                reason = unrestorable_output_reason(
+                    run.outputs - run.est_fit,
+                    captured_vars,
+                    self.shell.user_ns,
+                    cash_held=[*self._calls.held_call_results(), echo, run.metrics],
+                    shell=self.shell,
+                    holders=holders,
+                )
+                if reason is None and echo:
+                    reason = identity_coupled_reason("the value it echoes", echo[0])
+                if reason is None and holders:
+                    reason = self._take_holders(run, captured_vars, holders)
+        except WalkBudgetExceeded:
+            reason = (
+                f"finding which other variables hold objects of its outputs would take longer than "
+                f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
+            )
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)

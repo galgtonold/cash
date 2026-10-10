@@ -31,6 +31,7 @@ classes, functions bound to nothing, enum members, numpy scalars and dtypes,
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import datetime
 import decimal
@@ -41,7 +42,8 @@ import pathlib
 import sys
 import types
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _plain_data
@@ -385,6 +387,40 @@ def shared_names(
     return shared
 
 
+class WalkBudgetExceeded(Exception):
+    """The share check ran past its time budget (:func:`walk_budget`)."""
+
+
+_DEADLINE: list[float | None] = [None]
+
+
+@contextlib.contextmanager
+def walk_budget(seconds: float) -> Iterator[None]:
+    """Let the walks below take at most *seconds* before they raise
+    :class:`WalkBudgetExceeded`.
+
+    The share check finds every variable holding an object of a statement's
+    outputs, which can mean walking everything a big list holds: 6 s after a
+    loop that ran 0.1 s, because its loop variable is an element of the list.
+    A statement whose result is refused when the check gives up simply runs
+    each time, so the budget costs the cache a store, never a wrong value.
+    """
+    before = _DEADLINE[0]
+    _DEADLINE[0] = _perf_counter() + seconds
+    try:
+        yield
+    finally:
+        _DEADLINE[0] = before
+
+
+def check_walk_budget() -> None:
+    """Raise :class:`WalkBudgetExceeded` when the budget of the walk in
+    progress is spent; nothing outside :func:`walk_budget`."""
+    deadline = _DEADLINE[0]
+    if deadline is not None and _perf_counter() > deadline:
+        raise WalkBudgetExceeded
+
+
 def share_group(
     names: Iterable[str],
     values: Mapping[str, Any],
@@ -443,7 +479,11 @@ def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
     # the walk below takes a Python step per object -- most of re-sorting a
     # list of 450,000 parsed pairs a loop variable still held part of.
     stack = [root for root in group.values() if not _plain_data.is_tree(root, TREE_LEAVES)]
+    pops = 0
     while stack:
+        pops += 1
+        if not pops & 1023:
+            check_walk_budget()
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in seen:
             continue
@@ -966,7 +1006,11 @@ def _descend(
     each new node taken under *name*."""
     exact = EXACT_VALUE_TYPES
     containers = EXACT_CONTAINER_TYPES
+    pops = 0
     while stack:
+        pops += 1
+        if not pops & 1023:
+            check_walk_budget()
         children = children_of(stack.pop())
         # Nothing but values, by exact type: asked at C speed, where the
         # loop below takes a Python step per item -- 35 ms of storing a
