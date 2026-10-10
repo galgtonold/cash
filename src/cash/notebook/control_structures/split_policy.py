@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..loop_split import LoopSplitStore, is_split_half, loop_source_hash, store_for_backend
-from .single_unit_policy import has_file_io_calls, header_safe_to_reevaluate
+from .single_unit_policy import has_file_io_calls
 
 if TYPE_CHECKING:
     from ..statement import StatementProcessor
@@ -66,10 +66,9 @@ class LoopSplitPolicy:
         * **No** ``len()`` -- a generator cannot be sliced for the tail, and
           re-iterating it drains an exhausted source.
         * **Not sliceable** -- the tail's source is ``<iter expr>[k:]``;
-          ``set``/``dict`` are sized but cannot form it.
-        * **Header unsafe to re-evaluate** -- both halves evaluate it. Reuses
-          the single-unit path's own guard, so there is one rule rather than
-          two that can drift.
+          ``set``/``dict`` are sized but cannot form it. Each half iterates
+          a slice of the one value the header gave, so the header is
+          evaluated once however it was written.
         * ``break``/``continue`` -- head+tail is NOT equivalent when a break
           in the head must skip the tail.
         * ``for ... else`` -- ``else`` has one completion point; a split has
@@ -92,8 +91,6 @@ class LoopSplitPolicy:
             iterable[0:0]
         except Exception:  # a user __getitem__ can raise anything: not sliceable
             logger.debug("[LOOP_SPLIT] iterable is not sliceable", exc_info=True)
-            return None
-        if not header_safe_to_reevaluate(node.iter, iterable, user_ns):
             return None
         if has_file_io_calls(node.body):
             return None

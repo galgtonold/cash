@@ -3,10 +3,10 @@
 Per-iteration caching costs about 2 ms a body statement. Over an 87,000-line
 log that was 9 min 20 s for a loop that prints each line in 14 s without
 cash. Such a loop was never run as one unit: an open file is a one-shot
-iterator with no ``len``, so it could neither be sized nor evaluated twice.
-``open(path)`` in the header is a new handle at the start of the file on every
-evaluation, so the second evaluation is safe, and the line count can be read
-off the file.
+iterator with no ``len``, so it could not be sized. The line count can be read
+off the file, and the unit iterates the handle the header opened. Opening a
+file for reading has no effect a cache hit would lose, so such a call may also
+be left to the unit inside a header it can size from its text.
 """
 
 from __future__ import annotations
@@ -21,13 +21,7 @@ from tests._cell_driver import run_cash_cell
 
 def _safe(header: str, user_ns: dict) -> bool:
     node = ast.parse(f"for x in {header}:\n    pass").body[0]
-    iterable = eval(header, dict(user_ns), dict(user_ns))
-    try:
-        return policy.header_safe_to_reevaluate(node.iter, iterable, user_ns)
-    finally:
-        close = getattr(iterable, "close", None)
-        if close is not None:
-            close()
+    return policy.header_may_be_left_to_the_unit(node.iter, user_ns)
 
 
 @pytest.fixture
@@ -50,7 +44,7 @@ def path(tmp_path):
         "zip(open(path), range(5))",
     ],
 )
-def test_a_file_opened_for_reading_in_the_header_may_be_evaluated_twice(header, path):
+def test_a_file_opened_for_reading_in_the_header_may_be_left_to_the_unit(header, path):
     assert _safe(header, {"path": path})
 
 
@@ -74,7 +68,7 @@ def test_a_mode_that_is_not_a_literal_and_a_stored_handle_may_not(header, path):
 @pytest.mark.parametrize("mode", ["w", "a", "r+", "x"])
 def test_opening_for_writing_is_refused_without_opening_it(mode, path):
     node = ast.parse(f"for x in open(path, {mode!r}):\n    pass").body[0]
-    assert not policy.header_safe_to_reevaluate(node.iter, iter(()), {"path": path})
+    assert not policy.header_may_be_left_to_the_unit(node.iter, {"path": path})
 
 
 def test_a_notebooks_own_open_gets_no_benefit_of_the_doubt(path):
@@ -82,7 +76,7 @@ def test_a_notebooks_own_open_gets_no_benefit_of_the_doubt(path):
         return iter(())
 
     node = ast.parse("for x in open(path):\n    pass").body[0]
-    assert not policy.header_safe_to_reevaluate(node.iter, iter(()), {"path": path, "open": open})
+    assert not policy.header_may_be_left_to_the_unit(node.iter, {"path": path, "open": open})
 
 
 def test_the_line_count_of_a_file_is_estimated_from_its_size(tmp_path):
@@ -164,7 +158,7 @@ def test_a_notebooks_own_tqdm_gets_no_benefit_of_the_doubt():
         return it
 
     node = ast.parse("for x in tqdm(rows):\n    pass").body[0]
-    assert not policy.header_safe_to_reevaluate(node.iter, [1, 2], {"tqdm": tqdm, "rows": [1, 2]})
+    assert not policy.header_may_be_left_to_the_unit(node.iter, {"tqdm": tqdm, "rows": [1, 2]})
 
 
 def test_a_progress_bar_around_an_opened_file_is_sized_from_the_file(path):

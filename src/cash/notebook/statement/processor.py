@@ -61,7 +61,16 @@ from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
 from cash.notebook.statement.restore import StatementRestorer
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
-from cash.notebook.statement.run import ECHO_FIELD, CodeRunner, StatementExecution, StatementRun, error_result
+from cash.notebook.statement.run import (
+    ECHO_FIELD,
+    LOOP_ITERABLE_NAME,
+    NO_LOOP_ITERABLE,
+    CodeRunner,
+    StatementExecution,
+    StatementRun,
+    error_result,
+    over_the_handed_iterable,
+)
 from cash.notebook.statement.store import StatementStore
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
@@ -467,6 +476,9 @@ class StatementProcessor:
         stream_output: bool = False,
         force_outputs: set[str] | None = None,
         is_last: bool = True,
+        loop_iterable: Any = NO_LOOP_ITERABLE,
+        header_files: frozenset[str] = frozenset(),
+        header_remote: frozenset[str] = frozenset(),
     ) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
@@ -505,6 +517,14 @@ class StatementProcessor:
                 ``code`` (the unparsed form) is what is hashed. Discarded
                 whenever call interception rewrote an eligible call in
                 ``code`` -- see ``CallRouting.code_and_tree_for_execution``.
+            loop_iterable: For a ``for`` loop run as one unit whose header the
+                caller already evaluated: that value, which the loop iterates
+                instead of evaluating its header again (a random draw, a
+                drained queue or a property would otherwise give a second,
+                different value). Never affects the cache key: ``code`` keeps
+                the header as written.
+            header_files / header_remote: What evaluating that header read,
+                recorded as the statement's own reads.
 
         Returns:
             ProcessResult with keys: 'status', 'execution_time', 'total_time',
@@ -522,6 +542,9 @@ class StatementProcessor:
             stream_output=stream_output,
             force_outputs=force_outputs,
             is_last=is_last,
+            loop_iterable=loop_iterable,
+            header_files=header_files,
+            header_remote=header_remote,
         )
         done = self._prepare(run)
         if done is not None:
@@ -856,6 +879,9 @@ class StatementProcessor:
         # A tree parsed from the unparsed text has line numbers that do not
         # match the original source, so the runner re-parses that instead.
         tree = run.exec_tree if run.exec_source is None else None
+        handed = run.loop_iterable is not NO_LOOP_ITERABLE
+        if handed:
+            source, tree = over_the_handed_iterable(source)
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
@@ -893,14 +919,26 @@ class StatementProcessor:
             ):
                 execution.captured = captured
                 with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
+                    user_ns = self.shell.user_ns
+                    shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
+                    if handed:
+                        user_ns[LOOP_ITERABLE_NAME] = run.loop_iterable
                     start_time = _perf_counter()
                     try:
                         yield runner
                     finally:
                         wall_time = _perf_counter() - start_time
-                execution.accessed_files = file_tracker.get_accessed_files()
+                        if handed:
+                            # Gone before the outputs are captured, and the
+                            # value no longer held once the loop is done.
+                            run.loop_iterable = NO_LOOP_ITERABLE
+                            if shadowed is NO_LOOP_ITERABLE:
+                                user_ns.pop(LOOP_ITERABLE_NAME, None)
+                            else:
+                                user_ns[LOOP_ITERABLE_NAME] = shadowed
+                execution.accessed_files = file_tracker.get_accessed_files() | run.header_files
                 execution.written_paths = frozenset(written_paths)
-                execution.accessed_remote = file_tracker.get_accessed_remote_urls()
+                execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
                 # The keyed form (`run.code`), not what ran: a call routed
                 # through the call cache rewrites the text, and the key and
                 # the simulation look the observation up by the statement's

@@ -419,7 +419,7 @@ reads its content, and if it changed, everything that read it runs again.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @06e2db6f, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @54928083, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length (a loop
 inside the body counts each iteration ten times, as it usually runs about that
@@ -438,14 +438,20 @@ and, once it reaches the length that would have qualified, the rest as one
 unit drawing from the same iterator. Items are drawn exactly as plain Python
 draws them, so a generator's own side effects interleave with the body's, and
 an error leaves the iterator where Python would. Such a unit reads a stream,
-so it is never served from the cache. A loop over a call that cannot be
-evaluated twice and has no length (`for x in make_rows():`) still runs pass by
+so it is never served from the cache. A loop over a call whose value has no
+length (`for x in make_rows():` with a generator function) still runs pass by
 pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
-`for x in rows:`).
-A header built by builtins or a progress bar
-(`tqdm(list(zip(a, b)))`) is evaluated once, by the unit, as plain Python
-evaluates it. An array built from a list (`enumerate(np.array(lines))`)
+`for x in rows:`). An array built from a list (`enumerate(np.array(lines))`)
 counts as long as the list.
+
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @a78c2c65, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @9f65ba05 -->
+A loop's header is evaluated once, as plain Python evaluates it, so the loop
+gets the same items as without cash: one random draw
+(`np.random.permutation(n)`, `df.sample(n=300).index`), a queue drained once,
+a property read once. A header built only by builtins or a progress bar over
+plain data (`range(n)`, `tqdm(list(zip(a, b)))`) is evaluated by the unit, so
+a cache hit skips it; any other header is evaluated before the loop runs, on a
+hit too.
 
 The expensive call inside the loop body (`fetch(e)` in `out.append(fetch(e))`)
 is still cached, so usually there is nothing to do. **Fix** when it is not:

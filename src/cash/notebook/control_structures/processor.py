@@ -56,6 +56,7 @@ from ..consumables import is_stream
 from ..lineage_formula import statement_environment_reads
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.file_deps import compute_file_hash_component
+from ..statement.run import NO_LOOP_ITERABLE
 from ..write_observer import observe_writes
 from . import helpers as _helpers
 from .common import (
@@ -487,6 +488,9 @@ class ControlStructureProcessor:
         inherited_annotation: "CacheAnnotation | None" = None,
         force_outputs: set[str] | None = None,
         update_lineage: bool = True,
+        header_value: Any = NO_LOOP_ITERABLE,
+        header_files: frozenset[str] = frozenset(),
+        header_remote: frozenset[str] = frozenset(),
     ) -> ControlStructureResult:
         """
         Execute an entire control structure as a single unit.
@@ -509,6 +513,14 @@ class ControlStructureProcessor:
         *update_lineage* False leaves the lineage update of what the structure
         changed to the caller: a loop that ran its first passes one by one
         and the rest as this unit updates them once, for the whole loop.
+
+        *header_value* is what the ``for`` loop's header gave when the caller
+        evaluated it (to size the loop): the unit iterates that value rather
+        than evaluating the header a second time, which would draw a second
+        random permutation, find a drained queue empty or run a property
+        again. The key, the badge and the outputs still come from the loop as
+        written. *header_files* / *header_remote* are what that evaluation
+        read, the unit's reads too.
         """
         try:
             code = ast.unparse(node)
@@ -527,6 +539,9 @@ class ControlStructureProcessor:
                 annotation=annotation,
                 stream_output=True,
                 force_outputs=force_outputs,
+                loop_iterable=header_value,
+                header_files=header_files,
+                header_remote=header_remote,
             )
             return self._finalize_single_unit(node, code, metrics, update_lineage)
         except Exception as e:  # broad fallback wrapping arbitrary user code executed as a unit
