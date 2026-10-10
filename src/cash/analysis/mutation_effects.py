@@ -387,49 +387,94 @@ def control_structure_mutations(
     (``VirtualLineage``) both call this, each with its own builtin rule over
     the same lineage, so a loop bumps the same lineages on both sides.
     """
-    return _branch_mutations(_branches(node), _loop_targets(node), is_builtin, is_module)
-
-
-def _branch_mutations(
-    stmts: list[ast.stmt],
-    targets: set[str],
-    is_builtin: Callable[[str], bool],
-    is_module: Callable[[str], bool],
-) -> set[str]:
-    mutated: set[str] = set()
-    for stmt in stmts:
-        if isinstance(stmt, _COMPOUND):
-            mutated |= _branch_mutations(_branches(stmt), targets | _loop_targets(stmt), is_builtin, is_module)
-            continue
-        try:
-            mutated.update(analyze_statement(ast.unparse(stmt), None).all_mutated_vars)
-        except (SyntaxError, ValueError, AttributeError, TypeError):
-            pass  # nothing the analysis can see; the rules below still apply
-        mutated.update(selfref_reassignment_targets(stmt))
-        mutated.update(_bare_call_receivers(stmt, is_module))
-        # `%time acc.append(x)` in the body changes `acc` as the plain line does.
-        inner = magic_python(ast.Module(body=[stmt], type_ignores=[])).body[1:]
-        if inner:
-            mutated |= _branch_mutations(inner, targets, is_builtin, is_module)
+    in_place, rebound, called = _branch_mutations(_branches(node), is_module)
+    if isinstance(node, ast.For):
+        in_place, rebound, called = _through_loop_targets(node, in_place, rebound, called)
     # ``os.remove(f)`` reads as ``list.remove`` on ``os``; a module's lineage
     # is its code, which no call through it changes.
-    return {v for v in mutated if not is_builtin(v) and not is_module(v)} - targets
+    return {v for v in in_place | rebound if not is_builtin(v) and not is_module(v)}
 
 
-def _bare_call_receivers(stmt: ast.stmt, is_module: Callable[[str], bool]) -> set[str]:
+_Changes = tuple[set[str], set[str], set[str]]
+
+
+def _through_loop_targets(node: ast.For, in_place: set[str], rebound: set[str], called: set[str]) -> _Changes:
+    """A loop body's changes (`_branch_mutations`) as seen from outside the
+    loop.
+
+    A loop target is a rebinding, not a mutation, so it is left out. But a
+    target changed in place (``for r in records: r['tax'] = ...``,
+    ``for a in arrays: a += 1``) is an element of what the loop iterates
+    over, so that changed: the names the iterable is built from
+    (``records``, ``enumerate(rows)``, ``zip(a, b)``, ``d.values()``,
+    ``axes.flat``, ``recs[1:]``) count as changed in place instead. A bare
+    method call on a target counts too, even one known to leave a frame
+    alone (``for ax in axes: ax.plot(...)`` draws on each Axes): a call
+    whose result the loop drops is made for what it does. A target only
+    rebound (``line = line.strip()``) changes nothing the iterable holds.
+    """
+    targets = _loop_targets(node)
+    if (in_place | called) & targets:
+        in_place = in_place | _iterable_roots(node.iter)
+    return in_place - targets, rebound - targets, called - targets
+
+
+def _iterable_roots(node: ast.expr) -> set[str]:
+    """The names *node* reads that are not called: the containers a loop
+    takes its elements from, not the functions that walk them."""
+    functions = {id(sub.func) for sub in ast.walk(node) if isinstance(sub, ast.Call)}
+    return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and id(sub) not in functions}
+
+
+def _branch_mutations(stmts: list[ast.stmt], is_module: Callable[[str], bool]) -> _Changes:
+    """``(in place, self-referential rebinds, bare-call receivers)``: the
+    names *stmts* change in place, those they rebind from themselves
+    (``total += b``, ``total = total + b``), and the receivers of the method
+    calls whose result they drop, known pure or not; a loop among them
+    seen from outside it (`_through_loop_targets`)."""
+    in_place: set[str] = set()
+    rebound: set[str] = set()
+    called: set[str] = set()
+    for stmt in stmts:
+        if isinstance(stmt, _COMPOUND):
+            changes = _branch_mutations(_branches(stmt), is_module)
+            if isinstance(stmt, ast.For):
+                changes = _through_loop_targets(stmt, *changes)
+            in_place |= changes[0]
+            rebound |= changes[1]
+            called |= changes[2]
+            continue
+        try:
+            in_place.update(analyze_statement(ast.unparse(stmt), None).all_mutated_vars)
+        except (SyntaxError, ValueError, AttributeError, TypeError):
+            pass  # nothing the analysis can see; the rules below still apply
+        rebound.update(selfref_reassignment_targets(stmt))
+        in_place.update(_bare_call_receivers(stmt, is_module))
+        called.update(_bare_call_receivers(stmt, is_module, pure_too=True))
+        # `%time acc.append(x)` in the body changes `acc` as the plain line does.
+        inner_stmts = magic_python(ast.Module(body=[stmt], type_ignores=[])).body[1:]
+        if inner_stmts:
+            changes = _branch_mutations(inner_stmts, is_module)
+            in_place |= changes[0]
+            rebound |= changes[1]
+            called |= changes[2]
+    return in_place, rebound, called
+
+
+def _bare_call_receivers(stmt: ast.stmt, is_module: Callable[[str], bool], *, pure_too: bool = False) -> set[str]:
     """Receivers of *stmt*'s bare method calls that may change them.
 
     A call whose result is dropped is made for what it does, so its receiver
-    counts as changed unless the method is known pure or only writes the
-    receiver out to a file. A module is skipped: ``os.makedirs(p)`` changes
-    no notebook variable.
+    counts as changed unless the method is known pure (*pure_too* counts
+    those as well) or only writes the receiver out to a file. A module is
+    skipped: ``os.makedirs(p)`` changes no notebook variable.
     """
     calls = top_level_calls(ast.Module(body=[stmt], type_ignores=[]))
     receivers: set[str] = set()
     for base, method in calls.method_calls:
         if is_module(base) or method in RECEIVER_READONLY_WRITE_METHODS:
             continue
-        if chain_is_pure(method, calls.inner_methods.get((base, method), frozenset())):
+        if not pure_too and chain_is_pure(method, calls.inner_methods.get((base, method), frozenset())):
             continue
         receivers.add(base)
     return receivers

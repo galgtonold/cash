@@ -137,7 +137,8 @@ When a statement leaves two names sharing an object, cash links them: an alias
 {"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
 (`train = data["train"]`). A change made later through either name moves both,
 so the cells that read the other one re-run, on Run All and on a cell re-run
-alike.
+alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)
+changes `rows`.
 
 A change made through an object cash cannot link to a name is invisible, and
 the cells that read the name keep their cached results:
