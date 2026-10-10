@@ -100,3 +100,19 @@ class TestHitSeconds:
         memory_backend._COPY_SPEED.clear()
         assert memory_backend.copy_seconds(1 << 20) > 0
         assert len(memory_backend._COPY_SPEED) == 2  # the probe copies twice
+
+
+class TestACoarseThreadClock:
+    """Windows reports a 1e-07 resolution for `thread_time`, but it moves in
+    15.6 ms ticks: a big copy timed with it read 0 s, nothing was measured,
+    and pricing a hit raised ValueError (max of an empty list)."""
+
+    def test_a_clock_that_does_not_move_is_not_used(self):
+        assert not memory_backend._ticks_finely(lambda: 0.0)
+        assert memory_backend._ticks_finely(memory_backend.time.perf_counter)
+
+    def test_a_probe_the_clock_cannot_see_is_timed_by_the_wall_clock(self, copy_speed, monkeypatch):
+        memory_backend._COPY_SPEED.clear()
+        monkeypatch.setattr(memory_backend, "_copy_clock", lambda: 0.0)
+        assert memory_backend.copy_seconds(1 << 20) > 0
+        assert memory_backend._COPY_SPEED

@@ -1541,11 +1541,26 @@ def _fine_thread_clock() -> Any:
     copy: the wall time of the cell it would replace waited too.
     """
     try:
-        if time.get_clock_info("thread_time").resolution <= 1e-6:
+        if time.get_clock_info("thread_time").resolution <= 1e-6 and _ticks_finely(time.thread_time):
             return time.thread_time
     except (AttributeError, ValueError, OSError):
         pass
     return time.perf_counter
+
+
+def _ticks_finely(clock: Any) -> bool:
+    """Whether *clock* really moves within half a millisecond of busy work.
+
+    The reported resolution is not enough: Windows reports 1e-07 for
+    `thread_time`, but GetThreadTimes moves in 15.6 ms ticks, so a copy timed
+    with it reads 0 s.
+    """
+    deadline = time.perf_counter() + 5e-4
+    first = clock()
+    while time.perf_counter() < deadline:
+        if clock() != first:
+            return True
+    return False
 
 
 _copy_clock = _fine_thread_clock()
@@ -1572,6 +1587,10 @@ def copy_seconds(nbytes: int) -> float:
         probe = np.ones(_PROBE_BYTES // 8)
         for _ in range(2):  # the first touches fresh pages
             _copy_array(probe)
+        if not _COPY_SPEED:  # the clock did not move during the probe
+            started = time.perf_counter()
+            probe.copy(order="K")
+            _note_copy_speed(probe.nbytes, max(time.perf_counter() - started, 1e-9))
     return nbytes / max(_COPY_SPEED)
 
 
