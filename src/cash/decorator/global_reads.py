@@ -258,10 +258,13 @@ class GlobalReads:
         # code object -> global names its decorator expressions read
         self._decorator_names_cache: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
         # code object -> (tuple of global names it reads, the names among them
-        # folded only provisionally). One entry, so the two never disagree.
+        # folded only provisionally, the names it loads that its module did
+        # not bind yet). One entry, so the three never disagree.
         # See `read_global_data_names`; a missing entry means "unknown", which
         # `GlobalsFold.fold_read_globals` treats as "watch everything".
-        self._global_read_cache: LruMemo[Any, tuple[tuple[str, ...], frozenset]] = LruMemo(CODE_OBJECTS)
+        self._global_read_cache: LruMemo[Any, tuple[tuple[str, ...], frozenset, tuple[str, ...]]] = LruMemo(
+            CODE_OBJECTS
+        )
         # (module_global, attribute) read pairs per code object; see
         # `module_attr_pairs`.
         self._module_attr_cache: LruMemo[Any, tuple[tuple[str, str], ...]] = LruMemo(CODE_OBJECTS)
@@ -278,6 +281,23 @@ class GlobalReads:
         the fold treats as "watch every folded name")."""
         cached = self._global_read_cache.get(code)
         return cached[1] if cached is not None else None
+
+    def _current_entry(self, code: Any, g: dict) -> tuple | None:
+        """The remembered analysis of *code*, or None when there is none or
+        it is out of date: a name the code loads that its module had not
+        bound when it was worked out (``scale(1, "b")`` before ``A = 2``
+        further down the file) is bound now. Then the folded names and
+        `may_read_data`'s answer are both dropped, so the next fold keys
+        the new global. A few dict lookups per call, one per pending name."""
+        cached = self._global_read_cache.get(code)
+        if cached is None:
+            return None
+        pending = cached[2]
+        if pending and any(name in g for name in pending):
+            self._global_read_cache.pop(code, None)
+            self._reads_anything.pop(code, None)
+            return None
+        return cached
 
     def known_module_attr_pairs(self, code: Any) -> tuple[tuple[str, str], ...]:
         """`module_attr_pairs` as already worked out for *code*; ``()`` when
@@ -309,10 +329,10 @@ class GlobalReads:
         code = getattr(func, "__code__", None)
         if code is None:
             return ()
-        cached = self._global_read_cache.get(code)
+        g = getattr(func, "__globals__", {}) or {}
+        cached = self._current_entry(code, g)
         if cached is not None:
             return cached[0]
-        g = getattr(func, "__globals__", {}) or {}
 
         scopes = tuple(iter_code_scopes(code))
         written = {
@@ -324,15 +344,19 @@ class GlobalReads:
         # Names LOADED as globals, not every name in ``co_names``: that also
         # holds attribute names, so `b.lock` read the module's unrelated `lock`
         # and warned KEY-UNHASHABLE-GLOBAL about a global never read.
-        candidates = {
+        loaded = {
             instr.argval
             for scope in scopes
             for instr in dis.get_instructions(scope)
-            if instr.opname in _GLOBAL_LOADS
-            and instr.argval in g
-            and instr.argval not in MACHINERY_DUNDERS
-            and instr.argval not in written
+            if instr.opname in _GLOBAL_LOADS and instr.argval not in MACHINERY_DUNDERS and instr.argval not in written
         }
+        candidates = {name for name in loaded if name in g}
+        # A loaded name the module has not bound yet (a builtin, or a global
+        # defined further down the file than the first call) is remembered as
+        # pending: once the module binds it, `_current_entry` drops this
+        # analysis and the next fold keys it. Leaving it out for good served
+        # the old result after the global changed.
+        pending = loaded - candidates
         # A name spelled as a string reads the same global: `globals()["K"]`
         # is a LOAD_CONST, so `co_names` never had it and editing K served the
         # old answer -- 20 where an uncached run gives 500. The code channel already resolves string
@@ -343,16 +367,14 @@ class GlobalReads:
         # global `x` or `t`, hashed in full on every hit and recomputing
         # whenever a loop moved it.
         if reaches_namespace_by_name(scopes, g):
-            candidates |= {
+            spelled = {
                 c
                 for scope in scopes
                 for c in (scope.co_consts or ())
-                if isinstance(c, str)
-                and c.isidentifier()
-                and c in g
-                and c not in MACHINERY_DUNDERS
-                and c not in written
+                if isinstance(c, str) and c.isidentifier() and c not in MACHINERY_DUNDERS and c not in written
             }
+            candidates |= {c for c in spelled if c in g}
+            pending |= {c for c in spelled if c not in g}
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
         # otherwise drift every call and cause a permanent miss.
@@ -394,7 +416,7 @@ class GlobalReads:
         # A MISSING entry is not "nothing is provisional" --
         # `GlobalsFold.fold_read_globals` reads that as "watch every folded
         # name", which costs an extra hash per miss and is the safe direction.
-        self._global_read_cache[code] = (names, provisional)
+        self._global_read_cache[code] = (names, provisional, tuple(sorted(pending)))
         return names
 
     def reads_docstrings(self, code: Any) -> bool:
@@ -433,6 +455,9 @@ class GlobalReads:
         methods, and every one a dataclass generates -- so a class costs a
         lookup per such method instead of a fold."""
         code = fn.__code__
+        # Re-checks the pending names first: a False remembered before the
+        # module bound a global the code loads is no longer true.
+        self._current_entry(code, getattr(fn, "__globals__", None) or {})
         cached = self._reads_anything.get(code)
         if cached is None:
             cached = bool(

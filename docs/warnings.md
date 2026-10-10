@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @c4315362 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ef25865b -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -751,6 +751,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-CAPTURE](#key-unhashable-capture) | decorator | a value a closure reads cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
+| [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | a call goes through a property or `__getattr__`; what it reaches is not in the key |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
@@ -1282,7 +1283,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @cf9e45b6, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @eff65050, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The message names the type.
@@ -1320,6 +1321,32 @@ changed: a client, a logger, a compiled pattern.
 global. Per block: `with cash.assume_safe():` around that line.
 `assume_safe=True` on the decorator does not silence this code; filter it by
 code if you must. See [Silencing one code](#silencing-one-code).
+
+### KEY-UNRESOLVED-CALL {#key-unresolved-call}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+
+<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions_and_gaps @f44cc346 -->
+**What happened.** The function calls something through an object of your own
+code whose attribute is a property, or whose class answers missing names with
+`__getattr__`: `api.inner(x)`. cash never runs that code to find what it
+returns. It reads the getter's body instead, and keys every cached function the
+getter names, or failing that every cached function called `inner`. Here it
+found none, or only a plain function, so the function the call reaches is not
+in the key.
+
+**Why it matters.** Editing that function does not invalidate the cached
+results: the old result is served.
+
+**What to do.** Call the function by its own name (`impl.inner(x)`), or name
+it on the decorator: `@cash.cache(depends_on=[impl.inner])`.
+
+**When it is safe to ignore.** When the property hands out library code, or
+code you do not edit while results are cached.
+
+**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
+not `with cash.assume_safe():`, not `assume_safe=True`. Filter it by code if
+you must. See [Silencing one code](#silencing-one-code).
 
 ## Notebook {#notebook-codes}
 

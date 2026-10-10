@@ -29,6 +29,7 @@ from ..source_reading import getsource
 from .ast_util import bytecode_global_refs, copy_tree, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
+from .helper_code import is_user_code
 from .namespace_effects import capturable_globals, notebook_global_rebinds
 
 __all__ = [
@@ -663,6 +664,110 @@ def static_attribute(obj: Any, name: str) -> Any:
 
 _MISSING = object()
 
+#: How many property getters and ``__getattr__`` bodies one call chain is
+#: followed through (`_chain_targets`) before the rest counts as unresolved.
+_DYNAMIC_HOPS = 8
+
+
+def _dynamic_hook(obj: Any, root_module: str | None) -> Callable | None:
+    """The user-written ``__getattr__`` (or ``__getattribute__``) that answers
+    a name *obj*'s class does not hold, or None. A module's own
+    ``__getattr__`` is not one: `static_attribute` already asks it."""
+    if isinstance(obj, types.ModuleType):
+        return None
+    cls = obj if isinstance(obj, type) else type(obj)
+    owner = type(cls) if isinstance(obj, type) else cls
+    for hook_name in ("__getattr__", "__getattribute__"):
+        hook = inspect.getattr_static(owner, hook_name, None)
+        if isinstance(hook, (staticmethod, classmethod)):
+            hook = hook.__func__
+        if isinstance(hook, types.FunctionType) and is_user_code(hook, root_module):
+            return hook
+    return None
+
+
+def _body_targets(fn: Callable) -> list[Any]:
+    """What the names and ``a.b`` chains *fn*'s body reads hold, resolved
+    statically through its globals, its closure, modules and classes, the
+    way `CodeAnalyzer._referenced_function` resolves a read name: nothing
+    of the user's runs. A property getter's ``return impl.inner`` gives
+    ``impl.inner``; a ``__getattr__``'s ``getattr(impl, name)`` gives
+    ``impl``."""
+    try:
+        tree = ast.parse(textwrap.dedent(getsource(fn)))
+    except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
+        return []
+    code = getattr(fn, "__code__", None)
+    visitor = _CallVisitor()
+    visitor.visit(tree)
+    namespace: dict[str, Any] = dict(getattr(fn, "__globals__", None) or {})
+    for name, cell in zip(getattr(code, "co_freevars", ()) or (), getattr(fn, "__closure__", None) or ()):
+        try:
+            namespace[name] = cell.cell_contents
+        except ValueError:
+            continue
+    found: list[Any] = []
+    for chain in dict.fromkeys([*visitor.referenced, *visitor.names_to_resolve]):
+        parts = chain.split(".")
+        if parts[0] not in namespace:
+            continue
+        obj = namespace[parts[0]]
+        try:
+            for part in parts[1:]:
+                if not isinstance(obj, (types.ModuleType, type)):
+                    obj = _MISSING
+                    break
+                obj = static_attribute(obj, part)
+        except AttributeError:
+            continue
+        if obj is not _MISSING:
+            found.append(obj)
+    return found
+
+
+def _chain_targets(obj: Any, rest: list[str], root_module: str | None, hops: int = 0) -> tuple[list[Any], bool]:
+    """What ``obj.<rest>`` can reach, read without running the user's code,
+    and whether a property or ``__getattr__`` of the user's code was in the
+    way.
+
+    A plain hop is `static_attribute`. A hop that gives a property of the
+    user's code, or that only the user's ``__getattr__`` can answer, is
+    followed through the getter's body instead (`_body_targets`): what it
+    reads stands for what it returns, so ``api.inner`` with ``inner`` a
+    property returning ``impl.inner`` reaches ``impl.inner``. That is an
+    over-approximation (every function the getter reads counts), never a
+    run of the getter. The second value is True when such a hop was met.
+    """
+    for i, part in enumerate(rest):
+        try:
+            value = static_attribute(obj, part)
+        except AttributeError:
+            hook = _dynamic_hook(obj, root_module)
+            if hook is None:
+                return [], False
+            return _through_body(hook, rest[i:], root_module, hops), True
+        if isinstance(value, (property, functools.cached_property)):
+            fget = value.fget if isinstance(value, property) else value.func
+            if not (isinstance(fget, types.FunctionType) and is_user_code(fget, root_module)):
+                return [], False
+            return _through_body(fget, rest[i + 1 :], root_module, hops), True
+        obj = value
+    return [obj], False
+
+
+def _through_body(fn: Callable, rest: list[str], root_module: str | None, hops: int) -> list[Any]:
+    """`_chain_targets` continued from each object *fn*'s body reads."""
+    if hops >= _DYNAMIC_HOPS:
+        return []
+    reached: list[Any] = []
+    for target in _body_targets(fn):
+        if not rest:
+            reached.append(target)
+            continue
+        more, _ = _chain_targets(target, rest, root_module, hops + 1)
+        reached.extend(more)
+    return reached
+
 
 class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
@@ -684,6 +789,26 @@ class CodeAnalyzer:
         result after ``inner``'s helper changed -- only a CALL made an edge.
         """
 
+        return CodeAnalyzer.find_called_functions_and_gaps(
+            func, known_functions, include_references=include_references
+        )[0]
+
+    @staticmethod
+    def find_called_functions_and_gaps(
+        func: Callable, known_functions: dict[str, Callable] | None = None, *, include_references: bool = False
+    ) -> tuple[set[str], list[str]]:
+        """`find_called_functions`, and the call chains in *func* that go
+        through a property or ``__getattr__`` of the user's code to
+        something cash cannot tell is keyed: nothing it can name, or a
+        plain function of the user's (the key follows a cached one only).
+
+        ``api.inner(x)`` where ``inner`` is a property returning
+        ``impl.inner``, or ``api``'s class forwards names with
+        ``__getattr__``: the chain is followed through the getter's body.
+        When that finds no cached function, every cached function named
+        like the attribute (``inner``) counts instead, so editing any of
+        them invalidates; when none is named so either, the chain is a gap.
+        """
         code = getattr(func, "__code__", None)
         visitor = _CallVisitor(frozenset(getattr(code, "co_freevars", ()) or ()))
         try:
@@ -702,9 +827,11 @@ class CodeAnalyzer:
         # it, names can't be resolved, so skip dependency analysis.
         globals_dict = getattr(func, "__globals__", None)
         if globals_dict is None:
-            return set()
+            return set(), []
         resolved_qualnames: set[str] = set()
+        gaps: list[str] = []
         known_by_id = {id(f): n for n, f in known_functions.items()} if known_functions else {}
+        root_module = getattr(func, "__module__", None)
 
         for name in visitor.names_to_resolve:
             parts = name.split(".")
@@ -718,15 +845,29 @@ class CodeAnalyzer:
             # and `if obj:` would crash analysis of any function that references
             # such a value in its globals.
             if obj is not None:
-                try:
-                    for part in parts[1:]:
-                        obj = static_attribute(obj, part)
-                    obj = unwrap_partials(obj)
-                    fqn = _callee_name(obj, known_by_id)
+                targets, dynamic = _chain_targets(obj, parts[1:], root_module)
+                found = False
+                for target in targets:
+                    try:
+                        target = unwrap_partials(target)
+                        fqn = _callee_name(target, known_by_id)
+                    except AttributeError:
+                        continue  # Expected: some callables lack __qualname__
                     if fqn is not None and (known_functions is None or fqn in known_functions):
                         resolved_qualnames.add(fqn)
-                except AttributeError:
-                    pass  # Expected: some callables lack __qualname__
+                        found = True
+                if dynamic and not found:
+                    # Through a getter cash could not see into, or to a plain
+                    # helper the key does not follow that way.
+                    same_named = [
+                        n for n, f in (known_functions or {}).items() if getattr(f, "__name__", None) == parts[-1]
+                    ]
+                    resolved_qualnames.update(same_named)
+                    if not same_named and (
+                        not targets
+                        or any(isinstance(t, types.FunctionType) and is_user_code(t, root_module) for t in targets)
+                    ):
+                        gaps.append(name)
 
         if include_references and known_functions is not None:
             called = set(visitor.names_to_resolve)
@@ -737,7 +878,7 @@ class CodeAnalyzer:
                 if fqn is not None and fqn in known_functions:
                     resolved_qualnames.add(fqn)
 
-        return resolved_qualnames
+        return resolved_qualnames, gaps
 
     @staticmethod
     def _referenced_function(

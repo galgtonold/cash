@@ -152,6 +152,24 @@ CASES: dict[str, tuple[str, str]] = {
         """,
         "f(-1)",
     ),
+    "KEY-UNRESOLVED-CALL": (
+        """
+        def helper(x):
+            return x * 2
+
+        class Api:
+            @property
+            def run(self):
+                return helper
+
+        api = Api()
+
+        @c.cache{DEC}
+        def f(x):
+            return api.run(x){W}
+        """,
+        "f(1)",
+    ),
     "KEY-UNHASHABLE-GLOBAL": (
         """
         import threading
