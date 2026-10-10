@@ -157,7 +157,7 @@ def _run_failing(magics):
 def test_a_second_failing_run_leaves_what_a_plain_run_leaves(cash_magics, mock_shell, tmp_path, monkeypatch):
     # y and w were current: re-running them after the error read the x a later
     # line had already rebound (x = heavy(x)).
-    (tmp_path / "cb6_helpers.py").write_text(HELPERS)
+    (tmp_path / "cb6_helpers.py").write_text(HELPERS, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     from tests._cell_driver import run_cash_cell
 
@@ -175,7 +175,7 @@ def test_an_owed_step_runs_with_the_version_of_its_input_it_saw(cash_magics, moc
     # y = x * 2 (overwritten by the failing line) and x = load(); running y
     # again after the error must not read the x that x = heavy(x) rebound,
     # and x must end as heavy(x) left it.
-    (tmp_path / "cb6_helpers.py").write_text(HELPERS)
+    (tmp_path / "cb6_helpers.py").write_text(HELPERS, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     from tests._cell_driver import run_cash_cell
 

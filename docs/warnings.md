@@ -1392,30 +1392,28 @@ If it is not code, delete it or make it a markdown cell.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-A cell raised part way through, and a name it changed is not what a run of
-the cells from the top gives. The message names the cell and the variables.
-It comes in two cases.
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @36403056 -->
+**What happened.** A cell raised part way through, and a name it changed is
+not what a run of the cells from the top gives. The message names the cell
+and the variables. It comes in two cases.
 
-<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468 -->
-**What happened: a cell below a failed cell.** A cell above raised part
-way, say in a loop filling `tot`, and the cell you ran reads `tot`, or
-something built from it since (`final = {... tot ...}`). No run of the cells
-gives those values: the lines before the error leave `tot` empty, and the
-whole cell raises. So cash keeps them as they are, as a plain kernel does: it
-does not run the lines before the error again, re-run the cells between or
-restore them from the cache. A name built from them that is not in memory
-(after a restart) stays undefined.
+A cell above raised part way, say in a loop filling `tot`, and the cell you
+ran reads `tot`, or something built from it since (`final = {... tot ...}`).
+No run of the cells gives those values: the lines before the error leave
+`tot` empty, and the whole cell raises. So cash keeps them as they are, as a
+plain kernel does: it does not run the lines before the error again, re-run
+the cells between or restore them from the cache. A name built from them that
+is not in memory (after a restart) stays undefined.
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:_owed_by_skips @36403056 -->
-**What happened: the cell you ran.** Running it, cash had skipped or
-restored some of its lines up front, by the values the whole cell ends with.
-When a line before the error sets a name that a line at or after it sets
-again, cash runs that earlier line once more after the error, with the lines
-it reads from, so the name holds what a plain run leaves. Here it could not:
-the line is a loop or branch, or it reads a value from before the cell that
-a later line of the cell replaced. Those names hold the values the end of
-the cell gives them until something rebuilds them; a cell below that reads
-them rebuilds them first.
+Or the cell you ran raised. Running it, cash had skipped or restored some of
+its lines up front, by the values the whole cell ends with. When a line
+before the error sets a name that a line at or after it sets again, cash runs
+that earlier line once more after the error, with the lines it reads from, so
+the name holds what a plain run leaves. Here it could not: the line is a loop
+or branch, or it reads a value from before the cell that a later line of the
+cell replaced. Those names hold the values the end of the cell gives them
+until something rebuilds them; a cell below that reads them rebuilds them
+first.
 
 **Why it matters.** The cell you run sees values that a run from the top
 would not give it. They are the values the kernel holds, which is what you

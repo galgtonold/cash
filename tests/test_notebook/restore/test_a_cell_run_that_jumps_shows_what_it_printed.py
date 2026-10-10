@@ -38,7 +38,7 @@ SHOWN = "loaded 100 rows\ncleaned to 98\n"
 
 @pytest.fixture
 def helpers(tmp_path, monkeypatch):
-    (tmp_path / "cb5_helpers.py").write_text(HELPERS)
+    (tmp_path / "cb5_helpers.py").write_text(HELPERS, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
 
 
@@ -82,7 +82,8 @@ def test_a_step_whose_output_is_too_long_to_keep_runs(helpers, kernel, capsys, t
     # after the restart rather than being skipped silently.
     (tmp_path / "cb5_long.py").write_text(
         "import time\nfrom tests.conftest import ABOVE_PERSISTENCE_FLOOR_S\n"
-        "def load():\n    time.sleep(ABOVE_PERSISTENCE_FLOOR_S)\n    print('x' * 70000)\n    return [1, 2]\n"
+        "def load():\n    time.sleep(ABOVE_PERSISTENCE_FLOOR_S)\n    print('x' * 70000)\n    return [1, 2]\n",
+        encoding="utf-8",
     )
     cells = ["import cb5_long, cb5_helpers", "y = cb5_long.load()\ny = cb5_helpers.clean(y)"]
     first = kernel()

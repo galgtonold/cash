@@ -39,7 +39,7 @@ def proc(tmp_path, monkeypatch):
     path = tmp_path / "cb8proc.py"
 
     def write(limit: int) -> None:
-        path.write_text(PROC.format(limit=limit))
+        path.write_text(PROC.format(limit=limit), encoding="utf-8")
         import importlib
         import sys
 

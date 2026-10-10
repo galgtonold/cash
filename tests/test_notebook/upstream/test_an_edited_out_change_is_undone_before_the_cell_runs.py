@@ -38,7 +38,7 @@ EDITED = "snap = df.copy()\ndf['a2'] = df.a * 2\nu = (int(snap.a.sum()), int(df.
 
 @pytest.mark.parametrize("copy", ["df.copy()", "__import__('copy').copy(df)"])
 def test_the_copy_and_its_source_agree(cash_magics, mock_shell, tmp_path, monkeypatch, copy):
-    (tmp_path / "cb7_helpers.py").write_text(HELPERS)
+    (tmp_path / "cb7_helpers.py").write_text(HELPERS, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     for cell in BEFORE:
         run_cash_cell(cash_magics, cell, cells=BEFORE)
