@@ -1466,3 +1466,47 @@ def get_seeding_rng_modules(code: str) -> set[str]:
     is keyed on the epoch, so re-seeding invalidates the draws that follow it.
     """
     return {module for module, _ in _rng_scan(code).seed_calls}
+
+
+#: The last name of an RNG constructor, as :func:`mints_unseeded_generator`
+#: matches it on a dotted call through a ``random`` module (``np.random.X``,
+#: ``numpy.random.X``, ``random.X``).
+_CONSTRUCTOR_LAST_NAMES = frozenset(name.rsplit(".", 1)[1] for name in RNG_CARRIER_CONSTRUCTORS)
+
+
+def mints_unseeded_generator(code: str) -> bool:
+    """Whether *code* builds a random generator no seed reproduces, anywhere
+    in it -- function bodies included.
+
+    ``default_rng()``, ``np.random.RandomState()``, ``random.Random()`` and
+    ``Generator(PCG64())`` draw their seed from OS entropy; a
+    ``random.SystemRandom`` reads it on every draw. What a function built that
+    way returns is not a function of its arguments, however it is called.
+    Biased toward "seeded" for shapes it cannot read, as
+    :func:`_rng_constructor_is_seeded` is.
+    """
+    try:
+        tree = ast.parse(strip_markers(code))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name):
+            name = func.id
+            if name not in _BARE_CARRIER_CONSTRUCTORS and name != "SystemRandom":
+                continue
+        elif isinstance(func, ast.Attribute) and func.attr in _CONSTRUCTOR_LAST_NAMES:
+            owner = func.value
+            if not (
+                (isinstance(owner, ast.Attribute) and owner.attr == "random")
+                or (isinstance(owner, ast.Name) and owner.id == "random")
+            ):
+                continue
+            name = func.attr
+        else:
+            continue
+        if name == "SystemRandom" or not _rng_constructor_is_seeded(node):
+            return True
+    return False

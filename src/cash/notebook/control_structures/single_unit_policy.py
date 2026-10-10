@@ -5,22 +5,26 @@ analysis, cache key, mutation detection, capture, cache I/O). For a long loop
 of cheap statements that cost dwarfs the work, so :func:`should_run_as_single_unit`
 sends such a loop to the orchestrator's single-unit path instead.
 
-The single-unit path runs the loop FROM SOURCE, which evaluates its header a
-second time; :func:`header_safe_to_reevaluate` is the guard that makes that
-correct. The split policy (:mod:`.split_policy`) reuses the same guard, so
-there is one rule rather than two that can drift.
+A header is evaluated once, as plain Python evaluates it. Usually the handler
+evaluates it to size the loop, and the unit iterates that value. A header
+:func:`runs_whole_unevaluated` can size from its text is left to the unit
+instead, which then evaluates it -- only when the unit runs, so a cache hit
+skips it; :func:`header_may_be_left_to_the_unit` is the guard for that.
 
 Pure functions of the loop's AST, its evaluated iterable and the user
-namespace: nothing here runs a statement or touches a cache.
+namespace: nothing here runs a statement, a property or a cache.
 """
 
 from __future__ import annotations
 
 import ast
 import builtins as _builtins
+import functools
+import inspect
 import io
 import logging
 import os
+import types
 from typing import Any
 
 from ...analysis.cacheability import statement_writes_files
@@ -45,27 +49,24 @@ ASSUMED_INNER_ITERATIONS = 10
 # Minimum estimated overhead (in seconds) to trigger single-unit mode.
 MIN_OVERHEAD_SEC = 1.0
 
-# Builtin callables that PRODUCE an iterable without side effects, so the
-# single-unit fast path may re-evaluate the loop header a second time
-# (once in the handler, once inside ``execute_as_single_unit``) and get the
-# same iteration.  Any *other* call in the loop iterable (a bare user function
-# like ``drain()``, or an unknown name) may be a one-shot consumable whose
-# second evaluation drains an already-exhausted source — those are routed
-# to the per-iteration path, which iterates the single, already-evaluated
-# iterator.  Method calls (``df['c'].unique()``, ``d.items()``) are assumed
-# to be pure accessors and stay on the fast path so re-iterable containers
-# (ndarray/Series/DataFrame/dict views) keep the current behaviour.
+# Builtin callables that PRODUCE an iterable without side effects, so a
+# header built only from them may be left to the unit to evaluate
+# (`runs_whole_unevaluated`): skipping it on a cache hit loses nothing. Any
+# other call -- a notebook function like ``drain()``, a method like
+# ``inbox.drain()`` or ``np.random.permutation(n)`` -- may draw, consume or
+# change state, so such a header is evaluated first and its value handed to
+# the unit.
 #
 # The builtins that compute a BOUND are here too, not only the ones that
 # produce the iterable. `for t in range(0, len(frame), STEP):` is about
 # the commonest loop header there is, and without `len` on this list it
-# would be refused the fast path and decomposed per iteration.
+# would be evaluated first, for nothing.
 #
 # A name on this list is only trusted while it still IS the builtin -- see
-# `header_safe_to_reevaluate`. And none of these can drain a one-shot
-# iterator unseen, because every name the header reads is checked
+# `header_may_be_left_to_the_unit`. And none of these can drain a one-shot
+# iterator unseen, because every value the header reads is checked
 # for being one; that check, not this list, is what stops `sorted(g)`
-# re-draining `g`.
+# being skipped on a hit.
 PURE_ITER_PRODUCERS = frozenset(
     {
         "range",
@@ -94,9 +95,8 @@ PURE_ITER_PRODUCERS = frozenset(
     }
 )
 
-#: Methods that build a FRESH iterator over their object on every call.
-#: A header calling one may be evaluated twice: the second call iterates
-#: the same data again, where a stored iterator would be exhausted.
+#: Methods that build a FRESH iterator over their object on every call: a
+#: header calling one is sized from the object.
 FRESH_ITERATOR_METHODS = frozenset(
     {
         "itertuples",
@@ -223,7 +223,9 @@ def _lines_in_file(handle: Any) -> int | None:
     return max(1, size * lines // len(sample))
 
 
-def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, Any]) -> bool:
+def should_run_as_single_unit(
+    node: ast.For, iterable: Any, user_ns: dict[str, Any], sizes: dict[str, int | None] | None = None
+) -> bool:
     """Run this ``for`` loop as one cacheable unit rather than per iteration?
 
     Decomposition costs ~8 ms per body statement per iteration (key, mutation
@@ -246,7 +248,7 @@ def should_run_as_single_unit(node: ast.For, iterable: Any, user_ns: dict[str, A
     re-runs every iteration. Mutated variables still get a correct lineage
     (``update_lineage_after_execution`` covers the whole loop).
     """
-    n_iterations = estimated_iterations(node.iter, iterable, user_ns)
+    n_iterations = estimated_iterations(node.iter, iterable, user_ns, sizes)
     if n_iterations is None:
         # Generators, iterators without __len__ — can't estimate
         return False
@@ -377,16 +379,14 @@ UNEVALUATED = _UNEVALUATED
 def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
     """Whether *node* goes as one unit, decided without evaluating its header.
 
-    The unit runs the loop from source, which evaluates the header. Deciding
-    first on a header evaluated for the purpose built it twice:
-    ``for a, b in tqdm(list(zip(actions, next_actions))):`` over 2M pairs
-    built the list twice and drew a second bar, 3.4 s plain against 8.2 s.
+    The unit then evaluates the header, the only evaluation: building it
+    first to size the loop (``for a, b in tqdm(list(zip(actions,
+    next_actions))):`` over 2M pairs) costs what plain Python pays once more.
     A header that is a call to a pure builtin producer or a progress bar is
     sized from what it wraps (:func:`estimated_iterations` reads the names'
-    lengths) and judged safe from its text and the names it reads
-    (:func:`header_safe_to_reevaluate`), so it is evaluated once, by the
-    unit, as plain Python evaluates it. Anything else is evaluated first, as
-    before.
+    lengths, never running a property) and judged from its text and the
+    values it reads (:func:`header_may_be_left_to_the_unit`). Anything else
+    is evaluated first and its value handed to the unit.
     """
     call = node.iter
     if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
@@ -396,95 +396,219 @@ def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
     pure = name in PURE_ITER_PRODUCERS and user_ns.get(name, builtin) is builtin
     if not (pure or _is_progress_bar(name, user_ns)):
         return False
-    return header_safe_to_reevaluate(call, _UNEVALUATED, user_ns) and should_run_as_single_unit(
-        node, _UNEVALUATED, user_ns
-    )
+    return header_may_be_left_to_the_unit(call, user_ns) and should_run_as_single_unit(node, _UNEVALUATED, user_ns)
 
 
-def header_safe_to_reevaluate(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:
-    """Whether the loop header may be safely evaluated a second time.
+def _is_builtin_callable(value: Any) -> bool:
+    """A builtin function or type (``str``, ``len``, ``int``): calling it runs
+    no notebook code."""
+    if isinstance(value, types.BuiltinFunctionType):
+        return getattr(value, "__module__", None) == "builtins"
+    return isinstance(value, type) and value.__module__ == "builtins"
 
-    The single-unit fast path re-executes the loop from source, evaluating
-    ``iter_node`` again after the handler already evaluated it once.
-    That is only correct when the second evaluation reproduces the same
-    iteration — i.e. the header is a re-iterable container built by a
-    side-effect-free expression.
 
-    Returns ``False`` (route to the per-iteration path, which consumes the
-    single already-evaluated iterator) when EITHER:
+def header_may_be_left_to_the_unit(iter_node: ast.AST, user_ns: dict[str, Any]) -> bool:
+    """Whether the header may be evaluated by the unit alone.
 
-    * the evaluated value is a *self-iterator* — ``iter(x) is x`` — a
-      generator, ``map``/``zip``/``filter``/``enumerate``, an open file,
-      a csv reader, or ``iter(...)``: iterating it a second time yields
-      nothing because the first pass exhausted it; OR
-    * the header contains a *call to a bare name that is not a known-pure
-      iterable producer* (``drain()``, ``next_batch()``): such a call may
-      mutate/consume external state, so a second evaluation returns a
-      different (often empty) result.
+    Such a header is evaluated only when the unit runs: a cache hit skips it.
+    That is only right for a header with no effect of its own, so it is
+    refused when it:
 
-    Method calls (``df['c'].unique()``, ``d.items()``) are treated as pure
-    accessors and kept on the fast path, so re-iterable containers keep
-    the current byte-identical behaviour.
+    * calls anything but a pure builtin producer (:data:`PURE_ITER_PRODUCERS`,
+      while the name still is that builtin), a progress bar, or ``open`` for
+      reading -- ``drain()``, ``inbox.drain()``, ``np.random.permutation(n)``
+      and ``df.sample(n=300)`` may draw or change state;
+    * hands a notebook function on to one (``map(f, xs)``,
+      ``sorted(xs, key=f)``): its effects are the header's;
+    * reads a stored iterator, by name or through an attribute or a constant
+      subscript (``sorted(g)``, ``list(b.gen)``, ``list(gens['a'])``): the
+      evaluation drains it; or
+    * reads an attribute or subscript that cannot be read without running
+      code (a property, ``__getattr__``, a ``__getitem__``).
+
+    Such a header is evaluated first and the unit iterates its value, which
+    is as correct and costs the same.
     """
-    # One-shot self-iterators: re-iterating drains an exhausted source.
-    # (Most lack ``__len__`` and never reach the single-unit heuristic, but
-    # a custom self-iterator that defines ``__len__`` would — guard it.)
-    # A header that is itself a call to a pure producer, or to a method
-    # that builds a fresh iterator (`df.itertuples()`, `enumerate(rows)`),
-    # makes a NEW one-shot iterator each time it is evaluated, so its value
-    # being a self-iterator says nothing about the second evaluation. Only
-    # a header that merely names a stored iterator is exhausted by the
-    # first -- the walk below still refuses those, and any unknown call.
-    fresh = isinstance(iter_node, ast.Call) and (
-        (isinstance(iter_node.func, ast.Name) and iter_node.func.id in PURE_ITER_PRODUCERS)
-        or (isinstance(iter_node.func, ast.Attribute) and iter_node.func.attr in FRESH_ITERATOR_METHODS)
-        or _opens_for_reading(iter_node, user_ns)
-    )
-    try:
-        if not fresh and _is_own_iterator(iterable):
-            return False
-    except TypeError:
-        pass  # not iterable: the loop itself will say so
-    except Exception:  # a user __iter__ can raise anything; the loop re-raises it
-        logger.debug("[FAST_LOOP] iter() on the loop's iterable raised", exc_info=True)
-
+    called: set[int] = set()
     for sub in ast.walk(iter_node):
-        # A one-shot iterator ANYWHERE in the header, not only as the
-        # header. The check above only sees the RESULT, and
-        # `sorted(g)` returns a list: the first evaluation drains `g`,
-        # the second gets nothing, and the loop runs zero times, on the
-        # first run and with a clean EXECUTED badge. A dict lookup, so
-        # this costs nothing and runs no user code.
-        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-            value = user_ns.get(sub.id)
-            if value is not None:
-                try:
-                    if _is_own_iterator(value):
-                        return False
-                except TypeError:
-                    pass  # not iterable: cannot be drained
-                except Exception:  # a user __iter__ can raise anything
-                    logger.debug("[FAST_LOOP] iter(%s) raised", sub.id, exc_info=True)
-
-        # A bare-name call to anything other than a known side-effect-free
-        # builtin may consume/mutate state on re-evaluation.
-        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-            name = sub.func.id
-            if _opens_for_reading(sub, user_ns):
-                continue  # a new handle each time (`_opens_for_reading`)
-            if _is_progress_bar(name, user_ns):
-                continue  # judged by what it wraps, which this walk reaches next
-            if name not in PURE_ITER_PRODUCERS:
+        if not isinstance(sub, ast.Call):
+            continue
+        func = sub.func
+        if not isinstance(func, ast.Name):
+            return False  # a method or a call of a call: may draw or change state
+        called.add(id(func))
+        name = func.id
+        if _opens_for_reading(sub, user_ns) or _is_progress_bar(name, user_ns):
+            continue  # judged by what it wraps, which the walk below reaches
+        if name not in PURE_ITER_PRODUCERS:
+            return False
+        # ...and only while the name still IS that builtin. A notebook
+        # that defines its own `len` or `sorted` gets no benefit of the
+        # doubt from sharing the name.
+        if name in user_ns and user_ns[name] is not getattr(_builtins, name, None):
+            return False
+    for sub in ast.walk(iter_node):
+        if id(sub) in called or not isinstance(sub, (ast.Name, ast.Attribute, ast.Subscript)):
+            continue
+        if not isinstance(sub.ctx, ast.Load) or (isinstance(sub, ast.Name) and sub.id not in user_ns):
+            continue  # a builtin, a lambda's parameter, or a name the evaluation reports missing
+        value = _static_value(sub, user_ns)
+        if value is _UNKNOWN:
+            return False
+        if callable(value) and not _is_builtin_callable(value) and not isinstance(value, types.ModuleType):
+            return False  # a notebook function handed on, or a class built per item
+        try:
+            if _is_own_iterator(value):
                 return False
-            # ...and only while the name still IS that builtin. A notebook
-            # that defines its own `len` or `sorted` gets no benefit of the
-            # doubt from sharing the name.
-            if name in user_ns and user_ns[name] is not getattr(_builtins, name, None):
-                return False
+        except TypeError:
+            pass  # not iterable: cannot be drained
+        except Exception:  # a user __iter__ can raise anything
+            logger.debug("[FAST_LOOP] iter(%s) raised", ast.unparse(sub), exc_info=True)
+            return False
     return True
 
 
-def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> int | None:
+#: An attribute or subscript :func:`_static_value` cannot read without
+#: running code.
+_UNKNOWN = object()
+
+
+def _plain_attribute(base: Any, attr: str) -> Any:
+    """``base.attr`` when it is plain data -- in the instance's ``__dict__``,
+    a module global, or a class attribute that is no descriptor -- read
+    without running a property, ``__getattr__`` or ``__getattribute__``;
+    else :data:`_UNKNOWN`."""
+    if isinstance(base, types.ModuleType):
+        return vars(base).get(attr, _UNKNOWN)
+    getter = inspect.getattr_static(type(base), "__getattribute__", None)
+    if getter is not object.__getattribute__ and getter is not type.__getattribute__:
+        return _UNKNOWN
+    try:
+        value = inspect.getattr_static(base, attr)
+    except AttributeError:
+        return _UNKNOWN  # a `__getattr__` answer, or no such attribute
+    try:
+        own = object.__getattribute__(base, "__dict__")
+    except AttributeError:
+        own = None
+    if isinstance(own, dict) and attr in own and own[attr] is value:
+        return value  # the instance's own data, which Python returns as it is
+    if hasattr(type(value), "__get__"):
+        return _UNKNOWN  # a property, a method, any descriptor: reading it runs code
+    return value
+
+
+def _static_value(node: ast.AST, user_ns: dict[str, Any]) -> Any:
+    """The value of a name followed by attribute reads and constant
+    subscripts, read without running any code of the notebook's; else
+    :data:`_UNKNOWN`. Subscripts only of exact ``dict``, ``list`` and
+    ``tuple``, whose ``__getitem__`` is the builtin's."""
+    if isinstance(node, ast.Name):
+        return user_ns.get(node.id, _UNKNOWN)
+    if isinstance(node, ast.Attribute):
+        base = _static_value(node.value, user_ns)
+        return _UNKNOWN if base is _UNKNOWN else _plain_attribute(base, node.attr)
+    if isinstance(node, ast.Subscript) and _is_constant_index(node.slice):
+        base = _static_value(node.value, user_ns)
+        if type(base) not in (dict, list, tuple):
+            return _UNKNOWN
+        index = node.slice
+        try:
+            if isinstance(index, ast.Slice):
+                if type(base) is dict:
+                    return _UNKNOWN
+                parts = (index.lower, index.upper, index.step)
+                return base[slice(*(None if p is None else p.value for p in parts))]
+            key = index.value
+            if type(base) is dict and type(key) not in (str, int, float, bool, bytes, type(None)):
+                return _UNKNOWN
+            return base[key]
+        except (LookupError, TypeError, ValueError):
+            return _UNKNOWN
+    return _UNKNOWN
+
+
+#: The name the header's sizing probe is bound to while the header is evaluated.
+SIZE_PROBE_NAME = "__cash_size_probe__"
+
+_SINGLE_ARG_PRODUCERS = ("enumerate", "reversed", "sorted", "list", "tuple", "iter")
+
+
+def _wrap_sized(node: ast.expr, wrap) -> ast.expr:
+    """*node* with each expression :func:`estimated_iterations` sizes by
+    reading it (an attribute or subscript chain) passed through *wrap*."""
+    if _is_pure_access(node) and not isinstance(node, ast.Name):
+        return wrap(node)
+    if not isinstance(node, ast.Call):
+        return node
+    func = node.func
+    if isinstance(func, ast.Attribute) and func.attr in FRESH_ITERATOR_METHODS:
+        func.value = _wrap_sized(func.value, wrap)
+    elif isinstance(func, ast.Name) and node.args:
+        if func.id == "zip":
+            node.args = [_wrap_sized(a, wrap) for a in node.args]
+        elif func.id == "map":
+            node.args = [node.args[0], *(_wrap_sized(a, wrap) for a in node.args[1:])]
+        elif func.id == "filter":
+            if len(node.args) == 2:
+                node.args = [node.args[0], _wrap_sized(node.args[1], wrap)]
+        else:  # the single-argument producers, and a progress bar of any name
+            node.args = [_wrap_sized(node.args[0], wrap), *node.args[1:]]
+    return node
+
+
+@functools.lru_cache(maxsize=512)
+def sizing_header(iter_code: str) -> tuple[str, tuple[str, ...]] | None:
+    """*iter_code* with each attribute or subscript chain that sizes the loop
+    wrapped in a call of :data:`SIZE_PROBE_NAME`, and the text of each; None
+    when it has none.
+
+    Evaluating that text instead of the header gives the same value, and
+    the probe records the length of each chain AS the header reads it. Sizing
+    the loop by reading ``loader.batch`` again ran its property a second
+    time, and the loop then iterated a second batch.
+    """
+    try:
+        tree = ast.parse(iter_code, mode="eval")
+    except SyntaxError:
+        return None
+    texts: list[str] = []
+
+    def wrap(sub: ast.expr) -> ast.expr:
+        texts.append(ast.unparse(sub))
+        probe = ast.Call(
+            func=ast.Name(id=SIZE_PROBE_NAME, ctx=ast.Load()),
+            args=[sub, ast.Constant(value=len(texts) - 1)],
+            keywords=[],
+        )
+        return ast.copy_location(probe, sub)
+
+    if any(isinstance(n, ast.NamedExpr) for n in ast.walk(tree)):
+        return None  # binds a name: evaluated as written
+    tree.body = _wrap_sized(tree.body, wrap)
+    if not texts:
+        return None
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree), tuple(texts)
+
+
+def size_probe(texts: tuple[str, ...], sizes: dict[str, int | None]):
+    """The function :data:`SIZE_PROBE_NAME` is bound to: records the length of
+    the value it is handed under its text in *sizes*, and returns the value."""
+
+    def probe(value: Any, index: int) -> Any:
+        try:
+            sizes[texts[index]] = len(value)
+        except Exception:  # user __len__; unknown is safe
+            sizes[texts[index]] = None
+        return value
+
+    return probe
+
+
+def estimated_iterations(
+    iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any], sizes: dict[str, int | None] | None = None
+) -> int | None:
     """How many times the loop will run, or ``None`` if it cannot be told.
 
     ``len(iterable)`` alone missed ``df.itertuples()`` / ``iterrows()``,
@@ -493,7 +617,13 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
     per-statement machinery around 0.07 s of work. The length is
     read from what the header iterates instead -- the frame's rows, its
     columns for ``items()``, through ``enumerate``/``zip``/``reversed``/
-    ``sorted``/``list``/``tuple``.
+    ``sorted``/``list``/``tuple``, and ``range`` of constants and plain ints.
+
+    *sizes* holds the lengths the evaluation of the header recorded
+    (:func:`sizing_header`). An attribute or subscript it does not hold is
+    read only when that runs no code (:func:`_static_value`): never a
+    property, ``__getattr__`` or ``__getitem__``, whose second run could
+    differ from the one the loop iterates.
     """
     try:
         return len(iterable)
@@ -514,15 +644,19 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
                 return None
         if _is_pure_access(node):
             # `a.var["symbol"]` in `for gid, s in a.var["symbol"].items()`:
-            # attribute reads and constant subscripts on a name, read here
-            # to size the loop. Reading only a plain name left a
-            # 200,000-iteration inner loop counted as unknown, so it went
-            # through the per-statement machinery: 243 s against 3.8 s.
+            # the length the header's own evaluation recorded. Reading only a
+            # plain name left a 200,000-iteration inner loop counted as
+            # unknown, so it went through the per-statement machinery: 243 s
+            # against 3.8 s.
+            text = ast.unparse(node)
+            if sizes is not None and text in sizes:
+                return sizes[text]
+            value = _static_value(node, user_ns)
+            if value is _UNKNOWN:
+                return None
             try:
-                value = eval(compile(ast.Expression(node), "<loop-size>", "eval"), {"__builtins__": {}}, dict(user_ns))
                 return len(value)
-            except Exception:  # user expression; sizing is advisory, unknown is safe
-                logger.debug("[FAST_LOOP] could not size %s", ast.unparse(node), exc_info=True)
+            except TypeError:
                 return None
         if not isinstance(node, ast.Call):
             return None
@@ -539,9 +673,9 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
             # `np.array(lines)`: as long as the list along its first axis.
             return len(user_ns[node.args[0].id])
         if isinstance(func, ast.Name) and node.args:
-            if func.id in ("enumerate", "reversed", "sorted", "list", "tuple", "iter") or _is_progress_bar(
-                func.id, user_ns
-            ):
+            if func.id == "range":
+                return _length_of_range(node, user_ns)
+            if func.id in _SINGLE_ARG_PRODUCERS or _is_progress_bar(func.id, user_ns):
                 return length_of(node.args[0])
             if func.id in ("zip", "map"):
                 # `map(f, a, b)` stops at the shortest, as `zip` does.
@@ -556,6 +690,33 @@ def estimated_iterations(iter_node: ast.AST, iterable: Any, user_ns: dict[str, A
         return length_of(iter_node)
     except Exception:  # user __len__; no estimate means per-iteration, the safe default
         logger.debug("[FAST_LOOP] could not estimate the iteration count", exc_info=True)
+        return None
+
+
+def _length_of_range(call: ast.Call, user_ns: dict[str, Any]) -> int | None:
+    """``len(range(...))`` for the builtin ``range`` of int constants and names
+    bound to plain ints (``range(300)``, ``range(0, n, step)``); else None."""
+    if "range" in user_ns and user_ns["range"] is not range:
+        return None
+    if call.keywords or not 1 <= len(call.args) <= 3:
+        return None
+    bounds = []
+    for arg in call.args:
+        if isinstance(arg, ast.Constant):
+            value = arg.value
+        elif isinstance(arg, ast.Name):
+            value = user_ns.get(arg.id)
+        elif isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub) and isinstance(arg.operand, ast.Constant):
+            value = arg.operand.value
+            value = -value if type(value) is int else None
+        else:
+            return None
+        if type(value) is not int:
+            return None
+        bounds.append(value)
+    try:
+        return len(range(*bounds))
+    except (ValueError, OverflowError):
         return None
 
 

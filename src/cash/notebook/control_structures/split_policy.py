@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import ast
 import logging
-from collections.abc import Mapping
+import sys
 from typing import TYPE_CHECKING, Any
 
 from ..loop_split import LoopSplitStore, is_split_half, loop_source_hash, store_for_backend
-from .single_unit_policy import has_file_io_calls, header_safe_to_reevaluate
+from .single_unit_policy import has_file_io_calls
 
 if TYPE_CHECKING:
     from ..statement import StatementProcessor
@@ -36,6 +36,27 @@ logger = logging.getLogger(__name__)
 PROBE_ITERS = 5
 
 _UNSET = object()
+
+#: The types whose iteration walks exactly what positional slicing cuts, so
+#: ``x[:k]`` then ``x[k:]`` iterates what ``x`` iterates.
+_SLICES_AS_IT_ITERATES = (list, tuple, range, str, bytes)
+
+
+def slices_as_it_iterates(iterable: Any) -> bool:
+    """Whether iterating ``iterable[:k]`` then ``iterable[k:]`` walks the
+    same items, in the same order, as iterating *iterable*.
+
+    Only exact ``list``, ``tuple``, ``range``, ``str`` and ``bytes``, and a
+    numpy array with at least one axis (both iterate and slice its first
+    axis). A ``DataFrame`` iterates its columns but slices its rows, so each
+    half of ``for col in df:`` iterated every column; a ``defaultdict``
+    answers a slice by adding the slice as a key. A subclass or any other
+    type may redefine either side.
+    """
+    if type(iterable) in _SLICES_AS_IT_ITERATES:
+        return True
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and type(iterable) is numpy.ndarray and iterable.ndim >= 1
 
 
 class LoopSplitPolicy:
@@ -63,13 +84,10 @@ class LoopSplitPolicy:
         predicates. Each exclusion is load-bearing:
 
         * **Already a half** -- splitting a half recurses.
-        * **No** ``len()`` -- a generator cannot be sliced for the tail, and
-          re-iterating it drains an exhausted source.
-        * **Not sliceable** -- the tail's source is ``<iter expr>[k:]``;
-          ``set``/``dict`` are sized but cannot form it.
-        * **Header unsafe to re-evaluate** -- both halves evaluate it. Reuses
-          the single-unit path's own guard, so there is one rule rather than
-          two that can drift.
+        * **Not sliced as it iterates** -- the halves are ``<iter expr>[:k]``
+          and ``<iter expr>[k:]`` (:func:`slices_as_it_iterates`). Each
+          half iterates a slice of the one value the header gave, so the
+          header is evaluated once however it was written.
         * ``break``/``continue`` -- head+tail is NOT equivalent when a break
           in the head must skip the tail.
         * ``for ... else`` -- ``else`` has one completion point; a split has
@@ -78,22 +96,10 @@ class LoopSplitPolicy:
         """
         if node.orelse or is_split_half(node):
             return None
-        try:
-            n = len(iterable)
-        except TypeError:
+        if not slices_as_it_iterates(iterable):
             return None
+        n = len(iterable)
         if n <= PROBE_ITERS:
-            return None
-        if isinstance(iterable, Mapping):
-            # Never probed: a ``defaultdict`` answers ``d[0:0]`` by adding the
-            # key ``slice(0, 0, None)``, which the loop then iterates.
-            return None
-        try:
-            iterable[0:0]
-        except Exception:  # a user __getitem__ can raise anything: not sliceable
-            logger.debug("[LOOP_SPLIT] iterable is not sliceable", exc_info=True)
-            return None
-        if not header_safe_to_reevaluate(node.iter, iterable, user_ns):
             return None
         if has_file_io_calls(node.body):
             return None

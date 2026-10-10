@@ -569,7 +569,7 @@ class _ForbiddenVisitor(ast.NodeVisitor):
 #: Standard-library modules whose calls the scan knows, imported on demand when
 #: the statement imports one that nothing has loaded yet. Any other module is
 #: followed only once it is loaded: the scan never imports a library.
-_STDLIB_ROOTS: frozenset[str] = frozenset({"time", "datetime", "uuid", "os", "getpass"})
+_STDLIB_ROOTS: frozenset[str] = frozenset({"time", "datetime", "uuid", "os", "getpass", "secrets"})
 
 
 def _loaded(name: str) -> Any:
@@ -1236,6 +1236,32 @@ class CodeAnalyzer:
 
         visitor = _ForbiddenVisitor(user_ns)
         visitor.visit(tree)
+        return list(set(visitor.found_reasons))
+
+    @staticmethod
+    def scan_function_bodies_for_forbidden_functions(code: str, user_ns: dict[str, Any]) -> list[str]:
+        """:meth:`scan_for_forbidden_functions` of *code* as the functions it
+        defines run when CALLED: their bodies too, nested functions and
+        lambdas included.
+
+        The statement scan skips a ``def``'s body on purpose -- defining a
+        function reads no clock. A caller asking whether calling the
+        functions *code* defines is a function of their inputs needs the
+        bodies: ``def stamp(i): return time.time()`` reads the clock on every
+        call. Imports in a body are followed as in a statement.
+        """
+        try:
+            tree = ast.parse(CodeAnalyzer.strip_magics(code))
+        except SyntaxError:
+            return []
+        visitor = _ForbiddenVisitor(user_ns)
+        visitor.visit(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for statement in node.body:
+                    visitor.visit(statement)
+            elif isinstance(node, ast.Lambda):
+                visitor.visit(node.body)
         return list(set(visitor.found_reasons))
 
 

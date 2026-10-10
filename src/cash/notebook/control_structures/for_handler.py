@@ -21,10 +21,9 @@ and exercise it without going through ``ControlStructureProcessor.process()``.
 from __future__ import annotations
 
 import ast
-import io
 import logging
 import time as _time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash.control_markers import iteration_digest, mark_iteration
 
@@ -55,6 +54,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _UNSET = object()
+
+
+class _Header(NamedTuple):
+    """A loop header, evaluated once: its value, the files and remote URLs the
+    evaluation read, and the lengths it recorded for sizing the loop
+    (``single_unit_policy.sizing_header``)."""
+
+    value: Any
+    files: frozenset[str]
+    remote: frozenset[str]
+    sizes: dict[str, int | None]
 
 
 def _stamped(m: dict) -> list[dict]:
@@ -139,6 +149,7 @@ class ForLoopHandler:
         raw_cell: str | None = None,
         inherited_annotation=None,
         prev_node: ast.stmt | None = None,
+        header: _Header | None = None,
     ):
         """
         Process a for loop with per-iteration caching.
@@ -168,6 +179,10 @@ class ForLoopHandler:
         a matching ``out = []`` / ``out.append(f(e))`` loop). ``None`` by
         default so nested / direct callers with no notion of a preceding
         sibling are unaffected.
+
+        The header is evaluated once, here or by the unit. *header* is one
+        already evaluated: a split's head iterates its slice of the value
+        the whole loop's header gave.
         """
 
         all_metrics: list[ProcessResult] = []
@@ -186,7 +201,7 @@ class ForLoopHandler:
         logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
-            if self._whole_before_evaluating(node):
+            if header is None and self._whole_before_evaluating(node):
                 # The unit evaluates the header, once (`runs_whole_unevaluated`).
                 logger.debug("[CONTROL] Fast-loop: executing as single unit, header unevaluated")
                 user_ns = getattr(self.shell, "user_ns", None) or {}
@@ -200,7 +215,9 @@ class ForLoopHandler:
                     prev_node,
                 )
             iter_code = ast.unparse(node.iter)
-            iterable, header_files = self._evaluate_iterable(iter_code)
+            if header is None:
+                header = self._evaluate_iterable(iter_code)
+            iterable = header.value
 
             # Pre-compute the original for-loop header line so each body
             # metric can carry it (used by the badge renderer to show the
@@ -208,16 +225,14 @@ class ForLoopHandler:
             # instead of synthesising one from observed iteration values).
             loop_header = f"for {ast.unparse(node.target)} in {iter_code}:"
 
-            whole = self._run_whole(
-                node, iterable, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node
-            )
+            whole = self._run_whole(node, header, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
             if whole is not None:
                 return whole
 
             total_iterations, cached_iterations = self._run_decomposed(
                 node,
                 iterable,
-                header_files,
+                header.files,
                 target_names,
                 ttl,
                 silent,
@@ -273,7 +288,7 @@ class ForLoopHandler:
             logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
             return False
 
-    def _evaluate_iterable(self, iter_code: str) -> tuple[Any, set[str]]:
+    def _evaluate_iterable(self, iter_code: str) -> _Header:
         """Evaluate the loop's iterator, and the files evaluating it read.
 
         A loop is decomposed per-iteration and every body statement is
@@ -291,15 +306,35 @@ class ForLoopHandler:
         statement-level tracker this loop runs inside. Propagating registers
         the read with both, which is what the decorator does for a cached
         call nested inside another.
+
+        The lengths that size the loop are recorded as this evaluation reads
+        them (``single_unit_policy.sizing_header``): read again afterwards,
+        a property in ``enumerate(loader.batch)`` ran twice.
         """
-        with FileAccessTracker(self.shell.user_ns, propagate_to_parent=True) as iter_tracker:
-            iterable = eval(iter_code, self.shell.user_ns, self.shell.user_ns)
-        return iterable, set(iter_tracker.get_accessed_files())
+        user_ns = self.shell.user_ns
+        sizes: dict[str, int | None] = {}
+        sizing = single_unit_policy.sizing_header(iter_code)
+        with FileAccessTracker(user_ns, propagate_to_parent=True) as iter_tracker:
+            if sizing is None:
+                iterable = eval(iter_code, user_ns, user_ns)
+            else:
+                code, texts = sizing
+                user_ns[single_unit_policy.SIZE_PROBE_NAME] = single_unit_policy.size_probe(texts, sizes)
+                try:
+                    iterable = eval(code, user_ns, user_ns)
+                finally:
+                    user_ns.pop(single_unit_policy.SIZE_PROBE_NAME, None)
+        return _Header(
+            iterable,
+            frozenset(iter_tracker.get_accessed_files()),
+            frozenset(iter_tracker.get_accessed_remote_urls()),
+            sizes,
+        )
 
     def _run_whole(
         self,
         node: ast.For,
-        iterable: Any,
+        header: _Header,
         ttl: int | None,
         silent: bool,
         parent_context: dict[str, Any] | None,
@@ -323,9 +358,10 @@ class ForLoopHandler:
         # written for halves (a stale value), simulator-only leaves a plain
         # re-run paying full decomposition.
         user_ns = getattr(self.shell, "user_ns", None) or {}
+        iterable = header.value
         verdict_k = self._split_policy.recorded_k(node, iterable, user_ns)
         if verdict_k is not None:
-            return self._run_split(node, verdict_k, ttl, silent, parent_context, raw_cell, inherited_annotation)
+            return self._run_split(node, verdict_k, header, ttl, silent, parent_context, raw_cell, inherited_annotation)
 
         # A loop whose iterations were MEASURED as heavy keeps one entry per
         # iteration: the static guess below (8 ms per statement) is for
@@ -336,51 +372,18 @@ class ForLoopHandler:
         # Fast-loop heuristic: if per-iteration decomposition would be too
         # expensive relative to the computation, execute as a single unit.
         #
-        # The single-unit path re-executes the loop FROM SOURCE, which
-        # evaluates ``node.iter`` a SECOND time (it was already evaluated by
-        # the caller). That double-eval is harmless for a re-iterable
-        # container produced by a side-effect-free header, but for a one-shot
-        # consumable (a stored generator, ``iter(...)``, ``map``/``zip``, an
-        # open file, or a side-effecting call like ``drain()``) the second
-        # evaluation drains an already-exhausted source, corrupting the
-        # first-run result. Only take the fast path when re-evaluating the
-        # header is provably safe; otherwise the loop is decomposed, which
-        # consumes the single, already evaluated ``iterable``.
-        #
-        # The header's safety is asked first: it is the cheaper question, and
-        # sizing a file loop reads the start of the file.
-        #
-        # A header that only names an iterator (`for x in it:`) is evaluated
-        # again too, but that is a lookup: the unit gets the same iterator,
-        # not yet drawn from (`header_names_the_iterator`).
-        names_iterator = single_unit_policy.header_names_the_iterator(node.iter, iterable, user_ns)
-        if not (
-            (names_iterator or single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns))
-            and single_unit_policy.should_run_as_single_unit(node, iterable, user_ns)
-        ):
+        # The unit iterates the value evaluated above, not the header again:
+        # a second evaluation draws a second random permutation, finds a
+        # drained queue or a consumed generator empty, calls a function
+        # mapped over a range once more per item, and runs a property again.
+        if not single_unit_policy.should_run_as_single_unit(node, iterable, user_ns, header.sizes):
             return None
         logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
-        n_iterations = single_unit_policy.estimated_iterations(node.iter, iterable, user_ns)
-        if names_iterator:
-            # The user's own iterator, handle or bar: the unit draws from it.
-            return self._run_unit(
-                node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prev_node
-            )
-        # `for line in open(path)` was opened here and will be opened again by
-        # the unit: this handle is never read, so it is closed rather than
-        # left for the collector.
-        if isinstance(iterable, io.IOBase):
-            iterable.close()
-        elif type(iterable).__module__.partition(".")[0] == "tqdm":
-            iterable.leave = False  # a bar drawn here is never advanced: it is cleared, not left at 0%
-            wrapped = single_unit_policy.file_in_progress_bar(iterable)
-            iterable.close()
-            if wrapped is not None:
-                wrapped.close()  # opened by the header, which the unit evaluates again
+        n_iterations = single_unit_policy.estimated_iterations(node.iter, iterable, user_ns, header.sizes)
         # Single-unit mode makes the loop ONE cache entry, so the unit
         # annotation (whole range) is the right scope — a body directive has
         # no finer entry to attach to here.
-        return self._run_unit(node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prev_node)
+        return self._run_unit(node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prev_node, header)
 
     def _heavy_loops(self) -> heavy_loops.HeavyLoopStore | None:
         if self._heavy_store is _UNSET:
@@ -462,9 +465,16 @@ class ForLoopHandler:
         raw_cell: str | None,
         inherited_annotation,
         prev_node: ast.stmt | None,
+        header: _Header | None = None,
     ) -> ControlStructureResult:
         """Run the loop as one unit, and keep what its iterations cost when
-        it actually computed (a restore measures nothing)."""
+        it actually computed (a restore measures nothing).
+
+        With *header*, the unit iterates the value it holds; without, the
+        unit evaluates the header itself (``runs_whole_unevaluated``)."""
+        handed = {}
+        if header is not None:
+            handed = {"header_value": header.value, "header_files": header.files, "header_remote": header.remote}
         result = self.dispatcher.execute_as_single_unit(
             node,
             ttl,
@@ -472,6 +482,7 @@ class ForLoopHandler:
             raw_cell,
             inherited_annotation,
             force_outputs=self._single_unit_outputs(node, prev_node),
+            **handed,
         )
         if result.success and n_iterations and len(result.metrics) == 1:
             metric = result.metrics[0]
@@ -824,14 +835,19 @@ class ForLoopHandler:
     # Split execution
     # ------------------------------------------------------------------
 
-    def _run_split(self, node, k, ttl, silent, parent_context, raw_cell, inherited_annotation):
+    def _run_split(self, node, k, header, ttl, silent, parent_context, raw_cell, inherited_annotation):
         """Execute a split loop as head + tail.
 
         Halves come from ``loop_split.split_nodes`` -- the same derivation the
-        simulator uses -- so both sides run the same two statements. The head
-        recurses through :meth:`process` (and is itself unsplittable, being a
-        half); the tail takes the ordinary single-unit path. A head that
-        fails ends the loop there, with its error, as the unsplit loop would.
+        simulator uses -- so both sides are keyed as the same two statements.
+        The head recurses through :meth:`process` (and is itself
+        unsplittable, being a half); the tail takes the ordinary single-unit
+        path. A head that fails ends the loop there, with its error, as the
+        unsplit loop would.
+
+        Both halves iterate a slice of *header*'s value, the one evaluation
+        of the loop's header: evaluated again for each half, a header that
+        draws or consumes would give each half a different sequence.
         """
         # ``recorded_k`` returned a k, so the loop has no ``else`` to refuse.
         head, tail = split_nodes(node, k)
@@ -845,7 +861,9 @@ class ForLoopHandler:
             force_outputs = {acc, *loop_vars}
         logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)", k, force_outputs)
 
-        head_res = self.process(head, ttl, silent, parent_context, raw_cell, inherited_annotation)
+        value = header.value
+        head_header = _Header(value[:k], header.files, header.remote, {})
+        head_res = self.process(head, ttl, silent, parent_context, raw_cell, inherited_annotation, header=head_header)
         if not head_res.success:
             return head_res
         tail_res = self.dispatcher.execute_as_single_unit(
@@ -855,6 +873,9 @@ class ForLoopHandler:
             raw_cell,
             inherited_annotation,
             force_outputs=force_outputs,
+            header_value=value[k:],
+            header_files=header.files,
+            header_remote=header.remote,
         )
         return ControlStructureResult(
             success=tail_res.success,

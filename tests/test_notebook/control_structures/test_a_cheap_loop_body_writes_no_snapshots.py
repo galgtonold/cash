@@ -75,9 +75,9 @@ def test_a_long_cheap_itertuples_loop_runs_as_one_unit(cash_magics):
     calls = []
     orig = single_unit_policy.should_run_as_single_unit
 
-    def spy(node, iterable, user_ns, **kwargs):
-        result = orig(node, iterable, user_ns, **kwargs)
-        calls.append(result and single_unit_policy.header_safe_to_reevaluate(node.iter, iterable, user_ns))
+    def spy(node, iterable, user_ns, *args, **kwargs):
+        result = orig(node, iterable, user_ns, *args, **kwargs)
+        calls.append(result)
         return result
 
     single_unit_policy.should_run_as_single_unit = spy

@@ -228,6 +228,18 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "time.process_time": _CK,
     "uuid.uuid1": _CK,
     "uuid.uuid4": _CK,
+    # Random bytes and draws from the operating system's entropy: a fresh
+    # value on every call, like a fresh id, and no seed reproduces them.
+    "os.urandom": _CK,
+    "os.getrandom": _CK,
+    "secrets.token_bytes": _CK,
+    "secrets.token_hex": _CK,
+    "secrets.token_urlsafe": _CK,
+    "secrets.randbelow": _CK,
+    "secrets.randbits": _CK,
+    "secrets.choice": _CK,
+    "secrets.SystemRandom": _CK,
+    "random.SystemRandom": _CK,
     "pandas.Timestamp.now": _CK,
     "pandas.Timestamp.today": _CK,
     "pandas.Timestamp.utcnow": _CK,
