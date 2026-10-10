@@ -179,7 +179,7 @@ notice, not a warning: a cache at its cap is doing its job.
 
 === "Notebook"
 
-    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._after_cell @db14623f -->
+    <!-- claim: cash/notebook/ipython/magics.py:CashMagics._show_storage_notices @91b990ad, cash/notebook/ipython/magics.py:CashMagics._after_cell @ac507171 -->
     A line at the end of the first cell to finish after the write that
     filled the cache:
 
