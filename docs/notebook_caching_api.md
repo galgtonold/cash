@@ -61,7 +61,11 @@ result = daily.rolling(7).mean()   # edit: only this runs again
 - **Calls inside a statement are cached too.** In `out.append(compute(x))` the
   append runs every time, but `compute(x)` comes from the cache.
 - **Printed output is replayed** on a hit, along with rich output. A trailing
-  `;` still hides it.
+  `;` still hides it. A cell that rebuilds one name in steps
+  (`df = load(); df = clean(df)`) shows every step's output too when cash
+  restores the last version and skips the steps before it; a step that
+  printed more than 64 KB runs instead of being skipped.
+  <!-- claim: cash/notebook/statement/capture.py:REPLAY_RECORD_CAP == 65536 -->
 - **Top-level `await` cells** are cached like any other; a hit skips the `await`.
 
 Every cell shows a [badge](badges.md) with one row per statement:

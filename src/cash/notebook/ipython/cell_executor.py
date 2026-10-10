@@ -996,6 +996,11 @@ class CellExecutor:
             if i in planned:
                 metric = planned.pop(i)
                 all_metrics.append(metric)
+                # What the statement showed when it ran, as a hit shows it.
+                replay_outputs(metric.pop("stdout", ""), metric.pop("stderr", ""))
+                buffered_result_outputs = self._flush_rich_outputs(
+                    metric.pop("rich_outputs", None) or [], i == len(tree.body) - 1, buffered_result_outputs
+                )
                 (skipped if metric.get("status") is CacheStatus.SKIPPED else restored).add(i)
                 continue
             annotation = get_statement_annotations(raw_cell, node)

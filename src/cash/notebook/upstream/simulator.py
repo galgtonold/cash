@@ -673,7 +673,17 @@ class NotebookSimulator:
                         tainted_vars=set(),
                         trace_codes={entry.stmt_code for entry in trace},
                     ),
+                    with_outputs=True,
                 )
+                for info in restored:
+                    position = info.get("position")
+                    if isinstance(position, int):
+                        info["is_upstream"] = False
+                        restored_by_index[position] = info
+            # What a skipped statement showed when it ran is shown again from
+            # its entry; one whose output its entry could not keep runs.
+            replays: dict[int, dict] = {}
+            while True:
                 while True:
                     size = len(run)
                     # Stricter than the repair's own pass: a statement that runs
@@ -693,11 +703,24 @@ class NotebookSimulator:
                     run = planner.complete_later_producers(run, trace)
                     if len(run) == size:
                         break
-                for info in restored:
-                    position = info.get("position")
-                    if isinstance(position, int):
-                        info["is_upstream"] = False
-                        restored_by_index[position] = info
+                unkept = []
+                for i, entry in enumerate(trace):
+                    if i in run or i in restored_by_index or i in replays:
+                        continue
+                    record = self.restorer.recorded_replay(entry, sim.virtual_modules)
+                    if record is None:
+                        continue
+                    if not record.get("complete"):
+                        unkept.append(i)
+                        continue
+                    replays[i] = {
+                        "stdout": record.get("stdout", ""),
+                        "stderr": record.get("stderr", ""),
+                        "rich_outputs": list(record.get("rich") or []),
+                    }
+                if not unkept:
+                    break
+                run = sorted(set(run) | set(unkept))
             run_set = set(run)
             planned: dict[int, dict] = {}
             for i, entry in enumerate(trace):
@@ -709,6 +732,7 @@ class NotebookSimulator:
                     "is_upstream": False,
                     "saved_time": 0.0,
                     "total_time": 0.0,
+                    **replays.get(i, {}),
                 }
             if broken and not restored_by_index:
                 return None  # nothing on disk to jump to: run as usual

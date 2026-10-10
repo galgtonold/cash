@@ -992,11 +992,14 @@ class MismatchClassifier:
         )
 
     def backward_scan_pass(
-        self, sim: SimulationResult, result: ClassificationResult
+        self, sim: SimulationResult, result: ClassificationResult, *, with_outputs: bool = False
     ) -> tuple[list[int], list[dict], float]:
         """Scan the simulation trace backwards to build the re-execution schedule.
 
         Returns (stmts_to_run_indices, restored_statements_info, total_restore_time).
+        With *with_outputs*, each restored statement's info carries what it
+        showed when it ran (``stdout``, ``stderr``, ``rich_outputs``), for the
+        cell being run to show again; a repair of the cells above shows none.
         """
         trace = sim.trace
         scan = _BackwardScan(needed=set(result.broken_vars))
@@ -1043,6 +1046,7 @@ class MismatchClassifier:
                         "saved_time": saved_time,
                         "total_time": restore_time + sim.stmt_lookup_times.get(stmt_code, 0.0),
                         "position": stmt_positions.get(stmt_code, 999999),
+                        **(self.restorer.last_outputs if with_outputs else {}),
                     }
                 )
                 scan.needed.difference_update(restored_vars)

@@ -26,6 +26,7 @@ from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.notebook.statement._metadata import StatementCacheMetadata
+from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.notebook.statement.run import ECHO_FIELD
@@ -396,6 +397,9 @@ class StatementStore:
         self._producer_snapshots.pop(run.cache_key, None)
 
         if self._too_cheap_to_store(run, execution, file_dependencies, execution.cost):
+            if run.outputs and not self._calls.in_loop and replay_record(execution.captured) is not None:
+                # What it showed is kept for a cell run that skips it.
+                return self._store_metadata_only(run, execution, None, {})
             return None
         payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
@@ -434,6 +438,7 @@ class StatementStore:
             holders_moved=True if run.holders and run.moves_holders else None,
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
+            replay=replay_record(execution.captured),
             **cost_fields,
         )
         wire = self._wire(run, metadata, referenced)
@@ -621,6 +626,7 @@ class StatementStore:
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
             carriers_advanced=_carriers_advanced(run),
+            replay=replay_record(execution.captured),
             **cost_fields,
         )
         try:

@@ -64,9 +64,10 @@ statement behind it that is not on disk) and writes the value when reading it
 back is cheaper. Only the version the cell ends with is written: a name the cell
 assigns three times is stored once.
 
-<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator.plan_cell_run @e22b7a4b -->
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator.plan_cell_run @40a2eefe -->
 Running such a cell again after a restart restores the last versions it has on
-disk and runs only the statements they do not cover, in order.
+disk and runs only the statements they do not cover, in order. What the
+skipped statements printed is shown again, as for any restored statement.
 
 ## Keeping more
 
