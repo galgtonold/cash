@@ -26,6 +26,7 @@ from typing import Any, Literal
 __all__ = [
     "CallScope",
     "bytecode_global_refs",
+    "calls_in",
     "called_dotted_names",
     "called_names",
     "copy_tree",
@@ -258,6 +259,11 @@ def _called_name(call: ast.Call) -> tuple[str, ...]:
 def _handed_names(call: ast.Call) -> tuple[str, ...]:
     args = [*call.args, *(kw.value for kw in call.keywords)]
     return tuple(a.id for a in args if isinstance(a, ast.Name))
+
+
+def calls_in(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[ast.Call]:
+    """The calls in *tree*, within *scope*."""
+    return _call_names(tree, scope, lambda call: (call,))
 
 
 def called_names(tree: ast.AST | None, scope: CallScope = "all") -> frozenset[str]:

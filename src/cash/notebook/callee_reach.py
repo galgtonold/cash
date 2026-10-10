@@ -29,6 +29,7 @@ from typing import Any, NamedTuple
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
+from ..analysis.handed_callables import handed_callable_values
 from ..analysis.mutations import MUTATING_METHODS
 from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -334,6 +335,20 @@ def _state_writes(
             changed = _process_call(func, callee, namespace)
             if changed is not None:
                 process.add(changed)
+        users = followed_into(callee, kind, receiver)
+        if node is None or users or found is None:
+            return
+        if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
+            target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
+            home = _state_home(target, namespace)
+            if home is not None:
+                found.add(home)
+        elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
+            changed_in_place(func.value)
+
+    def followed_into(callee: Any, kind: str, receiver: Any) -> bool:
+        """Follow the function *callee* into its body; whether it is the
+        user's (its body, not its name, says what it changes)."""
         users = isinstance(callee, types.FunctionType) and _is_users_function(callee, namespace)
         if isinstance(callee, types.FunctionType) and follow:
             modules = _modules_changed_by(callee, namespace, process)
@@ -344,15 +359,14 @@ def _state_writes(
             if callee.__globals__ is namespace and id(callee) not in followed:
                 followed.add(id(callee))
                 _state_writes(_function_body(callee), namespace, found, followed, process)
-        if node is None or users or found is None:
-            return
-        if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
-            target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
-            home = _state_home(target, namespace)
-            if home is not None:
-                found.add(home)
-        elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
-            changed_in_place(func.value)
+        return users
+
+    def handed(node: ast.Call) -> None:
+        """Follow what the call is handed that the callee calls: a function
+        of a local module handed to ``s.apply`` runs as much as one called by
+        name (``s.apply(helpers.record)``, ``s.map(count)``)."""
+        for value in handed_callable_values(node, namespace):
+            followed_into(*_as_handed_callee(value))
 
     pending = list(statements)
     while pending:
@@ -389,6 +403,27 @@ def _state_writes(
                 if isinstance(target, types.ModuleType) and _is_local(target):
                     found.add(target.__name__)
             called(node.func, node)
+            if node.args or node.keywords:
+                handed(node)
+
+
+def _as_handed_callee(value: Any) -> tuple[Any, str, Any]:
+    """``(function, kind, receiver)`` calling the handed callable *value*
+    runs, as `_resolve_call` names a call target."""
+    if isinstance(value, types.MethodType):
+        receiver = value.__self__
+        return value.__func__, "classmethod" if isinstance(receiver, type) else "method", receiver
+    if isinstance(value, type):
+        try:
+            return inspect.getattr_static(value, "__init__"), "method", value
+        except AttributeError:
+            return None, "function", None
+    if isinstance(value, types.FunctionType):
+        return value, "function", None
+    try:
+        return inspect.getattr_static(type(value), "__call__"), "method", value
+    except AttributeError:
+        return None, "function", None
 
 
 def import_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:

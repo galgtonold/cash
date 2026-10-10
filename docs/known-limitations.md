@@ -175,17 +175,33 @@ rebind with `df = df.assign(...)`.
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @57645727 -->
+<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @0563cfbf -->
 A function that changes a global (`LOG.append(v)`, `counter["n"] += 1`), itself
 or through a helper it calls, is handled: the statement calling it runs every time so the change really happens,
 while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @bcbe5092, cash/analysis/handed_callables.py:hands_a_state_changing_callable @dc85c3c3 -->
+A function handed to a call counts as called, however it is handed: by name
+(`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
+as a method that changes its object (`s.apply(tracker.record)`), as an object
+whose class defines `__call__` and changes it, as a closure that changes what
+it closes over, or in a list or dict that a function of yours calls into
+(`run_steps(steps, data)` with `steps = [f]`). The statement runs every time,
+and the call of yours that is handed it is not served from the cache. A method
+counts as changing its object when its code changes it, or calls a method on
+something the object holds that cash does not know to leave it unchanged
+(`self.model.fit(x)`). A function of yours handed over whose source cannot be
+read makes the statement run uncached. A list or dict of functions handed to a
+library function is looked into only for `agg`, `aggregate` and `transform`.
+
 <!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 The same for a statement that sets state on one of your modules
 (`metrics.increment(5)` adding to a counter `metrics.py` keeps, itself or
-through a helper, `mylib.K = slow()`, or `importlib.reload(mylib)`): it runs every time, so the module
+through a helper, or handed to a call as `s.apply(metrics.record)` or
+`s.map(record)` after `from metrics import record`, `mylib.K = slow()`, or
+`importlib.reload(mylib)`): it runs every time, so the module
 holds after a restart, or after an edit of its file, what a top-to-bottom run
 leaves in it. A setting whose code does not say it (`globals()[name] = v`,
 `global K` in a method of one of your classes) is seen when it runs, in the

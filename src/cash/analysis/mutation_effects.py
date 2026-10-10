@@ -42,6 +42,7 @@ from .callee_effects import (
     stateful_self_functions,
 )
 from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
+from .handed_callables import handed_callables
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
@@ -453,7 +454,7 @@ def cell_effects(cell_code: str, sources: NotebookSources, namespace: Mapping[st
     """
     try:
         facts = _CellFacts(cell_code, ast.parse(cell_code))
-        writes = _CellWrites.of(facts, sources)
+        writes = _CellWrites.of(facts, sources, namespace)
         writes.add_argument_mutations(facts, sources)
         writes.add_callee_state(facts, sources)
         writes.add_object_protocol(facts, sources)
@@ -513,15 +514,22 @@ class _CellWrites:
     hidden: set[str] = field(default_factory=set)
 
     @classmethod
-    def of(cls, facts: _CellFacts, sources: NotebookSources) -> _CellWrites:
+    def of(cls, facts: _CellFacts, sources: NotebookSources, namespace: Mapping[str, Any]) -> _CellWrites:
         # Globals a callee mutates count as mutated here, exactly like an
         # inline mutation, so the reset covers them. They are deliberately NOT
         # outputs: the checker reads `outputs` as "written by the cell, not an
         # input to restore", which would disable the very reset that makes the
-        # statement's key converge.
+        # statement's key converge. The callables the cell hands to a call
+        # (``s.apply(ops['dbl'])``, ``s.apply(tracker.record)``) count as
+        # called, and the objects they change as mutated.
+        handed = handed_callables(facts.tree, namespace)
         callee_globals = (
-            callee_global_mutations(facts.tree, sources.functions.get) if facts.calls_something else frozenset()
+            callee_global_mutations(facts.tree, sources.functions.get, extra_sources=handed.sources)
+            if facts.calls_something or handed.sources
+            else frozenset()
         )
+        if handed.receivers:
+            callee_globals = callee_globals | capturable_globals(handed.receivers, namespace)
         nocache = facts.nocache
         return cls(
             mutated=set(facts.own_mutated | callee_globals) - nocache,
@@ -775,14 +783,22 @@ def statement_effects(
     resolve_source = _resolve_once(resolve_source)
     callee_globals: frozenset[str] = frozenset()
     arg_mutations: frozenset[str] = frozenset()
+    unreadable: tuple[str, ...] = ()
     try:
         inputs, outputs = CodeAnalyzer.analyze_code_block(
             code, tree=tree, resolve_source=resolve_source, user_ns=namespace
         )
         if not control_body:
-            callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
+            handed = handed_callables(tree, namespace, scope="no_control_bodies")
+            callee_globals = (
+                callee_global_mutations(
+                    tree, resolve_source, scope="no_control_bodies", extra_sources=handed.sources
+                )
+                | handed.receivers
+            )
             if namespace is not None:
                 callee_globals = capturable_globals(callee_globals, namespace)
+            unreadable = handed.unreadable
         arg_mutations = frozenset(
             v for v in function_arg_mutations(tree, resolve_source) if not is_module_name(v, namespace, virtual_modules)
         )
@@ -792,7 +808,9 @@ def statement_effects(
         inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree, user_ns=namespace)
         reason = analysis_failed("analyse the functions this statement calls", exc)
         return StatementEffects(frozenset(inputs), frozenset(outputs), frozenset(), frozenset(), (reason,))
-    return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations)
+    # A user callable handed to a call whose source cannot be read: what it
+    # changes is unknown, so the statement runs uncached.
+    return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations, unreadable)
 
 
 # ---------------------------------------------------------------------------
