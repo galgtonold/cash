@@ -227,6 +227,15 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc -->
+The disk entry is the result as it was computed: a change you make to it
+after the call never reaches the disk. The background write takes the memory
+tier's copy when that copy keeps nothing of yours (numbers, plain data, a
+table shared as above, anything copied through pickle). A table copied with
+pandas' deep copy (nullable or categorical columns, a subclass), whose
+Python objects in object columns stay yours, is serialized before the call
+returns instead, which costs that copy's pickle time on a miss.
+
 === "Decorator"
 
     A call returns as soon as its result is computed; the write follows.
