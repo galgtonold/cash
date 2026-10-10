@@ -33,6 +33,7 @@ from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
 from ..pyplot_draws import pyplot_draw_names
+from ..restored_var import _artist_class
 from .common import extract_target_names
 
 logger = logging.getLogger(__name__)
@@ -516,6 +517,21 @@ def get_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str 
     return None
 
 
+def _holds_artists(value: Any) -> bool:
+    """Whether *value* is a matplotlib artist (a figure, an axes) or a list,
+    tuple or object array of them (``plt.subplots(1, 3)``'s axes)."""
+    artist = _artist_class()
+    if artist is None:
+        return False
+    if isinstance(value, artist):
+        return True
+    if getattr(value, "dtype", None) == object and getattr(value, "size", 0) <= 1024:
+        return any(isinstance(item, artist) for item in value.flat)
+    if isinstance(value, (list, tuple)) and len(value) <= 1024:
+        return any(isinstance(item, artist) for item in value)
+    return False
+
+
 def update_mutated_variable_lineages(
     shell,
     statement_processor,
@@ -563,7 +579,15 @@ def update_mutated_variable_lineages(
 
         try:
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
-            value_hash = f"unit={unit_digest}" if unit_digest else statement_processor.compute_hash(val)
+            if unit_digest:
+                value_hash = f"unit={unit_digest}"
+            elif _holds_artists(val):
+                # A figure's content is a pickle of the whole figure, which
+                # no check reads (`hashed_by_lineage`): the loop's code, what
+                # it read and the lineage before name it.
+                value_hash = "artists"
+            else:
+                value_hash = statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
             prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)
