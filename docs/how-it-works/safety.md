@@ -160,7 +160,7 @@ into a module; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
+<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @5c88d0c7 -->
 cash spots side effects from the statement's source, without running it. So:
 
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
@@ -181,7 +181,8 @@ cash spots side effects from the statement's source, without running it. So:
 
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `datetime.now()`), makes a
-fresh id (`uuid.uuid4()`) or asks for input (`input()`, `getpass.getpass()`)
+fresh id (`uuid.uuid4()`), reads random bytes from the system (`os.urandom()`,
+`secrets.token_hex()`) or asks for input (`input()`, `getpass.getpass()`)
 runs every time too. A statement that reads an environment variable by name
 (`os.getenv("TENANT")`) or `os.getcwd()` is cached, with a digest of the value
 in its key. So is a read inside a function of your own the statement calls,

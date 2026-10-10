@@ -45,6 +45,7 @@ from ...tracking.randomness import (
     capture_rng_state,
     carrier_positions,
     hidden_lineage_writes,
+    mints_unseeded_generator,
     rng_carrier_kind,
     rng_modules_changed,
     rng_virtual_var,
@@ -375,13 +376,17 @@ class ControlStructureProcessor:
           draw after it, and a record would skip it;
         * no file written, by its text or by a function it calls: skipping
           the loop would skip the write;
-        * no clock or uuid read, in it or in a function it calls: its
-          outcome is not a function of its inputs;
+        * no clock, uuid, OS entropy (``os.urandom``, ``secrets``) or
+          generator seeded from entropy (``default_rng()``), in it or in the
+          BODY of a function it calls, however deep: its outcome is not a
+          function of its inputs;
         * no environment read and no data of the user's modules read, in it
           or in a function it calls: a statement folds the value into its key
           and lineage, which a trusted record would skip;
         * no global mutated in place by a function it calls, and no RNG
-          object read: effects the entry lineages do not show.
+          object or iterator read, by it or by a function it calls
+          (``next(ids)`` on a global ``itertools.count``): effects the entry
+          lineages do not show.
 
         Otherwise the lineages of every global its callees read, transitively
         -- an edited helper, even one called through another, has a new
@@ -398,6 +403,10 @@ class ControlStructureProcessor:
         if any(rng_carrier_kind(user_ns.get(name)) is not None for name in reads):
             return None
         callee_names = called_function_globals(reads, user_ns)
+        for name in callee_names:
+            value = user_ns.get(name)
+            if is_stream(value) or rng_carrier_kind(value) is not None:
+                return None  # drawn from by a callee: where it stands is not in the key
         resolve = self.statement_processor.resolve_live_function_source
         for name in set(reads) | callee_names:
             if not isinstance(user_ns.get(name), types.FunctionType):
@@ -405,12 +414,14 @@ class ControlStructureProcessor:
             source = resolve(name)
             if (
                 source is None
-                or CodeAnalyzer.scan_for_forbidden_functions(source, user_ns)
+                or CodeAnalyzer.scan_function_bodies_for_forbidden_functions(source, user_ns)
+                or mints_unseeded_generator(source)
                 or statement_environment_reads(source, user_ns)
             ):
                 return None
         if (
-            CodeAnalyzer.scan_for_forbidden_functions(code, user_ns)
+            CodeAnalyzer.scan_function_bodies_for_forbidden_functions(code, user_ns)
+            or mints_unseeded_generator(code)
             or statement_environment_reads(code, user_ns)
             or reached_user_code(code, user_ns).data
         ):

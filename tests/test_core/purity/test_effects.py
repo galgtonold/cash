@@ -94,3 +94,28 @@ def test_a_namespace_resolves_an_alias():
 
 def test_a_shadowed_builtin_is_not_the_builtin():
     assert classify_call(_call("input()"), {"input": lambda: "stub"}) is None
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "os.urandom(16)",
+        "os.getrandom(16)",
+        "secrets.token_hex(8)",
+        "secrets.token_bytes(8)",
+        "secrets.token_urlsafe(8)",
+        "secrets.randbelow(10)",
+        "secrets.randbits(8)",
+        "secrets.choice(xs)",
+        "random.SystemRandom()",
+    ],
+)
+def test_os_entropy_is_a_fresh_value_like_a_fresh_id(src):
+    """No seed reproduces it: each call gives a new value, as `uuid4()` does."""
+    effect = classify_call(_call(src))
+    assert effect is not None and effect.kind is EffectKind.CLOCK, effect
+
+
+def test_a_name_based_uuid_is_not_a_fresh_value():
+    """`uuid5(namespace, name)` is a hash of its arguments."""
+    assert classify_call(_call("uuid.uuid5(uuid.NAMESPACE_DNS, 'x')")) is None

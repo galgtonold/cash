@@ -83,7 +83,7 @@ they talk to the outside world.
 | sends something over the network (`requests.post`, `session.post`, `client.publish`, `s3.upload_file`) | runs every time |
 | writes to a database (`INSERT`, `commit`, `df.to_sql`) | runs every time |
 | starts a process (`subprocess.run`, `os.system`) | runs every time |
-| reads the clock (`datetime.now()`, `time.time()`, `uuid4()`) or asks for `input()` | runs every time |
+| reads the clock (`datetime.now()`, `time.time()`, `uuid4()`), random bytes from the system (`os.urandom()`, `secrets.token_hex()`) or asks for `input()` | runs every time |
 | draws on the current pyplot figure (`plt.plot`, `plt.show`) | runs every time |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |

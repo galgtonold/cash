@@ -756,12 +756,12 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/effects.py:MODULE_CALLS @5c88d0c7, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
-**What happened.** The function reads the clock or a fresh UUID
-(`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`,
-`pd.Timestamp.now()`), an environment variable whose name is only known at
+**What happened.** The function reads the clock, a fresh UUID or random
+bytes from the system (`datetime.now()`, `date.today()`, `time.time()`,
+`uuid.uuid4()`, `os.urandom()`, `secrets.token_hex()`, `pd.Timestamp.now()`), an environment variable whose name is only known at
 run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 `.items()`, `dict(os.environ)`). A helper whose body only returns one of
 these reads is reported where it is called, however it is called: `now()`,
@@ -1087,7 +1087,7 @@ the result of that call came from an emptied iterator.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @5c88d0c7 -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @0e105084 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
