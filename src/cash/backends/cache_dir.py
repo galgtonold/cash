@@ -38,6 +38,7 @@ __all__ = [
     "ENTRY_GLOB",
     "EVICTIONS_FILENAME",
     "FILE_DIGESTS_FILENAME",
+    "HEAVY_LOOPS_FILENAME",
     "KEYS_DIRNAME",
     "LOOP_SPLIT_FILENAME",
     "MISS_GUARD_FILENAME",
@@ -92,6 +93,8 @@ EVICTIONS_FILENAME = "_evicted.log"
 MISS_GUARD_FILENAME = "_miss_guard.json"
 #: The notebook's loop-split verdicts.
 LOOP_SPLIT_FILENAME = "_loop_split.json"
+#: The notebook's per-iteration cost of loops that ran as one unit.
+HEAVY_LOOPS_FILENAME = "_heavy_loops.json"
 #: The notebook's measured compute costs, for ``%cash_stats``.
 COMPUTE_BASELINES_FILENAME = "_compute_baselines.json"
 #: What each ``__cash_key__`` stood for when first checked (`KeyCheck`).
@@ -115,6 +118,7 @@ _CASH_FILE_NAMES = frozenset(
         EVICTIONS_FILENAME,
         MISS_GUARD_FILENAME,
         LOOP_SPLIT_FILENAME,
+        HEAVY_LOOPS_FILENAME,
         COMPUTE_BASELINES_FILENAME,
         CASH_KEYS_FILENAME,
         FILE_DIGESTS_FILENAME,

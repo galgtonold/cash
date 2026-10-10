@@ -33,6 +33,7 @@ from ...lineage_tag import own_tag
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
 from ..cache_status import CacheStatus
+from .. import heavy_loops
 from ..loop_split import loop_source_hash, split_nodes
 from ..restored_var import identity_digest
 from . import helpers as _helpers
@@ -52,6 +53,8 @@ if TYPE_CHECKING:
     from ..statement import ProcessResult, StatementProcessor
 
 logger = logging.getLogger(__name__)
+
+_UNSET = object()
 
 
 def _stamped(m: dict) -> list[dict]:
@@ -121,6 +124,7 @@ class ForLoopHandler:
         self.statement_processor = statement_processor
         self.dispatcher = dispatcher
         self._split_policy = LoopSplitPolicy(statement_processor)
+        self._heavy_store: heavy_loops.HeavyLoopStore | None | object = _UNSET
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -185,13 +189,15 @@ class ForLoopHandler:
             if self._whole_before_evaluating(node):
                 # The unit evaluates the header, once (`runs_whole_unevaluated`).
                 logger.debug("[CONTROL] Fast-loop: executing as single unit, header unevaluated")
-                return self.dispatcher.execute_as_single_unit(
+                user_ns = getattr(self.shell, "user_ns", None) or {}
+                return self._run_unit(
                     node,
+                    single_unit_policy.estimated_iterations(node.iter, single_unit_policy.UNEVALUATED, user_ns),
                     ttl,
                     silent,
                     raw_cell,
                     inherited_annotation,
-                    force_outputs=self._single_unit_outputs(node, prev_node),
+                    prev_node,
                 )
             iter_code = ast.unparse(node.iter)
             iterable, header_files = self._evaluate_iterable(iter_code)
@@ -223,6 +229,8 @@ class ForLoopHandler:
                 rest_metrics,
             )
 
+            self._refresh_cost(node, all_metrics, total_iterations)
+
             for m in all_metrics:
                 if isinstance(m, dict):
                     _stamp_loop_header(m, loop_header)
@@ -251,6 +259,8 @@ class ForLoopHandler:
         """Whether the loop runs as one unit with its header left to the unit
         (`single_unit_policy.runs_whole_unevaluated`). A loop with a recorded
         split verdict is evaluated first: `_run_whole` splits it."""
+        if self._prefers_iterations(node):
+            return False
         user_ns = getattr(self.shell, "user_ns", None) or {}
         if not single_unit_policy.runs_whole_unevaluated(node, user_ns):
             return False
@@ -317,6 +327,12 @@ class ForLoopHandler:
         if verdict_k is not None:
             return self._run_split(node, verdict_k, ttl, silent, parent_context, raw_cell, inherited_annotation)
 
+        # A loop whose iterations were MEASURED as heavy keeps one entry per
+        # iteration: the static guess below (8 ms per statement) is for
+        # iterations that cost less than their own bookkeeping.
+        if self._prefers_iterations(node):
+            return None
+
         # Fast-loop heuristic: if per-iteration decomposition would be too
         # expensive relative to the computation, execute as a single unit.
         #
@@ -344,15 +360,11 @@ class ForLoopHandler:
         ):
             return None
         logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
+        n_iterations = single_unit_policy.estimated_iterations(node.iter, iterable, user_ns)
         if names_iterator:
             # The user's own iterator, handle or bar: the unit draws from it.
-            return self.dispatcher.execute_as_single_unit(
-                node,
-                ttl,
-                silent,
-                raw_cell,
-                inherited_annotation,
-                force_outputs=self._single_unit_outputs(node, prev_node),
+            return self._run_unit(
+                node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prev_node
             )
         # `for line in open(path)` was opened here and will be opened again by
         # the unit: this handle is never read, so it is closed rather than
@@ -368,7 +380,82 @@ class ForLoopHandler:
         # Single-unit mode makes the loop ONE cache entry, so the unit
         # annotation (whole range) is the right scope — a body directive has
         # no finer entry to attach to here.
-        return self.dispatcher.execute_as_single_unit(
+        return self._run_unit(node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prev_node)
+
+    def _heavy_loops(self) -> heavy_loops.HeavyLoopStore | None:
+        if self._heavy_store is _UNSET:
+            self._heavy_store = heavy_loops.store_for_backend(self.statement_processor.cash_instance.backend)
+        return self._heavy_store  # type: ignore[return-value]
+
+    def _prefers_iterations(self, node: ast.For) -> bool:
+        """Whether this loop's iterations were measured heavy enough to be
+        cached one by one (:mod:`..heavy_loops`)."""
+        store = self._heavy_loops()
+        if store is None:
+            return False
+        try:
+            seconds = store.get(heavy_loops.header_identity(node))
+            if seconds is None:
+                return False
+            body = single_unit_policy.count_body_statements(
+                node.body, nested_loop_factor=single_unit_policy.ASSUMED_INNER_ITERATIONS
+            )
+            return heavy_loops.is_heavy(body, seconds)
+        except (OSError, ValueError, RecursionError):
+            logger.debug("[HEAVY_LOOPS] lookup failed", exc_info=True)
+            return False
+
+    def _refresh_cost(self, node: ast.For, metrics: list, iterations: int) -> None:
+        """A loop kept per iteration for its measured cost is measured again,
+        so one whose work got cheap goes back to one unit. Only loops already
+        in the store: the rest follow the static rule.
+
+        What an iteration costs is what its statements cost to compute, so a
+        restored statement counts at the time it saved, not at the few
+        milliseconds the restore took: measured from the work done alone, an
+        iteration that reused its heavy statement would read as cheap."""
+        store = self._heavy_loops()
+        if store is None or iterations <= 0:
+            return
+        try:
+            if store.get(heavy_loops.header_identity(node)) is None:
+                return
+        except (OSError, ValueError, RecursionError):
+            return
+        work = 0.0
+        for m in metrics:
+            if not isinstance(m, dict):
+                continue
+            status = m.get("status")
+            if status == CacheStatus.COMPUTED:
+                work += m.get("execution_time", 0.0)
+            elif status == CacheStatus.RESTORED:
+                work += m.get("saved_time", 0.0)
+        self._remember_cost(node, work, iterations)
+
+    def _remember_cost(self, node: ast.For, work_seconds: float, iterations: int) -> None:
+        """Keep what an iteration of this loop cost, measured while it computed."""
+        store = self._heavy_loops()
+        if store is None or iterations <= 0:
+            return
+        try:
+            store.record(heavy_loops.header_identity(node), work_seconds / iterations)
+        except (OSError, ValueError, RecursionError):
+            logger.debug("[HEAVY_LOOPS] could not record", exc_info=True)
+
+    def _run_unit(
+        self,
+        node: ast.For,
+        n_iterations: int | None,
+        ttl: int | None,
+        silent: bool,
+        raw_cell: str | None,
+        inherited_annotation,
+        prev_node: ast.stmt | None,
+    ) -> ControlStructureResult:
+        """Run the loop as one unit, and keep what its iterations cost when
+        it actually computed (a restore measures nothing)."""
+        result = self.dispatcher.execute_as_single_unit(
             node,
             ttl,
             silent,
@@ -376,6 +463,12 @@ class ForLoopHandler:
             inherited_annotation,
             force_outputs=self._single_unit_outputs(node, prev_node),
         )
+        if result.success and n_iterations and len(result.metrics) == 1:
+            metric = result.metrics[0]
+            logger.debug("[HEAVY_LOOPS] unit status=%s time=%s", metric.get("status"), metric.get("execution_time"))
+            if metric.get("status") in (CacheStatus.COMPUTED, CacheStatus.SKIPPED):
+                self._remember_cost(node, metric.get("execution_time", 0.0), n_iterations)
+        return result
 
     @staticmethod
     def _single_unit_outputs(node: ast.For, prev_node: ast.stmt | None) -> set[str] | None:

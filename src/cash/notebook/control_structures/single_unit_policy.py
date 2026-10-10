@@ -370,6 +370,8 @@ def _is_own_iterator(value: Any) -> bool:
 #: it has no length and cannot be iterated, so only the header's text and
 #: the names it reads decide.
 _UNEVALUATED = object()
+#: The same sentinel, for callers that size a loop whose header is still unevaluated.
+UNEVALUATED = _UNEVALUATED
 
 
 def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
