@@ -394,8 +394,13 @@ class ForLoopHandler:
         if store is None:
             return False
         try:
-            seconds = store.get(heavy_loops.header_identity(node))
-            if seconds is None:
+            measured = store.get(heavy_loops.header_identity(node))
+            if measured is None:
+                return False
+            seconds, unit_hash = measured
+            if unit_hash == loop_source_hash(node):
+                # Unchanged since it ran as one unit: that unit's entry is
+                # what a rerun restores, whole.
                 return False
             body = single_unit_policy.count_body_statements(
                 node.body, nested_loop_factor=single_unit_policy.ASSUMED_INNER_ITERATIONS
@@ -433,13 +438,18 @@ class ForLoopHandler:
                 work += m.get("saved_time", 0.0)
         self._remember_cost(node, work, iterations)
 
-    def _remember_cost(self, node: ast.For, work_seconds: float, iterations: int) -> None:
-        """Keep what an iteration of this loop cost, measured while it computed."""
+    def _remember_cost(self, node: ast.For, work_seconds: float, iterations: int, as_unit: bool = False) -> None:
+        """Keep what an iteration of this loop cost, measured while it computed
+        (*as_unit*: running whole, the source its unit entry is keyed on)."""
         store = self._heavy_loops()
         if store is None or iterations <= 0:
             return
         try:
-            store.record(heavy_loops.header_identity(node), work_seconds / iterations)
+            store.record(
+                heavy_loops.header_identity(node),
+                work_seconds / iterations,
+                loop_source_hash(node) if as_unit else None,
+            )
         except (OSError, ValueError, RecursionError):
             logger.debug("[HEAVY_LOOPS] could not record", exc_info=True)
 
@@ -467,7 +477,7 @@ class ForLoopHandler:
             metric = result.metrics[0]
             logger.debug("[HEAVY_LOOPS] unit status=%s time=%s", metric.get("status"), metric.get("execution_time"))
             if metric.get("status") in (CacheStatus.COMPUTED, CacheStatus.SKIPPED):
-                self._remember_cost(node, metric.get("execution_time", 0.0), n_iterations)
+                self._remember_cost(node, metric.get("execution_time", 0.0), n_iterations, as_unit=True)
         return result
 
     @staticmethod

@@ -61,33 +61,49 @@ def is_heavy(body_statements: int, seconds_per_iteration: float) -> bool:
     return seconds_per_iteration >= needed
 
 
-class HeavyLoopStore(VersionedJsonStore[float]):
-    """Persisted ``header identity -> seconds per iteration`` of the last
-    measured run. Best-effort like every store here: empty means "every loop
-    follows the static rule"."""
+class HeavyLoopStore(VersionedJsonStore[tuple[float, str]]):
+    """Persisted ``header identity -> (seconds per iteration, source hash)``
+    of the last measured run. The source hash is that of the loop as it ran as
+    one unit: run again unchanged it finds that unit's entry, which is
+    restored whole. Best-effort like every store here: empty means "every
+    loop follows the static rule"."""
 
     FILENAME = _STORE_FILENAME
     VERSION = _STORE_VERSION
     FIELD = "loops"
     LOG_TAG = "HEAVY_LOOPS"
 
-    def _load_value(self, value: object) -> float | None:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+    def _load_value(self, value: object) -> tuple[float, str] | None:
+        if not (isinstance(value, list) and len(value) == 2):
             return None
-        return float(value) if value >= 0 else None
+        seconds, unit = value
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
+            return None
+        return (float(seconds), unit) if isinstance(unit, str) else None
 
-    def get(self, identity: str) -> float | None:
+    def _dump_value(self, value: tuple[float, str]) -> list:
+        return [value[0], value[1]]
+
+    def get(self, identity: str) -> tuple[float, str] | None:
         self._ensure_loaded()
         return self._items.get(identity)
 
-    def record(self, identity: str, seconds_per_iteration: float) -> None:
+    def record(self, identity: str, seconds_per_iteration: float, unit_hash: str | None = None) -> None:
         """Keep the latest measurement; written only when it moved enough to
-        change a verdict somewhere (a quarter), not on every run."""
+        change a verdict somewhere (a quarter) or the unit's source changed.
+        *unit_hash* None keeps the one recorded: an iteration-by-iteration run
+        has no unit entry of its own."""
         self._ensure_loaded()
         old = self._items.get(identity)
-        if old is not None and abs(old - seconds_per_iteration) <= 0.25 * max(old, seconds_per_iteration):
+        if unit_hash is None:
+            unit_hash = old[1] if old else ""
+        if (
+            old is not None
+            and old[1] == unit_hash
+            and abs(old[0] - seconds_per_iteration) <= 0.25 * max(old[0], seconds_per_iteration)
+        ):
             return
-        self._items[identity] = seconds_per_iteration
+        self._items[identity] = (seconds_per_iteration, unit_hash)
         self._write()
 
 

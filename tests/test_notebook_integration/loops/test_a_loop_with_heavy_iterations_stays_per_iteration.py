@@ -41,7 +41,7 @@ def _seed(work_dir, loop_src, seconds):
     cache_dir = work_dir / ".cash"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "_heavy_loops.json").write_text(
-        json.dumps({"version": 1, "loops": {header_identity(node): seconds}}), encoding="utf-8"
+        json.dumps({"version": 1, "loops": {header_identity(node): [seconds, ""]}}), encoding="utf-8"
     )
 
 
@@ -99,3 +99,15 @@ def test_a_loop_learns_it_is_heavy_and_then_reuses_an_extension(nb_runner):
     out = nb_runner.get_output(2)
     assert f"total {_expected(N + 20, 1)}" in out, out
     assert f"{N + 10} cached" in out, out
+
+
+def test_an_unchanged_rerun_of_a_measured_loop_restores_its_unit(nb_runner):
+    """The loop ran whole and was measured heavy; run again unchanged it finds
+    that unit's entry and restores it, not iteration by iteration."""
+    nb_runner.create_notebook([SETUP, _loop()])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_cell(2)
+    out = nb_runner.get_output(2)
+    assert f"total {_expected(N, 1)}" in out, out
+    assert "LOOP x" not in out, out
