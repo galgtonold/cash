@@ -143,8 +143,9 @@ would rebind the name to a copy, while every other reference to the object
 kept the unchanged original.
 
 Inside a loop or `if`/`try` body, the loop or branch as a whole owns the
-changes its body makes. Drawing on a `Figure`/`Axes` and fitting an estimator
-still run every time there.
+changes its body makes, and an `if` or `while` owns what its condition
+changes whichever branch runs (`if opts.pop("debug", False):`). Drawing on
+a `Figure`/`Axes` and fitting an estimator still run every time there.
 
 An accumulator loop (`out = []`, then `for e in it: out.append(slow(e))`) does
 not cache as a statement, but the expensive call inside it does, so a re-run

@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 
 #: What a hash that cannot read a value raises. RecursionError: a value nested
 #: deeper than pickle or a walk follows, such as a linked list of a few
-#: hundred objects, has no content hash either.
-HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, RecursionError)
+#: hundred objects, has no content hash either. NotImplementedError: a value
+#: with no state to pickle, such as ``random.SystemRandom()``, whose
+#: ``__reduce__`` asks for a state it does not have.
+HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError, RecursionError, NotImplementedError)
 
 
 _BULKY_TYPE_NAMES = frozenset({"DataFrame", "Series", "ndarray"})
@@ -155,6 +157,13 @@ def compute_hash(obj: Any) -> str:
         return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
+    except Exception as exc:
+        # Whatever a user's `__reduce__` or `__getstate__` raises: the value
+        # has no content hash, so it gets the identity tier, which callers
+        # recognise as content-blind. Raised to the user, it failed a cell
+        # that plain Python runs.
+        logger.debug("Hash failed for %s: %r", type_name, exc)
+        return identity_hash(obj)
     except BaseException as exc:
         if not is_native_panic(exc):
             raise
@@ -162,9 +171,10 @@ def compute_hash(obj: Any) -> str:
 
     try:
         return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
-    except HASH_ERRORS:
+    except Exception:
         # Python 3.13 raises AttributeError for an instance of a class
-        # defined inside a function ("Can't get local object").
+        # defined inside a function ("Can't get local object"); a user's
+        # `__reduce__` may raise anything.
         pass
     except BaseException as exc:
         if not is_native_panic(exc):
