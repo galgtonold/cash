@@ -80,7 +80,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @a69ccc3e, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @e76e2209, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a -->
+<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @a69ccc3e, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @6b5f6133, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
