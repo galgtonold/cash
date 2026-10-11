@@ -479,6 +479,14 @@ class PurityChecks:
                     if cell is None:
                         continue
                     after = capture_digest(self._args, cell.cell_contents)
+                elif scope == "helper":
+                    # A factory helper's capture (`HelperIdentity._captures_of`):
+                    # the cell is the helper's, read under its own name.
+                    helper, cell_name = owner
+                    helper_cells = dict(zip(helper.__code__.co_freevars, helper.__closure__ or ()))
+                    if cell_name not in helper_cells:
+                        continue
+                    after = capture_digest(self._args, helper_cells[cell_name].cell_contents)
                 elif scope == "carrier":
                     mapping, key = owner
                     if key not in mapping:
@@ -514,8 +522,14 @@ class PurityChecks:
                 self._mutations.learn(code, "global", name)
                 logger.debug("[CORE] %s: stopped keying what %s carries; calling it changes it", func_name, name)
                 continue
-            self._mutations.learn(code, scope, name)
-            if scope == "closure":
+            if scope == "helper":
+                helper, name = owner
+                self._mutations.learn(helper.__code__, "closure", name)
+            else:
+                self._mutations.learn(code, scope, name)
+            if scope == "helper":
+                where = f"variable '{name}' its helper {getattr(helper, '__qualname__', helper)} captures"
+            elif scope == "closure":
                 where = f"variable it captures '{name}'"
             else:
                 module = owner.get("__name__") if isinstance(owner, dict) else None
