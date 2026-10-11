@@ -125,3 +125,11 @@ def test_a_small_collection_of_big_collections_is_hashed_by_lineage():
     assert restored_var.hashed_by_lineage({"a": list(range(300)), "b": [1]})
     assert restored_var.hashed_by_lineage([[1], ({"k": list(range(300))},)])
     assert not restored_var.hashed_by_lineage({"a": [1, 2], "b": ([3],)})
+
+
+def test_a_collection_that_holds_itself_is_answered():
+    cyc: list = [1]
+    cyc.append(cyc)
+    assert not restored_var.hashed_by_lineage(cyc)
+    cyc.append(list(range(300)))
+    assert restored_var.hashed_by_lineage(cyc)

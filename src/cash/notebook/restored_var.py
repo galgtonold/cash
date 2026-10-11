@@ -45,7 +45,7 @@ _LINEAGE_HASHED_ITEMS = 200
 _COLLECTIONS = (list, tuple, dict, set, frozenset)
 
 
-def hashed_by_lineage(value: Any) -> bool:
+def hashed_by_lineage(value: Any, _seen: set[int] | None = None) -> bool:
     """Is *value*'s session hash its lineage rather than its content?
 
     A frame, an array or a table, and a collection of more than
@@ -66,12 +66,15 @@ def hashed_by_lineage(value: Any) -> bool:
     if t in _COLLECTIONS:
         if len(value) > _LINEAGE_HASHED_ITEMS:
             return True
+        # Each collection looked into once: ``cyc.append(cyc)`` holds itself.
+        seen = set() if _seen is None else _seen
+        seen.add(id(value))
         items = value.values() if t is dict else value
         return any(
             type(v).__name__ in _LINEAGE_HASHED_TYPES
             or builtin_hash_family(type(v)) is not None
             or (artist is not None and isinstance(v, artist))
-            or (type(v) in _COLLECTIONS and hashed_by_lineage(v))
+            or (type(v) in _COLLECTIONS and id(v) not in seen and hashed_by_lineage(v, seen))
             for v in items
         )
     return False
