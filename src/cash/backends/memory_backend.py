@@ -25,7 +25,7 @@ from .. import _plain_data, kept_state
 from .._lazy_module import LazyModule
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
-from . import frame_sharing
+from . import frame_sharing, iterative_copy
 from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 
@@ -682,6 +682,7 @@ class InMemoryBackend(CacheBackend):
                     pickle.HIGHEST_PROTOCOL,
                     buffer_callback=buffers.append,
                     persistent_id=hook,
+                    on_retry=buffers.clear,
                 )
                 unpickler = pickle.Unpickler(
                     io.BytesIO(stream),
@@ -691,12 +692,27 @@ class InMemoryBackend(CacheBackend):
                 return unpickler.load()
             except pickle.PicklingError:
                 logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
-            except Exception:
+            except Exception as exc:
+                if kept_state.too_deep(exc):
+                    # Deeper than the pickler may recurse: deepcopy recurses
+                    # deeper still, so the copy keeps its own stack.
+                    return iterative_copy.deep_copy(value, memo, persistent_id)
                 logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
                 break
         if by_deepcopy is not None:
             by_deepcopy.append(True)
-        return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
+        before = dict(memo)
+        if not kept_state.FLAT_FIRST:  # see there: deepcopy too runs out of C stack first
+            try:
+                return InMemoryBackend._deepcopy_with_frames(value, memo, known_cells, record_cells)
+            except (RecursionError, MemoryError) as exc:
+                if not kept_state.too_deep(exc):
+                    raise
+        # What deepcopy left in *memo* is half built: start again from what
+        # was there before it.
+        memo.clear()
+        memo.update(before)
+        return iterative_copy.deep_copy(value, memo, persistent_id)
 
     @staticmethod
     def _deepcopy_with_frames(
