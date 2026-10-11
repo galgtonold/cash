@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
+from ...tracking.read_classification import stat_key
 from .._protocols import CashInstanceProtocol
 from ..cache_key import (
     carrier_advances_key,
@@ -111,12 +112,12 @@ class CacheProbe:
         return True
 
     @staticmethod
-    def stat_file_deps(hist_files: dict[str, float]) -> dict[str, float]:
-        """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files.
+    def stat_file_deps(hist_files: dict[str, Any]) -> dict[str, tuple[int, int, int]]:
+        """Stat each path in *hist_files* and return ``{path: stat_key}`` for existing files.
 
         Once per path per cell run (``run_memo.stats_this_run``), and from a directory
         listing where many share a directory."""
-        return {p: st.st_mtime for p, (_resolved, st) in stats_this_run(hist_files).items() if st is not None}
+        return {p: stat_key(st) for p, (_resolved, st) in stats_this_run(hist_files).items() if st is not None}
 
     def mutation_verdict(self, source_hash: str) -> set[str] | None:
         """The runtime's verdict on a bare method call, from an earlier kernel.

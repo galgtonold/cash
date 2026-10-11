@@ -25,6 +25,7 @@ from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...source_norm import exact_source_digest
+from ...tracking.read_classification import stat_key
 from .._protocols import ShellProtocol
 from ..callee_reach import one_walk, reached_user_code
 from ..control_structures import is_control_structure
@@ -191,29 +192,38 @@ class VirtualLineage:
                         if resolved is None:
                             continue
                         try:
-                            entry.cell_file_deps[path] = os.path.getmtime(resolved)
+                            entry.cell_file_deps[path] = stat_key(os.stat(resolved))
                         except OSError:
                             continue
 
     def _check_cell_file_deps(
         self,
-        cached_file_deps: dict[str, float],
+        cached_file_deps: dict[str, tuple[int, int, int]],
         idx: int,
     ) -> bool:
         """Return True if any file dep for the cached cell at *idx* has changed.
 
+        Compared by the whole `stat_key` (size, mtime and inode change time,
+        to the nanosecond), as the runtime's quick check is: an edit that keeps
+        the size and puts the mtime back (``cp -p``, ``rsync -t``) still moves
+        the change time on Linux and macOS, and a link re-pointed to a
+        same-size file stamped within a few milliseconds of the old one moves
+        the tuple too. Whether the entry is really stale is the runtime's
+        content check; a ``touch`` costs one re-check of the cell.
+
         One stat per file per cell run (``run_memo.stats_this_run``)."""
         current = stats_this_run(cached_file_deps)
-        for fpath, stored_mtime in cached_file_deps.items():
+        for fpath, stored in cached_file_deps.items():
             resolved, st = current[fpath]
             if resolved is None or st is None:
                 return True
-            if abs(st.st_mtime - stored_mtime) > 0.01:
+            now = stat_key(st)
+            if now != stored:
                 logger.debug(
-                    "[UPSTREAM_DEBUG] File dependency changed: %s (cached mtime=%s, current=%s)",
+                    "[UPSTREAM_DEBUG] File dependency changed: %s (cached stat=%s, current=%s)",
                     resolved,
-                    stored_mtime,
-                    st.st_mtime,
+                    stored,
+                    now,
                 )
                 return True
         return False
@@ -582,7 +592,7 @@ class VirtualLineage:
         i: int,
         node: ast.AST,
         cell_stmt_occurrence_counts: dict[str, int],
-        cell_file_deps: dict[str, float],
+        cell_file_deps: dict[str, tuple[int, int, int]],
         raw_cell: str | None = None,
     ) -> None:
         """Simulate one top-level statement of cell *i* into *sim*.

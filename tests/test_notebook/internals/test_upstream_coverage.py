@@ -26,6 +26,7 @@ from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntr
 from cash.notebook.upstream.cache_probe import CacheProbe
 from cash.notebook.upstream.cache_restore import lineage_conflict
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
+from cash.tracking.read_classification import stat_key
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,7 +213,7 @@ class TestStatFileDeps:
         f.write_text("a,b\n1,2", encoding="utf-8")
         result = CacheProbe.stat_file_deps({str(f): 0.0})
         assert str(f) in result
-        assert result[str(f)] == pytest.approx(os.path.getmtime(str(f)), abs=0.1)
+        assert result[str(f)] == stat_key(os.stat(str(f)))
 
     def test_missing_files_excluded(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")

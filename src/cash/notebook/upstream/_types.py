@@ -97,8 +97,9 @@ class SimulationCacheEntry(NamedTuple):
     vars_with_stale_files: set[str]
     """Variables depending on files whose mtime has changed."""
 
-    cell_file_deps: dict[str, float]
-    """``{filepath: mtime}`` for files read during this cell's simulation."""
+    cell_file_deps: dict[str, tuple[int, int, int]]
+    """``{filepath: stat_key}`` (size, mtime_ns, ctime_ns) for files read
+    during this cell's simulation."""
 
     cell_environment: str = ""
     """What the environment reads written in the cell returned when it was
