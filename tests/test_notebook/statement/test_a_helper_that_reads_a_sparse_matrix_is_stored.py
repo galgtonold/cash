@@ -37,6 +37,9 @@ def test_a_read_that_sorts_the_indices_is_not_a_change(fmt):
     m = _unsorted(fmt)
     before = mutation_fingerprint(m)
     m.sum()
+    # What that read does from scipy 1.16 on; 1.15, the last for Python
+    # 3.10, sums without sorting, so the sort is made here as it would.
+    m.sum_duplicates()
     assert m.has_canonical_format
     assert mutation_fingerprint(m) == before
 
