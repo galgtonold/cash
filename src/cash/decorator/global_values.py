@@ -233,7 +233,12 @@ class GlobalValues:
             pass
         cls_ref = code_ref(type(value))
         if cls_ref is not None and not getattr(value, "__dict__", None) and reduced_state(value) is None:
-            return f"{cls_ref}()"
+            # Pickled as a global name (`typing.Any`): that name is what it is.
+            try:
+                reduced = value.__reduce_ex__(4)
+            except Exception:  # noqa: BLE001 - carries nothing else to key
+                reduced = None
+            return f"{cls_ref}:{reduced}" if isinstance(reduced, str) else f"{cls_ref}()"
         try:
             return "value:" + self.data_digest(value)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError, RecursionError):
