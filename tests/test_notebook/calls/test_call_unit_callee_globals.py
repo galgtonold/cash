@@ -93,6 +93,31 @@ def wrapped_appends_to_zzz(v):
     ZZZ.append(v)
 
 
+CALL_COUNTS: dict = {}
+
+
+def _counted(f):
+    """The classic counting decorator: the wrapper writes a global itself."""
+
+    @functools.wraps(f)
+    def wrapper(*args):
+        CALL_COUNTS[f.__name__] = CALL_COUNTS.get(f.__name__, 0) + 1
+        return f(*args)
+
+    return wrapper
+
+
+@_counted
+def counted_and_pure(v):
+    return v * 2
+
+
+@_counted
+def counted_and_appends(v):
+    AAA.append(v)
+    return v
+
+
 class TestIdentification:
     def test_a_write_method_on_a_global_is_named(self):
         assert callee_mutated_globals(appends_to_a_global) == ("CALLS",)
@@ -172,6 +197,15 @@ class TestIdentification:
         assert wrapped_appends_to_aaa.__code__ is wrapped_appends_to_zzz.__code__
         assert callee_mutated_globals(wrapped_appends_to_aaa) == ("AAA",)
         assert callee_mutated_globals(wrapped_appends_to_zzz) == ("ZZZ",)
+
+    def test_a_wrappers_own_writes_are_named(self):
+        """``inspect`` unwraps to the wrapped function, whose body writes
+        nothing: the counting wrapper's ``CALL_COUNTS[...] = ...`` was never
+        read, so a hit skipped the count."""
+        assert callee_mutated_globals(counted_and_pure) == ("CALL_COUNTS",)
+
+    def test_every_layer_of_a_wrapper_is_read(self):
+        assert callee_mutated_globals(counted_and_appends) == ("AAA", "CALL_COUNTS")
 
     def test_a_sourceless_callee_is_silent_rather_than_raising(self):
         # A C builtin has no readable source. Fail OPEN: a callee cash cannot

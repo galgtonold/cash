@@ -26,7 +26,7 @@ from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
 from ..purity import is_pure
-from ..source_reading import getsource
+from ..source_reading import own_source, wrapper_layers
 from .ast_util import called_names, resolve_callee
 from .callee_effects import (
     argument_roots,
@@ -200,7 +200,7 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, bool, tuple[ast.expr, .
     if not is_user_code_file(code_obj.co_filename):
         return None
     try:
-        source = textwrap.dedent(getsource(func))
+        source = textwrap.dedent(own_source(func))
     except (OSError, TypeError):
         return None
     try:
@@ -234,10 +234,6 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, tuple[as
     without source."""
     if not isinstance(func, types.FunctionType):
         func = inspect.unwrap(func) if callable(func) else func
-        if not isinstance(func, types.FunctionType):
-            return None
-    elif hasattr(func, "__wrapped__"):
-        func = inspect.unwrap(func)
         if not isinstance(func, types.FunctionType):
             return None
     if is_pure(func):
@@ -281,12 +277,15 @@ def user_callee_writing_files(func: Any, *, appends: bool = True) -> str | None:
     :data:`_CALLEE_LIMIT` functions is taken for a writer, with a warning:
     the statement runs every time rather than be served without a write.
     """
-    root = _examined_body(func)
-    if root is None:
+    # A ``functools.wraps`` wrapper's own body runs as well as the wrapped
+    # function's: each layer is read by its own source.
+    roots = [body for layer in wrapper_layers(func) if (body := _examined_body(layer)) is not None]
+    if not roots:
         return None
-    seen: set[int] = {id(root[0])}
-    held = [root[0]]  # keeps every examined function alive, so no id is reused
-    stack = [root]
+    root = roots[0]
+    seen: set[int] = {id(body[0]) for body in roots}
+    held = [body[0] for body in roots]  # keeps every examined function alive, so no id is reused
+    stack = list(reversed(roots))
     while stack:
         current, replaces, appends_itself, callees = stack.pop()
         if replaces or (appends and appends_itself):

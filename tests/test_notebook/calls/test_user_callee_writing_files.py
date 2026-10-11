@@ -1,5 +1,6 @@
 """Which calls into user code write a file a cache hit would skip."""
 
+import functools
 import json
 import shutil
 
@@ -43,6 +44,44 @@ def compute(v):
 @pure
 def promised(path):
     open(path, "w", encoding="utf-8").write("x")
+
+
+def _logged(f):
+    @functools.wraps(f)
+    def wrapper(*args):
+        with open("calls.log", "w", encoding="utf-8") as fh:
+            fh.write(f.__name__)
+        return f(*args)
+
+    return wrapper
+
+
+@_logged
+def logged_compute(v):
+    return v + 1
+
+
+def _passes(f):
+    @functools.wraps(f)
+    def wrapper(*args):
+        return f(*args)
+
+    return wrapper
+
+
+@_passes
+def passed_export(df, path):
+    df.to_csv(path)
+
+
+def test_a_wrapper_that_writes_is_a_writer():
+    """The decorator's own body writes: read through ``__wrapped__`` alone,
+    the wrapped function's body said nothing."""
+    assert user_callee_writing_files(logged_compute) == "logged_compute"
+
+
+def test_a_write_under_a_wrapper_is_still_seen():
+    assert user_callee_writing_files(passed_export) == "passed_export"
 
 
 def test_a_helper_that_saves_or_exports_is_a_writer():
