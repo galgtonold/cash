@@ -307,6 +307,14 @@ class ReexecutionPlanner:
 
         Scoped to ``consumable_broken_vars`` — vars this run's consumable probe
         actually flagged as diverged — so no other broken var's plan changes.
+
+        A statement scheduled here runs again on everything else it changes
+        on top of what it finds (``for i in range(3): heapq.heappop(h);
+        q.get()``): each such name is rebuilt with it, from the statement that
+        last made it afresh through every later one changing it, or the pops
+        would be applied twice. When one of them has no such statement in the
+        trace, the statement is not scheduled at all, and the reader runs on
+        what it finds, as a plain run of that cell would.
         """
         if not consumable_broken_vars:
             return stmts_to_run_indices
@@ -321,6 +329,17 @@ class ReexecutionPlanner:
             except (SyntaxError, ValueError, TypeError):
                 continue
             if touched & consumed:
+                rebuilds = _rebuilds_of_what_it_changes(simulation_trace, i, consumable_broken_vars)
+                if rebuilds is None:
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "[UPSTREAM] Consumable-chain completion: not scheduling [%s]; a name it "
+                            "changes in place cannot be rebuilt: %.60s",
+                            i,
+                            stmt_code,
+                        )
+                    continue
+                scheduled.update(rebuilds)
                 scheduled.add(i)
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
@@ -942,3 +961,27 @@ class ReexecutionPlanner:
                 additional_indices.append(i)
 
         return stmts_to_run_indices + additional_indices
+
+
+def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables: set[str]) -> set[int] | None:
+    """The statements to run again before trace entry *index* so each name it
+    changes on top of what it finds (an output it also reads), other than the
+    *consumables* being refilled, holds what it held then: the last statement
+    before it that made the name afresh (an output it does not read) and every
+    later one changing it. None when a name has no such statement."""
+    entry = simulation_trace[index]
+    changed = (set(entry.outputs or ()) & set(entry.inputs or ())) - consumables
+    rebuilds: set[int] = set()
+    for name in changed:
+        writers: list[int] = []
+        for j in range(index - 1, -1, -1):
+            earlier = simulation_trace[j]
+            if name not in (earlier.outputs or ()):
+                continue
+            writers.append(j)
+            if name not in (earlier.inputs or ()):
+                break
+        else:
+            return None
+        rebuilds.update(writers)
+    return rebuilds
