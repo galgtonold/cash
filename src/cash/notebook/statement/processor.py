@@ -758,9 +758,10 @@ class StatementProcessor:
         #
         # The first writer's contribution is simply gone. ``force_outputs``
         # above CAN restore an accumulator, but only under
-        # ``cacheable_accumulator_loop``'s conditions -- fresh empty seed, a
-        # single accumulator call -- which are precisely the guarantees that
-        # make one writer's snapshot sufficient.
+        # ``seeded_accumulator_loop``'s conditions -- each container seeded
+        # empty in the same cell, written only inside this one loop -- which
+        # are precisely the guarantees that make one writer's snapshot
+        # sufficient.
         if callee_globals:
             outputs = outputs | callee_globals
         run.inputs, run.outputs = set(effects.inputs), outputs

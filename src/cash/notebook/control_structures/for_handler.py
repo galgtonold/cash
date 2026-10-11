@@ -23,11 +23,12 @@ from __future__ import annotations
 import ast
 import logging
 import time as _time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash.control_markers import iteration_digest, mark_iteration
 
-from ...analysis.mutations import accumulator_loop_body_shape, cacheable_accumulator_loop
+from ...analysis.mutations import accumulator_loop_body_shape, seeded_accumulator_loop
 from ...lineage_tag import own_tag
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
@@ -148,7 +149,7 @@ class ForLoopHandler:
         parent_context: dict[str, Any] | None,
         raw_cell: str | None = None,
         inherited_annotation=None,
-        prev_node: ast.stmt | None = None,
+        prior_nodes: Sequence[ast.stmt] = (),
         header: _Header | None = None,
     ):
         """
@@ -171,14 +172,12 @@ class ForLoopHandler:
         loops with many iterations of cheap array operations), the loop is
         executed as a single cacheable unit instead of per-iteration.
 
-        *prev_node* is the loop's immediately-preceding top-level sibling in
-        the same cell, or ``None`` — passed through so the single-unit branch
-        can compute ``force_outputs`` for a pure accumulator-loop shape
-        (without it, that branch is refused outright by the
-        in-place-mutation detector, since nothing suppresses that refusal for
-        a matching ``out = []`` / ``out.append(f(e))`` loop). ``None`` by
-        default so nested / direct callers with no notion of a preceding
-        sibling are unaffected.
+        *prior_nodes* are the loop's top-level siblings before it in the same
+        cell, in order -- passed through so the single-unit branch can
+        compute ``force_outputs`` for a loop that fills containers seeded
+        empty in them (without it, that branch is refused outright by the
+        in-place-mutation detector). Empty by default so nested / direct
+        callers with no notion of preceding siblings are unaffected.
 
         The header is evaluated once, here or by the unit. *header* is one
         already evaluated: a split's head iterates its slice of the value
@@ -212,7 +211,7 @@ class ForLoopHandler:
                     silent,
                     raw_cell,
                     inherited_annotation,
-                    prev_node,
+                    prior_nodes,
                 )
             iter_code = ast.unparse(node.iter)
             if header is None:
@@ -225,7 +224,9 @@ class ForLoopHandler:
             # instead of synthesising one from observed iteration values).
             loop_header = f"for {ast.unparse(node.target)} in {iter_code}:"
 
-            whole = self._run_whole(node, header, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
+            whole = self._run_whole(
+                node, header, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes
+            )
             if whole is not None:
                 return whole
 
@@ -340,7 +341,7 @@ class ForLoopHandler:
         parent_context: dict[str, Any] | None,
         raw_cell: str | None,
         inherited_annotation,
-        prev_node: ast.stmt | None,
+        prior_nodes: Sequence[ast.stmt],
     ) -> ControlStructureResult | None:
         """Run the loop as a recorded split or as one unit, when it is to be
         run that way; None when it is to be decomposed per iteration."""
@@ -383,7 +384,7 @@ class ForLoopHandler:
         # Single-unit mode makes the loop ONE cache entry, so the unit
         # annotation (whole range) is the right scope — a body directive has
         # no finer entry to attach to here.
-        return self._run_unit(node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prev_node, header)
+        return self._run_unit(node, n_iterations, ttl, silent, raw_cell, inherited_annotation, prior_nodes, header)
 
     def _heavy_loops(self) -> heavy_loops.HeavyLoopStore | None:
         if self._heavy_store is _UNSET:
@@ -464,7 +465,7 @@ class ForLoopHandler:
         silent: bool,
         raw_cell: str | None,
         inherited_annotation,
-        prev_node: ast.stmt | None,
+        prior_nodes: Sequence[ast.stmt],
         header: _Header | None = None,
     ) -> ControlStructureResult:
         """Run the loop as one unit, and keep what its iterations cost when
@@ -481,7 +482,7 @@ class ForLoopHandler:
             silent,
             raw_cell,
             inherited_annotation,
-            force_outputs=self._single_unit_outputs(node, prev_node),
+            force_outputs=self._single_unit_outputs(node, prior_nodes),
             **handed,
         )
         if result.success and n_iterations and len(result.metrics) == 1:
@@ -492,23 +493,23 @@ class ForLoopHandler:
         return result
 
     @staticmethod
-    def _single_unit_outputs(node: ast.For, prev_node: ast.stmt | None) -> set[str] | None:
-        """The outputs a single-unit run of a pure accumulator loop must keep.
+    def _single_unit_outputs(node: ast.For, prior_nodes: Sequence[ast.stmt]) -> set[str] | None:
+        """The outputs a single-unit run of a loop that fills fresh containers
+        must keep.
 
-        A pure accumulator loop's body (``out.append(f(e))``) reads as an
-        in-place mutation to the per-statement analyzer, which would
-        otherwise refuse to cache the whole unit outright -- and a large,
-        cheap accumulator loop would get no caching from either mechanism
-        (decomposition never runs here). These outputs, from the narrow
-        shape detector, suppress exactly that refusal (and capture the
-        leaked loop variable) so the single-unit path is actually cacheable.
-        ``None`` for every other loop, which keeps its behaviour unchanged.
+        The body's ``out.append(...)`` / ``d[k] = v`` reads as an in-place
+        mutation to the per-statement analyzer, which would otherwise refuse
+        to cache the whole unit outright -- and a large, cheap loop gets no
+        caching from either mechanism (decomposition never runs here). These
+        outputs, from :func:`seeded_accumulator_loop`, suppress exactly that
+        refusal (and capture the leaked loop variables) so the single-unit
+        path is actually cacheable. ``None`` for every other loop, which
+        keeps its behaviour unchanged.
         """
-        acc_loop = cacheable_accumulator_loop(node, prev_node)
-        if acc_loop is None:
+        found = seeded_accumulator_loop(node, prior_nodes)
+        if found is None:
             return None
-        acc, loop_vars, _iter_node, _expr_call = acc_loop
-        force_outputs = {acc, *loop_vars}
+        force_outputs = set(found)
         logger.debug("[CONTROL] Single-unit accumulator loop -> force_outputs=%s", force_outputs)
         return force_outputs
 
