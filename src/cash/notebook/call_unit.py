@@ -42,6 +42,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.handed_callables import hands_a_state_changing_callable
+from cash.analysis.namespace_effects import user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -959,8 +960,13 @@ class CallUnit:
         ):
             self._entries.refuse(call.key)
         # Not stored when it made, picked or drew on a pyplot figure, which a
-        # hit would not: the next drawing would land on another figure.
-        elif pyplot_state() == figures_before and self._worth_storing(call, result, elapsed, result_held):
+        # hit would not: the next drawing would land on another figure. Nor
+        # when it reads pyplot's current figure, which no key holds.
+        elif (
+            pyplot_state() == figures_before
+            and user_callee_using_pyplot(call.fn) is None
+            and self._worth_storing(call, result, elapsed, result_held)
+        ):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
         if stored:
             self._cached(

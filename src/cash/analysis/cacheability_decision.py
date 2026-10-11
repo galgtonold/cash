@@ -47,7 +47,7 @@ from cash import _plain_data
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
-from cash.analysis.namespace_effects import statement_user_writer_call
+from cash.analysis.namespace_effects import statement_user_pyplot_call, statement_user_writer_call
 from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning
 from cash.value_types import BUILTIN_NAMES, mro_kind
@@ -309,6 +309,15 @@ def decide_cacheability(
         if found:
             name, writer = found
             return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
+        # A helper reading pyplot's current figure (``len(plt.gca().lines)``)
+        # is display, as ``plt.gca()`` in the statement is: no key holds the
+        # figure it reads.
+        drawn = None if waived else statement_user_pyplot_call(code, user_ns, tree)
+        if drawn:
+            name, user = drawn
+            return False, [
+                f"Calls {name}(), which reads or changes pyplot's current figure through {user}: it runs every time"
+            ]
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
         return False, [analysis_failed("check the functions the statement calls", exc)]
 

@@ -15,9 +15,10 @@ import builtins
 import functools
 import inspect
 import os
+import sys
 import textwrap
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
@@ -55,6 +56,8 @@ __all__ = [
     "LISTING_TEXT_MARKERS",
     "resolve_path_list",
     "statement_saves_current_pyplot_figure",
+    "statement_user_pyplot_call",
+    "user_callee_using_pyplot",
     "capturable_globals",
     "notebook_global_rebinds",
     "bare_call_argument_names",
@@ -240,6 +243,72 @@ def user_callee_writing_files(func: Any) -> str | None:
     :data:`_CALLEE_LIMIT` functions is taken for a writer, with a warning:
     the statement runs every time rather than be served without a write.
     """
+    return _first_user_callee(func, lambda current, replaces, callees: replaces, "writes files")
+
+
+def user_callee_using_pyplot(func: Any) -> str | None:
+    """The user function that calls a function of the pyplot module
+    (``plt.gca()``, ``plt.gcf()``, ``plt.get_fignums()``, ...) when *func* is
+    called, or None.
+
+    ``plt.gca()`` written in a statement is display: it reads pyplot's
+    current figure, which no key holds, and runs every time. A helper that
+    does the same (``len(plt.gca().lines)``) changes no figure, so the check
+    of pyplot's state before and after it sees nothing, and its result was
+    served for the drawing of an earlier run. So a call into user code whose
+    body calls pyplot, directly or through another user function, is judged
+    like the call written in the statement. Followed as
+    :func:`user_callee_writing_files` follows a call; ``@pure`` is taken.
+    """
+    if "matplotlib.pyplot" not in sys.modules:
+        # No figure exists for a helper to read before pyplot is imported;
+        # one it makes itself is seen by the before-and-after check.
+        return None
+    return _first_user_callee(func, _calls_pyplot, "uses pyplot")
+
+
+def _calls_pyplot(func: types.FunctionType, replaces: bool, callees: tuple[ast.expr, ...]) -> bool:
+    """Whether *func*'s body calls a function of the pyplot module: through
+    the module (``plt.gca``) or a name bound to one of its functions."""
+    namespace = func.__globals__
+    for expr in callees:
+        if isinstance(expr, ast.Attribute):
+            if _receiver_is_pyplot_module(expr.value, namespace):
+                return True
+        elif isinstance(expr, ast.Name):
+            target = namespace.get(expr.id)
+            if callable(target) and getattr(target, "__module__", None) == "matplotlib.pyplot":
+                return True
+    return False
+
+
+def statement_user_pyplot_call(
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
+) -> tuple[str, str] | None:
+    """``(callee as spelled, function calling pyplot)`` for the first call in
+    *code* into user code that calls pyplot (:func:`user_callee_using_pyplot`),
+    or None."""
+    if not namespace or "(" not in code or "matplotlib.pyplot" not in sys.modules:
+        return None
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    for node in calls:
+        found = user_callee_using_pyplot(resolve_callee(node.func, namespace))
+        if found:
+            return ast.unparse(node.func), found
+    return None
+
+
+def _first_user_callee(
+    func: Any,
+    test: "Callable[[types.FunctionType, bool, tuple[ast.expr, ...]], bool]",
+    does: str,
+) -> str | None:
+    """The name of the first user function *func* reaches, itself included,
+    for which *test* holds, depth first; `_TOO_MANY_CALLEES` past
+    :data:`_CALLEE_LIMIT` functions, with a warning saying cash cannot tell
+    whether it *does* what is asked."""
     root = _examined_body(func)
     if root is None:
         return None
@@ -248,7 +317,7 @@ def user_callee_writing_files(func: Any) -> str | None:
     stack = [root]
     while stack:
         current, replaces, callees = stack.pop()
-        if replaces:
+        if test(current, replaces, callees):
             return current.__name__
         found = []
         for expr in callees:
@@ -266,7 +335,7 @@ def user_callee_writing_files(func: Any) -> str | None:
             warn_diagnostic(
                 CashCacheIneffectiveWarning,
                 "KEY-HELPERS-UNWALKABLE",
-                f"cash cannot tell whether {name}() writes files: it reaches more than "
+                f"cash cannot tell whether {name}() {does}: it reaches more than "
                 f"{_CALLEE_LIMIT} functions. A statement calling it runs every time.",
                 "If your code really calls this many functions, report it: cash should follow them all.",
             )
