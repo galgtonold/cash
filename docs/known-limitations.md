@@ -131,7 +131,7 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:GaveUp @a3ee6e04, cash/notebook/shared_objects.py:view_base_names @34cf5190, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:share_group @e76e2209, cash/notebook/shared_objects.py:view_base_names @34cf5190, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
 When a statement leaves two names sharing an object, cash links them: an alias
 (`log = history`), a container holding another variable's object (`config =
 {"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
@@ -155,7 +155,7 @@ the cells that read the name keep their cached results:
 ```python { .nb-cell }
 get = lambda: x
 get().append(5)        # changes x through a closure
-pick.__defaults__[0].append("vat")   # changes features through the default
+pick.__defaults__[0].append("vat")  # changes features via the default
 ```
 
 **Fix:** change the object through its own name (`x.append(5)`), or rebind
