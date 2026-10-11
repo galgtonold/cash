@@ -43,6 +43,7 @@ from .file_effects import (
     get_base_name,
     locally_opened_handles,
 )
+from .mutations import RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
 from .read_only_callees import reads_its_arguments_only
 
 __all__ = [
@@ -63,6 +64,8 @@ __all__ = [
     "call_arguments",
     "is_estimator",
     "fits_its_receiver",
+    "call_only_reads",
+    "handed_through_items",
 ]
 
 
@@ -1026,7 +1029,7 @@ def call_argument_names(tree: ast.Module | None) -> frozenset[str]:
     for call in statement_calls(tree, control_bodies=False):
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             names |= argument_roots(arg, iterated)
-    return frozenset(names)
+    return frozenset(names | handed_through_items(tree, iterated))
 
 
 #: Builtins that read what they are given and change none of it.
@@ -1114,7 +1117,39 @@ def call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
             continue
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             names |= argument_roots(arg, iterated)
-    return _changeable(names, user_ns)
+    return _changeable(names | handed_through_items(tree, iterated), user_ns)
+
+
+def handed_through_items(tree: ast.Module | None, iterated: dict[str, frozenset[str]]) -> frozenset[str]:
+    """The variables a statement hands, item by item, to code that may
+    change the items: a method no rule knows to be pure called on a
+    comprehension's or a loop's target (``[r.update(tax=1) for r in
+    records]``), and what a call is handed beside a ``lambda``
+    (``list(map(lambda r: r.update(tax=1), records))``). Either changes
+    what ``records`` holds, as handing ``r`` to a function of the user's
+    would, so they are watched the same way."""
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for call in statement_calls(tree, control_bodies=False):
+        func = call.func
+        if isinstance(func, ast.Attribute):
+            base = func.value
+            while isinstance(base, (ast.Attribute, ast.Subscript)):
+                base = base.value
+            if (
+                isinstance(base, ast.Name)
+                and base.id in iterated
+                and func.attr not in RECEIVER_READONLY_WRITE_METHODS
+                and not chain_is_pure(func.attr, frozenset())
+            ):
+                names |= iterated[base.id]
+        args = [*call.args, *(kw.value for kw in call.keywords)]
+        if any(isinstance(arg, ast.Lambda) for arg in args):
+            for arg in args:
+                if not isinstance(arg, ast.Lambda):
+                    names |= argument_roots(arg, iterated)
+    return frozenset(names)
 
 
 def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
@@ -1194,3 +1229,11 @@ def fits_its_receiver(method: str, receiver: object) -> bool:
     simulation.
     """
     return method in FITTING_METHODS and is_estimator(receiver)
+
+
+def call_only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
+    """Whether *call* only reads the arguments *arg_names* name: an
+    unshadowed builtin or a library function known to (``len(xs)``,
+    ``np.mean(a)``), on pandas, numpy or builtin values."""
+    return _only_reads(call, arg_names, user_ns)
+
