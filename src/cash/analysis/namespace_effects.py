@@ -43,7 +43,7 @@ from .file_effects import (
     get_base_name,
     locally_opened_handles,
 )
-from .read_only_callees import reads_its_arguments_only
+from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
 
 __all__ = [
     "statement_calls_user_writer",
@@ -1037,6 +1037,24 @@ _READING_BUILTINS = frozenset({"len", "print", "repr", "str", "type", "id", "isi
 _READ_SAFE_LIBRARIES = frozenset({"builtins", "pandas", "numpy"})
 
 
+def _literal(node: ast.expr):
+    """A constant's value, else `NOT_A_LITERAL` (anything at run time)."""
+    return node.value if isinstance(node, ast.Constant) else NOT_A_LITERAL
+
+
+def _reads_only_as_called(call: ast.Call, fn) -> bool:
+    """`reads_its_arguments_only` for *fn* called as *call* is written:
+    ``np.median(a, overwrite_input=True)`` asks for a write, and so may a
+    ``*args`` or ``**kwargs`` whose content the text does not show."""
+    open_ended = any(isinstance(arg, ast.Starred) for arg in call.args) or any(kw.arg is None for kw in call.keywords)
+    return reads_its_arguments_only(
+        fn,
+        [_literal(arg) for arg in call.args if not isinstance(arg, ast.Starred)],
+        {kw.arg: _literal(kw.value) for kw in call.keywords if kw.arg is not None},
+        open_ended=open_ended,
+    )
+
+
 def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
     """``len(df)``, ``print(arr)``, ``np.quantile(deltas, 0.95)``: the
     unshadowed builtin or a library function that only reads its arguments
@@ -1052,7 +1070,7 @@ def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
     if isinstance(func, ast.Name) and func.id in _READING_BUILTINS:
         if func.id in user_ns and user_ns[func.id] is not getattr(builtins, func.id):
             return False
-    elif not reads_its_arguments_only(resolve_callee(func, user_ns)):
+    elif not _reads_only_as_called(call, resolve_callee(func, user_ns)):
         return False
     return all(
         type(user_ns[name]).__module__.partition(".")[0] in _READ_SAFE_LIBRARIES
@@ -1110,11 +1128,30 @@ def call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
     names: set[str] = set(bare_call_arguments(tree, user_ns))
     iterated = iterated_sources(tree)
     for call in statement_calls(tree, control_bodies=False):
-        if not _users_callee(call.func, user_ns):
+        if not (_users_callee(call.func, user_ns) or _asks_for_a_write(call, user_ns)):
             continue
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             names |= argument_roots(arg, iterated)
     return _changeable(names, user_ns)
+
+
+def _asks_for_a_write(call: ast.Call, user_ns: Mapping[str, Any]) -> bool:
+    """A library call whose result is kept but which is asked to write into
+    what it is handed: ``m = np.median(a, overwrite_input=True)`` sorts
+    ``a`` in place, ``s = np.mean(a, 0, None, b)`` fills ``b``.
+
+    The same rule `reads_its_arguments_only` applies to a bare call: an
+    ``out=``, ``inplace=`` or ``overwrite_*=`` that is not the literal
+    ``False`` or ``None``, by keyword for any callee, and by position for a
+    function whose signature names one there.
+    """
+    if any(kw.arg is not None and turns_on_a_write(kw.arg, _literal(kw.value)) for kw in call.keywords):
+        return True
+    open_ended = any(kw.arg is None for kw in call.keywords) or any(isinstance(a, ast.Starred) for a in call.args)
+    if len(call.args) < 2 and not open_ended:
+        return False  # no read-only function takes a write parameter first
+    fn = resolve_callee(call.func, user_ns)
+    return reads_its_arguments_only(fn) and not _reads_only_as_called(call, fn)
 
 
 def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:

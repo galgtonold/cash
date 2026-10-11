@@ -52,7 +52,7 @@ def test_concat_does_not_hash_the_frames_it_joins(cash_magics, hashed_frames, mo
     if not read_only:
         import cash.notebook.call_unit as call_unit
 
-        monkeypatch.setattr(call_unit, "reads_its_arguments_only", lambda fn: False)
+        monkeypatch.setattr(call_unit, "reads_its_arguments_only", lambda *call, **options: False)
     run_cash_cell(cash_magics, "import pandas as pd\nframes = [pd.DataFrame({'a': [i, i]}) for i in range(30)]")
     hashed_frames.clear()
     run_cash_cell(cash_magics, "df = pd.concat(frames, ignore_index=True)")
@@ -61,3 +61,11 @@ def test_concat_does_not_hash_the_frames_it_joins(cash_magics, hashed_frames, mo
         assert not hashed_frames
     else:
         assert len(hashed_frames) >= 60  # the control: before and after, each frame
+
+
+def test_a_call_asked_to_write_into_an_argument_is_not_read_only():
+    """``np.median(a, overwrite_input=True)`` sorts ``a`` in place: its
+    arguments are hashed around it like any other callee's."""
+    a = np.arange(3.0)
+    assert not call_effects.reads_its_arguments_only(np.median, (a,), {"overwrite_input": True})
+    assert call_effects.reads_its_arguments_only(np.median, (a,), {"overwrite_input": False})
