@@ -641,7 +641,10 @@ class CodeArgs:
                 for scope in _code_scopes(code):
                     names.update(scope.co_names)
         result = frozenset(names)
-        self._attribute_names_memo[memo_key] = (report if report is not None else getattr(func, "__code__", func), result)
+        self._attribute_names_memo[memo_key] = (
+            report if report is not None else getattr(func, "__code__", func),
+            result,
+        )
         return result
 
     def _installed_code(self, cls: type, names: frozenset[str]) -> tuple[tuple[str, Any], ...]:
@@ -888,9 +891,7 @@ def _installed_user_code(attr: Any) -> list[Any]:
     else:
         held = getattr(attr, "__dict__", None)
         candidates = list(held.values()) if isinstance(held, dict) else []
-    return [
-        c for c in candidates if isinstance(c, (types.FunctionType, type)) and defined_in_user_code(c)
-    ]
+    return [c for c in candidates if isinstance(c, (types.FunctionType, type)) and defined_in_user_code(c)]
 
 
 def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:
