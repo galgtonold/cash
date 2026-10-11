@@ -57,7 +57,11 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
 
     ``OUT = Path('report')``, ``EXPORTS = BASE / 'exports'``: what a writer's
     ``OUT / 'chart.png'`` means when the kernel does not hold ``OUT`` yet.
-    A name bound more than once, or by anything else, is left out.
+    A name bound more than once, or by anything else, is left out. A
+    statement that only changes a name in place does not bind it: a path is
+    a string or a ``pathlib`` path, which nothing changes in place, and
+    ``for old in OUT.glob('*.png'): old.unlink()`` lists ``OUT`` among what
+    it changes when the simulation cannot see that ``OUT`` holds a path.
     """
 
     bound: dict[str, str | None] = {}
@@ -70,6 +74,7 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
             node = ast.parse(entry.stmt_code).body
         except (SyntaxError, ValueError, TypeError):
             node = []
+        outputs = set(outputs) - _changed_in_place_only(node, outputs) if node else outputs
         if (
             len(node) == 1
             and isinstance(node[0], ast.Assign)
@@ -81,6 +86,37 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
         for name in outputs:
             bound[name] = value if name not in bound or bound[name] == value else None
     return {name: path for name, path in bound.items() if path is not None}
+
+
+#: What can bind a name without an assignment to it.
+_BINDS_OTHERWISE = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Match,
+)
+
+
+def _changed_in_place_only(body: list[ast.stmt], outputs) -> set[str]:
+    """The names of *outputs* that *body* never binds: no assignment,
+    loop target, ``with ... as`` or ``del`` names them, and nothing else
+    in it can bind a name (an import, a ``def``, a ``global``, ``exec``,
+    ``globals()``)."""
+    stored: set[str] = set()
+    for stmt in body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, _BINDS_OTHERWISE):
+                return set()
+            if isinstance(sub, ast.Name):
+                if not isinstance(sub.ctx, ast.Load):
+                    stored.add(sub.id)
+                elif sub.id in {"exec", "eval", "globals", "vars", "setattr", "locals"}:
+                    return set()
+    return set(outputs) - stored
 
 
 @functools.lru_cache(maxsize=STATEMENTS)
