@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from cash import content_hashers
+from cash.decorator import arg_hashing
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -67,9 +68,16 @@ def test_a_first_run_reads_the_argument_twice(cash_magics, mock_shell, reads_of_
     assert len(reads_of_x) == 2, f"x was hashed {len(reads_of_x)} times"
 
 
-def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_shell, reads_of_x):
+def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_shell, reads_of_x, monkeypatch):
     """A frame under copy-on-write is checked rather than read again
-    (`ArgFingerprints`), by every check that asks."""
+    (`ArgFingerprints`), by every check that asks.
+
+    Copy-on-write is the only mode from pandas 3 on and opt-in before it
+    (pandas 2 is the newest for Python 3.10): turned on here for this test.
+    """
+    if int(pd.__version__.split(".", 1)[0]) < 3:
+        monkeypatch.setattr(pd.options.mode, "copy_on_write", True)
+        monkeypatch.setattr(arg_hashing, "_COW_PANDAS", None)
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, SETUP)
     run_cash_cell(cash_magics, "x = pd.DataFrame({'a': np.arange(300_000.0), 'b': np.ones(300_000)})")
