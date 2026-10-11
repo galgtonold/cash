@@ -70,6 +70,7 @@ __all__ = [
     "handed_callables",
     "handed_values",
     "hands_a_state_changing_callable",
+    "users_object_attributes",
 ]
 
 
@@ -83,6 +84,9 @@ class HandedCallables(NamedTuple):
     receivers: frozenset[str] = frozenset()
     #: Why a handed user callable could not be read, one line each.
     unreadable: tuple[str, ...] = ()
+    #: The functions whose sources are in `sources`, each with the globals
+    #: its names are read from.
+    functions: tuple[types.FunctionType, ...] = ()
 
 
 _NONE = HandedCallables()
@@ -159,7 +163,9 @@ def handed_callables(
                 found.add(value, root, False)
     if not (found.sources or found.receivers or found.unreadable):
         return _NONE
-    return HandedCallables(tuple(found.sources), frozenset(found.receivers), tuple(found.unreadable))
+    return HandedCallables(
+        tuple(found.sources), frozenset(found.receivers), tuple(found.unreadable), tuple(found.functions)
+    )
 
 
 def handed_callable_values(call: ast.Call, namespace: Mapping[str, Any]) -> list[Any]:
@@ -1086,6 +1092,13 @@ def _items(container: Any) -> Iterable[Any]:
             return chain(dict.keys(container), dict.values(container))
         return container
     return _attributes_of(container)
+
+
+def users_object_attributes(value: Any) -> list[Any]:
+    """The values of the instance attributes of *value* when it is an object
+    of the user's class (its ``__dict__`` and ``__slots__``, read without
+    running code); empty for anything else."""
+    return _attributes_of(value) if _is_users_object(value) else []
 
 
 def _attributes_of(obj: Any) -> list[Any]:

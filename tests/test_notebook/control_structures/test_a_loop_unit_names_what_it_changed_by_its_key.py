@@ -102,6 +102,17 @@ ROWS = "rows = [list(range(10))] * 20\n"
             "import numpy as np\ngen = np.random.default_rng(0)\ndef draw(x):\n    return int(gen.integers(1000))",
             "draw(x)",
         ),
+        ("import time\ndef pc(x):\n    return time.perf_counter_ns() % 1000", "pc(x)"),
+        (
+            "import itertools\nclass IdGen:\n    def __init__(self):\n        self.c = itertools.count(1)\n"
+            "    def next(self, x):\n        return next(self.c)\nidgen = IdGen()",
+            "idgen.next(x)",
+        ),
+        (
+            "import time\nclass Clock:\n    def read(self, x):\n        return time.time_ns() // 1000 % 1000\n"
+            "clock = Clock()",
+            "clock.read(x)",
+        ),
     ],
     ids=[
         "a helper reads the clock",
@@ -112,6 +123,9 @@ ROWS = "rows = [list(range(10))] * 20\n"
         "a helper draws from secrets",
         "a helper builds an unseeded generator",
         "a helper draws from a global generator",
+        "a helper reads perf_counter_ns",
+        "a method draws from what its object holds",
+        "a method reads the clock",
     ],
 )
 def test_a_loop_whose_helper_is_not_a_function_of_its_inputs_is_named_by_its_values(cash_magics, setup, call):

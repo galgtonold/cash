@@ -33,6 +33,7 @@ import ast
 import contextlib
 import hashlib
 import logging
+import textwrap
 import types
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -40,9 +41,11 @@ from typing import TYPE_CHECKING, Any
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.handed_callables import handed_callables
+from ...analysis.handed_callables import handed_callables, users_object_attributes
 from ...analysis.namespace_effects import statement_calls_user_writer
+from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_norm import exact_source_digest
+from ...source_reading import own_source
 from ...tracking.randomness import (
     capture_rng_state,
     carrier_positions,
@@ -406,6 +409,12 @@ class ControlStructureProcessor:
             return None
         if any(rng_carrier_kind(user_ns.get(name)) is not None for name in reads):
             return None
+        for name in reads:
+            # ``idgen.next(i)`` drawing ``next(self.c)``: a method draws on
+            # what its object holds, as a function draws on a global.
+            held = users_object_attributes(user_ns.get(name))
+            if any(is_stream(value) or rng_carrier_kind(value) is not None for value in held):
+                return None
         callee_names = called_function_globals(reads, user_ns)
         for name in callee_names:
             value = user_ns.get(name)
@@ -418,22 +427,39 @@ class ControlStructureProcessor:
         handed = handed_callables(tree, user_ns)
         if handed.unreadable or handed.receivers:
             return None  # a callable it cannot read, or one that changes an object in place
-        sources = [
-            resolve(name) for name in set(reads) | callee_names if isinstance(user_ns.get(name), types.FunctionType)
+        # Each body read with the globals its names are looked up in.
+        scanned: list[tuple[str | None, Any]] = [
+            (resolve(name), user_ns)
+            for name in set(reads) | callee_names
+            if isinstance(user_ns.get(name), types.FunctionType)
         ]
-        for source in [*sources, *handed.sources]:
+        # Every function of the user's the loop can reach or hands over: a
+        # function of their module (``tools.stamp(i)``), a method of their
+        # class (``idgen.clock(i)``), a ``__call__``, each read by its own
+        # source.
+        reach = reached_user_code(code, user_ns)
+        if reach.data:
+            return None
+        for function in (*reach.functions, *handed.functions):
+            try:
+                # A method's source comes indented; read as it stands it
+                # would not parse, and the scans would find nothing.
+                scanned.append((textwrap.dedent(own_source(function)), function.__globals__))
+            except SOURCE_RETRIEVAL_ERRORS:
+                return None
+        scanned.extend((textwrap.dedent(source), user_ns) for source in handed.sources)
+        for source, namespace in scanned:
             if (
                 source is None
-                or CodeAnalyzer.scan_function_bodies_for_forbidden_functions(source, user_ns)
+                or CodeAnalyzer.scan_function_bodies_for_forbidden_functions(source, namespace)
                 or mints_unseeded_generator(source)
-                or statement_environment_reads(source, user_ns)
+                or statement_environment_reads(source, namespace)
             ):
                 return None
         if (
             CodeAnalyzer.scan_function_bodies_for_forbidden_functions(code, user_ns)
             or mints_unseeded_generator(code)
             or statement_environment_reads(code, user_ns)
-            or reached_user_code(code, user_ns).data
         ):
             return None
         if callee_global_mutations(tree, resolve, extra_sources=handed.sources):

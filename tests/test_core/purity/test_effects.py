@@ -124,3 +124,22 @@ def test_os_entropy_is_a_fresh_value_like_a_fresh_id(src):
 def test_a_name_based_uuid_is_not_a_fresh_value():
     """`uuid5(namespace, name)` is a hash of its arguments."""
     assert classify_call(_call("uuid.uuid5(uuid.NAMESPACE_DNS, 'x')")) is None
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "time.perf_counter_ns()",
+        "time.monotonic_ns()",
+        "time.process_time_ns()",
+        "time.thread_time()",
+        "time.thread_time_ns()",
+        "time.clock_gettime(time.CLOCK_MONOTONIC)",
+        "time.clock_gettime_ns(time.CLOCK_MONOTONIC)",
+    ],
+)
+def test_every_spelling_of_a_timer_reads_the_clock(src):
+    """The ``_ns`` twins and the thread and ``clock_gettime`` timers give a
+    new value on every call, as ``time.perf_counter()`` does."""
+    effect = classify_call(_call(src))
+    assert effect is not None and effect.kind is EffectKind.CLOCK, effect
