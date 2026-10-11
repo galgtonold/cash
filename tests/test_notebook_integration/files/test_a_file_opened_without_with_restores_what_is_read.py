@@ -20,7 +20,9 @@ SHOW = "print('ROWS', len(parsed), parsed[-1])"
 
 
 def _write(nb_runner, n):
-    (nb_runner.work_dir / "rows.txt").write_text("".join(f"{i},{i * 3}\n" for i in range(n)), encoding="utf-8")
+    (nb_runner.work_dir / "rows.txt").write_text(
+        "".join(f"{i},{i * 3}\n" for i in range(n)), encoding="utf-8", newline="\n"
+    )
 
 
 def _parse_line(output):
@@ -72,7 +74,7 @@ def test_a_read_through_another_name_moves_the_file_on_every_run(nb_runner, open
     """A read through ``f.readline``, a function holding the handle, or a
     dict of handles moves the file on as ``f.readline()`` does: served from
     the cache, it left the next read starting at the header again."""
-    (nb_runner.work_dir / "data.csv").write_text("id,v\n1,2\n3,4\n", encoding="utf-8")
+    (nb_runner.work_dir / "data.csv").write_text("id,v\n1,2\n3,4\n", encoding="utf-8", newline="\n")
     setup = SETUP + "\ncash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)"
     nb_runner.create_notebook(
         [setup, opener, read + "\nprint('HEADER', repr(header))", "print('REST', repr(f.read()))"]
