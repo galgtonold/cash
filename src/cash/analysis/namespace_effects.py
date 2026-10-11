@@ -27,6 +27,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
 from ..purity import is_pure
 from ..source_reading import own_source, wrapper_layers
+from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import called_names, resolve_callee
 from .callee_effects import (
     argument_roots,
@@ -209,6 +210,18 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, bool, tuple[ast.expr, .
         return None
     handles = frozenset(locally_opened_handles(tree))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    # ``# @cash:assume-safe`` on a write, or ``with cash.assume_safe():``
+    # around it, is the user's word that skipping it on a hit is fine; on the
+    # ``def`` line it covers the whole body. In a helper it covers every
+    # caller, as it does for the analyzer's other findings.
+    waived, whole_body = audited_lines(source) if "@cash:" in source else (frozenset(), False)
+    if "with" in source:
+        waived = waived | assume_safe_block_lines(tree, func)
+    if whole_body:
+        calls = []
+    elif waived:
+        # A waived call to another helper waives what that helper writes.
+        calls = [node for node in calls if node.lineno not in waived]
     verdicts = {call_repeatability(node, handles) for node in calls}
     replaces = REPEATABILITY_REPLACING in verdicts
     appends = REPEATABILITY_ACCUMULATING in verdicts

@@ -41,7 +41,7 @@ def _expensive_def(counter):
     """RHS is independent of ``df`` so a self-reference cannot be blamed."""
     return (
         "def expensive(n):\n"
-        f"    open(r'{counter}', 'a').write('X')\n"
+        f"    open(r'{counter}', 'a').write('X')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.05)\n"
         "    return [i * 10 for i in range(n)]"
     )

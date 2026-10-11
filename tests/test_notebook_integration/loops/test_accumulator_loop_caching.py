@@ -80,7 +80,7 @@ def _n(path):
 def _slow_def(counter):
     """Like ``SLOW``, but also logs each real call to *counter* so tests can
     count real executions instead of trusting the badge's own bookkeeping."""
-    return f"def slow(e):\n    open(r'{counter}', 'a').write('X')\n    time.sleep(0.03)\n    return e * 10"
+    return f"def slow(e):\n    open(r'{counter}', 'a').write('X')  # @cash:assume-safe (a test counter)\n    time.sleep(0.03)\n    return e * 10"
 
 
 def _restart(nb_runner):

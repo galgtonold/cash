@@ -69,7 +69,7 @@ def _compute_def(counter, ms=1.0):
         "    while time.perf_counter() < t:\n"
         "        pass\n"
         "def compute(v):\n"
-        f"    open(r'{counter}', 'a').write('X')\n"
+        f"    open(r'{counter}', 'a').write('X')  # @cash:assume-safe (a test counter)\n"
         f"    _busy({ms})\n"
         "    return v * 10\n"
     )

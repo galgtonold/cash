@@ -4,6 +4,7 @@ import functools
 import json
 import shutil
 
+import cash
 from cash.analysis import namespace_effects
 from cash.analysis.namespace_effects import user_callee_writing_files
 from cash.purity import pure
@@ -39,6 +40,32 @@ def slow_and_logged(v):
 
 def compute(v):
     return v + 1
+
+
+def counted(v):
+    open("calls.log", "a", encoding="utf-8").write("X")  # @cash:assume-safe
+    return v
+
+
+def counted_by_its_def(v):  # @cash:assume-safe
+    open("calls.log", "a", encoding="utf-8").write("X")
+    return v
+
+
+def counted_in_a_block(v):
+    with cash.assume_safe():
+        open("calls.log", "a", encoding="utf-8").write("X")
+    return v
+
+
+def logged_on_its_word(v):
+    log("x")  # @cash:assume-safe
+    return v
+
+
+def counted_then_saved(v, path):
+    open("calls.log", "a", encoding="utf-8").write("X")  # @cash:assume-safe
+    open(path, "w", encoding="utf-8").write(str(v))
 
 
 @pure
@@ -211,3 +238,16 @@ def test_the_same_code_in_an_installed_package_is_not_read(tmp_path, monkeypatch
 
     assert user_callee_writing_files(user.dump) == "dump"
     assert user_callee_writing_files(installed.dump) is None
+
+
+def test_a_write_the_user_waived_in_the_helper_is_not_a_writer():
+    """``# @cash:assume-safe`` on the write, on the ``def`` line, or ``with
+    cash.assume_safe():`` around it: in a helper it covers every caller."""
+    assert user_callee_writing_files(counted) is None
+    assert user_callee_writing_files(counted_by_its_def) is None
+    assert user_callee_writing_files(counted_in_a_block) is None
+    assert user_callee_writing_files(logged_on_its_word) is None, "a waived call waives the helper it calls"
+
+
+def test_a_waiver_covers_its_own_line_only():
+    assert user_callee_writing_files(counted_then_saved) == "counted_then_saved"

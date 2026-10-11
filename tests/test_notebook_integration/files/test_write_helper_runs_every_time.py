@@ -54,16 +54,23 @@ def test_warm_restart_and_run_all_writes_the_chart(nb_runner):
         assert (work / "out" / "grid.png").exists(), f"warm run {cycle + 1} wrote no chart"
 
 
-@pytest.mark.parametrize(("annotation", "runs"), [("", 2), ("  # @cash:assume-safe", 1)], ids=["plain", "assume-safe"])
-def test_a_helper_that_appends_runs_every_time(nb_runner, annotation, runs):
+@pytest.mark.parametrize(
+    ("annotation", "helper_annotation", "runs"),
+    [("", "", 2), ("  # @cash:assume-safe", "", 1), ("", "  # @cash:assume-safe", 1)],
+    ids=["plain", "assume-safe", "assume-safe-in-the-helper"],
+)
+def test_a_helper_that_appends_runs_every_time(nb_runner, annotation, helper_annotation, runs):
     """A function that appends to a log writes a file a cache hit would
     skip: it runs again after a restart, as in a plain kernel, unless the
-    statement says the write may be skipped."""
+    statement, or the write in the helper (which covers every caller), says
+    the write may be skipped."""
     nb_runner.create_notebook(
         [
             "import cash\n%cash_on",
             SETUP,
-            "import time\ndef slow(v):\n    log('slow')\n    time.sleep(0.3)\n    return v * 2\nx = slow(21)"
+            "import time\ndef slow(v):\n    log('slow')"
+            + helper_annotation
+            + "\n    time.sleep(0.3)\n    return v * 2\nx = slow(21)"
             + annotation,
             "print('x =', x)",
         ]

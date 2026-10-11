@@ -180,7 +180,8 @@ cash spots side effects from the statement's source, without running it. So:
   (`map(save, figs)`, `s.apply(save)`), and one that appends (`open(p, "a")`,
   an experiment log): a log started afresh above and read back below would
   lose the rows a hit skips. Put `# @cash:assume-safe` on the statement when
-  the write may be skipped. A function of an installed
+  the write may be skipped, or on the write in your function to cover every
+  caller (a call counter, a debug log). A function of an installed
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
