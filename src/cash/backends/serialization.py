@@ -72,7 +72,7 @@ class PickleSerializer(Serializer):
             buffers.append(raw.tobytes() if copy else raw)
             return False
 
-        stream = kept_state.dumps(data, protocol=5, buffer_callback=take)
+        stream = kept_state.dumps(data, protocol=5, buffer_callback=take, on_retry=buffers.clear)
         return stream, buffers
 
     def deserialize_split(self, stream: Any, buffers: list) -> Any:

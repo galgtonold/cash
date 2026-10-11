@@ -24,7 +24,17 @@ import types
 import weakref
 from typing import Any
 
-__all__ = ["chooses_its_state", "dumps", "left_out_attrs", "restore_with_dict"]
+__all__ = [
+    "FlatValue",
+    "chooses_its_state",
+    "dumps",
+    "flatten",
+    "left_out_attrs",
+    "load_flat",
+    "reducers",
+    "restore_with_dict",
+    "too_deep",
+]
 
 
 def dumps(
@@ -36,13 +46,128 @@ def dumps(
     extra: dict | None = None,
     persistent_id: Any = None,
     keyed: bool = False,
+    on_retry: Any = None,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
     are reducers by type that come first (a clock test double's);
     *persistent_id* is the pickler's hook of that name. *keyed*
     bytes are for hashing, never loaded: an instance of the user's own class
-    also keeps the attributes its own reduce leaves out (`_reduce_for_key`)."""
+    also keeps the attributes its own reduce leaves out (`_reduce_for_key`).
+
+    A value too deep for the pickler's recursion is pickled flat
+    (`FlatValue`), which ``pickle.loads`` reads back as the value; when it
+    is, *on_retry* is called first, as *buffer_callback* is called again
+    for the buffers of the second attempt. *keyed* bytes are not: a value
+    too deep to key raises RecursionError, as before."""
+    if FLAT_FIRST and not _surely_shallow(value):
+        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+    try:
+        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+    except (RecursionError, MemoryError) as exc:
+        if keyed or not too_deep(exc):
+            # A key is never taken over a value pickle cannot follow: the
+            # caller says the value is too deep to key (`canonical_form`).
+            raise
+    # Deeper than the pickler may recurse (a linked list of a few thousand
+    # nodes): pickled flat instead, as `FlatValue`. Buffers handed out by the
+    # attempt that failed are taken back first.
+    if on_retry is not None:
+        on_retry()
+    flat = flatten(value, _KeepDict(protocol, extra, keyed), _persistent_leaf(persistent_id))
+    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+
+
+def _dumps_walked_first(
+    value: Any,
+    protocol: int,
+    fast: bool,
+    buffer_callback: Any,
+    extra: dict | None,
+    persistent_id: Any,
+    keyed: bool,
+) -> bytes:
+    """`dumps` where the pickler would run out of C stack before its
+    recursion limit (`FLAT_FIRST`): the value is walked on the heap first,
+    and handed to the pickler only when it is shallow enough
+    (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
+    pickle follows elsewhere, and past that it raises RecursionError as the
+    pickler raises on other Pythons."""
+    deepest = sys.getrecursionlimit() // 2 if keyed else None
+    flat = flatten(value, _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id), deepest)
+    if flat.depth <= _SAFE_DEPTH:
+        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+
+
+#: How many objects deep the pickler is let follow a value on `FLAT_FIRST`
+#: Pythons. Each costs it two or three levels of C recursion.
+_SAFE_DEPTH = 100
+
+
+#: Python 3.10 on Windows runs out of C stack before the recursion limit
+#: stops the pickler or ``deepcopy``: its threads have a 2 MB stack, and
+#: pickling a chain a few hundred objects long took the process down rather
+#: than raise. There the user's objects and the containers holding them are
+#: always pickled flat, and only a library's objects, whose pickling is a
+#: level or two deep, by the pickler itself. Later Pythons, and 3.10 on the
+#: 8 MB and larger stacks of Linux and macOS, raise RecursionError first.
+FLAT_FIRST = sys.version_info < (3, 11) and sys.platform == "win32"
+
+
+def _persistent_leaf(persistent_id: Any) -> Any:
+    """What `flatten` pickles whole: what *persistent_id* takes."""
+    return None if persistent_id is None else (lambda obj: persistent_id(obj) is not None)
+
+
+def _flat_leaf(persistent_id: Any) -> Any:
+    """What `flatten` pickles whole on `FLAT_FIRST` Pythons: what
+    *persistent_id* takes, and a library's objects (`_library_type`)."""
+
+    def leaf(obj: Any) -> bool:
+        if persistent_id is not None and persistent_id(obj) is not None:
+            return True
+        return _library_type(type(obj))
+
+    return leaf
+
+
+def _library_type(t: type) -> bool:
+    """Is *t* a library's type (pandas, numpy, the standard library's
+    ``datetime``), not one of the user's nor a builtin container? Remembered
+    per type."""
+    try:
+        return _LIBRARY_TYPES[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return False
+    module = t.__module__
+    if module in _WALKED_MODULES:
+        found = False
+    else:
+        from .install_paths import is_user_code_module
+
+        found = not is_user_code_module(sys.modules.get(module))
+    _LIBRARY_TYPES[t] = found
+    return found
+
+
+#: Their types hold other objects as the user's do: walked by `flatten`.
+_WALKED_MODULES = frozenset({"builtins", "collections", "copyreg", "__main__"})
+
+_LIBRARY_TYPES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _dumps(
+    value: Any,
+    protocol: int,
+    fast: bool,
+    buffer_callback: Any,
+    extra: dict | None,
+    persistent_id: Any,
+    keyed: bool,
+) -> bytes:
     buf = io.BytesIO()
     pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
     pickler.fast = fast
@@ -51,6 +176,301 @@ def dumps(
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed)
     pickler.dump(value)
     return buf.getvalue()
+
+
+def _surely_shallow(value: Any) -> bool:
+    """Is *value* one the pickler walks a level or two of at most: an atom,
+    a plain array, or a short container of atoms? Such a value needs no
+    large stack (`_big_stack`), and most of what is pickled is one."""
+    kind = type(value)
+    if kind in _FLAT_ATOMS or _flat_array(value):
+        return True
+    if kind is dict:
+        return len(value) <= _SHALLOW_ITEMS and all(
+            type(k) in _FLAT_ATOMS and type(v) in _FLAT_ATOMS for k, v in value.items()
+        )
+    if kind in (list, tuple, set, frozenset):
+        return len(value) <= _SHALLOW_ITEMS and all(type(item) in _FLAT_ATOMS for item in value)
+    return False
+
+
+#: The most items `_surely_shallow` looks through before it says no.
+_SHALLOW_ITEMS = 64
+
+
+def too_deep(exc: BaseException) -> bool:
+    """Did *exc* stop a walk that went deeper than the stack allows?
+
+    A RecursionError; or, on Windows before Python 3.12, the MemoryError
+    the interpreter raises when it finds its C stack nearly used up.
+    """
+    return isinstance(exc, RecursionError) or (isinstance(exc, MemoryError) and str(exc) == "Stack overflow")
+
+
+class _Slot(int):
+    """In a `FlatValue`'s steps: the object made at that step number."""
+
+    __slots__ = ()
+
+    def __reduce__(self) -> tuple:
+        return _Slot, (int(self),)
+
+
+#: Pickled as they are in a `FlatValue`: none holds another object.
+_FLAT_ATOMS: frozenset[type] = frozenset(
+    {type(None), bool, int, float, complex, str, bytes, type(Ellipsis), type(NotImplemented), range}
+)
+
+
+class FlatValue:
+    """A value as a flat list of steps that make it, pickled where the value
+    itself is too deep to pickle: ``load_flat(steps, root)`` when loaded.
+
+    Each object the value holds is one step (made, then filled), and refers
+    to the others by step number (`_Slot`), so the stream is as deep as one
+    object however long the chain. The steps are those pickle's own stream
+    takes, in its order: an object is made from its reduce, then its
+    state is set once everything in it is built, so ``__setstate__`` sees
+    what it would see in a plain pickle.
+    """
+
+    __slots__ = ("depth", "root", "steps")
+
+    def __init__(self, steps: list, root: Any, depth: int = 0) -> None:
+        self.steps = steps
+        self.root = root
+        #: How many objects deep the value is: the longest chain of
+        #: objects, each holding the next, that the walk followed.
+        self.depth = depth
+
+    def __reduce__(self) -> tuple:
+        return load_flat, (self.steps, self.root)
+
+
+def flatten(value: Any, reducers: Any, leaf: Any = None, deepest: int | None = None) -> FlatValue:
+    """*value* as a `FlatValue`, walked on a stack of constant size.
+
+    *reducers* is ``type -> reducer`` (`_KeepDict`); *leaf*, when given,
+    says which objects to pickle as they are (the pickler's persistent ids).
+    Raises ``pickle.PicklingError`` for an object rebuilt from arguments
+    that hold the object itself, as pickle cannot store one either, and
+    RecursionError, as the pickler does, for a value more than *deepest*
+    objects deep.
+    """
+    steps: list = []
+    slots: dict[int, _Slot] = {}
+    alive: list = []  # every object walked, so no id in *slots* is reused
+    making: set[int] = set()
+
+    def made(obj: Any) -> _Slot:
+        """The step number of *obj*, made by the step appended next."""
+        slot = _Slot(len(slots_in_order))
+        slots_in_order.append(slot)
+        slots[id(obj)] = slot
+        alive.append(obj)
+        return slot
+
+    slots_in_order: list[_Slot] = []
+
+    def whole(obj: Any) -> bool:
+        """Pickled as it is, without a step: it holds no object."""
+        obj_type = type(obj)
+        return obj_type in _FLAT_ATOMS or obj_type in _WHOLE or issubclass(obj_type, type)
+
+    def start(obj: Any) -> tuple[bool, Any]:
+        obj_type = type(obj)
+        if obj_type in _FLAT_ATOMS:
+            return True, obj
+        key = id(obj)
+        if key in slots:
+            return True, slots[key]
+        if leaf is not None and leaf(obj):
+            return True, obj  # asked first, as the pickler asks its persistent_id first
+        if obj_type is list:
+            return False, _list(obj)
+        if obj_type is dict:
+            return False, _dict(obj)
+        if obj_type is tuple:
+            if all(map(whole, obj)):
+                return True, obj  # pickled in the step that holds it
+            return False, _tuple(obj)
+        if obj_type in _WHOLE or issubclass(obj_type, type) or _flat_array(obj):
+            return True, obj
+        reduced = reducers[obj_type](obj)
+        if isinstance(reduced, str):
+            return True, obj  # a global, pickled by name
+        if key in making:
+            raise pickle.PicklingError(f"a {obj_type.__qualname__} is rebuilt from arguments that hold it")
+        return False, _reduced(obj, reduced)
+
+    def _list(obj: list) -> Any:
+        slot = made(obj)
+        steps.append(("list", slot))
+        items = []
+        for item in obj:
+            items.append((yield item))
+        steps.append(("extend", slot, items))
+        return slot
+
+    def _dict(obj: dict) -> Any:
+        slot = made(obj)
+        steps.append(("dict", slot))
+        pairs = []
+        for k, v in obj.items():
+            pairs.append((yield k))
+            pairs.append((yield v))
+        steps.append(("setitems", slot, pairs))
+        return slot
+
+    def _tuple(obj: tuple) -> Any:
+        items = []
+        for item in obj:
+            items.append((yield item))
+        if id(obj) in slots:  # made meanwhile, through a cycle
+            return slots[id(obj)]
+        slot = made(obj)
+        steps.append(("tuple", slot, items))
+        return slot
+
+    def _reduced(obj: Any, reduced: tuple) -> Any:
+        rebuild, args, *rest = reduced
+        rest += [None] * (4 - len(rest))
+        state, listitems, dictitems, setter = rest[:4]
+        making.add(id(obj))
+        args = yield args
+        making.discard(id(obj))
+        slot = made(obj)
+        steps.append(("new", slot, rebuild, args))
+        if state is not None:
+            state = yield state
+            steps.append(("build", slot, state, setter))
+        if listitems is not None:
+            items = []
+            for item in listitems:
+                items.append((yield item))
+            steps.append(("extend", slot, items))
+        if dictitems is not None:
+            pairs = []
+            for k, v in dictitems:
+                pairs.append((yield k))
+                pairs.append((yield v))
+            steps.append(("setitems", slot, pairs))
+        return slot
+
+    depth = 0
+    done, root = start(value)
+    if not done:
+        stack = [root]
+        sent: Any = None
+        while stack:
+            if len(stack) > depth:
+                depth = len(stack)
+                if deepest is not None and depth > deepest:
+                    raise RecursionError("maximum recursion depth exceeded while pickling an object")
+            try:
+                part = stack[-1].send(sent)
+            except StopIteration as finished:
+                stack.pop()
+                sent = finished.value
+                continue
+            done, got = start(part)
+            if done:
+                sent = got
+            else:
+                stack.append(got)
+                sent = None
+        root = sent
+    return FlatValue(steps, root, depth)
+
+
+def load_flat(steps: list, root: Any) -> Any:
+    """The value a `FlatValue` holds, made step by step. Named in stored
+    entries: keep its name."""
+    made: list = []
+
+    def get(part: Any) -> Any:
+        return made[part] if type(part) is _Slot else part
+
+    for step in steps:
+        kind = step[0]
+        if kind == "list":
+            made.append([])
+        elif kind == "dict":
+            made.append({})
+        elif kind == "tuple":
+            made.append(tuple(get(item) for item in step[2]))
+        elif kind == "new":
+            made.append(step[2](*get(step[3])))
+        elif kind == "build":
+            _build(made[step[1]], get(step[2]), step[3])
+        elif kind == "extend":
+            target, items = made[step[1]], [get(item) for item in step[2]]
+            if isinstance(target, list):
+                target.extend(items)
+            else:
+                extend = getattr(target, "extend", None)
+                if extend is not None:
+                    extend(items)
+                else:
+                    for item in items:
+                        target.append(item)
+        elif kind == "setitems":
+            target, pairs = made[step[1]], step[2]
+            for i in range(0, len(pairs), 2):
+                target[get(pairs[i])] = get(pairs[i + 1])
+        else:
+            raise pickle.UnpicklingError(f"unknown step {kind!r} in a flat value")
+    return get(root)
+
+
+def _build(obj: Any, state: Any, setter: Any) -> None:
+    """Set *obj*'s *state*, as pickle's ``BUILD`` does."""
+    if setter is not None:
+        setter(obj, state)
+        return
+    setstate = getattr(obj, "__setstate__", None)
+    if setstate is not None:
+        setstate(state)
+        return
+    slots = None
+    if isinstance(state, tuple) and len(state) == 2:
+        state, slots = state
+    if state:
+        inst_dict = obj.__dict__
+        for k, v in state.items():
+            inst_dict[sys.intern(k) if type(k) is str else k] = v
+    if slots:
+        for k, v in slots.items():
+            setattr(obj, k, v)
+
+
+#: Pickled as they are in a `FlatValue`: by name, or holding no object.
+_WHOLE: frozenset[type] = frozenset(
+    {
+        types.FunctionType,
+        types.BuiltinFunctionType,
+        types.ModuleType,
+        types.CodeType,
+        bytearray,
+        pickle.PickleBuffer,
+    }
+)
+
+
+def _flat_array(obj: Any) -> bool:
+    """A numpy array of plain values: pickled as it is in a `FlatValue`,
+    its data out of band as ever."""
+    if "numpy" not in sys.modules:
+        return False
+    ndarray = sys.modules["numpy"].ndarray
+    return isinstance(obj, ndarray) and not obj.dtype.hasobject
+
+
+def reducers(protocol: int = pickle.DEFAULT_PROTOCOL) -> dict:
+    """Each type's reducer, as `dumps` reduces it: ``reducers(p)[type(obj)](obj)``
+    is what pickling *obj* at protocol *p* saves (a class has none: it is
+    pickled by name)."""
+    return _KeepDict(protocol, None)
 
 
 class _KeepDict(dict):
