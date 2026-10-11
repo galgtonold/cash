@@ -55,9 +55,22 @@ def test_the_write_is_found_through_another_user_function():
     assert user_callee_writing_files(report) == "export"
 
 
-def test_an_append_or_no_write_is_not():
-    assert user_callee_writing_files(log) is None
-    assert user_callee_writing_files(slow_and_logged) is None
+def test_an_append_is_a_write_a_hit_would_skip():
+    """An experiment log the notebook starts afresh and reads back below
+    loses the rows a cache hit skips: an append counts like a replace."""
+    assert user_callee_writing_files(log) == "log"
+    assert user_callee_writing_files(slow_and_logged) == "log"
+
+
+def test_the_upstream_replay_does_not_count_an_append():
+    """Re-fired by a replay, an append writes its rows twice; asked without
+    appends, only a replacing write counts."""
+    assert user_callee_writing_files(log, appends=False) is None
+    assert user_callee_writing_files(slow_and_logged, appends=False) is None
+    assert user_callee_writing_files(export, appends=False) == "export"
+
+
+def test_no_write_is_not_a_writer():
     assert user_callee_writing_files(compute) is None
 
 

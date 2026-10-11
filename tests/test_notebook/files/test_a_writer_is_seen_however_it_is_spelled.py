@@ -23,7 +23,7 @@ skipped, while a notebook-defined ``save(...)`` was covered all along.
 
 The controls matter as much as the failing case: an installed package's method
 (``df.to_csv``) must NOT become a reason to refuse caching every statement that
-touches a DataFrame, and an append must stay a skippable effect.
+touches a DataFrame.
 """
 
 from __future__ import annotations
@@ -82,9 +82,10 @@ def test_a_module_function_that_writes_nothing_is_not_a_writer(ns):
     assert statement_calls_user_writer("v = tl.tidy(values)", ns) is None
 
 
-def test_an_append_through_a_module_is_still_not_a_writer(ns):
-    """An append is the effect a cache hit is understood to skip."""
-    assert statement_calls_user_writer("tl.note('hello')", ns) is None
+def test_an_append_through_a_module_is_a_writer(ns):
+    """An append is a write a cache hit would skip: a log started afresh
+    above and read back below loses its rows."""
+    assert statement_calls_user_writer("tl.note('hello')", ns) == "note"
 
 
 def test_an_installed_packages_method_is_not_looked_into(ns):
@@ -152,10 +153,17 @@ def test_the_cacheability_decision_refuses_a_project_module_writer(ns, code, wri
     assert f"which writes files ({writer})" in reasons[0]
 
 
-def test_the_decision_still_caches_module_calls_that_replace_no_file(ns):
-    """Controls: no write, and an append, keep caching through a module."""
+def test_the_decision_still_caches_module_calls_that_write_no_file(ns):
+    """Control: no write keeps caching through a module."""
     assert _verdict("v = tl.tidy(values)", ns) == (True, [])
-    assert _verdict("tl.note('hello')", ns) == (True, [])
+
+
+def test_the_decision_refuses_an_appending_call_and_names_the_opt_out(ns):
+    cacheable, reasons = _verdict("tl.note('hello')", ns)
+    assert cacheable is False
+    assert "which writes files (note)" in reasons[0]
+    assert "# @cash:assume-safe" in reasons[0]
+    assert _verdict("tl.note('hello')", ns, CacheAnnotation(assume_safe=True)) == (True, [])
 
 
 def test_assume_safe_waives_a_project_module_writer(ns):

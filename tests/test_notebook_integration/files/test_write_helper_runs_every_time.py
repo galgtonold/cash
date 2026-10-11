@@ -54,14 +54,17 @@ def test_warm_restart_and_run_all_writes_the_chart(nb_runner):
         assert (work / "out" / "grid.png").exists(), f"warm run {cycle + 1} wrote no chart"
 
 
-def test_a_helper_that_only_appends_still_caches(nb_runner):
-    """Control: an append is a skippable side effect, like a print -- a
-    function that logs keeps caching."""
+@pytest.mark.parametrize(("annotation", "runs"), [("", 2), ("  # @cash:assume-safe", 1)], ids=["plain", "assume-safe"])
+def test_a_helper_that_appends_runs_every_time(nb_runner, annotation, runs):
+    """A function that appends to a log writes a file a cache hit would
+    skip: it runs again after a restart, as in a plain kernel, unless the
+    statement says the write may be skipped."""
     nb_runner.create_notebook(
         [
             "import cash\n%cash_on",
             SETUP,
-            "import time\ndef slow(v):\n    log('slow')\n    time.sleep(0.3)\n    return v * 2\nx = slow(21)",
+            "import time\ndef slow(v):\n    log('slow')\n    time.sleep(0.3)\n    return v * 2\nx = slow(21)"
+            + annotation,
             "print('x =', x)",
         ]
     )
@@ -74,7 +77,31 @@ def test_a_helper_that_only_appends_still_caches(nb_runner):
     nb_runner.enable_persist()
     nb_runner.run_all()
     assert "x = 42" in nb_runner.get_output(4)
-    assert log.read_text(encoding="utf-8").split() == ["slow"], "slow() re-ran instead of coming from the cache"
+    assert log.read_text(encoding="utf-8").split() == ["slow"] * runs
+
+
+EXPERIMENT_LOG = [
+    "import time, csv\nopen('results.csv', 'w').close()   # start a fresh log",
+    "def evaluate(lr):\n    time.sleep(0.3)\n    score = round(1 - lr, 3)\n"
+    "    with open('results.csv', 'a', newline='') as fh:\n        csv.writer(fh).writerow([lr, score])\n"
+    "    return score",
+    "s1 = evaluate(0.1)",
+    "more = list(map(evaluate, [0.2, 0.3]))",
+    "rows = list(csv.reader(open('results.csv')))",
+]
+
+
+def test_an_experiment_log_started_afresh_gets_its_rows_again(nb_runner):
+    """The log is emptied at the top and read back at the bottom: served
+    from the cache, the calls appended nothing and the log read back empty."""
+    nb_runner.create_notebook(EXPERIMENT_LOG)
+    nb_runner.start_kernel()
+    for _ in range(2):
+        nb_runner.run_all()
+        assert nb_runner.peek("len(rows)") == "3"
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert nb_runner.peek("len(rows)") == "3"
 
 
 # The same export behind a helper in the user's own module, as the notebook

@@ -176,7 +176,11 @@ cash spots side effects from the statement's source, without running it. So:
 - A call to a function of yours whose body writes a file counts as a write
   (`save(fig, "chart.png")`), whether it is defined in the notebook or in a
   module of your project (`helpers.save(fig, "chart.png")`), and so does one
-  that writes through another of your functions. A function of an installed
+  that writes through another of your functions, one handed to a call
+  (`map(save, figs)`, `s.apply(save)`), and one that appends (`open(p, "a")`,
+  an experiment log): a log started afresh above and read back below would
+  lose the rows a hit skips. Put `# @cash:assume-safe` on the statement when
+  the write may be skipped. A function of an installed
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
