@@ -42,13 +42,17 @@ _LINEAGE_HASHED_TYPES = frozenset({"DataFrame", "Series", "ndarray"})
 #: A collection with more items than this is lineage-hashed too.
 _LINEAGE_HASHED_ITEMS = 200
 
+_COLLECTIONS = (list, tuple, dict, set, frozenset)
+
 
 def hashed_by_lineage(value: Any) -> bool:
     """Is *value*'s session hash its lineage rather than its content?
 
     A frame, an array or a table, and a collection of more than
-    ``_LINEAGE_HASHED_ITEMS`` items or holding one of those: hashing it in
-    full on every output and every restore would cost seconds a hit. No
+    ``_LINEAGE_HASHED_ITEMS`` items or holding one of those, at any depth:
+    hashing it in full on every output and every restore would cost seconds
+    a hit (``data = {"user_id": user_ids, ...}`` over four parsed columns of
+    two million items, 6 s). No
     check compares such a value's content with its session hash: each one
     that would reads it as changed instead (fail closed), since a lineage
     never equals a content hash.
@@ -59,7 +63,7 @@ def hashed_by_lineage(value: Any) -> bool:
     artist = _artist_class()
     if artist is not None and isinstance(value, artist):
         return True
-    if t in (list, tuple, dict, set, frozenset):
+    if t in _COLLECTIONS:
         if len(value) > _LINEAGE_HASHED_ITEMS:
             return True
         items = value.values() if t is dict else value
@@ -67,6 +71,7 @@ def hashed_by_lineage(value: Any) -> bool:
             type(v).__name__ in _LINEAGE_HASHED_TYPES
             or builtin_hash_family(type(v)) is not None
             or (artist is not None and isinstance(v, artist))
+            or (type(v) in _COLLECTIONS and hashed_by_lineage(v))
             for v in items
         )
     return False

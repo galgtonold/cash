@@ -1066,7 +1066,12 @@ def _take_breaks(
         stack = [obj]
         seen = {own}
         while stack:
-            for child in children_of(stack.pop()) or ():
+            children = children_of(stack.pop())
+            # Nothing but values, by exact type, asked at C speed: a dict of
+            # four parsed columns of two million items each took 2.4 s here.
+            if not children or EXACT_VALUE_TYPES.issuperset(map(type, children)):
+                continue
+            for child in children:
                 ckey = id(child)
                 if ckey in seen or type(child) in EXACT_VALUE_TYPES:
                     continue

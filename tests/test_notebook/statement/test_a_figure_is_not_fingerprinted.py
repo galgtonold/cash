@@ -117,3 +117,11 @@ def test_a_groupby_is_hashed_by_lineage():
     assert restored_var.hashed_by_lineage(df.groupby("a").t)
     assert restored_var.hashed_by_lineage(df.a.rolling(2))
     assert not restored_var.hashed_by_lineage(pd.Timestamp(1))
+
+
+def test_a_small_collection_of_big_collections_is_hashed_by_lineage():
+    """``data = {"user_id": user_ids, ...}`` over four parsed columns of two
+    million items pickled them all for its session hash: 6 s."""
+    assert restored_var.hashed_by_lineage({"a": list(range(300)), "b": [1]})
+    assert restored_var.hashed_by_lineage([[1], ({"k": list(range(300))},)])
+    assert not restored_var.hashed_by_lineage({"a": [1, 2], "b": ([3],)})

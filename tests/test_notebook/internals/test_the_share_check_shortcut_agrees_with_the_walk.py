@@ -178,6 +178,17 @@ def test_parts_of_a_part_another_name_holds_are_walked():
     assert shared_names({"recs": ns["recs"], "rec": ns["rec"]}, (ns,)) == {"recs"}
 
 
+def test_columns_a_dict_gathers_join_it():
+    """``data = {"user_id": user_ids, ...}`` over four parsed columns: each
+    column is held by its name too. Checking that no such column lies below
+    another took a Python step per value, 2.4 s a walk for two million."""
+    ns = {"ids": [str(i) for i in range(5000)], "times": [datetime.datetime(2020, 1, 1)] * 5000}
+    ns["data"] = {"id": ns["ids"], "time": ns["times"]}
+    holders, shared = share_group(["data"], {"data": ns["data"]}, ns)
+
+    assert set(holders) == {"ids", "times"} and shared == set()
+
+
 def test_shared_pairs_of_values_are_not_holders():
     """Tuples of values alone that something else holds too (the RAM tier's
     copy of parsed pairs shares them) have no identity to keep."""
