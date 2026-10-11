@@ -92,3 +92,49 @@ def test_an_unrelated_name_does_not_move(cash_magics):
     before = cash_magics.tracking_state.variable_lineage["copy"]
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert cash_magics.tracking_state.variable_lineage["copy"] == before
+
+
+#: Something that is not a variable holds the list too, made before the dict
+#: or object that holds it: the share check gives up on that holder, and still
+#: links the variables it found.
+BESIDE_A_HOLDER_NOT_A_VARIABLE = {
+    "a function default": (
+        "def pick(row, cols=features):\n    return cols",
+        "config = {'features': features}",
+        "config",
+    ),
+    "a class attribute": ("class Model:\n    cols = features", "config = {'features': features}", "config"),
+    "an argparse namespace": ("import argparse", "args = argparse.Namespace(features=features)", "args"),
+    "a deque": ("from collections import deque", "args = deque([features])", "args"),
+}
+
+
+@pytest.mark.parametrize("name", list(BESIDE_A_HOLDER_NOT_A_VARIABLE))
+def test_a_holder_that_is_not_a_variable_still_links_the_variables(cash_magics, name):
+    other, link, holder = BESIDE_A_HOLDER_NOT_A_VARIABLE[name]
+    cells = ["features = ['a', 'b']\nunrelated = ['a', 'b']", other, link, "features.append('zip')"]
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    for cell in cells[:3]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    lineage = cash_magics.tracking_state.variable_lineage
+    before, control = lineage[holder], lineage["unrelated"]
+    run_cash_cell(cash_magics, cells[3], cells=cells)
+    assert lineage[holder] != before
+    assert lineage["unrelated"] == control
+
+
+def test_a_numpy_view_moves_when_its_base_changes(cash_magics):
+    """``head = big[:5]``: ``head.base`` holds ``big``, which no count of
+    ``head`` shows; ``big *= 2`` changes what ``head`` reads."""
+    pytest.importorskip("numpy")
+    cells = ["import numpy as np\nbig = np.arange(10.0)\nother = np.arange(5.0)", "head = big[:5]", "big *= 2"]
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    for cell in cells[:2]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    lineage = cash_magics.tracking_state.variable_lineage
+    before, control = lineage["head"], lineage["other"]
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert lineage["head"] != before
+    assert lineage["other"] == control

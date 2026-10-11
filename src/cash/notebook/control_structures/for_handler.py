@@ -621,6 +621,9 @@ class ForLoopHandler:
             if isinstance(passes, list) and passes and passes[-1] is loop_pass:
                 passes.pop()
             moved = in_loop.pop_overlay(overlay)
+        # The last item is the user's only through the loop's targets: held
+        # here, it would read as another holder to the share check below.
+        iteration_value = None
 
         if run_rest:
             logger.debug("[CONTROL] %d passes over an iterator: the rest runs as one unit", total_iterations)
@@ -647,6 +650,9 @@ class ForLoopHandler:
             body_files=body_files,
             unchanged=set() if run_rest else loop_pass.unchanged(self.shell, self.statement_processor, node),
             also=moved | in_loop.close_watch(loop_code, ran=True),
+            link_shares=_helpers.current_loop_pass(self.dispatcher) is None,
+            cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
+            held=(iterable,),
         )
         return total_iterations, cached_iterations
 

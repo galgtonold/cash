@@ -119,7 +119,13 @@ class IfHandler:
             # have changed (`LoopPass`).
             loop_pass = _helpers.current_loop_pass(self.dispatcher)
             if loop_pass is None:
-                _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
+                _helpers.update_lineage_after_execution(
+                    self.shell,
+                    self.statement_processor,
+                    node,
+                    ast.unparse(node),
+                    cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
+                )
             else:
                 loop_pass.if_ran(self.shell, self.statement_processor, node, tests, branch_body)
 

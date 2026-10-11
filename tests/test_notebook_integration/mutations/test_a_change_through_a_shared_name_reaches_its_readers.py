@@ -74,7 +74,72 @@ EDITED = {
         "[1, 3]",
         "[1, 4]",
     ),
+    "a numpy view of an array changed in place": (
+        [
+            SLOW + "\nimport numpy as np",
+            "big = np.arange(10.0)",
+            "head = big[:5]",
+            "big *= 2",
+            "r = slow(head)\nprint(r)",
+        ],
+        4,
+        "big *= 3",
+        "array([0., 2., 4., 6., 8.])",
+        "array([ 0.,  3.,  6.,  9., 12.])",
+    ),
 }
+
+#: The alias is made inside a block and the list is changed inside a block
+#: too: no top-level statement links them, the structures do when they end.
+_SPLITS = "splits = {}\nfor name, rows in [('train', train_rows), ('test', test_rows)]:\n    splits[name] = rows"
+for _label, _make, _change in [
+    ("a loop", _SPLITS, "for x in extra:\n    train_rows.append(x)"),
+    ("an if", _SPLITS, "if extra:\n    train_rows.extend(extra)"),
+    (
+        "a try",
+        "splits = {}\ntry:\n    splits['train'] = train_rows\n    splits['test'] = test_rows\nexcept KeyError:\n    pass",
+        "try:\n    train_rows.extend(extra)\nexcept KeyError:\n    pass",
+    ),
+    (
+        "a loop inside a loop",
+        "splits = {}\nfor k in range(1):\n    for name, rows in [('train', train_rows), ('test', test_rows)]:\n"
+        "        splits[name] = rows",
+        "for x in extra:\n    train_rows.append(x)",
+    ),
+]:
+    EDITED[f"an alias made in a block, changed in {_label}"] = (
+        [SLOW, "train_rows = [1, 2]\ntest_rows = [3]", _make, "extra = [10]\n" + _change, "r = slow(splits)\nprint(r)"],
+        4,
+        "extra = [20]\n" + _change,
+        "{'train': [1, 2, 10], 'test': [3]}",
+        "{'train': [1, 2, 20], 'test': [3]}",
+    )
+
+#: Something that is not a variable holds the list too (``features`` and
+#: the cell making it); the dict or object a variable binds holding it must
+#: still follow a change made through the list's own name.
+for _label, _other, _holder, _reader in [
+    (
+        "a function default",
+        "def pick(row, cols=features):\n    return [row[c] for c in cols]",
+        "config = {'features': features}",
+        "config",
+    ),
+    ("a class attribute", "class Model:\n    cols = features", "config = {'features': features}", "config"),
+    ("an argparse namespace", "import argparse", "args = argparse.Namespace(features=features)", "args"),
+    ("a deque", "from collections import deque", "args = deque([features])", "args"),
+]:
+    _shown = {
+        "config": "{{'features': ['a', 'b', '{}']}}",
+        "args": "Namespace(features=['a', 'b', '{}'])" if "Namespace" in _holder else "deque([['a', 'b', '{}']])",
+    }[_reader]
+    EDITED[f"a list {_label} holds too, changed through its own name"] = (
+        [SLOW, "features = ['a', 'b']", _other, _holder, "features.append('zip')", f"r = slow({_reader})\nprint(r)"],
+        5,
+        "features.append('vat')",
+        _shown.format("zip"),
+        _shown.format("vat"),
+    )
 
 
 @pytest.mark.parametrize("name", list(EDITED))

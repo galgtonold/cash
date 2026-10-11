@@ -123,7 +123,14 @@ class TryHandler:
                 if node.finalbody:
                     run_branch(node.finalbody, "finally")
 
-            _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
+            _helpers.update_lineage_after_execution(
+                self.shell,
+                self.statement_processor,
+                node,
+                ast.unparse(node),
+                link_shares=_helpers.current_loop_pass(self.dispatcher) is None,
+                cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
+            )
             body_stmts = self._build_try_executed_body_stmts(node, try_body_succeeded, matched_handler)
 
             for m in all_metrics:

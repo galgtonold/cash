@@ -51,12 +51,14 @@ from cash import _plain_data
 from cash.tracking.function_tracker import is_local_module
 
 __all__ = [
+    "GaveUp",
     "attrs_copied_apart",
     "holds_part_of",
     "output_history",
     "referring_names",
     "share_group",
     "shared_names",
+    "view_base_names",
 ]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
@@ -429,6 +431,42 @@ def view_bases(value: Any) -> list[int]:
     return found
 
 
+def view_base_names(
+    values: Iterable[Any], user_ns: Mapping[str, Any], skip_name: Callable[[str], bool] = lambda name: False
+) -> set[str]:
+    """The variables of *user_ns* bound to an array that a numpy view among
+    *values*, or held in them, sits on (`view_bases`).
+
+    The share check counts references, and an array is a leaf to it: ``head
+    = big[:5]`` holds ``big`` through ``head.base``, which no count of
+    ``head`` shows, while a later ``big *= 3`` changes what ``head`` reads.
+    Walked as `_identities` walks, under the walk budget in progress
+    (`check_walk_budget`); JSON-like data holds no array and is not walked.
+    """
+    np = sys.modules.get("numpy")
+    if np is None:
+        return set()
+    value_types = VALUE_TYPES + library_value_types()
+    bases: set[int] = set()
+    seen: set[int] = set()
+    stack = [value for value in values if not _plain_data.is_tree(value)]
+    pops = 0
+    while stack:
+        pops += 1
+        if not pops & 1023:
+            check_walk_budget()
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        bases.update(view_bases(obj))
+        stack.extend(children_of(obj) or ())
+    del stack, seen
+    if not bases:
+        return set()
+    return {name for name, value in list(user_ns.items()) if id(value) in bases and not skip_name(name)}
+
+
 def holds_a_held_object(value: Any) -> bool:
     """Whether an object *value* holds (not *value* itself) has a holder
     outside *value*, by reference count, or *value* holds a numpy view (whose
@@ -678,6 +716,36 @@ def referring_names(
     return names, not frontier
 
 
+@dataclasses.dataclass
+class GaveUp:
+    """What `share_group` found: the links of a check that succeeded, or what
+    it still found when it gave up.
+
+    *names* are the notebook variables found holding an object of the
+    outputs, or held in one, beside the holder that is not a variable (a
+    function's defaults, a class, a library object such as an
+    ``argparse.Namespace`` or a numpy view): a change made in place through
+    one of them is a change to what the outputs reach, so they are linked
+    though the statement is not stored. *links* pairs them with the names
+    whose objects they hold or are held in, ``(owners, holders)``: an
+    output, or a variable an earlier round found, so a variable is linked
+    only to the outputs it shares an object with. *complete* is False when
+    the search was cut short (too many objects, too deep, out of time), so
+    names may be missing.
+    """
+
+    names: set[str] = dataclasses.field(default_factory=set)
+    links: list[tuple[frozenset[str], frozenset[str]]] = dataclasses.field(default_factory=list)
+    complete: bool = True
+
+    def add(self, owners: Iterable[str], holders: Iterable[str]) -> None:
+        """Note that *holders* share an object with *owners*."""
+        held = frozenset(holders)
+        if held:
+            self.names |= held
+            self.links.append((frozenset(owners), held))
+
+
 def share_group(
     names: Iterable[str],
     values: Mapping[str, Any],
@@ -685,6 +753,7 @@ def share_group(
     cash_held: Iterable[Any] = (),
     named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
     foreign: Callable[[str], bool] = lambda name: False,
+    gave_up: GaveUp | None = None,
 ) -> tuple[dict[str, Any], set[str]]:
     """``(holders, shared)`` for the outputs *names*, bound in *values*.
 
@@ -700,7 +769,12 @@ def share_group(
     When a holder is anything else -- a library's registry, a closure, a
     module of a library, a suspended frame, an object cash does not copy
     along -- or a variable *foreign* names (IPython's own), *shared* names
-    the outputs still shared and *holders* is empty.
+    the outputs still shared and *holders* is empty. *gave_up*, when given,
+    then gets the variables found holding the outputs' objects all the same
+    (`GaveUp`): the search goes past such a holder instead of stopping at
+    it, without climbing through it. When the check succeeds, *gave_up*
+    gets each round's links all the same: which names were shared, and the
+    variables found holding them.
     """
     group = {name: values[name] for name in names if values.get(name) is not None}
     bindings = [values, user_ns]
@@ -711,14 +785,29 @@ def share_group(
     # round: no code runs between them, so what holds a part of it is the
     # same (`_walk`'s *memo*).
     memo: dict[int, list | None] = {}
+    links: list[tuple[set[str], set[str]]] = []
+    partial = GaveUp() if gave_up is not None else None
     for _round in range(_MAX_ROUNDS):
-        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo)
+        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial)
         if not shared:
+            if gave_up is not None:
+                for owners, holders in links:
+                    gave_up.add(owners, holders)
             return {name: group[name] for name in joined}, set()
+        if found:
+            links.append((shared, found))
         if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group):
             break
         joined |= found
         group.update((name, user_ns[name]) for name in found)
+    else:
+        if partial is not None:
+            partial.complete = False
+    if gave_up is not None and partial is not None:
+        for owners, holders in links:
+            gave_up.add(owners, (name for name in holders if not foreign(name)))
+        gave_up.add(shared, (name for name in partial.names if not foreign(name)))
+        gave_up.complete = gave_up.complete and partial.complete
     outputs = set(group) - joined
     return {}, (shared & outputs) or outputs
 
@@ -759,12 +848,14 @@ def _check_group(
     keep_identity: Iterable[str] | None,
     user_ns: Mapping[str, Any] | None = None,
     memo: dict[int, list | None] | None = None,
+    gave_up: GaveUp | None = None,
 ) -> tuple[set[str], set[str] | None]:
     """``(shared, found)`` for *group*: the names whose objects are held
     beyond what the group, *bindings*, *cash_held* and *named_held* account
     for, and -- with *user_ns* -- the variables of *user_ns* outside the
     group that hold them (`_find_holders`), None when one holder is not such
-    a variable. *memo* is `_walk`'s, kept by the caller across rounds."""
+    a variable (*gave_up* then gets the variables found all the same).
+    *memo* is `_walk`'s, kept by the caller across rounds."""
     value_types = VALUE_TYPES + library_value_types()
     if memo is None:
         memo = {}
@@ -795,15 +886,19 @@ def _check_group(
         internal |= {id(memo), *(id(listed) for listed in memo.values() if listed is not None)}
         internal |= {id(m) for m in bindings if m is not user_ns}
         discounted = {key for mapping, key in named_held if mapping is user_ns}
-        found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted)
+        partial = GaveUp() if gave_up is not None else None
+        found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
         if found is not None or breaks.isdisjoint(excess):
+            if found is None and gave_up is not None and partial is not None:
+                gave_up.names |= partial.names
+                gave_up.complete = gave_up.complete and partial.complete
             return shared, found
         # A container a root read a level at a time holds besides its parent
         # (`_take_breaks`): the search up from it climbs through the
         # containers above it, which the walk left out of *internal*, and a
         # longer climb can give up where the full walk's would not. Asked
         # again of the full walk, with none of these references left.
-        del nodes, inbound, checked, owner, breaks, internal, excess, found
+        del nodes, inbound, checked, owner, breaks, internal, excess, found, partial
     return shared, None
 
 
@@ -817,7 +912,11 @@ def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: di
 
 
 def _find_holders(
-    targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
+    targets: list[Any],
+    internal: set[int],
+    user_ns: Mapping[str, Any],
+    known: set[str],
+    gave_up: GaveUp | None = None,
 ) -> set[str] | None:
     """The variables of *user_ns* not in *known* that hold one of *targets*,
     directly or through containers and attributes a restore copies along;
@@ -834,7 +933,7 @@ def _find_holders(
     found = _holders_from_names(targets, internal, user_ns, known)
     if found:
         return found
-    return _holders_from_referrers(targets, internal, user_ns, known)
+    return _holders_from_referrers(targets, internal, user_ns, known, gave_up)
 
 
 #: Most objects `_holders_from_referrers` looks the holders of at once.
@@ -933,7 +1032,11 @@ def _holders_from_names(
 
 
 def _holders_from_referrers(
-    targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
+    targets: list[Any],
+    internal: set[int],
+    user_ns: Mapping[str, Any],
+    known: set[str],
+    gave_up: GaveUp | None = None,
 ) -> set[str] | None:
     """`_find_holders` up `gc.get_referrers`, one level of containers per
     call. The ids in *internal* are references already accounted for (the
@@ -941,6 +1044,15 @@ def _holders_from_referrers(
     this function's own frame and its callers' are too. An object holding a
     reference without telling the garbage collector is not found at all; the
     count taken again afterwards still sees it, and refuses.
+
+    A holder that is not a container nor an object whose attributes a
+    restore copies (a function's defaults, a class, a library object, a
+    frame) makes the answer None. With *gave_up*, the search does not stop
+    there: it notes the holder, does not climb through it, and goes on
+    collecting the variables the other holders lead to, which *gave_up*
+    gets, with the variables bound to such a holder itself (``args =
+    argparse.Namespace(features=features)``). Cut short by the limits
+    below, *gave_up* says the names may be incomplete.
     """
     stack = set()
     frame = sys._getframe()
@@ -950,10 +1062,17 @@ def _holders_from_referrers(
     del frame
     seen = set(internal) | stack
     found: set[str] = set()
+    # By id only: holding a frame or a library object here would keep it
+    # alive, and add to the counts taken again afterwards.
+    outside: set[int] = set()
     level = targets
     for _depth in range(_MAX_DEPTH):
         if len(level) > _MAX_REFERRER_TARGETS:
-            return None
+            return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
+        if outside and _past_deadline():
+            # Past a holder the search used to stop at: within the walk's
+            # budget, or the names found so far are all it says.
+            return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
         # Passed as one tuple, which the call hands on as it is: it is a
         # referrer too.
         args = tuple(level)
@@ -968,15 +1087,64 @@ def _holders_from_referrers(
             if holder is user_ns:
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
-            if not (isinstance(holder, _CONTAINERS) or attributes_of(holder) is not None):
-                # A frame, a closure cell, a function, a module, a library's object.
-                return None
+            if not (isinstance(holder, _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
+                holder
+            ):
+                # A frame, a closure cell, a function, a module or its
+                # namespace, a library's object.
+                if gave_up is None:
+                    return None
+                seen.add(id(holder))
+                outside.add(id(holder))
+                continue
             seen.add(id(holder))
             upper.append(holder)
         del referrers, args
         if not upper:
-            return found
+            return _gave_up(gave_up, found, outside, user_ns, known) if outside else found
         level = upper
+    return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
+
+
+def _past_deadline() -> bool:
+    """Is the budget of the walk in progress spent (`walk_budget`)?"""
+    deadline = _DEADLINE[0]
+    return deadline is not None and _perf_counter() > deadline
+
+
+def _is_module_namespace(holder: Any) -> bool:
+    """Whether *holder* is the ``__dict__`` of an imported module: what its
+    functions read their globals from, never a container of the notebook's."""
+    if type(holder) is not dict:
+        return False
+    name = holder.get("__name__")
+    if type(name) is not str:
+        return False
+    module = sys.modules.get(name)
+    return module is not None and getattr(module, "__dict__", None) is holder
+
+
+def _gave_up(
+    gave_up: GaveUp | None,
+    found: set[str],
+    outside: set[int],
+    user_ns: Mapping[str, Any],
+    known: set[str],
+    complete: bool = True,
+) -> None:
+    """Hand *gave_up* the variables `_holders_from_referrers` found, and
+    those bound to one of the holders it did not climb through (*outside*,
+    by id); None, its answer when it gives up."""
+    if gave_up is not None:
+        value_types = VALUE_TYPES + library_value_types()
+        gave_up.names |= found
+        if outside:
+            gave_up.names.update(
+                name
+                for name, value in list(user_ns.items())
+                if id(value) in outside and name not in known and not is_value(value, value_types)
+            )
+        gave_up.complete = gave_up.complete and complete
     return None
 
 

@@ -672,6 +672,8 @@ class ControlStructureProcessor:
                 code,
                 unit_digest=self._unit_digest(node, code, metrics),
                 also=self.statement_processor.in_loop.close_watch(code, ran=status == CacheStatus.COMPUTED),
+                link_shares=_helpers.current_loop_pass(self) is None,
+                cost=metrics.get("execution_time", 0.0),
             )
         elif update_lineage:
             self.statement_processor.in_loop.close_watch(code, ran=False)

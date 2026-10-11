@@ -6,6 +6,7 @@ import ast
 import io
 import logging
 import secrets
+import sys
 import types
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
@@ -126,12 +127,14 @@ from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ..run_memo import forget_file_state_this_run
 from ..shared_objects import (
     VALUE_TYPES,
+    GaveUp,
     WalkBudgetExceeded,
     is_value,
     library_value_types,
     output_history,
     referring_names,
     share_group,
+    view_base_names,
     walk_budget,
 )
 from ..write_observer import observe_writes
@@ -1469,7 +1472,7 @@ class StatementProcessor:
         # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
         budget = share_check_budget(cost)
         found: dict[str, Any] | None = None
-        gave_up: list[bool] = []
+        gave_up: list[GaveUp] = []
         try:
             with walk_budget(budget):
                 reason = unrestorable_output_reason(
@@ -1494,9 +1497,10 @@ class StatementProcessor:
             )
         if reason is None and found is not None:
             return found
-        # Gave up on a holder that is not a variable: no variable to link,
-        # and asking again would cost the check twice.
-        run.share_gave_up = bool(gave_up)
+        # Gave up on a holder that is not a variable: the variables it found
+        # all the same are linked (`_holders_of`), and asking again would
+        # cost the check twice.
+        run.share_gave_up = gave_up[0] if gave_up else None
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -1537,6 +1541,8 @@ class StatementProcessor:
         holders: dict[str, Any] | None,
         echo: tuple[Any, ...] = (),
         cost: float = 0.0,
+        fallback_floor: float = SHARE_FALLBACK_FLOOR_S,
+        held: tuple[Any, ...] = (),
     ) -> None:
         """Record an edge between each output and every other variable bound
         to its object, holding it or held in it (`record_shared_object_edges`),
@@ -1549,8 +1555,11 @@ class StatementProcessor:
         When its budget ran out, the variables are looked for from the
         outputs up (`referring_names`); when that is cut short too, some may
         be missing, and the NOTEBOOK-SHARE-UNCHECKED warning says so. A
-        holder that is not a variable (a closure, a library's registry) links
-        no variable. A loop or branch body is
+        holder that is not a variable (a closure, a library's registry, a
+        function's defaults) links no variable itself, but the variables
+        found beside it are linked (`GaveUp`). The arrays a numpy view among
+        the outputs sits on are linked too (`view_base_names`): a count of
+        the view does not show them. A loop or branch body is
         left to its structure, which moves what it changed when it ends
         (``update_lineage_after_execution``).
         """
@@ -1561,20 +1570,68 @@ class StatementProcessor:
             return
         complete = True
         if holders is not None:
-            names = set(holders)
+            links = [(outputs, set(holders))]
         else:
-            names, complete = self._holders_of(run, outputs, captured_vars, echo, cost)
-        if names:
-            record_shared_object_edges(self.tracking_state.derivation_edges, outputs, names)
+            links, complete = self._holders_of(run, outputs, captured_vars, echo, cost, fallback_floor, held)
+        bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost)
+        links += bases
+        complete = complete and bases_complete
+        for owners, names in links:
+            record_shared_object_edges(self.tracking_state.derivation_edges, owners, names)
         if not complete:
             self._warn_share_unchecked(run, outputs, cost)
 
+    def record_structure_share_edges(
+        self,
+        code: str,
+        names: Iterable[str],
+        cost: float = 0.0,
+        static: Mapping[str, set[str]] | None = None,
+        held: tuple[Any, ...] = (),
+    ) -> None:
+        """Link the variables *names* a control structure changed or bound to
+        every other variable they share an object with, as a statement's own
+        outputs are (`_record_shared_object_edges`).
+
+        A body statement records no edge (it runs once per pass, and the
+        simulation treats the structure as one statement), so ``for name, rows
+        in pairs: splits[name] = rows`` left ``splits`` unlinked from the
+        lists it holds, and a later change of ``train_rows`` inside a block
+        did not move it. Asked once when the structure ends, within the share
+        check's budget for *cost*, the fallback search included: a structure
+        that ran 10 ms is not made to take a second. Cut short,
+        NOTEBOOK-SHARE-UNCHECKED says so. *held* is what cash holds of the
+        structure (a loop's iterable). *static* links each loop target to
+        the variables whose items it takes, without a check.
+        """
+        user_ns = self.shell.user_ns
+        value_types = VALUE_TYPES + library_value_types()
+        edges = self.tracking_state.derivation_edges
+        for target, roots in (static or {}).items():
+            if target in user_ns and not is_value(user_ns[target], value_types):
+                record_shared_object_edges(edges, [target], [root for root in roots if root in user_ns])
+        captured = {name: user_ns[name] for name in names if name in user_ns}
+        if not captured:
+            return
+        run = StatementRun(code=code, source_hash=statement_source_hash(code))
+        run.outputs = set(captured)
+        self._record_shared_object_edges(run, captured, None, (), cost, fallback_floor=0.0, held=held)
+        del captured
+
     def _holders_of(
-        self, run: StatementRun, outputs: list[str], captured_vars: dict[str, Any], echo: tuple[Any, ...], cost: float
-    ) -> tuple[set[str], bool]:
-        """``(names, complete)``: the variables holding an object of *outputs*
-        too, or held in one. Keeps no output value in a local: the check
-        counts references."""
+        self,
+        run: StatementRun,
+        outputs: list[str],
+        captured_vars: dict[str, Any],
+        echo: tuple[Any, ...],
+        cost: float,
+        fallback_floor: float = SHARE_FALLBACK_FLOOR_S,
+        held: tuple[Any, ...] = (),
+    ) -> tuple[list[tuple[Iterable[str], set[str]]], bool]:
+        """``(links, complete)``: the variables holding an object of *outputs*
+        too, or held in one, as ``(owners, holders)`` pairs (`GaveUp.links`
+        when the check gave up on a holder that is not a variable). Keeps no
+        output value in a local: the check counts references."""
         value_types = VALUE_TYPES + library_value_types()
         # A figure or axes is held by pyplot's registry, which the check
         # gives up on; how a figure's axes reach it is a derivation edge of
@@ -1585,40 +1642,72 @@ class StatementProcessor:
             if not is_value(captured_vars.get(name), value_types) and not holds_artists(captured_vars.get(name))
         ]
         if not names:
-            return set(), True
+            return [], True
         user_ns = self.shell.user_ns
         history, named = output_history(user_ns, self.shell)
         hidden = getattr(self.shell, "user_ns_hidden", None) or {}
-        cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
+        # *held* are containers cash holds itself (a loop's iterable), each
+        # one counted as such whatever else refers to it.
+        cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history, *held]
 
         def foreign(name: str) -> bool:
             return name in hidden or is_history_name(name)
 
         budget = share_check_budget(cost)
-        if run.share_gave_up:
-            return set(), True
+        if run.share_gave_up is not None:
+            return list(run.share_gave_up.links), run.share_gave_up.complete
         timed_out = run.share_unchecked
         if not timed_out:
             try:
+                gave_up = GaveUp()
                 with walk_budget(budget):
-                    found, shared = share_group(names, captured_vars, user_ns, cash_held, named, foreign=foreign)
+                    found, shared = share_group(
+                        names, captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=gave_up
+                    )
                 if not shared:
-                    return set(found), True
-                # A holder that is not a variable (pyplot's figure registry,
-                # a library's cache, a closure): no variable to link, and a
-                # search from the outputs up would climb through the library
-                # until its budget ran out, on every plot statement.
-                return set(), True
+                    # Each name with the holders found for it, not every
+                    # output with every holder: a block checks many names.
+                    return list(gave_up.links), True
+                # A holder that is not a variable (a library's cache, a
+                # closure, a function's defaults): the variables found beside
+                # it, not a search from the outputs up, which would climb
+                # through the library until its budget ran out.
+                return list(gave_up.links), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True
         found_names, complete = referring_names(
             [captured_vars[name] for name in names],
             user_ns,
-            max(budget, SHARE_FALLBACK_FLOOR_S),
+            max(budget, fallback_floor),
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        return found_names, complete
+        return [(outputs, found_names)], complete
+
+    def _view_bases_of(
+        self, outputs: list[str], captured_vars: dict[str, Any], cost: float
+    ) -> tuple[list[tuple[Iterable[str], set[str]]], bool]:
+        """``(links, complete)``: each output with the variables bound to an
+        array a numpy view in it sits on (`view_base_names`), within the
+        share check's budget."""
+        if "numpy" not in sys.modules:
+            return [], True
+        user_ns = self.shell.user_ns
+        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        links: list[tuple[Iterable[str], set[str]]] = []
+        try:
+            with walk_budget(share_check_budget(cost)):
+                for name in outputs:
+                    found = view_base_names(
+                        [captured_vars[name]],
+                        user_ns,
+                        skip_name=lambda other: other in hidden or is_history_name(other),
+                    )
+                    if found:
+                        links.append(([name], found))
+        except WalkBudgetExceeded:
+            return links, False
+        return links, True
 
     def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
         """Warn, once per statement, that the variables sharing an object
