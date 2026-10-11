@@ -271,3 +271,34 @@ def test_a_loop_handing_a_module_function_that_appends_to_module_state_runs_agai
 
     out = nb_runner.get_output(5)
     assert want in out, out
+
+
+#: A function of the user's module the loop calls only from a lambda it
+#: hands to a call: ``tally.record`` is not named where a call is.
+TALLY_LAMBDA = "SEEN = []\n\n\ndef record(v, tag='x'):\n    SEEN.append(v)\n    return v\n"
+
+
+@pytest.mark.parametrize(
+    "hand",
+    ["d['v'].map(lambda v: tally.record(v))", "sorted(d['v'], key=lambda v: tally.record(v))"],
+    ids=["map-a-lambda", "sort-key-lambda"],
+)
+def test_a_loop_handing_a_lambda_that_appends_to_module_state_runs_again(nb_runner, _teed, hand):
+    """The lambda calls ``tally.record`` on every value. Trusted after a
+    restart, the loop's record restored ``raw`` and skipped the loop, so a
+    cell reading both saw ``raw`` whole and ``tally.SEEN`` empty."""
+    (Path(nb_runner.work_dir) / "tally.py").write_text(TALLY_LAMBDA, encoding="utf-8")
+    loop = (
+        f"parts = []\nfor f in files:\n    d = parse(f)\n    {hand}\n    parts.append(d)\n"
+        "raw = pd.concat(parts, ignore_index=True)"
+    )
+    reader = "print('R', len(raw), len(tally.SEEN))"
+    _run_all(nb_runner, ["import cash\n%cash_on", SETUP + "\nimport tally", CLEAN, loop, reader])
+    want = f"R {50 * N} {50 * N}"
+    assert want in nb_runner.get_output(5), nb_runner.get_output(5)
+    assert nb_runner.peek(_record_expr(loop)) == "None", "the loop's outcome was recorded"
+
+    _restart_and_run(nb_runner, 5)
+
+    out = nb_runner.get_output(5)
+    assert want in out, out

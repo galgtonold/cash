@@ -147,3 +147,29 @@ def test_a_writer_in_the_users_module_rewrites_its_file_every_run(nb_runner, imp
             nb_runner.restart()
         nb_runner.run_all()
         assert report.read_text(encoding="utf-8") == written, f"{label}: the file was not rewritten"
+
+
+HANDED = [
+    "import os, shutil, time, pandas as pd\nshutil.rmtree('handed', ignore_errors=True); os.makedirs('handed')",
+    "def save(v):\n    time.sleep(0.05)\n    p = f'handed/{v}.txt'\n    with open(p, 'w') as fh:\n        fh.write(str(v))\n    return p",
+    "p1 = list(map(save, range(3)))",
+    "p2 = pd.Series([10, 11, 12]).apply(save)",
+    "p3 = pd.Series([20, 21]).map(lambda v: save(v))",
+]
+HANDED_FILES = sorted(f"{v}.txt" for v in (0, 1, 2, 10, 11, 12, 20, 21))
+
+
+def test_a_writer_handed_to_map_or_apply_writes_again(nb_runner):
+    """``map(save, xs)`` and ``Series.apply(save)`` call ``save``: served
+    from the cache, the folder emptied at the top stayed without its files."""
+    work = Path(nb_runner.work_dir)
+    nb_runner.create_notebook(HANDED)
+    nb_runner.start_kernel()
+    nb_runner.enable_persist()
+    for _ in range(2):
+        nb_runner.run_all()
+        assert sorted(p.name for p in (work / "handed").iterdir()) == HANDED_FILES
+    nb_runner.restart()
+    nb_runner.enable_persist()
+    nb_runner.run_all()
+    assert sorted(p.name for p in (work / "handed").iterdir()) == HANDED_FILES

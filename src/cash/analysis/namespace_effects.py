@@ -43,6 +43,7 @@ from .file_effects import (
     get_base_name,
     locally_opened_handles,
 )
+from .handed_callables import handed_callable_values
 from .read_only_callees import reads_its_arguments_only
 
 __all__ = [
@@ -118,7 +119,30 @@ def statement_user_writer_call(
         found = user_callee_writing_files(resolve_callee(node.func, namespace))
         if found:
             return ast.unparse(node.func), found
+        if node.args or node.keywords:
+            # ``map(save, xs)``, ``s.apply(save)``, ``s.apply(lambda v:
+            # save(v))``: the callee calls what it is handed, as a call by
+            # name does.
+            for value in handed_callable_values(node, namespace):
+                found = user_callee_writing_files(_function_called(value))
+                if found:
+                    return getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
+
+
+def _function_called(value: Any) -> Any:
+    """The function calling *value* runs first: a method's function, a
+    class's ``__init__``, a callable object's ``__call__``; *value* itself
+    for anything else."""
+    if isinstance(value, types.MethodType):
+        return value.__func__
+    if isinstance(value, types.FunctionType) or not callable(value):
+        return value
+    owner = value if isinstance(value, type) else type(value)
+    try:
+        return inspect.getattr_static(owner, "__init__" if isinstance(value, type) else "__call__")
+    except AttributeError:
+        return value
 
 
 @functools.lru_cache(maxsize=STATEMENTS)

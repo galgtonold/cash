@@ -199,14 +199,20 @@ A function handed to a call counts as called, however it is handed: by name
 (`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
 as a method that changes its object (`s.apply(tracker.record)`), as an object
 whose class defines `__call__` and changes it, as a closure that changes what
-it closes over, or in a list or dict that a function of yours calls into
-(`run_steps(steps, data)` with `steps = [f]`). The statement runs every time,
-and the call of yours that is handed it is not served from the cache. A method
-counts as changing its object when its code changes it, or calls a method on
-something the object holds that cash does not know to leave it unchanged
-(`self.model.fit(x)`). A function of yours handed over whose source cannot be
-read makes the statement run uncached. A list or dict of functions handed to a
-library function is looked into only for `agg`, `aggregate` and `transform`.
+it closes over, picked by an expression (`ops.get("dbl")`, `ops[key]`,
+`f if flag else g`, `getattr(tracker, "record")`), called from a lambda
+(`s.map(lambda v: tally.record(v))`), or in a list, dict, deque or object of
+your class that a function of yours calls into (`run_steps(steps, data)` with
+`steps = [f]`, `run(pipe, data)` calling `pipe.steps`). The statement runs
+every time, and the call of yours that is handed it is not served from the
+cache. A method counts as changing its object when its code changes it, or
+calls a method on something the object holds that cash does not know to leave
+it unchanged (`self.model.fit(x)`). A function of yours handed over whose
+source cannot be read, or one that only running code can tell
+(`s.apply(make_scorer(2))`, the result of a call of yours), makes the
+statement run uncached, with the reason on its badge. A list or dict of
+functions handed to a library function is looked into only for `agg`,
+`aggregate` and `transform`.
 
 <!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 The same for a statement that sets state on one of your modules

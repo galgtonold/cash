@@ -161,3 +161,28 @@ def test_the_decision_still_caches_module_calls_that_replace_no_file(ns):
 def test_assume_safe_waives_a_project_module_writer(ns):
     """``# @cash:assume-safe`` waives the write however the call is spelled."""
     assert _verdict("tl.export_summary(d, 'out.json')", ns, CacheAnnotation(assume_safe=True)) == (True, [])
+
+
+@pytest.mark.parametrize(
+    ("code", "writer"),
+    [
+        ("ps = list(map(export_summary, rows))", "export_summary"),
+        ("ps = s.apply(tl.save_chart)", "save_chart"),
+        ("ps = sorted(rows, key=tl.build_report)", "write_table"),
+        ("ps = s.apply(OPS['save'])", "save_chart"),
+        ("ps = s.apply(OPS.get('save'))", "save_chart"),
+    ],
+)
+def test_a_writer_handed_to_a_call_is_seen(ns, code, writer):
+    """``map(save, xs)`` and ``s.apply(save)`` call ``save`` as much as
+    ``save(x)`` does: served from the cache, the files are not written."""
+    local = dict(ns, OPS={"save": _writer_lib.save_chart})
+    assert statement_calls_user_writer(code, local) == writer
+    cacheable, reasons = _verdict(code, local)
+    assert cacheable is False
+    assert f"which writes files ({writer})" in reasons[0]
+
+
+def test_a_function_handed_to_a_call_that_writes_nothing_keeps_caching(ns):
+    """Control: a handed function that writes no file is not a writer."""
+    assert statement_calls_user_writer("vs = list(map(tl.tidy, rows))", ns) is None

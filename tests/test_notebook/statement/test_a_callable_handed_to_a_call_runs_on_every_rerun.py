@@ -70,6 +70,42 @@ CASES = {
         "r = run_steps(steps, list(range(4)))",
         "len(tracker.seen)",
     ),
+    "picked-by-get": (
+        "seen = []\ndef f(v):\n    time.sleep(SLEEP); seen.append(v); return v * 2\nops = {'dbl': f}",
+        "r = s.apply(ops.get('dbl'))",
+        "len(seen)",
+    ),
+    "picked-by-a-variable-key": (
+        "seen = []\ndef f(v):\n    time.sleep(SLEEP); seen.append(v); return v * 2\nops = {'dbl': f}\nkey = 'dbl'",
+        "r = s.apply(ops[key])",
+        "len(seen)",
+    ),
+    "picked-by-a-conditional": (
+        "seen = []\ndef f(v):\n    time.sleep(SLEEP); seen.append(v); return v * 2\nflag = True",
+        "r = s.apply(f if flag else abs)",
+        "len(seen)",
+    ),
+    "picked-by-getattr": (
+        "class Tracker:\n    def __init__(self):\n        self.seen = []\n"
+        "    def record(self, v):\n        time.sleep(SLEEP); self.seen.append(v); return v * 2\n"
+        "tracker = Tracker()",
+        "r = s.apply(getattr(tracker, 'record'))",
+        "len(tracker.seen)",
+    ),
+    "kept-in-an-object-a-helper-runs": (
+        "seen = []\ndef f(v):\n    time.sleep(SLEEP); seen.append(v); return v\n"
+        "class Pipeline:\n    def __init__(self, steps):\n        self.steps = steps\n"
+        "def run(pipe, data):\n    return [st(x) for x in data for st in pipe.steps]\npipe = Pipeline([f])",
+        "r = run(pipe, list(range(4)))",
+        "len(seen)",
+    ),
+    "kept-in-a-deque-a-helper-runs": (
+        "import collections\nseen = []\ndef f(v):\n    time.sleep(SLEEP); seen.append(v); return v\n"
+        "def run_steps(steps, data):\n    return [st(x) for x in data for st in steps]\n"
+        "steps = collections.deque([f])",
+        "r = run_steps(steps, list(range(4)))",
+        "len(seen)",
+    ),
 }
 
 
@@ -164,3 +200,67 @@ def test_a_call_handed_a_list_of_writers_is_not_served():
     assert not hands_a_state_changing_callable(run_steps, ([ns["g"]], [1]), {})
     # A list the callee does not call into is data, and not looked into.
     assert not hands_a_state_changing_callable(total, ([ns["f"]],), {})
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["r = s.apply(make(2))", "r = s.apply(Scaler(2))", "r = sorted(rows, key=make(2))"],
+)
+def test_a_callable_only_running_code_can_tell_is_unreadable(statement):
+    """What a function of the user's returns is known only by running it:
+    the statement is told it cannot be read, and runs uncached."""
+    from cash.analysis.handed_callables import handed_callables
+
+    ns = _namespace(
+        "def make(k):\n    return lambda v: v * k\n"
+        "class Scaler:\n    def __init__(self, k):\n        self.k = k\n"
+        "    def __call__(self, v):\n        return v * self.k\n"
+    )
+    found = handed_callables(ast.parse(statement), ns)
+    assert len(found.unreadable) == 1
+    assert "cannot tell which function it is" in found.unreadable[0]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "print(ops[key])",  # not a position the callee calls
+        "r = s.map(table[key])",  # a library object's item is data
+        "r = s.apply(functools.partial(g, 1))",
+        "r = sorted(rows, key=operator.itemgetter(1))",
+        "r = s.apply(np_abs)",
+    ],
+)
+def test_what_cash_can_resolve_or_needs_not_is_not_unreadable(statement):
+    """Controls: a variable key outside a calling position, a part of a
+    library object, and library calls that hand over what they are given."""
+    import functools
+    import operator
+
+    from cash.analysis.handed_callables import handed_callables
+
+    ns = _namespace("def g(v, w):\n    return v\nops = {'g': g}\nkey = 'g'\n")
+    ns.update(functools=functools, operator=operator, table={"g": [1]}, np_abs=abs)
+    found = handed_callables(ast.parse(statement), ns)
+    assert found.unreadable == ()
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "r = s.map(lambda v: tracker.record(v))",
+        "r = sorted(rows, key=lambda v: tracker.record(v))",
+        "r = s.apply(lambda v: OPS[key](v))",
+    ],
+)
+def test_a_lambda_hands_over_what_it_calls(statement):
+    """A lambda handed to a call runs its body: the methods and functions
+    it calls are handed over with it."""
+    from cash.analysis.handed_callables import handed_callables
+
+    ns = _namespace(
+        "class Tracker:\n    def __init__(self):\n        self.seen = []\n"
+        "    def record(self, v):\n        self.seen.append(v)\n"
+        "tracker = Tracker()\nOPS = {'rec': tracker.record}\nkey = 'rec'\n"
+    )
+    assert set(handed_callables(ast.parse(statement), ns).receivers) >= {"tracker"}
