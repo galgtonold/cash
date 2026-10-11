@@ -294,24 +294,52 @@ def _library_children(value: Any) -> list[Any] | None:
     a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
     items (one that owns them: a view's items are its base's), and a
     pandas object's ``attrs``."""
-    if isinstance(value, collections.deque):
+    kind = _LIBRARY_KINDS.get(type(value))
+    if kind is None:
+        kind = _library_kind(type(value))
+    if kind is _LEAF:
+        return None
+    if kind is _DEQUE:
         return list(value)
-    if isinstance(value, _WRAPPING_CONTAINERS):
+    if kind is _WRAPPING:
         try:
             own = object.__getattribute__(value, "__dict__")
         except (AttributeError, TypeError):
             return None
         return list(own.values()) if type(own) is dict else None
-    np = sys.modules.get("numpy")
-    if np is not None and isinstance(value, np.ndarray):
+    if kind is _ARRAY:
         if value.dtype.kind == "O" and value.base is None:
             return list(value.flat)
         return None
-    pd = sys.modules.get("pandas")
-    if pd is not None and isinstance(value, (pd.DataFrame, pd.Series)):
-        attrs = _pandas_attrs(value)
-        return [attrs] if attrs else None
-    return None
+    attrs = _pandas_attrs(value)
+    return [attrs] if attrs else None
+
+
+_LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
+
+#: `_library_kind` by type: a walk asks for every leaf it meets.
+_LIBRARY_KINDS: dict[type, str] = {}
+
+
+def _library_kind(cls: type) -> str:
+    """Which of `_library_children`'s containers *cls* is, if any."""
+    if issubclass(cls, collections.deque):
+        kind = _DEQUE
+    elif issubclass(cls, _WRAPPING_CONTAINERS):
+        kind = _WRAPPING
+    else:
+        np = sys.modules.get("numpy")
+        pd = sys.modules.get("pandas")
+        if np is not None and issubclass(cls, np.ndarray):
+            kind = _ARRAY
+        elif pd is not None and issubclass(cls, (pd.DataFrame, pd.Series)):
+            kind = _PANDAS
+        else:
+            kind = _LEAF
+    if len(_LIBRARY_KINDS) > 4096:
+        _LIBRARY_KINDS.clear()
+    _LIBRARY_KINDS[cls] = kind
+    return kind
 
 
 def _pandas_attrs(value: Any) -> dict | None:
