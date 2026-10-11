@@ -23,7 +23,8 @@ from cash.backends.serialization import PickleSerializer
 
 pytestmark = [pytest.mark.core]
 
-#: Deeper than pickle follows on any supported Python.
+#: Deeper than pickle follows on Python 3.10 to 3.13 (3.14 follows as deep
+#: as the C stack allows, which can be deeper).
 DEEP = 20_000
 
 
@@ -110,9 +111,24 @@ def _identity(x):
     return x
 
 
-def test_a_key_is_never_taken_over_a_flattened_value():
+def test_a_key_is_never_taken_over_a_flattened_value(monkeypatch):
+    """Where the pickler runs out of recursion, keyed bytes raise and are not
+    pickled flat. How deep the pickler follows is not fixed: from Python 3.14
+    it is the C stack left, and a CI runner's 3.14.8 pickled the whole
+    DEEP chain. So the pickler is made to give up on it here, as it does on
+    a smaller stack."""
+    head = _chain(DEEP)
+    real = kept_state._dumps
+
+    def out_of_stack_on_the_chain(value, *args):
+        if value is head:
+            raise RecursionError("maximum recursion depth exceeded while pickling an object")
+        return real(value, *args)
+
+    monkeypatch.setattr(kept_state, "_dumps", out_of_stack_on_the_chain)
     with pytest.raises(RecursionError):
-        kept_state.dumps(_chain(DEEP), keyed=True)
+        kept_state.dumps(head, keyed=True)
+    assert _values(pickle.loads(kept_state.dumps(head))) == _values(head), "a stored value is pickled flat"
 
 
 def test_a_deep_chain_pickle_refuses_is_copied_by_the_ram_tier():
