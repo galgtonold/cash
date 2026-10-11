@@ -27,7 +27,7 @@ from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
-from .key_values import SYNC_TYPES, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
+from .key_values import SYNC_TYPES, code_ref, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
 from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
@@ -611,6 +611,13 @@ class HelperIdentity:
             if isinstance(value, SYNC_TYPES):
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
+                # Code: the user's is followed as a helper in its own right.
+                # What it names is keyed here, for the code the helper walk
+                # does not follow: `make(np.float32)` and `make(np.float64)`,
+                # `make(sum)` and `make(max)` shared one key.
+                ref = None if isinstance(value, types.ModuleType) or is_cash_wrapper(value) else code_ref(value)
+                if ref is not None:
+                    captures.append((name, f"ref:{ref}"))
                 continue
             watched = False
             if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
@@ -937,10 +944,16 @@ class ClosureFold:
         provably only reads it."""
         if is_immutable_capture(v):
             return (name, v)
-        if isinstance(v, SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
-            # A lock holds no data. A class, an ``lru_cache`` wrapper or
-            # another callable is code, followed by the helper walk.
+        if isinstance(v, SYNC_TYPES):
+            # A lock holds no data.
             return None
+        if callable(v) and not is_user_callable_instance(v):
+            # A class, an ``lru_cache`` wrapper or another callable is code,
+            # the user's followed by the helper walk; keyed here by what it
+            # names, for the code that walk does not follow
+            # (`make(np.float32)`, `make(np.add)`).
+            ref = code_ref(v)
+            return None if ref is None else (name, f"ref:{ref}")
         if read_only:
             # Read-only mutable capture: fold its content hash. One that
             # cannot be hashed runs the call uncached rather than being
