@@ -69,7 +69,12 @@ __all__ = [
 #: 3: arrays, columns and files are digested by `cash.bulk_digest`. An old
 #: entry could never match a new key -- every digest of the new scheme is
 #: taken over different bytes -- but it would never be used again either.
-CACHE_FORMAT_VERSION = 3
+#: 4: statements that draw on pyplot's figures, hand a call a function that
+#: changes state, or read a name sharing an object with another now always
+#: run or key differently. An older build stored entries for some of them
+#: (``sns.barplot(...)``, ``s.apply(tracker.record)``) that this build would
+#: still find and serve, so they are cleared.
+CACHE_FORMAT_VERSION = 4
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
