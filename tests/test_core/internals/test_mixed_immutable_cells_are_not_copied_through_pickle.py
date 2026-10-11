@@ -56,3 +56,18 @@ def test_a_list_among_mixed_cells_is_still_copied():
     df["x"].iloc[2].append(3)
 
     assert backend.get("k")[1]["x"].iloc[2] == [1, 2]
+
+
+def test_a_list_of_timestamps_is_copied_without_pickling():
+    """``list(df['action_time'])``: 1.7 million Timestamps went through a
+    pickle round trip for the RAM tier, 16 s after a 2.9 s statement. A new
+    list holding the same immutable Timestamps is a complete copy."""
+    stamps = list(pd.Series(pd.to_datetime(["2023-01-01", "2023-01-02"] * 50)))
+
+    backend = InMemoryBackend()
+    backend.set("k", {"variables": {"stamps": stamps}}, {"execution_time": 1.0})
+    stamps.append(pd.Timestamp("2024-01-01"))
+    hit = backend.get("k")[1]["variables"]["stamps"]
+
+    assert len(hit) == 100
+    assert hit[0] is stamps[0], "the Timestamps are shared, not pickled"

@@ -804,7 +804,7 @@ class InMemoryBackend(CacheBackend):
                 if (holds_premade or _plain_data.spine_copy(item, memo) is None) and depth < 4:
                     InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1)
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
-                if _plain_data.immutable_below(item):
+                if _plain_data.immutable_below(item) or _of_immutable_cells(item):
                     memo[id(item)] = item if item_type is tuple else list(item)
                 else:
                     # Nested plain or JSON-like data (a parsed log: rows
@@ -1508,6 +1508,18 @@ def immutable_cells(array: Any) -> bool:
     if kind not in ("mixed", "mixed-integer", "mixed-integer-float"):
         return False
     return _immutable_cell_types().issuperset(map(type, array))
+
+
+def _of_immutable_cells(items: list | tuple) -> bool:
+    """Is *items* flat, of values no one can change in place, pandas' and
+    numpy's scalars among them (`_immutable_cell_types`)? Then a new list is
+    a complete copy. ``list(df['action_time'])``, 1.7 million Timestamps, was
+    copied through a pickle round trip for the RAM tier: 16 s after a 2.9 s
+    statement. Asked of the exact types at C speed, and only once pandas is
+    imported: before that, no such scalar exists."""
+    if "pandas" not in sys.modules:
+        return False
+    return _immutable_cell_types().issuperset(map(type, items))
 
 
 @functools.cache
