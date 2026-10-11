@@ -115,7 +115,7 @@ read the version from where it lives** (the catalog, the database, the
 server), not from an attribute the object set when it was made, as
 `DatasetVersion` above does.
 
-<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/backends/persistence_policy.py:PersistencePolicy.decide @9833f8dc -->
+<!-- claim: cash/decorator/store.py:ResultStore._unpicklable_source_refusal @176a0ddd, cash/backends/persistence_policy.py:PersistencePolicy.decide @4e63030d -->
 A source that cannot be pickled (one holding an open connection or a lock)
 can only be asked by the process that has it. The caller's entry then stays
 in RAM for this process, and is not written to disk; with a backend that has
