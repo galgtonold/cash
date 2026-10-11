@@ -15,6 +15,7 @@ import textwrap
 
 import pytest
 
+from cash.backends import frame_sharing
 from cash.backends.memory_backend import InMemoryBackend
 from tests._scripts import run_python
 
@@ -23,7 +24,9 @@ np = pytest.importorskip("numpy")
 
 
 TABLES = {
-    "daily index": lambda: pd.DataFrame({"sales": np.arange(5.0)}, index=pd.date_range("2024-01-01", periods=5, freq="D")),
+    "daily index": lambda: pd.DataFrame(
+        {"sales": np.arange(5.0)}, index=pd.date_range("2024-01-01", periods=5, freq="D")
+    ),
     "hourly timedelta index": lambda: pd.DataFrame(
         {"v": np.arange(4.0)}, index=pd.timedelta_range("1D", periods=4, freq="h")
     ),
@@ -66,6 +69,7 @@ def test_the_copy_the_disk_write_pickles_keeps_the_freq(name):
     assert _freqs(pickle.loads(pickle.dumps(stored))) == _freqs(table)
 
 
+@pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
 @pytest.mark.parametrize("name", TABLES)
 def test_a_table_read_from_disk_keeps_the_freq_when_kept_in_ram(name):
     """A disk read is frozen where it is (`promote`), and every hit of it after."""

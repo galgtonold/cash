@@ -88,9 +88,9 @@ ROWS = "rows = [list(range(10))] * 20\n"
 @pytest.mark.parametrize(
     "setup, call",
     [
-        ("import time\ndef stamp(x):\n    return time.time_ns() % 1000", "stamp(x)"),
+        ("import time\ndef stamp(x):\n    return time.time_ns() // 1000 % 1000", "stamp(x)"),
         (
-            "import time\ndef now():\n    return time.time_ns() % 1000\ndef stamp(x):\n    return now()",
+            "import time\ndef now():\n    return time.time_ns() // 1000 % 1000\ndef stamp(x):\n    return now()",
             "stamp(x)",
         ),
         ("import itertools\nids = itertools.count(1)\ndef new_id(x):\n    return next(ids)", "new_id(x)"),
@@ -98,7 +98,10 @@ ROWS = "rows = [list(range(10))] * 20\n"
         ("import os", "os.urandom(1)[0]"),
         ("import secrets\ndef pick(x):\n    return secrets.randbelow(1000)", "pick(x)"),
         ("import numpy as np\ndef draw(x):\n    return int(np.random.default_rng().integers(1000))", "draw(x)"),
-        ("import numpy as np\ngen = np.random.default_rng(0)\ndef draw(x):\n    return int(gen.integers(1000))", "draw(x)"),
+        (
+            "import numpy as np\ngen = np.random.default_rng(0)\ndef draw(x):\n    return int(gen.integers(1000))",
+            "draw(x)",
+        ),
     ],
     ids=[
         "a helper reads the clock",
