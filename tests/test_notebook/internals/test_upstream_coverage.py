@@ -18,8 +18,6 @@ import types
 from collections.abc import Mapping
 from unittest.mock import MagicMock
 
-import pytest
-
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry

@@ -26,9 +26,7 @@ def test_a_cell_below_prints_what_run_all_prints(nb_runner, tmp_path):
     csv.write_text("x\n1\n", encoding="utf-8", newline="\n")
     os.utime(csv, (1e9, 1e9))
     path = str(csv).replace("\\", "/")
-    nb_runner.create_notebook(
-        ["import pandas as pd", f"df = pd.read_csv('{path}')", "t = int(df.x.sum())", "print(t)"]
-    )
+    nb_runner.create_notebook(["import pandas as pd", f"df = pd.read_csv('{path}')", "t = int(df.x.sum())", "print(t)"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert nb_runner.get_output(4).strip() == "1"
