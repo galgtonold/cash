@@ -1451,10 +1451,11 @@ class StatementProcessor:
         already (`_refuse_unrestorable_outputs`); for any other statement --
         one that re-executes every run, like ``raw.append(x)`` -- the same
         check (`share_group`) is asked here, within the same time budget.
-        When it cannot say, its budget spent or a holder not a variable, the
-        variables are looked for from the outputs up (`referring_names`);
-        when the budget ran out and that is cut short too, some may be
-        missing, and the NOTEBOOK-SHARE-UNCHECKED warning says so. A loop or branch body is
+        When its budget ran out, the variables are looked for from the
+        outputs up (`referring_names`); when that is cut short too, some may
+        be missing, and the NOTEBOOK-SHARE-UNCHECKED warning says so. A
+        holder that is not a variable (a closure, a library's registry) links
+        no variable. A loop or branch body is
         left to its structure, which moves what it changed when it ends
         (``update_lineage_after_execution``).
         """
@@ -1499,6 +1500,11 @@ class StatementProcessor:
                     found, shared = share_group(names, captured_vars, user_ns, cash_held, named, foreign=foreign)
                 if not shared:
                     return set(found), True
+                # A holder that is not a variable (pyplot's figure registry,
+                # a library's cache, a closure): no variable to link, and a
+                # search from the outputs up would climb through the library
+                # until its budget ran out, on every plot statement.
+                return set(), True
             except WalkBudgetExceeded:
                 timed_out = True
         found_names, complete = referring_names(
@@ -1508,11 +1514,7 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        # A holder that is not a variable (pyplot's figure registry, a
-        # library's cache) is what the climb runs into without end: only a
-        # search the budget cut short leaves variables unknown, as the check
-        # it stands in for would have found them.
-        return found_names, complete or not timed_out
+        return found_names, complete
 
     def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
         """Warn, once per statement, that the variables sharing an object
