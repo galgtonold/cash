@@ -76,7 +76,7 @@ class _KeepDict(dict):
             reducer = registered
         else:
             if _drops_dict(t):
-                reducer = functools.partial(_reduce_with_dict, protocol=self._protocol)
+                reducer = _reducer_with_dict(self._protocol)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
         self[t] = reducer
@@ -117,6 +117,24 @@ def _decide_drops_dict(t: type) -> bool:
 _PYTHON_METHODS = (types.FunctionType, classmethod, staticmethod)
 
 _DROPS_DICT: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _reducer_with_dict(protocol: int) -> Any:
+    """`_reduce_with_dict` for *protocol*, with the common case -- an
+    instance with nothing in its ``__dict__`` -- first and in one call: a
+    column of 1.9 million ``pandas.Timestamp`` went through it one at a
+    time, 1.8 s on top of pickle's own 3.4 s."""
+
+    def reduce(obj: Any) -> Any:
+        try:
+            empty = not obj.__dict__
+        except AttributeError:
+            empty = True
+        if empty:
+            return obj.__reduce_ex__(protocol)
+        return _reduce_with_dict(obj, protocol)
+
+    return reduce
 
 
 def _reduce_with_dict(obj: Any, protocol: int) -> Any:

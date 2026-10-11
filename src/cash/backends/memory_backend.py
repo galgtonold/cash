@@ -22,10 +22,10 @@ from typing import Any
 from cash.exceptions import CacheBackendError
 
 from .. import _plain_data, kept_state
-from . import frame_sharing
 from .._lazy_module import LazyModule
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
+from . import frame_sharing
 from ._base import CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 
@@ -437,6 +437,9 @@ class InMemoryBackend(CacheBackend):
             if value_type.__name__ == "ndarray" and value_type is getattr(sys.modules.get("numpy"), "ndarray", None):
                 if not value.dtype.hasobject:
                     return _copy_array(value)
+                copied = _copy_object_array(value)
+                if copied is not None:
+                    return copied
             if value_type is list or value_type is tuple:
                 if all(type(item) in IMMUTABLE_PRIMS for item in value):
                     return value if value_type is tuple else list(value)
@@ -621,6 +624,10 @@ class InMemoryBackend(CacheBackend):
                 return key
             if obj_type is ndarray and not obj.dtype.hasobject:
                 memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
+                alive.append(obj)
+                return key
+            if obj_type is ndarray and (copied := _copy_object_array(obj)) is not None:
+                memo[key] = copied
                 alive.append(obj)
                 return key
             if obj_type is _Marshalled:
@@ -1676,6 +1683,22 @@ def _copy_array(array: Any) -> Any:
         started = _copy_clock()
         copied = array.copy(order="K")
         _note_copy_speed(array.nbytes, _copy_clock() - started)
+    if not array.flags.writeable:
+        copied.flags.writeable = False
+    return copied
+
+
+def _copy_object_array(array: Any) -> Any | None:
+    """A copy of a numpy array of objects no one can change in place
+    (`immutable_cells`), the cells shared, read-only if it was; None for any
+    other array. ``df['action_time'].unique()`` over 1.9 million Timestamps
+    was copied through a pickle round trip for the RAM tier: 17 s after a
+    4 s statement. Not timed: sharing cells is no measure of copy speed."""
+    if array.dtype.kind != "O" or "pandas" not in sys.modules:
+        return None
+    if not immutable_cells(array.ravel(order="K")):
+        return None
+    copied = array.copy(order="K")
     if not array.flags.writeable:
         copied.flags.writeable = False
     return copied

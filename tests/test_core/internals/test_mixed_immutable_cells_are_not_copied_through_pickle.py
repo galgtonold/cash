@@ -17,8 +17,8 @@ import pytest
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
-from cash.backends import memory_backend  # noqa: E402 - imported after the importorskip above
-from cash.backends.memory_backend import InMemoryBackend, immutable_cells  # noqa: E402
+from cash.backends import memory_backend
+from cash.backends.memory_backend import InMemoryBackend, immutable_cells
 
 
 def test_a_mix_of_immutable_cells_is_immutable():
@@ -71,3 +71,32 @@ def test_a_list_of_timestamps_is_copied_without_pickling():
 
     assert len(hit) == 100
     assert hit[0] is stamps[0], "the Timestamps are shared, not pickled"
+
+
+def test_an_array_of_timestamps_is_copied_without_pickling():
+    """``df['action_time'].unique()`` on an object column: 1.9 million
+    Timestamps in a numpy array went through a pickle round trip for the RAM
+    tier, 17 s after a 4 s statement. A new array of the same Timestamps is
+    a complete copy, alone or inside a notebook entry."""
+    stamps = np.array(list(pd.to_datetime(["2023-01-01", "2023-01-02"] * 50)), dtype=object)
+    stamps.flags.writeable = False
+
+    backend = InMemoryBackend()
+    backend.set("alone", stamps, {"execution_time": 1.0})
+    backend.set("entry", {"variables": {"stamps": stamps}}, {"execution_time": 1.0})
+
+    for hit in (backend.get("alone")[1], backend.get("entry")[1]["variables"]["stamps"]):
+        assert hit is not stamps
+        assert hit[0] is stamps[0], "the Timestamps are shared, not pickled"
+        assert not hit.flags.writeable, "read-only stays read-only, as a disk hit has it"
+        assert (hit == stamps).all()
+
+
+def test_an_array_holding_a_list_is_still_copied():
+    cells = np.empty(2, dtype=object)
+    cells[0], cells[1] = pd.Timestamp("2023-01-01"), [1, 2]
+    backend = InMemoryBackend()
+    backend.set("k", cells, {"execution_time": 1.0})
+    cells[1].append(3)
+
+    assert backend.get("k")[1][1] == [1, 2]
