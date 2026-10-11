@@ -150,3 +150,49 @@ def test_the_iterative_copy_keeps_what_deepcopy_keeps():
     assert copied["a"] is copied["b"][0] is copied["b"][1].a
     assert copied["a"] is not shared and copied["a"] == [1]
     assert copied["c"] is not value["c"] and copied["c"].v == 1
+
+
+class TestWhereThePicklerRunsOutOfStackFirst:
+    """On Python 3.10 on Windows (`kept_state.FLAT_FIRST`) a value is found
+    shallow before the pickler is let follow it. Finding that by flattening
+    it cost seconds for every pickle of a list of 200,000 rows, keys
+    included, and ran a test past its 30 s timeout on that CI job."""
+
+    @pytest.fixture(autouse=True)
+    def flat_first(self, monkeypatch):
+        monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+
+    def test_a_wide_shallow_value_is_pickled_without_flattening_it(self, monkeypatch):
+        def no_flatten(*_args, **_kwargs):
+            raise AssertionError("a shallow value was flattened")
+
+        monkeypatch.setattr(kept_state, "flatten", no_flatten)
+        rows = [(i, {"k": i, "tags": ["a", "b"]}) for i in range(2_000)]
+        for keyed in (False, True):
+            assert pickle.loads(kept_state.dumps(rows, keyed=keyed)) == rows
+
+    def test_a_chain_its_list_holds_every_node_of_is_deep(self):
+        """The list is two levels deep from each node, but the pickler goes
+        down the chain from the first node it saves."""
+        head = _chain(kept_state._SAFE_DEPTH * 2)
+        nodes = []
+        node = head
+        while node is not None:
+            nodes.append(node)
+            node = node.next
+        assert not kept_state._at_most_deep(nodes, kept_state._SAFE_DEPTH, kept_state.reducers(), lambda _o: False)
+        back = pickle.loads(kept_state.dumps(nodes))
+        assert _values(back[0]) == _values(head)
+
+    def test_a_cycle_and_a_value_built_from_itself_are_left_to_flatten(self):
+        loop: list = [1]
+        loop.append(loop)
+        back = pickle.loads(kept_state.dumps(loop))
+        assert back[1] is back
+
+        class Loop:
+            def __reduce__(self):
+                return (_identity, (self,))
+
+        with pytest.raises(pickle.PicklingError):
+            kept_state.dumps(Loop())

@@ -17,6 +17,7 @@ from __future__ import annotations
 import copyreg
 import functools
 import io
+import itertools
 import operator
 import pickle
 import sys
@@ -93,11 +94,109 @@ def _dumps_walked_first(
     (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
-    deepest = sys.getrecursionlimit() // 2 if keyed else None
-    flat = flatten(value, _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id), deepest)
-    if flat.depth <= _SAFE_DEPTH:
+    reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
+    if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf):
         return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+    deepest = sys.getrecursionlimit() // 2 if keyed else None
+    flat = flatten(value, reducers, leaf, deepest)
     return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+
+
+def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
+    """Is *value* at most *limit* objects deep, as the pickler follows it?
+
+    `flatten` made a step for every object to learn the same, and on
+    `FLAT_FIRST` Pythons every value not `_surely_shallow` was flattened
+    before it was pickled: seconds for each pickle of a list of 200,000
+    rows, each key of it included, which ran a test keying such a list past
+    its timeout on Windows 3.10. Here the value is taken a level at a time,
+    the builtin containers of a level opened at C speed, and nothing is
+    built. The levels count the longest chain of objects each holding the
+    next, which the pickler, following each object once, never goes deeper
+    than; so this may say deep where `flatten` would not, never the other
+    way. A cycle, or anything else met again level after level, is left to
+    `flatten`, which walks each object once (and refuses an object rebuilt
+    from arguments that hold it, which the pickler would recurse through
+    until the stack ran out).
+    """
+    level = _not_atoms([value])
+    seen: set[int] = set()
+    alive: list[list] = []  # the levels, so no id in *seen* is reused by a reduce's parts
+    rewalked = 0
+    for _ in range(limit):
+        if not level:
+            return True
+        before = len(seen)
+        seen.update(map(id, level))
+        again = len(level) - (len(seen) - before)
+        if again:
+            rewalked += again
+            if rewalked > _REWALKED_FREE:
+                # Much of it met again: a cycle, or objects shared all the
+                # way down. `flatten` walks each object once.
+                return False
+            level = list(dict(zip(map(id, level), level)).values())  # each once in a level
+        alive.append(level)
+        level = _next_level(level, reducers, leaf)
+    return not level
+
+
+#: How many objects `_at_most_deep` walks again before it leaves the value
+#: to `flatten`: a few shared at every level (a class, a dtype) are not a
+#: cycle.
+_REWALKED_FREE = 1024
+
+
+def _next_level(level: list, reducers: Any, leaf: Any) -> list:
+    """What the objects of *level* hold that is not an atom."""
+    kinds = list(map(type, level))
+    opened = list(map(_OPENED_BY_ITEMS.__contains__, kinds))
+    found: list[Any] = []
+    containers = list(itertools.compress(level, opened))
+    if containers:
+        found += _not_atoms(list(itertools.chain.from_iterable(containers)))  # a dict's keys too
+        dicts = list(itertools.compress(level, map(_DICT.__contains__, kinds)))
+        found += _not_atoms(list(itertools.chain.from_iterable(map(dict.values, dicts))))
+    if len(containers) < len(level):
+        for obj in itertools.compress(level, map(operator.not_, opened)):
+            parts = _reduced_parts(obj, reducers, leaf)
+            if parts:
+                found += _not_atoms(parts)
+    return found
+
+
+#: Opened by `_next_level` without a reduce: what iterating them gives is
+#: what the pickler saves in them (a dict's values follow its keys).
+_OPENED_BY_ITEMS: frozenset[type] = frozenset({list, tuple, set, frozenset, dict})
+_DICT: frozenset[type] = frozenset({dict})
+
+
+def _not_atoms(items: list) -> list:
+    """The items of *items* that are not `_FLAT_ATOMS`, picked out without
+    a Python step per item."""
+    return list(itertools.compress(items, map(operator.not_, map(_FLAT_ATOMS.__contains__, map(type, items)))))
+
+
+def _reduced_parts(obj: Any, reducers: Any, leaf: Any) -> list:
+    """What pickling *obj*, not a builtin container, saves inside it, as
+    `flatten` follows it: nothing for an object pickled whole."""
+    obj_type = type(obj)
+    if leaf(obj) or obj_type in _WHOLE or issubclass(obj_type, type) or _flat_array(obj):
+        return []
+    reduced = reducers[obj_type](obj)
+    if isinstance(reduced, str):
+        return []  # a global, pickled by name
+    _rebuild, args, *rest = reduced
+    rest += [None] * (4 - len(rest))
+    state, listitems, dictitems = rest[:3]
+    parts = [args]
+    if state is not None:
+        parts.append(state)
+    if listitems is not None:
+        parts += listitems
+    if dictitems is not None:
+        parts += itertools.chain.from_iterable(dictitems)
+    return parts
 
 
 #: How many objects deep the pickler is let follow a value on `FLAT_FIRST`
