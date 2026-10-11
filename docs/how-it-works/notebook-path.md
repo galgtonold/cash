@@ -104,7 +104,7 @@ the objects are hashed before and after, and the ones that changed are
 recorded for that loop's text, so later runs, a restart and the upstream check
 move the same names.
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @92d2fcf2, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b99280d5 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b99280d5 -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,
