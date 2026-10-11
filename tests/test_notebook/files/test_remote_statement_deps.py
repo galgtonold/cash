@@ -18,12 +18,13 @@ stat'ed and getmtime'd by its consumers, so a URL there contributes nothing.
 from __future__ import annotations
 
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
 
 from cash.notebook.statement.file_deps import compute_file_hash_component
 from cash.remote_source import REMOTE_LEDGER
+from tests._local_http import LocalThreadingHTTPServer
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +63,7 @@ def origin():
         def log_message(self, *args):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     state.url = f"http://127.0.0.1:{server.server_address[1]}/data.csv"

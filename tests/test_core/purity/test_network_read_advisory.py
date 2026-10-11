@@ -28,6 +28,7 @@ import pytest
 from cash.analysis.purity_analyzer import PurityAnalyzer
 from cash.analysis.purity_report import ISSUE_NETWORK_READ
 from cash.exceptions import CashImpureFunctionError
+from tests._local_http import LocalHTTPServer
 
 pytestmark = [pytest.mark.timeout(120)]
 
@@ -81,7 +82,7 @@ def url():
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}/"
     server.shutdown()

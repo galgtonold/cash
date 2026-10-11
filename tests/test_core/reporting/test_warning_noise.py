@@ -25,6 +25,8 @@ import warnings
 
 import pytest
 
+from tests._local_http import LocalHTTPServer
+
 pytestmark = [pytest.mark.core, pytest.mark.timeout(120)]
 
 _app_log = logging.getLogger("cash_test_app")
@@ -59,7 +61,7 @@ def url():
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}/"
     server.shutdown()

@@ -16,7 +16,7 @@ The alternative default is silent staleness.
 from __future__ import annotations
 
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import pytest
 
@@ -27,6 +27,7 @@ from cash.tracking.file_dep_snapshot import (
     snapshot_file_deps,
     snapshot_remote_deps,
 )
+from tests._local_http import LocalThreadingHTTPServer
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +67,7 @@ def origin():
         def log_message(self, *args):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     state.url = f"http://127.0.0.1:{server.server_address[1]}/data.csv"

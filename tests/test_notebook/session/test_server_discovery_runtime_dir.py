@@ -25,12 +25,13 @@ import threading
 import time
 import types
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import psutil
 import pytest
 
 from cash.notebook import server_discovery as sd
+from tests._local_http import LocalThreadingHTTPServer
 
 KERNEL_ID = "5f1c0d8e-2b7a-4c3e-9d61-0a8e4f7b2c19"
 NB_PATH = "reports/analysis.ipynb"
@@ -71,7 +72,7 @@ class _StubServer:
             def log_message(self, *args):
                 pass
 
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self._httpd = LocalThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.url = f"http://127.0.0.1:{self._httpd.server_address[1]}/"
         self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         self._thread.start()

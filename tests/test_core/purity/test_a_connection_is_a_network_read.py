@@ -24,6 +24,7 @@ import pytest
 
 from cash.exceptions import CashImpureFunctionError
 from cash.tracking.reader_patches import file_registry
+from tests._local_http import LocalHTTPServer
 
 pytestmark = [pytest.mark.timeout(120)]
 
@@ -39,7 +40,7 @@ def url():
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}/"
     server.shutdown()
