@@ -172,9 +172,26 @@ def _on_mkdir(args: tuple) -> None:
     if not isinstance(path, (str, bytes, os.PathLike)):
         return
     tracker = active_tracker.get()
+    observer = _active_effect_observer.get()
+    if tracker is None and observer is None:
+        return
+    # The event comes before the syscall: `makedirs(d, exist_ok=True)` and
+    # `Path(d).mkdir(exist_ok=True)` raise it for a folder that is already
+    # there and swallow the FileExistsError. That folder holds the user's
+    # data, not the block's output -- `Path(out).parent.mkdir(...)` for an
+    # output in the working directory is `mkdir(".")`. Ask the disk.
+    # The event reports no dir_fd as -1.
+    dir_fd = args[2] if len(args) > 2 and isinstance(args[2], int) and args[2] >= 0 else None
+    try:
+        if dir_fd is None:
+            os.lstat(path)
+        else:
+            os.lstat(path, dir_fd=dir_fd)
+        return  # something is there already: this mkdir creates nothing
+    except (OSError, ValueError, TypeError, NotImplementedError):
+        pass  # not there (or unreadable): the mkdir makes it
     if tracker is not None:
         tracker.note_created(path, directory=True)
-    observer = _active_effect_observer.get()
     if observer is not None:
         observer.note_created_dir(path)
 

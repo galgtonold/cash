@@ -1854,7 +1854,9 @@ from, so storing it could serve a stale result later.
 A file the function creates itself (opened for writing, in a directory it made
 with `tempfile.TemporaryDirectory`, `mkdtemp` or `os.mkdir`, or by
 `tempfile.mkstemp`) is its own output, not an input: writing a scratch file,
-reading it back and removing it caches normally.
+reading it back and removing it caches normally. A folder that was already
+there is not one the function made, so `os.makedirs(d, exist_ok=True)` leaves
+the files under `d` inputs.
 
 **What to do.** Usually nothing: the next call caches normally. If it fires on
 every run, the function probably reads a file and then writes to it. Split the
