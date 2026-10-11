@@ -247,11 +247,15 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
         "KEY-UNHASHABLE-GLOBAL",  # a global the function reads could not be
         # hashed, so changing it invalidates nothing
+        "KEY-UNRESOLVED-CALL",  # a call goes through a property or __getattr__
+        # cash does not run, so the function it reaches is not in the key
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
         # ran the cell uncached
         "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
         # the statement ran uncached
+        "NOTEBOOK-FAILED-CELL",  # a cell raised part way, and a name it
+        # changed is kept as that run left it, or could not be put back
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
@@ -261,6 +265,10 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # kernel restarted, and cash cannot rebuild the state a cell set on it
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
+        "NOTEBOOK-SHARE-UNCHECKED",  # cash could not find every variable
+        # sharing an object with a statement's outputs in time
+        "NOTEBOOK-SHARED-KEPT",  # a value another name below still shares
+        # is kept as it is rather than rebuilt for a cell re-run on its own
         # -- RANDOM: a cached value that randomness makes non-reproducible ------
         "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
         # draw, not a fresh one

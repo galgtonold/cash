@@ -26,11 +26,13 @@ from ...analysis.annotations import (
     parse_annotations_in_range,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import control_structure_mutations, is_module_name
+from ...analysis.mutation_effects import condition_mutations, control_structure_mutations, is_module_name
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
+from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
+from ..pyplot_draws import holds_artists, pyplot_draw_names
 from .common import extract_target_names
 
 logger = logging.getLogger(__name__)
@@ -290,6 +292,14 @@ def update_lineage_after_execution(
     state_names = module_state_names(code, user_ns, structure=True) | state_holders(seen, code, user_ns)
     mutated_vars |= state_names
     statement_processor.note_module_state(code, state_names, module_state_writes(code, user_ns) | seen)
+    # Drawing through pyplot changes the current figure and axes
+    # (``pyplot_draws``); recorded for the simulation as a statement's is.
+    drawn = pyplot_draw_names(node, user_ns)
+    draws = state.pyplot_draw_outputs
+    digest = statement_source_hash(ast.unparse(node))
+    if drawn or digest in draws:
+        draws[digest] = drawn
+    mutated_vars |= drawn
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)
@@ -328,14 +338,30 @@ def structure_mutations(shell, statement_processor, node: ast.AST) -> set[str]:
 
 
 def _without_branches(stmts: list[ast.stmt]) -> list[ast.stmt]:
-    """*stmts* with each ``if`` among them left out (a ``pass`` in its place).
+    """*stmts* with the branches of each ``if`` among them left out.
 
     These are the ``if`` statements a decomposed loop body hands to the if
-    handler, which reports the branch it ran (:meth:`LoopPass.branch_ran`).
-    An ``if`` deeper inside another structure is kept: that structure may
-    run as one unit, and nothing reports which of its branches ran.
+    handler, which reports the branch it ran (:meth:`LoopPass.if_ran`). Its
+    condition is kept (``if test: pass``): it runs on every pass, whichever
+    branch is taken. An ``if`` deeper inside another structure is kept whole:
+    that structure may run as one unit, and nothing reports which of its
+    branches ran.
     """
-    return [ast.Pass() if isinstance(stmt, ast.If) else stmt for stmt in stmts]
+    return [_condition_only(stmt) if isinstance(stmt, ast.If) else stmt for stmt in stmts]
+
+
+def _condition_only(node: ast.If) -> ast.If:
+    """``if test: pass``: what *node* runs before any branch."""
+    return ast.copy_location(ast.If(test=node.test, body=[ast.Pass()], orelse=[]), node)
+
+
+def _evaluated_chain(node: ast.If, tests: list[ast.expr], body: list[ast.stmt]) -> ast.If:
+    """``if t0: pass elif t1: pass ... elif tn: <body>``: the conditions an
+    ``if`` chain evaluated, *tests*, and the branch *body* it ran."""
+    chain = ast.copy_location(ast.If(test=tests[-1], body=body or [ast.Pass()], orelse=[]), node)
+    for test in reversed(tests[:-1]):
+        chain = ast.copy_location(ast.If(test=test, body=[ast.Pass()], orelse=[chain]), node)
+    return chain
 
 
 class LoopPass:
@@ -351,15 +377,34 @@ class LoopPass:
     a branch ran: ``for k in range(7):`` over ``if df.ss[k] is None:
     df.ss[k] = ...`` reads the 1M-row frame zero times, not eight, while the
     branch never runs.
+
+    The conditions are code that ran, whichever branch is taken: what the
+    ``if`` condition changes (``if stack.pop() > 7:``) changes on every pass,
+    and what an ``elif`` condition changes, on a pass that evaluated it.
     """
 
     def __init__(self) -> None:
         self.fired: set[str] = set()
+        # What each condition changes, asked once per loop rather than per
+        # pass: the body's nodes are the same on every pass.
+        self._changes: dict[int, tuple[ast.expr, frozenset[str]]] = {}
 
-    def branch_ran(self, shell, statement_processor, node: ast.If, body: list[ast.stmt]) -> None:
-        """The ``if`` *node* in the loop body ran the branch *body*."""
-        branch = ast.copy_location(ast.If(test=node.test, body=body, orelse=[]), node)
-        own = ast.copy_location(ast.If(test=node.test, body=_without_branches(body) or [ast.Pass()], orelse=[]), node)
+    def _condition_changes(self, test: ast.expr) -> frozenset[str]:
+        known = self._changes.get(id(test))
+        if known is None or known[0] is not test:
+            known = self._changes[id(test)] = (test, condition_mutations(test))
+        return known[1]
+
+    def if_ran(
+        self, shell, statement_processor, node: ast.If, tests: list[ast.expr], body: list[ast.stmt]
+    ) -> None:
+        """The ``if`` *node* in the loop body evaluated the conditions *tests*
+        (the ``if``'s and each ``elif``'s up to the one taken) and ran the
+        branch *body* (empty when none was taken)."""
+        if not body and not any(self._condition_changes(test) for test in tests):
+            return
+        branch = _evaluated_chain(node, tests, body)
+        own = _evaluated_chain(node, tests, _without_branches(body) or [ast.Pass()])
         self.fired |= structure_mutations(shell, statement_processor, own)
         update_lineage_after_execution(shell, statement_processor, branch, ast.unparse(node))
 
@@ -533,7 +578,14 @@ def update_mutated_variable_lineages(
     *unit_digest*, when given, stands in for the value hash: what went into a
     loop whose outcome is a function of its key, which names the value
     without reading it.
+
+    Then every other variable bound to, holding or held in what moved
+    (``data = raw`` before ``for x in xs: raw.append(x)``) moves on with
+    it, through the edges the statements recorded (`bump_derived_lineages`),
+    as after a single statement. What the structure moved itself is not
+    moved again.
     """
+    moved: set[str] = set()
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
             continue
@@ -546,7 +598,15 @@ def update_mutated_variable_lineages(
 
         try:
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
-            value_hash = f"unit={unit_digest}" if unit_digest else statement_processor.compute_hash(val)
+            if unit_digest:
+                value_hash = f"unit={unit_digest}"
+            elif holds_artists(val):
+                # A figure's content is a pickle of the whole figure, which
+                # no check reads (`hashed_by_lineage`): the loop's code, what
+                # it read and the lineage before name it.
+                value_hash = "artists"
+            else:
+                value_hash = statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
             prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)
@@ -561,11 +621,16 @@ def update_mutated_variable_lineages(
             new_lineage = hashlib.sha256(":".join(lineage_components).encode()).hexdigest()
 
             statement_processor.tracking_state.lineage.record(var_name, new_lineage, value=val)
+            moved.add(var_name)
 
             logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 
         except (TypeError, ValueError, AttributeError) as e:
             logger.debug("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
+    if moved and statement_processor.tracking_state.derivation_edges:
+        statement_processor.lineage_builder.replay_derivation_bumps(
+            statement_processor.tracking_state, moved, set(mutated_vars)
+        )
 
 
 # ---------------------------------------------------------------------------

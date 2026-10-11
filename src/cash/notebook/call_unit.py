@@ -41,6 +41,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
+from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -66,6 +67,7 @@ from cash.notebook.call_refs import (
     SIZE_FIELD,
 )
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
+from cash.notebook.pyplot_state import pyplot_state
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
@@ -794,6 +796,10 @@ class CallUnit:
                 # `counter()` bumps a `nonlocal`: a hit would skip the bump
                 # and hand the next call the same count.
                 return fn(*args, **kwargs)
+            if hands_a_state_changing_callable(fn, args, kwargs):
+                # `run_steps(steps, data)` with `steps = [f]`, `f` appending
+                # to a list: the callee runs `f`, and a hit would skip it.
+                return fn(*args, **kwargs)
             # Globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
             # memoised (`callee_mutated_globals`) while the "is it bound, is it
@@ -922,6 +928,7 @@ class CallUnit:
         # to the enclosing statement's tracker immediately, so the miss-path
         # "recorded for free" behaviour holds.
         rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
+        figures_before = pyplot_state()
         ticket = self._invocations[-1].ticket if self._invocations else (0, 0)
         arg_hashes_before = (
             None
@@ -948,7 +955,9 @@ class CallUnit:
             call, module_before
         ):
             self._entries.refuse(call.key)
-        elif self._worth_storing(call, result, elapsed, result_held):
+        # Not stored when it made, picked or drew on a pyplot figure, which a
+        # hit would not: the next drawing would land on another figure.
+        elif pyplot_state() == figures_before and self._worth_storing(call, result, elapsed, result_held):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
         if stored:
             self._cached(

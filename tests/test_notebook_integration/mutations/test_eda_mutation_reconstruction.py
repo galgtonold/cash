@@ -351,8 +351,8 @@ def scen_class_var_accumulator(r):
 
 
 def scen_alias_double_apply_own_rerun(r):
-    """DOCUMENTED limitation: mutating an upstream object through an alias, then
-    re-running that same cell, double-applies (cash can't attribute it to df)."""
+    """Mutating an upstream object through an alias, then re-running that same
+    cell, applies the change once, as from the top."""
     _start(
         r,
         [
@@ -452,6 +452,10 @@ SCENARIOS = [
     # still open and is pinned by
     # ``test_callee_global_capture.py::test_a_loop_body_captures_the_callee_global_too``.
     scen_hidden_global_mutation,
+    # Promoted from CANARY_SCENARIOS: ``alias = df`` links the two names, so
+    # the change made through ``alias`` moves ``df`` and an isolated re-run
+    # starts from the rebuilt frame.
+    scen_alias_double_apply_own_rerun,
 ]
 
 
@@ -463,7 +467,6 @@ SCENARIOS = [
 # the green passes above are meaningful rather than trivially matching.
 CANARY_SCENARIOS = [
     scen_class_var_accumulator,  # docs: "Class variables shared across cells"
-    scen_alias_double_apply_own_rerun,  # docs: "Mutating an object created in an earlier cell" / alias
 ]
 
 

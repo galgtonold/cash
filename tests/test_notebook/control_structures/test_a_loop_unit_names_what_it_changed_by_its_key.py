@@ -80,3 +80,48 @@ def test_a_loop_reading_a_file_sees_the_new_content(cash_magics, tmp_path):
     path.write_text("5", encoding="utf-8")
     _run(cash_magics, [loop, "total = sum(a)"])
     assert ns["total"] == 5 * 45 * 20
+
+
+ROWS = "rows = [list(range(10))] * 20\n"
+
+
+@pytest.mark.parametrize(
+    "setup, call",
+    [
+        ("import time\ndef stamp(x):\n    return time.time_ns() % 1000", "stamp(x)"),
+        (
+            "import time\ndef now():\n    return time.time_ns() % 1000\ndef stamp(x):\n    return now()",
+            "stamp(x)",
+        ),
+        ("import itertools\nids = itertools.count(1)\ndef new_id(x):\n    return next(ids)", "new_id(x)"),
+        ("import uuid\ndef tag(x):\n    return uuid.uuid4().int % 1000", "tag(x)"),
+        ("import os", "os.urandom(1)[0]"),
+        ("import secrets\ndef pick(x):\n    return secrets.randbelow(1000)", "pick(x)"),
+        ("import numpy as np\ndef draw(x):\n    return int(np.random.default_rng().integers(1000))", "draw(x)"),
+        ("import numpy as np\ngen = np.random.default_rng(0)\ndef draw(x):\n    return int(gen.integers(1000))", "draw(x)"),
+    ],
+    ids=[
+        "a helper reads the clock",
+        "a helper's helper reads the clock",
+        "a helper draws from a global counter",
+        "a helper makes a uuid",
+        "os.urandom in the loop",
+        "a helper draws from secrets",
+        "a helper builds an unseeded generator",
+        "a helper draws from a global generator",
+    ],
+)
+def test_a_loop_whose_helper_is_not_a_function_of_its_inputs_is_named_by_its_values(cash_magics, setup, call):
+    """The loop really runs again and leaves new values; were it named by its
+    key, the cell below would be served the result for the old ones."""
+    if "numpy" in setup:
+        pytest.importorskip("numpy")
+    ns = cash_magics.shell.user_ns
+    lineage = cash_magics.tracking_state.variable_lineage
+    loop = f"a = []\nfor s in rows:\n    for x in s:\n        a.append({call})"
+    _run(cash_magics, [ROWS + setup, loop, "total = sum(a)"])
+    first, before = lineage["a"], list(ns["a"])
+    _run(cash_magics, [loop, "total = sum(a)"])
+    assert ns["a"] != before, "positive control: the loop left new values"
+    assert ns["total"] == sum(ns["a"])
+    assert lineage["a"] != first, "new values under the old lineage: a cell below is served the old result"

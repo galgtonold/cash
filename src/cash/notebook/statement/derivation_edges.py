@@ -6,7 +6,11 @@ never models:
 * a numpy **view** (``v = a[100:200]``) whose ``v.base is a`` — mutating ``v``
   in place mutates ``a``;
 * a pandas **ref-holder** (``g = df.groupby('k')``, ``r = df.rolling(3)``, ...)
-  whose ``g.obj is df`` — mutating ``df`` in place changes what ``g`` aggregates.
+  whose ``g.obj is df`` — mutating ``df`` in place changes what ``g`` aggregates;
+* two **names for one object** (``data = raw``, ``config = {'features':
+  features}``, ``train = data['train']``) — a change through either one is a
+  change to what the other reaches (:func:`record_shared_object_edges`, an
+  edge each way).
 
 Lineage freezes each variable's hash at *creation*, so a later in-place
 mutation of one side never bumps the other, and a downstream consumer serves a
@@ -55,6 +59,8 @@ __all__ = [
     "bump_derived_lineages",
     "clear_edges_for",
     "is_uncacheable_alias",
+    "record_shared_object_edges",
+    "shared_object_partners",
 ]
 
 
@@ -368,6 +374,38 @@ def _detect_pandas_refholder_edge(
         derivation_edges.setdefault(nm, set()).add(out)
 
 
+def record_shared_object_edges(
+    derivation_edges: dict[str, set[str]],
+    outputs: Iterable[str],
+    holders: Iterable[str],
+) -> None:
+    """Record that each of *outputs* shares an object with each of *holders*.
+
+    ``data = raw`` (the same list under two names), ``config = {'features':
+    features}`` (a dict holding another variable's list) and ``train =
+    data['train']`` (a list another variable's dict holds): a change made
+    through either name is a change to what the other reaches, so the edge
+    goes both ways. The holders are what the shared-object check finds by
+    reference count (`share_group`), so an edge is only recorded between
+    variables that really share an object when the statement ran.
+    """
+    holders = [h for h in holders]
+    for out in outputs:
+        for holder in holders:
+            if holder == out:
+                continue
+            derivation_edges.setdefault(out, set()).add(holder)
+            derivation_edges.setdefault(holder, set()).add(out)
+
+
+def shared_object_partners(derivation_edges: dict[str, set[str]], var: str) -> set[str]:
+    """The variables *var* has an edge with, either way."""
+    partners = set(derivation_edges.get(var, ()))
+    partners.update(src for src, targets in derivation_edges.items() if var in targets)
+    partners.discard(var)
+    return partners
+
+
 def bump_derived_lineages(
     derivation_edges: dict[str, set[str]],
     lineage_map: dict[str, str],
@@ -376,14 +414,18 @@ def bump_derived_lineages(
     *,
     record: Callable[[str, str], None],
     present: Callable[[str], bool],
+    skip: Iterable[str] = (),
 ) -> set[str]:
     """Replay derivation bumps after outputs' lineages were written.
 
-    For each OUTPUT ``out`` that has outgoing edges, bump each target ``t`` —
-    but ONLY if ``t`` is not an input of the current statement. At creation
-    (``v = a[...]``) the base ``a`` IS an input, so a plain view creation does
-    not invalidate the base; at mutation (``v[:] = 9``) the base is NOT an
-    input, so it is bumped. Transitive with a visited set (view-of-view,
+    For each OUTPUT ``out`` that has outgoing edges and that the statement
+    also reads -- a change in place (``v[:] = 9``, ``raw.append(x)``), not a
+    rebinding (``raw = [9]``, which leaves the old object unchanged under its
+    other names) -- bump each target ``t``, but ONLY if ``t`` is neither an
+    input nor an output of the current statement. At creation (``v =
+    a[...]``) the base ``a`` IS an input, so a plain view creation does not
+    invalidate the base; at mutation (``v[:] = 9``) the base is NOT an input,
+    so it is bumped. Transitive with a visited set (view-of-view,
     groupby-of-...). Targets no longer present are pruned lazily.
 
     Returns the set of vars whose lineage was bumped. The simulator unions this
@@ -404,15 +446,24 @@ def bump_derived_lineages(
     present(var):
         Whether ``var`` still exists (``in user_ns`` at runtime; always-True in
         the simulator, which has no live namespace).
+    skip:
+        Variables this statement already moved on another way -- those stored
+        with its entry (``held_lineage``): neither bumped nor bumped through,
+        on every path alike, so the runtime and the simulation agree.
     """
     bumped: set[str] = set()
     if not derivation_edges:
         return bumped
+    skip = set(skip)
 
     visited: set[str] = set()
-    # Seed the walk with the statement's outputs; a bump can cascade
+    # Seed the walk with what the statement changed in place: an output it
+    # also read. A name it binds afresh (``clf = LogisticRegression()``,
+    # ``v = a[...]``) changed no object another name reaches -- the runtime
+    # drops such a name's edges before it records its new ones -- so the
+    # edges it had are no reason to bump anything. A bump can cascade
     # (mutating ``a`` bumps view ``v``, which may itself be a base for ``w``).
-    frontier: list[str] = [o for o in outputs if o in derivation_edges]
+    frontier: list[str] = [o for o in outputs if o in derivation_edges and o in inputs]
     while frontier:
         src = frontier.pop()
         if src in visited:
@@ -422,8 +473,9 @@ def bump_derived_lineages(
         if src_lineage is None:
             continue
         for target in sorted(derivation_edges.get(src, ())):
-            if target in inputs:
-                # Creation edge (``v = a[...]``): do NOT bump the base.
+            if target in inputs or target in skip or target in outputs:
+                # Creation edge (``v = a[...]``): do NOT bump the base. Nor
+                # an output: the statement gave it its lineage just now.
                 continue
             if not present(target):
                 continue

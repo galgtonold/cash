@@ -372,6 +372,7 @@ class VirtualLineage:
             virtual_lineage=dict(cached_entry.virtual_lineage),
             virtual_modules=set(cached_entry.virtual_modules),
         )
+        sim.vars_left_by_failed_runs = dict(cached_entry.vars_left_by_failed_runs or {})
         trace, looped, stale = sim.trace, sim.vars_mutated_by_loops, sim.vars_with_stale_files
         for entry in self.cache.entries[:first_changed_cell]:
             trace.extend(entry.trace_segment)
@@ -648,6 +649,8 @@ class VirtualLineage:
             # where its text does not name it (`set_k(5)` imported from it):
             # a rebuild runs the import before it.
             inputs = set(inputs) | (outputs & self.statements.module_state_outputs(stmt_code))
+            # So does one that draws on pyplot's current figure and axes.
+            inputs |= outputs & self.statements.pyplot_draw_outputs(stmt_code, parse_cached(stmt_code))
 
         if outputs:
             produced_lineages = {out: virtual_lineage[out] for out in outputs if out in virtual_lineage}
@@ -724,6 +727,7 @@ class VirtualLineage:
                         vars_mutated_by_loops=set(),
                         vars_with_stale_files=set(),
                         cell_file_deps={},
+                        vars_left_by_failed_runs=dict(sim.vars_left_by_failed_runs),
                     )
                 )
                 return
@@ -741,6 +745,7 @@ class VirtualLineage:
                 # The statement this cell's last run raised at, and every one
                 # after it, never ran: the kernel holds what came before.
                 if index == stopped_at:
+                    self._hold_what_a_failed_run_left(sim, i, cell_hash)
                     break
                 # A top-level ``raise`` unconditionally aborts the cell — every
                 # statement after it is dead code that never runs in a real
@@ -750,9 +755,12 @@ class VirtualLineage:
                 # .
                 if isinstance(node, ast.Raise):
                     break
+                before = len(simulation_trace)
                 self.simulate_one_node(
                     sim, i, node, cell_stmt_occurrence_counts, cell_file_deps, raw_cell=clean_cell_code
                 )
+                if sim.vars_left_by_failed_runs:
+                    _carry_what_a_failed_run_left(sim.vars_left_by_failed_runs, simulation_trace[before:])
 
         except SyntaxError:
             # a single unparseable upstream cell (a half-written cell
@@ -797,8 +805,17 @@ class VirtualLineage:
                 cell_environment=self._cell_environment(cell_code),
                 stopped_at=stopped_at,
                 magic_generation=magic_generation,
+                vars_left_by_failed_runs=dict(sim.vars_left_by_failed_runs),
             )
         )
+
+    def _hold_what_a_failed_run_left(self, sim: SimulationResult, i: int, cell_hash: str) -> None:
+        """Mark the names cell *i*'s failed run left changed, and has not
+        bound since, as left by it (``SimulationResult.vars_left_by_failed_runs``)."""
+        recorded = self.tracking_state.variable_lineage
+        for name in self.tracking_state.failed_cell_names.get(cell_hash, ()):
+            if name in self.shell.user_ns and name not in recorded:
+                sim.vars_left_by_failed_runs[name] = i
 
     def _stop_index(self, cell_code: str) -> int | None:
         """Where the simulation of *cell_code* stops (``TrackingState.failed_cells``)."""
@@ -910,3 +927,39 @@ def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) 
             if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) in names for alias in node.names):
                 return idx
     return None
+
+
+def _carry_what_a_failed_run_left(left: dict[str, int], entries: list) -> None:
+    """What *entries* build from a name a failed run left is left by it too,
+    and so is a left name they change in place; a name they bind anew from
+    anything else is not any more."""
+    for entry in entries:
+        sources = [left[name] for name in entry.inputs if name in left]
+        rebound = _rebound_names(entry.stmt_code) if not sources else set()
+        for name in entry.outputs:
+            if sources:
+                left[name] = min(sources)
+            elif name in left and name in rebound:
+                del left[name]
+
+
+def _rebound_names(stmt_code: str) -> set[str]:
+    """The names *stmt_code* binds as a whole (``x = ...``, ``import x``,
+    ``def x``), not ones it changes in place (``x[0] = ...``, ``x += ...``)."""
+    try:
+        tree = ast.parse(stmt_code)
+    except SyntaxError:
+        return set()
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                for sub in ast.walk(target):
+                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                        names.add(sub.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+    return names

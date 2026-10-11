@@ -130,6 +130,55 @@ def test_a_write_through_a_view_made_writable_is_seen(total, write):
     assert total(frame) == 109.0
 
 
+def _bump(view):
+    _flip_and_write(view)
+    return 0.0
+
+
+def _bump_in_place(window):
+    window[0] = 100.0
+    return 0.0
+
+
+#: pandas handing the frame's memory to the user's callable: views it took
+#: itself (read-only, made writable), or writable windows straight into a
+#: column (``rolling``/``expanding`` with ``raw=True``).
+CALLBACK_WRITES = {
+    "apply raw": lambda f: f.apply(_bump, raw=True),
+    "apply raw positional": lambda f: f.apply(_bump, 0, True),
+    "rolling apply raw": lambda f: f.rolling(1).apply(_bump_in_place, raw=True),
+    "series rolling apply raw": lambda f: f["a"].rolling(1).apply(_bump_in_place, raw=True),
+    "expanding apply raw": lambda f: f.expanding().apply(_bump_in_place, raw=True),
+    "pipe to_numpy": lambda f: _flip_and_write(f.pipe(pd.DataFrame.to_numpy)[:, 0]),
+    "series pipe to_numpy": lambda f: _flip_and_write(f["a"].pipe(pd.Series.to_numpy)),
+}
+
+
+@pytest.mark.parametrize("write", list(CALLBACK_WRITES.values()), ids=list(CALLBACK_WRITES))
+def test_a_write_through_memory_pandas_hands_a_callable_is_seen(total, write):
+    frame = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+    assert total(frame) == 10.0
+    assert total(frame) == 10.0  # the memo holds it now
+    write(frame)
+    expected = float(frame["a"].sum() + frame["b"].sum())
+    assert expected != 10.0
+    assert total(frame) == expected
+
+
+def test_a_callable_that_gets_no_memory_keeps_the_memo(total, monkeypatch):
+    """Positive control: ``apply`` without ``raw`` hands the callable
+    Series, and a rolling sum hands it nothing: the memo still holds."""
+    frame = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+    assert total(frame) == 10.0
+    calls = []
+    real = arg_hashing.builtin_hash
+    monkeypatch.setattr(arg_hashing, "builtin_hash", lambda v: calls.append(1) or real(v))
+    frame.apply(lambda col: 0.0)
+    frame.rolling(1).sum()
+    assert total(frame) == 10.0
+    assert calls == []
+
+
 def test_a_write_to_an_index_through_a_view_made_writable_is_seen():
     cash = Cash(backend=InMemoryBackend(), register_magic=False)
 

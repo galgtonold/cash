@@ -44,7 +44,11 @@ from .cache_key import statement_source_hash
 from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
 _STORE_FILENAME = LOOP_SPLIT_FILENAME
-_STORE_VERSION = 1
+#: 2: only loops over a value that slices as it iterates are split
+#: (``split_policy.slices_as_it_iterates``). A verdict recorded before for
+#: ``for col in df:`` would have the simulation model halves the runtime no
+#: longer runs, so those verdicts are dropped.
+_STORE_VERSION = 2
 
 
 def loop_source_hash(node: ast.AST) -> str:
@@ -73,8 +77,9 @@ def split_nodes(node: ast.For, k: int) -> tuple[ast.For, ast.For]:
     """Return ``(head, tail)`` for-nodes covering ``[:k]`` and ``[k:]``.
 
     Together they iterate exactly what *node* iterates, in the same order,
-    provided the iterable is sliceable and the header is safe to evaluate
-    twice -- the caller's responsibility to have checked.
+    provided the header's value slices as it iterates -- the caller's
+    responsibility to have checked (``split_policy.slices_as_it_iterates``);
+    the runtime runs each half over a slice of that one value.
 
     ``orelse`` must be empty: a ``for ... else`` has one completion point and
     a split loop has none, so there is nowhere correct to put it.

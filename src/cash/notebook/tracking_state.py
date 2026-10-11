@@ -65,6 +65,19 @@ class TrackingState:
     # W: CellExecutor. R: VirtualLineage.
     failed_cells: dict[str, int] = field(default_factory=dict)
 
+    # sha256(cell source) -> the names the statement that raised may have
+    # changed before it did, for a cell in ``failed_cells``: they hold what
+    # the failed run left, which no run of the cells makes, so the upstream
+    # check keeps them (and what is built from them) as they are.
+    # W: CellExecutor. R: VirtualLineage.
+    failed_cell_names: dict[str, frozenset[str]] = field(default_factory=dict)
+
+    # notebook position -> the text the cell there last ran with, as the
+    # upstream check saw it. A statement that text held and the cell's
+    # running text does not was edited out of the cell.
+    # W/R: NotebookSimulator (MismatchClassifier).
+    cell_text_at: dict[int, str] = field(default_factory=dict)
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.
@@ -205,6 +218,15 @@ class TrackingState:
     # W: MutationRouting, control structures; StatementLineage (read back
     # after a restart). R: StatementLineage, ControlSimulation, UpstreamChecker.
     module_state_outputs: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
+
+    # Statement source hash -> the names bound to pyplot's current figure and
+    # axes (or to an array of Axes holding the current one) when the statement
+    # last drew through pyplot (``plt.plot(...)``, ``plt.title(...)``): the
+    # runtime took them for changed in place, and the simulation takes them
+    # for outputs of the statement as well (``pyplot_draws``).
+    # W: StatementProcessor, control structures. R: StatementLineage,
+    # ControlSimulation.
+    pyplot_draw_outputs: dict[str, frozenset[str]] = field(default_factory=dict)
 
     # Statement source hash -> (statement, modules) of an earlier kernel's
     # record of a statement that set state on local modules no name of the

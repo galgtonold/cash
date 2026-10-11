@@ -57,6 +57,12 @@ def test_each_policy_decides_every_kind(policy):
         ("sys.stderr.write(x)", EffectKind.CONSOLE),
         ("os.write(2, b)", EffectKind.CONSOLE),
         ("plt.plot(x)", EffectKind.DISPLAY),
+        # Making or fetching pyplot's current figure changes what the next
+        # drawing lands on, which a hit would not do.
+        ("plt.figure()", EffectKind.DISPLAY),
+        ("plt.subplots()", EffectKind.DISPLAY),
+        ("plt.subplot(2, 1, 1)", EffectKind.DISPLAY),
+        ("plt.gca()", EffectKind.DISPLAY),
         ("input()", EffectKind.INTERACTIVE),
     ],
 )
@@ -73,7 +79,6 @@ def test_classify_call(src, kind):
         "d.get(k)",  # `get` is not a verb: dict.get
         "s.replace('a', 'b')",  # nor is `replace`: str.replace
         "lst.append(x)",  # a mutation, not an effect
-        "plt.figure()",  # creates a figure: judged as the object it returns
     ],
 )
 def test_not_an_effect(src):
@@ -94,3 +99,28 @@ def test_a_namespace_resolves_an_alias():
 
 def test_a_shadowed_builtin_is_not_the_builtin():
     assert classify_call(_call("input()"), {"input": lambda: "stub"}) is None
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "os.urandom(16)",
+        "os.getrandom(16)",
+        "secrets.token_hex(8)",
+        "secrets.token_bytes(8)",
+        "secrets.token_urlsafe(8)",
+        "secrets.randbelow(10)",
+        "secrets.randbits(8)",
+        "secrets.choice(xs)",
+        "random.SystemRandom()",
+    ],
+)
+def test_os_entropy_is_a_fresh_value_like_a_fresh_id(src):
+    """No seed reproduces it: each call gives a new value, as `uuid4()` does."""
+    effect = classify_call(_call(src))
+    assert effect is not None and effect.kind is EffectKind.CLOCK, effect
+
+
+def test_a_name_based_uuid_is_not_a_fresh_value():
+    """`uuid5(namespace, name)` is a hash of its arguments."""
+    assert classify_call(_call("uuid.uuid5(uuid.NAMESPACE_DNS, 'x')")) is None

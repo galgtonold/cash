@@ -29,7 +29,7 @@ flowchart TB
     R2 --> BD
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @4f3bd3f5 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @704074bb -->
 1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
    it was edited, cash works out from the notebook's code which statements
@@ -52,7 +52,7 @@ per statement, which the badge reports as cash's own overhead.
 
 ## Fine-grained caching: loops and branches
 
-<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @54b5f986 -->
+<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @9977949d -->
 A `for` loop is cached one iteration at a time. Each iteration's statements
 are keyed with the loop variable's value, so changing one item of the list
 does not throw away the others.
@@ -91,7 +91,7 @@ chain: each iteration depends only on its own item. See
 [call-level caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls)
 and [reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @4345fdbb, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @9e730bb5 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @92d2fcf2, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @9e730bb5 -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,
@@ -123,13 +123,15 @@ cache, checking first that the code that produced them is unchanged. For a
 chain of steps (`df = load()`, then `df = clean(df)`), it restores the final
 value directly instead of replaying each step.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @20f64924 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @9e3b8bc2 -->
 A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop
 did nothing else: no file written, no draw from the global random generators,
-no clock, `uuid` or environment read, no data of your modules read, no global
-changed in place. Otherwise
+an iterator or a generator seeded from the system (`default_rng()`), no clock,
+`uuid`, `os.urandom` or environment read, no data of your modules read, no
+global or object changed in place, in the loop or in any function it calls
+or hands to a call (`s.apply(tally.record)`). Otherwise
 the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.

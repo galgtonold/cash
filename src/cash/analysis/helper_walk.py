@@ -138,6 +138,7 @@ class HelperWalk:
         self._names: set[str] = set()
         self._bindings: list[tuple[str, tuple[str, ...], Any]] = []
         self._seen_bindings: set[BindingPath] = set()
+        self._unbound: dict[tuple[str, str], None] = {}
         self._unkeyable: list[str] = []
         #: id(callee) -> the first call-site binding that reached it
         self._caller_paths: dict[int, BindingPath] = {}
@@ -444,8 +445,14 @@ class HelperWalk:
     def _queue_called(self, body: _Body) -> None:
         """Every call the visitor recorded, judged or not: resolved, its
         binding noted, and the callee queued when it is user code."""
+        shadowed: frozenset[str] | None = None
         for call_node in body.visitor.called_callable_nodes + body.visitor.impure_call_nodes:
-            site_path = _call_site_path(body, callee_chain(call_node.func))
+            chain = callee_chain(call_node.func)
+            site_path = _call_site_path(body, chain)
+            if site_path is not None and len(site_path[1]) == 1 and site_path[1] == chain:
+                if shadowed is None:
+                    shadowed = body.param_names | scope_locals(body.func_def)
+                self._note_if_unbound(body, site_path, shadowed)
             if site_path is not None:
                 start = getattr(call_node, "lineno", 0)
                 end = getattr(call_node, "end_lineno", None) or start
@@ -660,6 +667,16 @@ class HelperWalk:
             self._cached_seen.add(id(callee))
             self._cached_callees.append(held_ref(callee))
 
+    def _note_if_unbound(self, body: _Body, path: BindingPath, shadowed: frozenset[str]) -> None:
+        """Note a bare called name its module has not bound (yet): a builtin,
+        or a helper defined further down the file than the first call.
+        Binding it later re-analyses the function (``bindings_changed``)."""
+        name = path[1][0]
+        if name in shadowed or name in body.local_imports:
+            return
+        if name not in (getattr(body.func, "__globals__", None) or ()):
+            self._unbound.setdefault((path[0], name), None)
+
     def _note_binding(self, callee: Any, path: BindingPath | None) -> None:
         if path is None or path in self._seen_bindings:
             return
@@ -713,6 +730,7 @@ class HelperWalk:
             helper_resolution_paths=self._helper_paths,
             opaque_callees=tuple(sorted(set(self._opaque))),
             helper_bindings=tuple(self._bindings),
+            unbound_names=tuple(self._unbound),
             waived_bindings=frozenset(self._waived_paths - self._unwaived_paths),
             unkeyable=tuple(self._unkeyable),
             environment_reads=frozenset(self._environment_reads),

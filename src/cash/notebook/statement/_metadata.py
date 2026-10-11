@@ -84,6 +84,10 @@ class StatementCacheMetadata:
     # outputs, keyed on different inputs. The disk tier prunes the superseded
     # ones by what they are worth (``cash.backends.versions``).
     version_slot: str | None = None
+    #: What the statement showed when it ran (``capture.replay_record``),
+    #: for a cell run that skips it to show again; absent when it showed
+    #: nothing.
+    replay: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {f.name: value for f in fields(self) if (value := getattr(self, f.name)) is not None}

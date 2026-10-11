@@ -30,11 +30,53 @@ if TYPE_CHECKING:
     from cash.analysis.cacheability import StatementAnalysis
     from cash.notebook.statement.results import ProcessResult
 
-__all__ = ["ECHO_FIELD", "CodeRunner", "StatementExecution", "StatementRun", "echoes", "error_result"]
+__all__ = [
+    "ECHO_FIELD",
+    "LOOP_ITERABLE_NAME",
+    "NO_LOOP_ITERABLE",
+    "CodeRunner",
+    "StatementExecution",
+    "StatementRun",
+    "echoes",
+    "error_result",
+    "over_the_handed_iterable",
+]
 
 #: The key that carries the value a cell's last expression echoed: in a
 #: statement's metrics, and in the cache entry that replays it on a hit.
 ECHO_FIELD = "echo_value"
+
+#: The name a loop run as one unit iterates when its header was evaluated
+#: before the unit ran (``StatementRun.loop_iterable``). Bound only while the
+#: unit runs; never an input, an output or part of a key.
+LOOP_ITERABLE_NAME = "__cash_loop_iter__"
+
+
+class _NoLoopIterable:
+    def __repr__(self) -> str:
+        return "NO_LOOP_ITERABLE"
+
+
+#: ``StatementRun.loop_iterable`` when the statement evaluates its own header.
+NO_LOOP_ITERABLE: Any = _NoLoopIterable()
+
+
+def over_the_handed_iterable(source: str) -> tuple[str, ast.Module]:
+    """*source*, a ``for`` loop, iterating :data:`LOOP_ITERABLE_NAME` in place
+    of its header, and the tree of that text.
+
+    Only the header expression changes. It sits on the ``for`` line of the
+    unparsed text, so every line keeps its number and a traceback still
+    points at the body line that raised.
+    """
+    tree = ast.parse(source)
+    loop = tree.body[0] if len(tree.body) == 1 else None
+    if not isinstance(loop, ast.For):
+        raise ValueError("a handed-over loop iterable needs a single for statement")
+    loop.iter = ast.copy_location(ast.Name(id=LOOP_ITERABLE_NAME, ctx=ast.Load()), loop.iter)
+    ast.fix_missing_locations(tree)
+    text = ast.unparse(tree)
+    return text, ast.parse(text)
 
 
 @dataclass
@@ -59,6 +101,14 @@ class StatementRun:
     #: Extra outputs to capture and restore (the accumulator-loop fast path).
     force_outputs: set[str] | None = None
     is_last: bool = True
+    #: For a loop run as one unit whose header cash already evaluated: the
+    #: value that evaluation gave, which the loop iterates in place of
+    #: evaluating its header a second time. Never keyed: the key is ``code``.
+    loop_iterable: Any = NO_LOOP_ITERABLE
+    #: The files and remote URLs evaluating that header read. It ran before
+    #: the unit's own tracker started, so they are the unit's reads too.
+    header_files: frozenset[str] = frozenset()
+    header_remote: frozenset[str] = frozenset()
 
     metrics: ProcessResult = field(default_factory=dict)  # type: ignore[assignment]
     process_start: float = 0.0
@@ -124,6 +174,17 @@ class StatementRun:
     #: outputs (``module_state_names``).
     state_modules: frozenset[str] = frozenset()
     state_names: frozenset[str] = frozenset()
+    #: The names bound to pyplot's current figure and axes, when the
+    #: statement drew through pyplot (``pyplot_draws``): outputs and inputs
+    #: both, so their lineage folds in where they were.
+    pyplot_drawn: frozenset[str] = frozenset()
+    #: The share check of its outputs ran out of time
+    #: (``StatementProcessor._refuse_unrestorable_outputs``), so which other
+    #: variables hold them is not known from it.
+    share_unchecked: bool = False
+    #: The share check of its outputs found a holder that is not a variable
+    #: (a library's registry, a closure), so no variable shares them.
+    share_gave_up: bool = False
     #: The local modules running it was seen rebinding a global of
     #: (``callee_reach.rebound_modules``).
     rebound_modules: frozenset[str] = frozenset()

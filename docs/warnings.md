@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @c4315362 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f00be38f -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -457,7 +457,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @eeb04ac6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @c0b69ac5 -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 
@@ -751,17 +751,18 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-CAPTURE](#key-unhashable-capture) | decorator | a value a closure reads cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
+| [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | a call goes through a property or `__getattr__`; what it reaches is not in the key |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/effects.py:MODULE_CALLS @3cc76bb1, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
+<!-- claim: cash/effects.py:MODULE_CALLS @5c88d0c7, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @e0692d46 -->
 <!-- claim: cash/effects.py:CLOCK_WHEN_ARGS_OMITTED @3c78d511, cash/effects.py:_reads_clock_when_omitted @b543a896 -->
-**What happened.** The function reads the clock or a fresh UUID
-(`datetime.now()`, `date.today()`, `time.time()`, `uuid.uuid4()`,
-`pd.Timestamp.now()`), an environment variable whose name is only known at
+**What happened.** The function reads the clock, a fresh UUID or random
+bytes from the system (`datetime.now()`, `date.today()`, `time.time()`,
+`uuid.uuid4()`, `os.urandom()`, `secrets.token_hex()`, `pd.Timestamp.now()`), an environment variable whose name is only known at
 run time (`os.getenv(name)`), or the whole environment (`os.environ.copy()`,
 `.items()`, `dict(os.environ)`). A helper whose body only returns one of
 these reads is reported where it is called, however it is called: `now()`,
@@ -1087,7 +1088,7 @@ the result of that call came from an emptied iterator.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @3cc76bb1 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @5c88d0c7 -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @0e105084 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1282,7 +1283,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @cf9e45b6, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @eff65050, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The message names the type.
@@ -1321,6 +1322,32 @@ global. Per block: `with cash.assume_safe():` around that line.
 `assume_safe=True` on the decorator does not silence this code; filter it by
 code if you must. See [Silencing one code](#silencing-one-code).
 
+### KEY-UNRESOLVED-CALL {#key-unresolved-call}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+
+<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions_and_gaps @f44cc346 -->
+**What happened.** The function calls something through an object of your own
+code whose attribute is a property, or whose class answers missing names with
+`__getattr__`: `api.inner(x)`. cash never runs that code to find what it
+returns. It reads the getter's body instead, and keys every cached function the
+getter names, or failing that every cached function called `inner`. Here it
+found none, or only a plain function, so the function the call reaches is not
+in the key.
+
+**Why it matters.** Editing that function does not invalidate the cached
+results: the old result is served.
+
+**What to do.** Call the function by its own name (`impl.inner(x)`), or name
+it on the decorator: `@cash.cache(depends_on=[impl.inner])`.
+
+**When it is safe to ignore.** When the property hands out library code, or
+code you do not edit while results are cached.
+
+**Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
+not `with cash.assume_safe():`, not `assume_safe=True`. Filter it by code if
+you must. See [Silencing one code](#silencing-one-code).
+
 ## Notebook {#notebook-codes}
 
 Notebook-wide machinery rather than one statement. Every code here starts `NOTEBOOK-`.
@@ -1330,10 +1357,13 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+| [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
+| [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
 
@@ -1386,6 +1416,42 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-FAILED-CELL {#notebook-failed-cell}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @3abb284a -->
+**What happened.** A cell raised part way through, and a name it changed is
+not what a run of the cells from the top gives. The message names the cell
+and the variables. It comes in two cases.
+
+A cell above raised part way, say in a loop filling `tot`, and the cell you
+ran reads `tot`, or something built from it since (`final = {... tot ...}`).
+No run of the cells gives those values: the lines before the error leave
+`tot` empty, and the whole cell raises. So cash keeps them as they are, as a
+plain kernel does: it does not run the lines before the error again, re-run
+the cells between or restore them from the cache. A name built from them that
+is not in memory (after a restart) stays undefined.
+
+Or the cell you ran raised. Running it, cash had skipped or restored some of
+its lines up front, by the values the whole cell ends with. When a line
+before the error sets a name that a line at or after it sets again, cash runs
+that earlier line once more after the error, with the lines it reads from, so
+the name holds what a plain run leaves. Here it could not: the line is a loop
+or branch, or it reads a value from before the cell that a later line of the
+cell replaced. Those names hold the values the end of the cell gives them
+until something rebuilds them; a cell below that reads them rebuilds them
+first.
+
+**Why it matters.** The cell you run sees values that a run from the top
+would not give it. They are the values the kernel holds, which is what you
+see without cash, but a result built from them is not the notebook's result.
+
+**What to do.** Fix the error and run the cell that raised again, then the
+cells below it.
+
+**When it is safe to ignore.** While you are still looking into the error.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 
@@ -1480,6 +1546,53 @@ fig.savefig("chart.png")
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
+
+### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @1f4e4f9e, cash/notebook/shared_objects.py:referring_names @5602736f -->
+**What happened.** After a statement ran, cash looked for the other variables
+that hold an object of its outputs, or are held in one (`data = raw`,
+`config = {"features": features}`), so that a later change through either
+name re-runs the cells reading the other. The search takes at most twice
+what the statement took (at least a second), and it ran out of time before
+it was sure it had found them all. The message names the outputs. It is
+shown once per statement.
+
+**Why it matters.** A later change made in place through a variable it
+missed (`raw.append(x)`) does not re-run the cells that read the outputs,
+or the other way round, and they keep their cached results.
+
+**What to do.** If a later cell changes these objects in place through
+another name, rebind instead (`raw = raw + [x]`), or re-run the cells that
+read them yourself.
+
+**When it is safe to ignore.** When nothing below changes these objects in
+place, through any name.
+
+### NOTEBOOK-SHARED-KEPT {#notebook-shared-kept}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+**What happened.** You re-ran on its own a cell that changes a value in place
+(`history.append(x)`), and a cell below makes another name share that value
+(`log = history`, `cfg = {"features": features}`). cash normally rebuilds the
+value as the cells above leave it before such a re-run, so the change is not
+applied twice. Here it kept the value as it is: the cell's change applies again
+on top of the one it made last time, as in a plain re-run.
+
+**Why it matters.** A rebuilt value would be a new object under the cell's own
+name only. The name below would keep the old one, and from then on a change
+made through either name would no longer reach the other, which no run of the
+notebook from the top does.
+
+**What to do.** For the value a run from the top gives, run the notebook from
+the top, or from the cell that creates the value.
+
+**When it is safe to ignore.** When the cell's change is meant to accumulate,
+or applying it twice does not change the result (`s.add(x)` on a set).
 
 ## Randomness {#random-codes}
 

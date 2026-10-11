@@ -21,12 +21,16 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import CellEffects
 from ...analysis.mutations import consumed_input_names
+from ...diagnostics import log_diagnostic, warn_diagnostic
+from ...exceptions import CashWarning
 from ...lineage_tag import own_tag
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ..restored_var import hashed_by_lineage
+from ..shared_objects import holds_part_of
+from ..statement.derivation_edges import shared_object_partners
 from ..tracking_state import TrackingState
 from .unsaved_edits import UnsavedEdits
 
@@ -57,6 +61,9 @@ class StaleValueGuard:
         #: Function name -> the last cell checked that calls it (see
         #: :meth:`_mark_stateful_funcs_broken`).
         self._stateful_called_in: dict[str, int] = {}
+        #: ``(cell index, name, partners)`` already warned about as kept
+        #: (`_kept_for_partner_below`), so a cell re-run in a loop warns once.
+        self._warned_kept: set[tuple[int, str, tuple[str, ...]]] = set()
         #: The cell the current check is for.
         self._cell_idx: int | None = None
         self._cells: list[str] | None = None
@@ -120,6 +127,7 @@ class StaleValueGuard:
         self_written = reassigned | inplace_self
         if not self_written:
             return
+        self._keep_shared_own_writes(inplace_self & broken_vars, broken_vars, virtual_lineage)
         # Vars that an *upstream* cell also mutates in place. A no-lineage var
         # mutated across several cells (``results.append(..)`` once per cell) has
         # no recorded per-cell base — current_session_hashes never advances past
@@ -222,7 +230,8 @@ class StaleValueGuard:
                     if base_lineage is not None and self._written_above(var_name, notebook_cells, current_cell_idx):
                         base_lineage = None
                     if base_lineage is not None and live_lineage != base_lineage:
-                        broken_vars.add(var_name)
+                        if not self._kept_for_partner_below(var_name, live_value):
+                            broken_vars.add(var_name)
                     else:
                         if upstream_inplace_mutated is None:
                             upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
@@ -514,6 +523,8 @@ class StaleValueGuard:
         if base_lineage is not None:
             current_lineage = self.tracking_state.variable_lineage.get(var_name)
             if current_lineage is not None and current_lineage != base_lineage:
+                if self._kept_for_partner_below(var_name, live_value):
+                    return
                 logger.debug(
                     "[UPSTREAM_DEBUG] no-lineage self-write '%s' holds its own prior "
                     "output on re-run (cell-entry base lineage %s but current %s); "
@@ -541,7 +552,9 @@ class StaleValueGuard:
             # producer above has bound a new one (or this cell never ran),
             # and rebuilding it would cut the views, aliases and containers
             # that share the object.
-            if self._started_from_before(var_name, live_value):
+            if self._started_from_before(var_name, live_value) and not self._kept_for_partner_below(
+                var_name, live_value
+            ):
                 logger.debug(
                     "[UPSTREAM_DEBUG] in-place mutation '%s' holds its own prior output on "
                     "re-run (the cell already started from this object); marking broken.",
@@ -553,7 +566,7 @@ class StaleValueGuard:
             live_content = self.compute_hash_fn(live_value)
         except (TypeError, ValueError, AttributeError, RecursionError):
             return
-        if live_content != base_content:
+        if live_content != base_content and not self._kept_for_partner_below(var_name, live_value):
             logger.debug(
                 "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "
                 "output on re-run (cell-entry base content %s but live %s); marking "
@@ -563,6 +576,76 @@ class StaleValueGuard:
                 live_content[:8],
             )
             broken_vars.add(var_name)
+
+    def _keep_shared_own_writes(
+        self, names: set[str], broken_vars: set[str], virtual_lineage: dict[str, str] | None
+    ) -> None:
+        """Take back from *broken_vars* each of *names* (changed in place by
+        this cell) that is stale only through this cell's own last run and is
+        kept for a variable below that shares it (`_kept_for_partner_below`).
+
+        Stale only through its own last run: the cells above leave it with
+        the lineage this cell started from last time, so nothing above
+        changed. When something did, it is rebuilt as before.
+        """
+        if not names or virtual_lineage is None:
+            return
+        consumed = self.tracking_state.executed_input_lineages
+        for var_name in sorted(names):
+            base = consumed.get(var_name, {}).get(var_name)
+            if base is None or virtual_lineage.get(var_name) != base:
+                continue
+            if self._written_above(var_name, self._cells, self._cell_idx):
+                continue
+            if self._kept_for_partner_below(var_name, self.shell.user_ns.get(var_name)):
+                broken_vars.discard(var_name)
+
+    def _kept_for_partner_below(self, var_name: str, live_value: Any) -> bool:
+        """Whether *var_name* is kept as it is, rather than rebuilt, because a
+        variable a cell below produced still shares its object; warns
+        (``NOTEBOOK-SHARED-KEPT``) when so.
+
+        Rebuilding binds a new object to *var_name* only. The cell below that
+        made the other name share it (``log = history``, ``cfg = {'f':
+        feats}``) is not re-run for this cell, so the two names would stop
+        sharing: the next change through one would no longer reach the other,
+        as it does in the notebook's own run. Keeping the live object is what
+        a plain re-run of the cell does, so the cell's own change applies on
+        top of the one it made last time, and the warning says so.
+        """
+        cells, idx = self._cells, self._cell_idx
+        if cells is None or idx is None or not 0 <= idx < len(cells):
+            return False
+        user_ns = self.shell.user_ns
+        codes = self.tracking_state.executed_cell_codes
+        above = cells[: idx + 1]
+        below = []
+        for partner in sorted(shared_object_partners(self.tracking_state.derivation_edges, var_name)):
+            if partner not in user_ns:
+                continue
+            prod = strip_markers(codes.get(partner) or "").strip()
+            if not prod or any(prod in cell for cell in above):
+                continue
+            if user_ns[partner] is live_value or holds_part_of(user_ns[partner], [live_value]):
+                below.append(partner)
+        if not below:
+            return False
+        key = (idx, var_name, tuple(below))
+        if key not in self._warned_kept:
+            self._warned_kept.add(key)
+            names = ", ".join(f"'{p}'" for p in below)
+            what = (
+                f"cell {idx + 1} changes '{var_name}' in place and has run before, so a re-run would "
+                f"normally start from '{var_name}' rebuilt as the cells above leave it. {names}, made by "
+                f"a cell below, shares that object, and a rebuilt '{var_name}' would no longer be shared "
+                f"with it. cash keeps '{var_name}' as it is: the cell's change applies again on top of "
+                "the one it made last time."
+            )
+            fix = f"run the notebook from the top (or from the cell that creates '{var_name}') for a first-run value."
+            log_diagnostic(logger, "NOTEBOOK-SHARED-KEPT", what, fix)
+            warn_diagnostic(CashWarning, "NOTEBOOK-SHARED-KEPT", what, fix, location=("<cash>", idx + 1))
+        trace_event("shared_kept", var=var_name, partners=below)
+        return True
 
     def _started_from_before(self, var_name: str, live_value: Any) -> bool:
         """Whether the current cell started from *live_value* last time it ran.

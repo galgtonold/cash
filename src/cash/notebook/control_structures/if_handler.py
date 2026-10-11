@@ -75,7 +75,7 @@ class IfHandler:
 
         try:
             # Walk if/elif/else chain to find the taken branch
-            branch_body, branch_label = self._find_taken_branch(node)
+            branch_body, branch_label, tests = self._find_taken_branch(node)
 
             logger.debug(
                 "[CONTROL] If per-statement: taking branch '%s', %s statements", branch_label, len(branch_body)
@@ -113,14 +113,15 @@ class IfHandler:
                 else:
                     cached_count += 1
 
-            # After execution, update lineage for mutated variables. In the
-            # body of a decomposed loop, only for a branch that ran, and only
-            # what it may have changed (`LoopPass`).
+            # After execution, update lineage for mutated variables, the
+            # conditions' changes included. In the body of a decomposed loop,
+            # only what the conditions evaluated and the branch that ran may
+            # have changed (`LoopPass`).
             loop_pass = _helpers.current_loop_pass(self.dispatcher)
             if loop_pass is None:
                 _helpers.update_lineage_after_execution(self.shell, self.statement_processor, node, ast.unparse(node))
-            elif branch_body:
-                loop_pass.branch_ran(self.shell, self.statement_processor, node, branch_body)
+            else:
+                loop_pass.if_ran(self.shell, self.statement_processor, node, tests, branch_body)
 
             # Tag all metrics with body statements for the whole if block
             # (so the badge can show the header and which branch we took)
@@ -194,19 +195,23 @@ class IfHandler:
         )
         return metrics.get("status") == CacheStatus.COMPUTED
 
-    def _find_taken_branch(self, node: ast.If) -> tuple[list[ast.AST], str]:
-        """Walk if/elif/else chain and return (body_nodes, label) of the taken branch.
+    def _find_taken_branch(self, node: ast.If) -> tuple[list[ast.AST], str, list[ast.expr]]:
+        """Walk if/elif/else chain and return (body_nodes, label, tests) of the taken branch.
 
         Evaluates each condition in the user namespace. Returns the first branch
-        whose condition is truthy, or the else branch if no condition matches.
+        whose condition is truthy, or the else branch if no condition matches,
+        and the conditions evaluated on the way: they ran, and what they
+        change is changed whichever branch is taken.
 
         A condition that raises (evaluating it or taking its truth value)
         raises that error, marked with the condition's cell line.
         """
         current = node
         branch_idx = 0
+        tests: list[ast.expr] = []
         while True:
             test_code = ast.unparse(current.test)
+            tests.append(current.test)
             try:
                 taken = bool(eval(test_code, self.shell.user_ns, self.shell.user_ns))
             except Exception as e:  # the user's error, only marked with its line
@@ -216,7 +221,7 @@ class IfHandler:
             if taken:
                 keyword = "elif" if branch_idx > 0 else "if"
                 label = f"{keyword} {test_code}"
-                return current.body, label
+                return current.body, label, tests
 
             # Move to elif/else
             if current.orelse:
@@ -226,7 +231,7 @@ class IfHandler:
                     branch_idx += 1
                 else:
                     # else branch
-                    return current.orelse, "else"
+                    return current.orelse, "else", tests
             else:
                 # No else and no condition matched → empty body
-                return [], "if (no branch taken)"
+                return [], "if (no branch taken)", tests

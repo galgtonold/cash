@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from cash.control_markers import strip_markers
 
 from ...analysis.cacheability_decision import is_lineage_exempt
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
@@ -475,6 +475,7 @@ class MismatchClassifier:
             for rule in (
                 self._own_call_explains_lineage,
                 self._reject_read_only_input,
+                self._rebuild_after_a_gone_change,
                 self._keep_valid_extension,
                 self._rerun_on_stale_files,
                 self._rerun_single_unit_loop_output,
@@ -525,6 +526,38 @@ class MismatchClassifier:
         )
         m.broken_vars.add(m.var_name)
         return True
+
+    def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:
+        """A required input the cell also writes, last changed by a statement
+        edited out of this cell (``df.loc[0, 'a'] = -1``): the text the cell
+        last ran with held it (``TrackingState.cell_text_at``), and no cell
+        holds it now. No run of the notebook as it stands makes the live
+        value, so it is rebuilt before the cell runs. Kept, the cell copied
+        or read the changed value and the check before the next cell rebuilt
+        the input without it, leaving the copy behind. (A read-only input is
+        rebuilt by ``_reject_read_only_input``.)"""
+        if not (m.required and m.cell_output) or not self._edited_out_of_this_cell(m):
+            return False
+        logger.debug(
+            "[UPSTREAM_DEBUG]   -> '%s' was last changed by a statement edited out of this cell. Marking broken.",
+            m.var_name,
+        )
+        m.broken_vars.add(m.var_name)
+        return True
+
+    def _edited_out_of_this_cell(self, m: _Mismatch) -> bool:
+        """Whether the statement that last changed *m*'s variable
+        (``TrackingState.executed_cell_codes``) was in the text this cell last
+        ran with and is in no cell now, the running one included."""
+        last = self.tracking_state.executed_cell_codes.get(m.var_name)
+        code = normalize_stmt(last) if last else ""
+        before = self.tracking_state.cell_text_at.get(m.check.current_cell_idx)
+        if not code or before is None or not _holds(before, code):
+            return False
+        cells = list(m.check.notebook_cells or [])
+        if m.check.cell_code:
+            cells.append(m.check.cell_code)
+        return not any(_holds(cell, code) for cell in cells)
 
     def _keep_valid_extension(self, m: _Mismatch) -> bool:
         """The live value is a valid extension of the notebook's state."""
@@ -956,11 +989,14 @@ class MismatchClassifier:
         )
 
     def backward_scan_pass(
-        self, sim: SimulationResult, result: ClassificationResult
+        self, sim: SimulationResult, result: ClassificationResult, *, with_outputs: bool = False
     ) -> tuple[list[int], list[dict], float]:
         """Scan the simulation trace backwards to build the re-execution schedule.
 
         Returns (stmts_to_run_indices, restored_statements_info, total_restore_time).
+        With *with_outputs*, each restored statement's info carries what it
+        showed when it ran (``stdout``, ``stderr``, ``rich_outputs``), for the
+        cell being run to show again; a repair of the cells above shows none.
         """
         trace = sim.trace
         scan = _BackwardScan(needed=set(result.broken_vars))
@@ -1007,6 +1043,7 @@ class MismatchClassifier:
                         "saved_time": saved_time,
                         "total_time": restore_time + sim.stmt_lookup_times.get(stmt_code, 0.0),
                         "position": stmt_positions.get(stmt_code, 999999),
+                        **(self.restorer.last_outputs if with_outputs else {}),
                     }
                 )
                 scan.needed.difference_update(restored_vars)
@@ -1180,3 +1217,24 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
+
+
+def _holds(cell_code: str, code: str) -> bool:
+    """Whether *cell_code* holds the statement *code* (normalized), nested or not."""
+    return code in cell_code or code in _statements_of(cell_code)
+
+
+def _statements_of(cell_code: str) -> set[str]:
+    """Every statement of *cell_code*, nested ones too, as
+    ``normalize_stmt(ast.unparse(...))`` gives it; empty when it does not parse."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            try:
+                found.add(normalize_stmt(ast.unparse(node)))
+            except (ValueError, TypeError, RecursionError):
+                continue
+    return found

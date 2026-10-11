@@ -35,6 +35,21 @@ cash.register_hasher(Store, hash_store)
 Never hash by `id()`: ids repeat across processes, so a later run could get
 another object's entry. See [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 
+## A table changed past pandas
+
+<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @9c632881, cash/decorator/arg_hashing.py:_watch_callback_handouts @e4bee4fe -->
+Under pandas copy-on-write, a table passed to a cached function again is not
+hashed again while pandas has given it no new data: pandas copies a column
+before it writes it. A write that goes past pandas is seen as long as it goes
+through memory pandas handed out: `df["x"].array`, a view from `.values`,
+`.to_numpy()` or `np.asarray` that you made writable again, and the arrays
+pandas passes to your function from `df.apply(f, raw=True)`,
+`rolling(...).apply(f, raw=True)`, `expanding().apply(f, raw=True)`, `pipe`
+and a groupby's `apply`, `agg` and `transform`. A NumPy view pandas made
+somewhere else and you made writable is not seen, and the cached function
+returns its old result for the table: write through pandas
+(`df.loc[...] = ...`) instead.
+
 ## An argument that does not change the result
 
 <!-- claim: cash/core.py:Cash.cache @470582df -->

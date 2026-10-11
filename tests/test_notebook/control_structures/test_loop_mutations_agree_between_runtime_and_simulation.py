@@ -30,8 +30,10 @@ SHAPES = {
     ),
     "a nested loop's own target": (
         "rows = [[], []]\nout = []",
+        # ``row`` is rebound each pass, but what it is bound to is an item of
+        # ``rows``: changing it changes ``rows``.
         "for i in range(2):\n    for row in rows:\n        row.append(i)\n    out.append(i)\n",
-        {"out"},
+        {"out", "rows"},
     ),
     "a builtin name the user bound": (
         "list = []\nseen = []",
@@ -47,6 +49,14 @@ SHAPES = {
         "import io\nimport os\nbuf = io.StringIO()\nrows = []",
         "for i in range(3):\n    buf.write(str(i))\n    os.getcwd()\n    rows.copy()\n",
         {"buf"},
+    ),
+    # A condition runs whichever branch is taken; a method whose result it
+    # uses changes its receiver only when known to (``pop``, not ``get``).
+    "what a condition changes": (
+        "stack = list(range(10))\nopts = {'a': 1}\nnames = ['x']",
+        "for i in range(3):\n    if stack.pop() > 7 and opts.get('a') and names[0].startswith('x'):\n        pass\n"
+        "    elif opts.pop('a', None):\n        pass\n    while stack.pop() > 100:\n        pass\n",
+        {"stack", "opts"},
     ),
     # ``remove`` is a list method too; ``os`` is not a list.
     "a module function named like a list method": (

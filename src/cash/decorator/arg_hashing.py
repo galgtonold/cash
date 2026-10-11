@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import functools
 import hashlib
 import inspect
@@ -599,6 +600,7 @@ def watch_array_handles() -> None:
         else:
             continue
         setattr(cls, name, property(_noting(getter, outside_only), doc=original.__doc__))
+    _watch_callback_handouts()
     original_array = pd.array
     noting_array = _noting(original_array, False)
 
@@ -612,6 +614,85 @@ def watch_array_handles() -> None:
 
 
 _WATCHING = False
+
+#: Set while a pandas method that hands its data to the user's callable
+#: runs (`_watch_callback_handouts`): a read-only view pandas takes there
+#: itself can end up in the user's hands, so `_noting` records it too.
+_HANDING_OUT: contextvars.ContextVar[bool] = contextvars.ContextVar("cash_pandas_handing_out", default=False)
+
+
+def _watch_callback_handouts() -> None:
+    """Record the memory pandas hands to a user's callable.
+
+    ``df.apply(f, raw=True)`` gives ``f`` read-only views of the frame's
+    columns that pandas took itself, so `_noting` skipped them as pandas'
+    own reads; ``col.flags.writeable = True`` then wrote into the frame
+    under the memo. ``df.pipe(pd.DataFrame.to_numpy)`` and a groupby's
+    ``apply`` / ``agg`` / ``transform`` can hand one out the same way: while
+    they run, `_HANDING_OUT` makes `_noting` record those views as well.
+
+    ``rolling(...).apply(f, raw=True)`` and ``expanding()`` give ``f``
+    WRITABLE windows straight into the column, through no accessor: the
+    object's whole memory is recorded before it runs, as is a raw
+    ``df.apply``'s. Either costs the frame one fresh hash on its next
+    call, not the memo for good; nothing changes for code that does not
+    call these.
+    """
+    import pandas as pd
+    from pandas.core.generic import NDFrame
+    from pandas.core.groupby.generic import DataFrameGroupBy, SeriesGroupBy
+    from pandas.core.groupby.groupby import GroupBy
+
+    targets: list[tuple[type, str, int | None]] = [(pd.DataFrame, "apply", 2), (NDFrame, "pipe", None)]
+    for cls in (GroupBy, SeriesGroupBy, DataFrameGroupBy):
+        targets += [(cls, name, None) for name in ("apply", "agg", "aggregate", "transform", "pipe")]
+    try:
+        from pandas.core.window.expanding import Expanding
+        from pandas.core.window.rolling import Rolling
+
+        targets += [(Rolling, "apply", 1), (Expanding, "apply", 1)]
+    except ImportError:  # pragma: no cover - a pandas without these
+        pass
+    for cls, name, raw_at in targets:
+        original = cls.__dict__.get(name)
+        if isinstance(original, types.FunctionType):
+            setattr(cls, name, _handing_out(original, raw_at))
+
+
+def _handing_out(method: Callable, raw_at: int | None) -> Callable:
+    """*method* run under `_HANDING_OUT`; with *raw_at* (where ``raw``
+    sits among the positional arguments after ``self``), only when ``raw``
+    is true, and then the object's memory is recorded first."""
+
+    @functools.wraps(method)
+    def handing_out(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if raw_at is not None:
+            raw = kwargs.get("raw", args[raw_at] if len(args) > raw_at else False)
+            if not raw:
+                return method(self, *args, **kwargs)
+            try:
+                for obj in (self, getattr(self, "obj", None), getattr(self, "_selected_obj", None)):
+                    _note_frame_memory(obj)
+            except Exception:  # noqa: BLE001 - recording must never break the user's call
+                _EXPOSED[-1] = (None, sys.maxsize)
+        if _HANDING_OUT.get():
+            return method(self, *args, **kwargs)
+        token = _HANDING_OUT.set(True)
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            _HANDING_OUT.reset(token)
+
+    return handing_out
+
+
+def _note_frame_memory(obj: Any) -> None:
+    """Record every block array of a pandas *obj* (`_note_exposed`)."""
+    mgr = getattr(obj, "_mgr", None)
+    if mgr is None or not is_cow_pandas(obj):
+        return
+    for block in mgr.blocks:
+        _note_exposed(block.values)
 
 
 def _get_through(descriptor: Any, instance: Any) -> Any:
@@ -628,7 +709,7 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
         handle = accessor(*args, **kwargs)
         if outside_only:
             caller = sys._getframe(1).f_globals.get("__name__", "")
-            if caller.startswith("pandas."):
+            if caller.startswith("pandas.") and not _HANDING_OUT.get():
                 return handle
             if outside_only is _READ_ONLY_VIEW:
                 flags = getattr(handle, "flags", None)
@@ -750,6 +831,7 @@ def _raise_panic_as_unhashable(exc: BaseException) -> None:
 
 #: `ArgHasher.normalize_call_args` without a signature: the name's own.
 _BY_NAME: Any = object()
+
 
 class _CostliestArg:
     """The argument of one payload that took longest to hash: its label,

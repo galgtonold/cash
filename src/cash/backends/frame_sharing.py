@@ -140,19 +140,30 @@ def _self_test(pd: Any) -> bool:
             "i": np.arange(4),
             "d": pd.date_range("2020-01-01", periods=4),
             "s": ["a", "b", "c", "d"],
-        }
+        },
+        index=pd.date_range("2024-01-01", periods=4, freq="D"),
     )
+    by_date = pd.Series(np.arange(4.0), index=pd.timedelta_range("1D", periods=4, freq="h"))
     stored = df.copy(deep=True)
-    if not _freeze(stored):
+    stored_series = by_date.copy(deep=True)
+    if not _freeze(stored) or not _freeze(stored_series):
         return False
     hit = hand_out(stored)
     other = hand_out(stored)
     if not all(blk.refs.has_reference() for blk in stored._mgr.blocks):
         return False
+    # A dated index keeps its freq through the freeze, a hit and a pickle.
+    import pickle
+
+    for kept, original in ((hit, df), (hand_out(stored_series), by_date)):
+        if kept.index.freq != original.index.freq:
+            return False
+        if pickle.loads(pickle.dumps(kept)).index.freq != original.index.freq:
+            return False
     del stored
-    hit.loc[0, "f"] = 100.0
-    hit.loc[1, "d"] = pd.Timestamp("2021-01-01")
-    hit.loc[2, "s"] = "z"
+    hit.iloc[0, 0] = 100.0
+    hit.iloc[1, 2] = pd.Timestamp("2021-01-01")
+    hit.iloc[2, 3] = "z"
     hit.iloc[3, 1] = 9
     if other["f"].iloc[0] != 0.0 or other["i"].iloc[3] != 3 or other["s"].iloc[2] != "c":
         return False
@@ -264,7 +275,15 @@ def _freeze_values(values: Any) -> Any:
     if parts[0][0] == "":
         return _read_only(values)
     frozen = _read_only(values._ndarray)
-    return values if frozen is values._ndarray else values._from_backing_data(frozen)
+    return values if frozen is values._ndarray else _same_dates(values, frozen)
+
+
+def _same_dates(values: Any, ndarray: Any) -> Any:
+    """A DatetimeArray or TimedeltaArray like *values* over *ndarray*, its
+    ``freq`` kept: ``_from_backing_data`` drops it, and a table with a
+    ``date_range`` index would come back from a hit, or from disk, without
+    it (``df.shift(1, freq=df.index.freq)`` then shifts the data)."""
+    return type(values)._simple_new(ndarray, dtype=values.dtype, freq=values.freq)
 
 
 def _frozen_index(index: Any) -> Any:
@@ -406,7 +425,7 @@ def _pickle_form(values: Any) -> Any:
         if parts[0][0] == "":
             return _writable_alias(values)
         alias = _writable_alias(values._ndarray)
-        return values if alias is values._ndarray else values._from_backing_data(alias)
+        return values if alias is values._ndarray else _same_dates(values, alias)
     except Exception:  # noqa: BLE001 - pickled as it is: read-only, never wrong
         logger.debug("cash: pickling a frozen block as it is", exc_info=True)
         return values

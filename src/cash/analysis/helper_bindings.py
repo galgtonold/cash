@@ -174,7 +174,8 @@ def resolve_binding(module_name: str, chain: tuple[str, ...]) -> Any:
 
 
 def bindings_changed(report: PurityReport) -> bool:
-    """Does any call-site binding the report followed hold a different object now?
+    """Does any call-site binding the report followed hold a different object
+    now, or has the module bound a name a call site found unbound?
 
     A module that has left ``sys.modules`` proves nothing either way and is
     skipped. Identity, not equality: a re-created function with the same
@@ -185,6 +186,10 @@ def bindings_changed(report: PurityReport) -> bool:
         if live is UNRESOLVED:
             continue
         if live is not ref():
+            return True
+    for module_name, name in report.unbound_names:
+        module = sys.modules.get(module_name)
+        if module is not None and name in (getattr(module, "__dict__", None) or ()):
             return True
     return False
 

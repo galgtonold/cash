@@ -61,7 +61,11 @@ result = daily.rolling(7).mean()   # edit: only this runs again
 - **Calls inside a statement are cached too.** In `out.append(compute(x))` the
   append runs every time, but `compute(x)` comes from the cache.
 - **Printed output is replayed** on a hit, along with rich output. A trailing
-  `;` still hides it.
+  `;` still hides it. A cell that rebuilds one name in steps
+  (`df = load(); df = clean(df)`) shows every step's output too when cash
+  restores the last version and skips the steps before it; a step that
+  printed more than 64 KB runs instead of being skipped.
+  <!-- claim: cash/notebook/statement/capture.py:REPLAY_RECORD_CAP == 65536 -->
 - **Top-level `await` cells** are cached like any other; a hit skips the `await`.
 
 Every cell shows a [badge](badges.md) with one row per statement:
@@ -76,18 +80,19 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @98ce202f, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60 -->
+<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @a69ccc3e, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @98ce202f, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
 | sends something over the network (`requests.post`, `session.post`, `client.publish`, `s3.upload_file`) | runs every time |
 | writes to a database (`INSERT`, `commit`, `df.to_sql`) | runs every time |
 | starts a process (`subprocess.run`, `os.system`) | runs every time |
-| reads the clock (`datetime.now()`, `time.time()`, `uuid4()`) or asks for `input()` | runs every time |
-| draws on the current pyplot figure (`plt.plot`, `plt.show`) | runs every time |
+| reads the clock (`datetime.now()`, `time.time()`, `uuid4()`), random bytes from the system (`os.urandom()`, `secrets.token_hex()`) or asks for `input()` | runs every time |
+| makes, picks or draws on the current pyplot figure (`plt.figure`, `plt.subplots`, `plt.subplot`, `plt.plot`, `plt.show`), directly or through a library or a function you wrote (`sns.barplot(...)`, `s.plot()`) | runs every time: a hit would leave the next drawing on another figure. Cash compares pyplot's open figures, the current one and what its axes hold before and after the statement |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
-| sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps, `importlib.reload(mylib)`) | runs every time |
+| sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps, the same function handed to a call as `s.apply(metrics.increment)`, `importlib.reload(mylib)`) | runs every time |
+| hands a call a function of yours that changes state (`s.apply(ops["dbl"])` appending to a list, `s.apply(tracker.record)` changing `tracker`, `run_steps([f], data)`) | runs every time, as calling it by name does |
 | changes an environment variable or the working directory (`os.environ["MODE"] = "b"`, `os.chdir(d)`), itself or in a function of yours it calls | runs every time; after a kernel restart it runs again before a cell below it you run on its own |
 | reads from an iterator or open file held in a variable (`next(rows)`, `fh.readline()`, `islice(src, 3)`) | runs every time: a hit would not move the iterator on; a slow call inside it is still cached |
 | keeps or changes an object another variable also holds, directly or in a list, dict or attribute of one (`models = {"m": m}`, `a["x"] = ...` after `b = a`, `d["a"] = ...` after `d = dfs[0]`) | cached together with those variables: a hit restores them as one object graph, so `models["m"] is m` and `dfs[0] is d` again. A method bound to it counts as holding it (`hooks = {"log": tracker.log}`). When something else holds it (a closure, a library's module or registry), when it is held through a closure or a builtin method (`hooks = {"add": results.append}`), or in a loop body (`for d in dfs:`), it runs every time: a restored copy would not be that object. IPython's output history (`Out`, `_`) holding a value you displayed does not count |

@@ -30,7 +30,14 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
-from cash.notebook.shared_objects import holds_a_held_object, holds_part_of
+from cash.notebook.shared_objects import (
+    VALUE_TYPES,
+    holds_a_held_object,
+    holds_an_unopened_object,
+    holds_part_of,
+    is_value,
+    library_value_types,
+)
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
@@ -265,6 +272,11 @@ class CallEntries:
            (`holds_a_held_object`). A fresh result is neither, and the walk
            over a large global the function merely reads is skipped.
 
+           When something else holds the result (*root_held*) and an
+           argument is or holds an object that walk cannot look inside (a
+           library object, an object with ``__slots__``), the result may sit
+           inside it unseen: it is not stored.
+
            Not for a plain value. CPython shares one object for small ints
            and interned strings, so ``score(1, 10)`` returns the very ``10``
            it was passed -- the check refused that call on every run, and it
@@ -295,8 +307,10 @@ class CallEntries:
         prevent, handed back on every hit.
         """
         try:
+            sources = (*args, *kwargs.values())
             return (
-                not holds_part_of(result, (*args, *kwargs.values(), *self._reached(result, fn, root_held)))
+                not holds_part_of(result, (*sources, *self._reached(result, fn, root_held)))
+                and not (root_held and _has_identity(result) and holds_an_unopened_object(sources))
                 and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
@@ -551,3 +565,12 @@ class CallEntries:
             return None
         trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
         return estimate
+
+
+def _has_identity(value: Any) -> bool:
+    """Whether *value* is, or holds, an object whose identity a copy loses:
+    not a plain value (a number, a string, a tuple of them)."""
+    value_types = VALUE_TYPES + library_value_types()
+    if isinstance(value, (tuple, frozenset)):
+        return not all(is_value(item, value_types) for item in value)
+    return not is_value(value, value_types)

@@ -28,9 +28,43 @@ __all__ = [
     "capture_output",
     "display_execution_output",
     "make_capture_ctx",
+    "REPLAY_RECORD_CAP",
     "replay_outputs",
+    "replay_record",
     "tee_output",
 ]
+
+
+#: The most output, in bytes, an entry's metadata keeps for a step a cell run
+#: may skip (``replay_record``). Over it, the step runs instead.
+REPLAY_RECORD_CAP = 64 * 1024
+
+
+def replay_record(captured: Any) -> dict | None:
+    """What *captured* showed, for an entry's metadata to replay when a cell
+    run skips its statement (``NotebookSimulator.plan_cell_run``).
+
+    None when it showed nothing. ``{"complete": False}`` alone when it
+    showed more than ``REPLAY_RECORD_CAP`` bytes or a rich output that is
+    not plain display data: that statement is run rather than skipped.
+    """
+    stdout = getattr(captured, "stdout", "") or ""
+    stderr = getattr(captured, "stderr", "") or ""
+    outputs = list(getattr(captured, "outputs", None) or [])
+    if not (stdout or stderr or outputs):
+        return None
+    rich: list[dict] = []
+    size = len(stdout) + len(stderr)
+    for output in outputs:
+        data = getattr(output, "data", None) if not isinstance(output, dict) else output.get("data")
+        metadata = getattr(output, "metadata", None) if not isinstance(output, dict) else output.get("metadata")
+        if not isinstance(data, dict) or not all(isinstance(v, (str, dict, list)) for v in data.values()):
+            return {"complete": False}
+        size += sum(len(str(v)) for v in data.values())
+        rich.append({"data": dict(data), "metadata": dict(metadata or {})})
+    if size > REPLAY_RECORD_CAP:
+        return {"complete": False}
+    return {"complete": True, "stdout": stdout, "stderr": stderr, "rich": rich}
 
 
 class NoCapture:

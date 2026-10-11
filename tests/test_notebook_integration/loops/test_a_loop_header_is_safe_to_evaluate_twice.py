@@ -1,9 +1,9 @@
 """The loop fast path: taken when it is safe, and only then.
 
 A cheap loop with many iterations runs as one unit, because decomposing it
-per iteration costs ~8 ms per body statement per iteration. Doing that means
-evaluating the header twice, so the question of WHEN it is allowed is the
-whole feature. It was once wrong in both directions.
+per iteration costs ~8 ms per body statement per iteration. The unit iterates
+the header's value, evaluated once; a header with no effect may be left to the
+unit to evaluate. It was once wrong in both directions.
 
 Measured on a real notebook's cell, 627 iterations of four cheap numpy statements:
 
@@ -16,7 +16,7 @@ called it BLOCKING. And the other way: `for x in sorted(g):` over a 400-item
 generator ran zero times, because the check for one-shot iterators looked
 only at the header's RESULT, and `sorted` returns a list.
 
-The unit twin is ``tests/test_notebook/control_structures/test_a_loop_header_is_safe_to_evaluate_twice.py``.
+The unit twin is ``tests/test_notebook/control_structures/test_a_loop_header_is_left_to_the_unit_only_without_effects.py``.
 """
 
 import pytest

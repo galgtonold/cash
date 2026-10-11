@@ -127,29 +127,41 @@ s = stamp(1)
 
 ## Changes cash cannot see
 
-Each of these applies a change a second time, or misses one, on an isolated
-re-run. Run All is not affected.
+Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/analysis/aliases.py:bare_alias_targets @311a21c3, cash/analysis/aliases.py:reference_alias_targets @f052d224 -->
-cash tracks a change through the name the object is bound to. Through another
-name it is invisible, so a re-run applies it twice:
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16 -->
+When a statement leaves two names sharing an object, cash links them: an alias
+(`log = history`), a container holding another variable's object (`config =
+{"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
+(`train = data["train"]`). A change made later through either name moves both,
+so the cells that read the other one re-run, on Run All and on a cell re-run
+alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)
+changes `rows`, and a pyplot call that draws on the current figure
+(`plt.plot(...)`, `plt.title(...)`) changes the names bound to that figure and
+its axes; such a call runs every time.
+
+A change made through an object cash cannot link to a name is invisible, and
+the cells that read the name keep their cached results:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
 ```python { .nb-cell }
-b.ref = x
-b.ref.append(99)       # changes x, but cash sees only b
-
-t = (lst,)
-t[0].append(3)         # changes lst
-
-y = x if flag else z
-y.append(3)            # x or z?
+get = lambda: x
+get().append(5)        # changes x through a closure
 ```
 
-**Fix:** change the object through its own name (`x.append(99)`), or rebind
-(`x = x + [99]`).
+**Fix:** change the object through its own name (`x.append(5)`), or rebind
+(`x = x + [5]`).
+
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+A cell that changes a value in place (`history.append(x)`) and is re-run on its
+own normally starts from the value as the cells above leave it, so the change
+is not applied twice. When a cell below has made another name share that value
+(`log = history`), rebuilding it would leave the two names with different
+objects, so cash keeps the value as it is, applies the change on top of the
+last one, as a plain re-run does, and says so with
+[NOTEBOOK-SHARED-KEPT](warnings.md#notebook-shared-kept).
 
 ### Mutating an object created in an earlier cell
 
@@ -175,17 +187,33 @@ rebind with `df = df.assign(...)`.
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @57645727 -->
+<!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @0563cfbf -->
 A function that changes a global (`LOG.append(v)`, `counter["n"] += 1`), itself
 or through a helper it calls, is handled: the statement calling it runs every time so the change really happens,
 while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @9327197c, cash/analysis/handed_callables.py:hands_a_state_changing_callable @dc85c3c3 -->
+A function handed to a call counts as called, however it is handed: by name
+(`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
+as a method that changes its object (`s.apply(tracker.record)`), as an object
+whose class defines `__call__` and changes it, as a closure that changes what
+it closes over, or in a list or dict that a function of yours calls into
+(`run_steps(steps, data)` with `steps = [f]`). The statement runs every time,
+and the call of yours that is handed it is not served from the cache. A method
+counts as changing its object when its code changes it, or calls a method on
+something the object holds that cash does not know to leave it unchanged
+(`self.model.fit(x)`). A function of yours handed over whose source cannot be
+read makes the statement run uncached. A list or dict of functions handed to a
+library function is looked into only for `agg`, `aggregate` and `transform`.
+
 <!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 The same for a statement that sets state on one of your modules
 (`metrics.increment(5)` adding to a counter `metrics.py` keeps, itself or
-through a helper, `mylib.K = slow()`, or `importlib.reload(mylib)`): it runs every time, so the module
+through a helper, or handed to a call as `s.apply(metrics.record)` or
+`s.map(record)` after `from metrics import record`, `mylib.K = slow()`, or
+`importlib.reload(mylib)`): it runs every time, so the module
 holds after a restart, or after an edit of its file, what a top-to-bottom run
 leaves in it. A setting whose code does not say it (`globals()[name] = v`,
 `global K` in a method of one of your classes) is seen when it runs, in the
@@ -419,7 +447,7 @@ reads its content, and if it changed, everything that read it runs again.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @06e2db6f, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @54928083, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length (a loop
 inside the body counts each iteration ten times, as it usually runs about that
@@ -438,14 +466,20 @@ and, once it reaches the length that would have qualified, the rest as one
 unit drawing from the same iterator. Items are drawn exactly as plain Python
 draws them, so a generator's own side effects interleave with the body's, and
 an error leaves the iterator where Python would. Such a unit reads a stream,
-so it is never served from the cache. A loop over a call that cannot be
-evaluated twice and has no length (`for x in make_rows():`) still runs pass by
+so it is never served from the cache. A loop over a call whose value has no
+length (`for x in make_rows():` with a generator function) still runs pass by
 pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
-`for x in rows:`).
-A header built by builtins or a progress bar
-(`tqdm(list(zip(a, b)))`) is evaluated once, by the unit, as plain Python
-evaluates it. An array built from a list (`enumerate(np.array(lines))`)
+`for x in rows:`). An array built from a list (`enumerate(np.array(lines))`)
 counts as long as the list.
+
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @a78c2c65, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @9f65ba05 -->
+A loop's header is evaluated once, as plain Python evaluates it, so the loop
+gets the same items as without cash: one random draw
+(`np.random.permutation(n)`, `df.sample(n=300).index`), a queue drained once,
+a property read once. A header built only by builtins or a progress bar over
+plain data (`range(n)`, `tqdm(list(zip(a, b)))`) is evaluated by the unit, so
+a cache hit skips it; any other header is evaluated before the loop runs, on a
+hit too.
 
 The expensive call inside the loop body (`fetch(e)` in `out.append(fetch(e))`)
 is still cached, so usually there is nothing to do. **Fix** when it is not:

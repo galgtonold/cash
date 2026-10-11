@@ -22,6 +22,7 @@ from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
 from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
+from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
 from ._types import SimulationResult, TraceEntry
@@ -75,6 +76,10 @@ class ControlSimulation:
         # not trusted in memory as a loop's accumulator is: a reload drops
         # its state, which only its producers put back.
         code = ast.unparse(node)
+        # Drawing through pyplot changes the current figure and axes, as the
+        # runtime took them (``pyplot_draws``).
+        mutated_vars |= self.statements.pyplot_draw_outputs(code, node)
+        vars_mutated_by_loops.update(mutated_vars)
         recorded = self.statements.recorded_module_state(code)
         if recorded is not None:
             return mutated_vars | recorded[0]
@@ -104,6 +109,18 @@ class ControlSimulation:
                     mv,
                     new_lineage[:12],
                 )
+        # What the structure changed through another name moves on with it,
+        # through the edges the runtime recorded, as the runtime's
+        # ``update_mutated_variable_lineages`` moves it.
+        if extra_outputs:
+            extra_outputs |= bump_derived_lineages(
+                self.tracking_state.derivation_edges,
+                virtual_lineage,
+                set(extra_outputs),
+                set(mutated_vars),
+                record=virtual_lineage.__setitem__,
+                present=lambda _name: True,
+            )
         return extra_outputs
 
     def simulate(self, node: ast.AST, sim: SimulationResult) -> None:

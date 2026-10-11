@@ -184,7 +184,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @faf9d2b8, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @6d2b8d5d -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @faf9d2b8, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @c9c50888 -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
@@ -194,6 +194,9 @@ missing from memory is restored from the cache. A name a shell command or a
 magic binds is the exception: cash runs a `%time`, `%timeit` or `%prun` line
 again, since it runs Python, but never any other magic, so it keeps the value
 the name has and warns ([A name a magic binds](../known-limitations.md#a-name-a-magic-binds)).
+So is what a cell that raised part way left: cash keeps it, and what was built
+from it, as they are, and warns
+([NOTEBOOK-FAILED-CELL](../warnings.md#notebook-failed-cell)).
 
 Only what the cell you run depends on is considered. A stale chart or export
 above it that it does not read stays as it is. A statement that writes a file

@@ -144,7 +144,9 @@ def test_badge_tells_the_truth_about_the_refused_figure(nb_runner):
 
     output = nb_runner.get_output(2)
     assert "NOT CACHED" in output, f"The refused figure must show as NOT CACHED. Got:\n{output}"
-    assert "Identity-coupled" in output, f"The badge must say WHY the figure was refused. Got:\n{output}"
+    # `plt.subplots()` makes pyplot's current figure: a hit would not, so it
+    # is refused as a display side effect before its value is looked at.
+    assert "plt.subplots() (display)" in output, f"The badge must say WHY the figure was refused. Got:\n{output}"
 
 
 @pytest.mark.timeout(90)
