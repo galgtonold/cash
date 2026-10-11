@@ -1421,7 +1421,7 @@ If it is not code, delete it or make it a markdown cell.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @3abb284a -->
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @fb2193e4 -->
 **What happened.** A cell raised part way through, and a name it changed is
 not what a run of the cells from the top gives. The message names the cell
 and the variables. It comes in two cases.
