@@ -25,7 +25,9 @@ SETUP = [
     "y = np.array([0, 1] * 10)",
 ]
 BUILD = "scaler = StandardScaler(); clf = LogisticRegression(); pipe = Pipeline([('s', scaler), ('m', clf)])"
-FIT = "# @cash:cache-fit\npipe.fit(X, y)"
+# The fit takes a few ms, under the store floor on a fast machine or an older
+# scikit-learn (1.7 on Python 3.10), so ``persist`` keeps it stored either way.
+FIT = "# @cash:cache-fit\n# @cash:persist\npipe.fit(X, y)"
 
 
 def _run(cash_magics, code):
