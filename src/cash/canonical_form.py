@@ -206,7 +206,7 @@ class _Walk:
     containers met so far (*seen*), and the caller's *content*, *hook* and
     *left* (see `stable_key_repr`)."""
 
-    __slots__ = ("content", "fielded", "holds_set", "hook", "left", "seen", "stack")
+    __slots__ = ("clean", "content", "fielded", "holds_set", "hook", "left", "seen", "stack", "whole")
 
     def __init__(
         self,
@@ -226,6 +226,12 @@ class _Walk:
         self.stack: set[int] = set()
         #: Objects known to hold a set (`contains_set`'s *found*).
         self.holds_set: dict[int, Any] = {}
+        #: Objects known to hold no set (`contains_set`'s *clean*).
+        self.clean: dict[int, Any] = {}
+        #: The objects already left to pickle whole, by id, each with whether
+        #: it went on *left*: met again, one is that form again without a
+        #: second search. Held here, so no other object takes its id.
+        self.whole: dict[int, tuple[Any, bool]] = {}
 
 
 def _walk(value: Any, walk: _Walk) -> Any:
@@ -321,6 +327,15 @@ def _enter(value: Any, walk: _Walk) -> Any:
             if family in _WRITABLE_FAMILIES:
                 seen[id(value)] = (len(seen), value)
             return ("__cash_content__", family, digest)
+    whole = walk.whole.get(id(value))
+    if whole is not None:
+        # An object met before and left to pickle whole: the same form
+        # again, and pickle's memo writes it once. A column holding one
+        # bound method in each of 845,000 rows searched the method's
+        # frame for a set once per row, 224 s for one statement.
+        if whole[1]:
+            walk.left.append(value)  # type: ignore[union-attr]
+        return value
     if id(value) in walk.stack:
         raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
     if isinstance(value, _MUTABLE_CONTAINERS):
@@ -541,7 +556,7 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             by_fields = _object_by_fields(value, walk)
             if by_fields is not None:
                 return by_fields
-        if contains_set(value, walk.holds_set):
+        if contains_set(value, walk.holds_set, walk.clean):
             return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
         if holds_content_data(value, walk.content):
             # Pickled whole, every frame inside was serialised and hashed on each
@@ -554,10 +569,12 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             except CyclicValueError:
                 pass
         left = walk.left
-        if left is not None and not (
+        appended = left is not None and not (
             type(value) in _VALUE_LEAVES or isinstance(value, _BY_NAME) or type(value) in _plain_data.fake_clock()[0]
-        ):
-            left.append(value)
+        )
+        if appended:
+            left.append(value)  # type: ignore[union-attr]
+        walk.whole[id(value)] = (value, appended)
         return value
     finally:
         walk.stack.discard(id(value))
@@ -891,7 +908,7 @@ def _pickled_state(value: Any) -> Any:
     return tuple(parts)
 
 
-def contains_set(value: Any, found: dict[int, Any] | None = None) -> bool:
+def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[int, Any] | None = None) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
     inside objects). `stable_key_repr` opens an object up only when it holds
     one; any other object is left to pickle.
@@ -911,6 +928,14 @@ def contains_set(value: Any, found: dict[int, Any] | None = None) -> bool:
     answers at once. The walk asks again of each object it opens below one
     that holds a set, and without the record a linked list with a set at
     its end was searched to the end once per node.
+
+    *clean*, when given, is the same record of the nodes known to hold no
+    set: every node of a search that found none, held there so no other
+    object takes its id. A node in it is not searched again. Only a whole
+    search that found nothing says so of each node: a node left early is
+    still being searched above, and may reach a set through it. 845,000
+    bound methods of one object, each searched through that object, took
+    224 s.
     """
     seen: set[int] = set()
     # Every node looked at is held until the search ends, so the id of one
@@ -946,7 +971,7 @@ def contains_set(value: Any, found: dict[int, Any] | None = None) -> bool:
                 for on_path in path:
                     found[id(on_path)] = on_path
             return True
-        if id(node) in seen:
+        if id(node) in seen or (clean is not None and id(node) in clean):
             continue
         if isinstance(node, logging.Logger):
             # Pickled by NAME (`Logger.__reduce__`), so nothing inside it
@@ -973,6 +998,9 @@ def contains_set(value: Any, found: dict[int, Any] | None = None) -> bool:
         todo.append(_LEAVE)
         parts.reverse()
         todo.extend(parts)
+    if clean is not None:
+        for node in held:
+            clean[id(node)] = node
     return False
 
 
