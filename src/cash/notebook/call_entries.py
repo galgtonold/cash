@@ -33,7 +33,6 @@ from cash.notebook.consumables import is_consumable_unrestorable
 from cash.notebook.shared_objects import (
     VALUE_TYPES,
     holds_a_held_object,
-    holds_an_unopened_object,
     holds_part_of,
     is_value,
     library_value_types,
@@ -273,10 +272,10 @@ class CallEntries:
            (`holds_a_held_object`). A fresh result is neither, and the walk
            over a large global the function merely reads is skipped.
 
-           When something else holds the result (*root_held*) and an
-           argument is or holds an object that walk cannot look inside (a
-           library object, an object with ``__slots__``), the result may sit
-           inside it unseen: it is not stored.
+           When something else holds the result (*root_held*) and that walk
+           finds the holder in none of them, the holder is one cash cannot
+           name (a library object, a pandas ``attrs``, a cache of the
+           function's own): it is not stored.
 
            Not for a plain value. CPython shares one object for small ints
            and interned strings, so ``score(1, 10)`` returns the very ``10``
@@ -311,7 +310,10 @@ class CallEntries:
             sources = (*args, *kwargs.values())
             return (
                 not holds_part_of(result, (*sources, *self._reached(result, fn, root_held)))
-                and not (root_held and _has_identity(result) and holds_an_unopened_object(sources))
+                # Held by something else (*root_held*), and that holder is
+                # none of the arguments or of what the function reaches: a
+                # holder cash cannot name, so a copy might not be what it holds.
+                and not (root_held and _has_identity(result))
                 and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
