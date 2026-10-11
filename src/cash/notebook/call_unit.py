@@ -51,6 +51,7 @@ from cash.notebook.call_effects import (
     call_capturing_output,
     capture_globals,
     hash_args,
+    reads_its_arguments_only,
     rebinds_its_closure,
     replay_deps,
     replay_output,
@@ -922,7 +923,11 @@ class CallUnit:
         # "recorded for free" behaviour holds.
         rng_before = capture_rng_state(), capture_reachable_carrier_states(call.fn)
         ticket = self._invocations[-1].ticket if self._invocations else (0, 0)
-        arg_hashes_before = hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket))
+        arg_hashes_before = (
+            None
+            if reads_its_arguments_only(call.fn)
+            else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket))
+        )
         module_before = _module_globals(call.fn)
         started = _perf_counter()
         call_tracker = FileAccessTracker(
@@ -958,9 +963,12 @@ class CallUnit:
         return result
 
     def _did_what_a_hit_cannot(
-        self, call: _Call, rng_before, arg_hashes_before: tuple, ticket: tuple[int, int] = (0, 0)
+        self, call: _Call, rng_before, arg_hashes_before: tuple | None, ticket: tuple[int, int] = (0, 0)
     ) -> bool:
-        """Whether the call just run had an effect a hit would silently skip."""
+        """Whether the call just run had an effect a hit would silently skip.
+
+        *arg_hashes_before* is None for a callee that never writes into its
+        arguments (`reads_its_arguments_only`): they are not hashed again."""
         modules_before, carriers_before = rng_before
         if rng_modules_changed(modules_before, capture_rng_state()) or carrier_states_changed(carriers_before):
             # RNG is a consumed linear resource -- what matters is stream
@@ -975,6 +983,8 @@ class CallUnit:
         # The identity check only catches `return arg` -- this
         # catches "mutated but returned a *different* object", which
         # a hit would silently skip.
+        if arg_hashes_before is None:
+            return False
         arg_hashes_after = hash_args(call.args, call.kwargs, self._fingerprints)
         if arg_hashes_after != arg_hashes_before:
             return True
