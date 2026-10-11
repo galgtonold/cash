@@ -492,14 +492,17 @@ class MismatchClassifier:
         no name, so the receiver is not a current-cell output and would
         otherwise be rejected below as a read-only input, rebuilding the value
         every time the cell ran again. The reset is cheap and keeps the key
-        stable across re-runs, while an edit upstream still changes the
-        simulated lineage. Only without an upstream modification: after one,
-        the live value itself is stale and must be rebuilt.
+        stable across re-runs. Only while the call would read what it read
+        when it ran (`_self_call_reads_the_same`): after a changed data
+        file, a reloaded helper or an edited cell moved ``X``, the fit
+        ``model.fit(X, y)`` made is stale and must be made again.
         """
-        if not m.required or m.sim.upstream_has_modifications:
+        if not m.required:
             return False
         last_code = self.tracking_state.executed_cell_codes.get(m.var_name)
         if not self_call_resets_lineage(m.var_name, last_code, self.shell.user_ns.get(m.var_name)):
+            return False
+        if not self._self_call_reads_the_same(m, last_code):
             return False
         logger.debug(
             "[UPSTREAM_DEBUG]   -> '%s' was last changed by a call on itself that leaves it current. "
@@ -510,6 +513,33 @@ class MismatchClassifier:
         )
         self.tracking_state.lineage.reset_to(m.var_name, m.final_virtual_hash)
         return True
+
+    def _self_call_reads_the_same(self, m: _Mismatch, last_code: str) -> bool:
+        """Whether the call *last_code* that last changed *m*'s variable
+        would read, run now, the versions it read when it ran.
+
+        What it read is ``executed_input_lineages`` of the variable (``X``,
+        ``y`` and ``model`` itself for ``model.fit(X, y)``); what it would
+        read is the simulation's lineages at that call (its trace entry).
+        Without such an entry, the inputs other than the receiver must hold
+        their versions at the end of the simulation, and no cell above may
+        have changed.
+        """
+        read = self.tracking_state.executed_input_lineages.get(m.var_name)
+        if not read:
+            return False
+        code = normalize_stmt(last_code)
+        entry = next(
+            (e for e in reversed(m.sim.trace) if m.var_name in e.outputs and normalize_stmt(e.stmt_code) == code),
+            None,
+        )
+        if entry is not None:
+            now = entry.input_hashes or {}
+            return all(now.get(name) == lineage for name, lineage in read.items())
+        if m.sim.upstream_has_modifications:
+            return False
+        final = m.sim.virtual_lineage
+        return all(final.get(name) == lineage for name, lineage in read.items() if name != m.var_name)
 
     def _reject_read_only_input(self, m: _Mismatch) -> bool:
         """A required input the cell does not write: a downstream mutation
