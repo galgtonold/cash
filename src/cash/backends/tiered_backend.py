@@ -9,6 +9,7 @@ from typing import Any, NamedTuple
 from ._base import CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
 from .persistence_policy import PersistencePolicy
+from .sampled_cost import sampled_cost
 from .serialization import PickleSerializer, Serializer
 from .store_notices import StoreNotices
 
@@ -548,6 +549,7 @@ class TieredBackend(CacheBackend):
                 backend_kind=self._promotion_backend_kind(),
                 deferred=deferred,
                 override=self.promotion_policy,
+                sampled=None if deferred or _chosen_by_caller(metadata) else sampled_cost(value),
             )
             size = metadata.get("size", 0) or 0
             cap_size = size or metadata.get("cost_model_size_bytes", 0)
@@ -601,3 +603,9 @@ class TieredBackend(CacheBackend):
         # Log visibility
         if stored_destinations:
             logger.debug("[STORAGE] Stored in: %s", ", ".join(stored_destinations))
+
+
+def _chosen_by_caller(metadata: MetadataDict) -> bool:
+    """Whether the persistence of the entry *metadata* describes is decided
+    already, so its write cost is not sampled (`sampled_cost`)."""
+    return bool(metadata.get("force_persist") or metadata.get("decorator_entry") or metadata.get("process_local"))

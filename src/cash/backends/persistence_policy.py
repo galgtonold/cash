@@ -30,6 +30,7 @@ from cash import cost_model
 from cash.config.schema import CashConfig
 
 from ._base import store_seconds
+from .sampled_cost import SampledCost
 from .value_policy import worth_its_bytes
 
 __all__ = [
@@ -156,12 +157,17 @@ class PersistencePolicy:
         backend_kind: str,
         deferred: bool = False,
         override: Callable[[float, int], bool] | None = None,
+        sampled: SampledCost | None = None,
     ) -> Decision:
         """Should the entry *metadata* describes be written past RAM now?
 
         *deferred* marks a value the same cell replaces later; the end-of-cell
         pass (`decide_rebuild`) judges the last one. *override* replaces the
-        cost model for an entry that carries no cost-model family.
+        cost model for an entry that carries no cost-model family. *sampled*
+        is what pickling and loading the value's big object-heavy parts was
+        measured to cost on a sample (`sampled_cost`): such a value is kept
+        in RAM only when its write would hold up the notebook longer than
+        one restore saves.
         """
         size = metadata.get("size", 0) or 0
         cap_size = size or metadata.get("cost_model_size_bytes", 0)
@@ -187,7 +193,7 @@ class PersistencePolicy:
             pays = override(compute_s, size)
         else:
             pays = self.pays_to_restore(compute_s, size, backend_kind=backend_kind)
-        if not pays:
+        if not pays or (sampled is not None and _write_outweighs_restore(compute_s, sampled, self.min_savings_pct)):
             return Decision(False, "compute", cap_size)
 
         # An entry is weighed with the entries it refers to (``call_ref_bytes``):
@@ -224,3 +230,14 @@ class PersistencePolicy:
         if not metadata.get("force_persist") and not worth_its_bytes(weight, rebuild_s):
             return Decision(False, "bytes", weight, report=True)
         return Decision(True, weight=weight)
+
+
+def _write_outweighs_restore(compute_s: float, sampled: SampledCost, min_savings_pct: float) -> bool:
+    """Does writing a value cost more than one restore of it saves?
+
+    The write runs in the background but pickling holds the interpreter lock,
+    so the notebook waits for it: a dict of parsed sessions computed in 3.0 s
+    took 3.7 s to pickle, to restore in 1.25 s after a restart.
+    """
+    saved = compute_s - sampled.load
+    return saved <= max(sampled.dump, min_savings_pct * compute_s)
