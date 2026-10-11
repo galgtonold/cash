@@ -212,7 +212,20 @@ def compute(n):
 """
 
 
+def _finish_writes():
+    """Let every background store finish while ``usermod`` is still the
+    module it pickled from: the writer pickles ``A`` by name, so one still
+    in flight when the module is replaced (or unloaded at teardown, where a
+    re-import fails for want of ``cash_instance``) is discarded, and the
+    discarded-write guard fails the test."""
+    from cash.backends._writes import all_pending_writes
+
+    for queue in all_pending_writes():
+        queue.wait_all()
+
+
 def _load_module(work, cash_instance, b_expr):
+    _finish_writes()
     (work / "usermod.py").write_text(MODULE.format(b_expr=b_expr), encoding="utf-8")
     shutil.rmtree(work / "__pycache__", ignore_errors=True)
     sys.modules.pop("usermod", None)
@@ -232,6 +245,7 @@ def work(tmp_path, monkeypatch):
     d.mkdir()
     monkeypatch.syspath_prepend(str(d))
     yield d
+    _finish_writes()
     sys.modules.pop("usermod", None)
 
 
