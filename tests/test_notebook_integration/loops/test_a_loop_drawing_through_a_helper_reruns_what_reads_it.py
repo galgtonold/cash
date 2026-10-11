@@ -26,7 +26,7 @@ SUMMARY_DEF = "import time\ndef summarize(v):\n    time.sleep(0.3)\n    return s
     ],
     ids=["the clock", "a global counter", "a uuid", "os.urandom"],
 )
-def test_the_cell_below_sees_the_new_values(nb_runner, helper, body):
+def test_the_cell_below_sees_the_new_values(nb_runner, helper, body, resets=False):
     nb_runner.create_notebook(
         [
             "import cash\n%cash_on",
@@ -40,7 +40,12 @@ def test_the_cell_below_sees_the_new_values(nb_runner, helper, body):
     nb_runner.run_all()
     first = nb_runner.peek("out")
     nb_runner.run_cells([3, 4, 5])
-    assert nb_runner.peek("out") != first, "positive control: the loop left new values"
+    if resets:
+        # The loop changes an object a cell above made, which a re-run sets
+        # back first, as for ``self.k += 1``: the same values, every run.
+        assert nb_runner.peek("out") == first, "the object the loop draws from was set back"
+    else:
+        assert nb_runner.peek("out") != first, "positive control: the loop left new values"
     expected = nb_runner.peek("sum(out)").strip()
     assert nb_runner.get_output(5).strip() == expected, (
         "the summary was restored for the old values: " + nb_runner.get_raw_output(5)
@@ -76,6 +81,11 @@ TOOLS = (
 def test_a_helper_of_a_module_or_a_class_is_read_too(nb_runner, helper, body):
     """A function of the user's module, a method of their class drawing on
     what its object holds, and a ``_ns`` timer: the loop's key named the
-    list, and the cell below was restored with the old result."""
+    list, and the cell below was restored with the old result.
+
+    The method's counter is an object a cell above made, which the loop is
+    seen changing (``loop_watch``): re-running the loop sets it back first,
+    so the loop draws the same values again, and the cell below must show
+    the sum of those."""
     (nb_runner.work_dir / "tools.py").write_text(TOOLS, encoding="utf-8")
-    test_the_cell_below_sees_the_new_values(nb_runner, helper, body)
+    test_the_cell_below_sees_the_new_values(nb_runner, helper, body, resets="idgen" in body)
