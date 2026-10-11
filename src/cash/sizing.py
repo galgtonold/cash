@@ -418,6 +418,20 @@ def memory_footprint(obj: Any, _seen: set[int] | None = None) -> int:
     state, a tuple of 625 ints one dict down (1.7M calls in one cell).
     """
     seen = set() if _seen is None else _seen
+    # Walked on a stack of its own, in the order a recursive walk takes: a
+    # chain of objects (a linked list) recursed once per link, and ran out
+    # of recursion -- or, on Python 3.10, of the C stack -- a few hundred
+    # links down.
+    total = 0
+    stack = [obj]
+    while stack:
+        total += _own_footprint(stack.pop(), seen, stack)
+    return total
+
+
+def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
+    """What *obj* takes itself, with what it holds pushed onto *stack* to
+    be counted after it (`memory_footprint`)."""
     if id(obj) in seen:
         return 0
     seen.add(id(obj))
@@ -435,18 +449,24 @@ def memory_footprint(obj: Any, _seen: set[int] | None = None) -> int:
         if size is not None:
             return size
         size = sys.getsizeof(obj)
+        held: list = []
         if isinstance(obj, dict):
-            size += sum(memory_footprint(v, seen) for v in obj.values())
-            size += sum(memory_footprint(k, seen) for k in obj)
+            held += obj.values()
+            held += obj
         elif isinstance(obj, (list, tuple, set, frozenset)):
             sampled = _sampled_instances(obj, seen) if len(obj) > _plain_data.SIZE_EXACT_UP_TO else None
-            size += sum(memory_footprint(i, seen) for i in obj) if sampled is None else sampled
+            if sampled is None:
+                held += obj
+            else:
+                size += sampled
         elif not isinstance(obj, _HELD_BY_NAME):
-            size += _attrs_footprint(obj, seen)
-        return size
+            size += _attrs_footprint(obj, seen, held)
     except (TypeError, RecursionError, ValueError):
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
         return 0
+    held.reverse()  # the first popped first
+    stack += held
+    return size
 
 
 #: What a copy of a value refers to rather than holds: pickled by name.
@@ -499,8 +519,10 @@ def _attr_values(obj: Any) -> list:
     return values
 
 
-def _attrs_footprint(obj: Any, seen: set[int]) -> int:
-    """What an instance holds in its ``__dict__`` and ``__slots__``.
+def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
+    """What an instance holds in its ``__dict__`` and ``__slots__``: the
+    attributes of a flat type summed here, the others appended to *held*
+    for the walk to count.
 
     A dataclass or a model holding arrays is its attributes: by its own
     ``sys.getsizeof`` alone a 16 MB fit was 48 bytes, and the RAM tier's cap
@@ -517,11 +539,14 @@ def _attrs_footprint(obj: Any, seen: set[int]) -> int:
             if type(value) in _FLAT_CELLS:
                 size += sys.getsizeof(value)
             else:
-                size += memory_footprint(value, seen)
+                held.append(value)
     for name in _slot_names(type(obj)):
         value = getattr(obj, name, None)
         if value is not None:
-            size += sys.getsizeof(value) if type(value) in _FLAT_CELLS else memory_footprint(value, seen)
+            if type(value) in _FLAT_CELLS:
+                size += sys.getsizeof(value)
+            else:
+                held.append(value)
     return size
 
 
