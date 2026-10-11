@@ -13,7 +13,7 @@ from cash.notebook.read_handles import read_handle_digest
 
 def test_two_opens_of_the_same_file_name_the_same_value(tmp_path):
     path = tmp_path / "data.txt"
-    path.write_text("a\nb\n")
+    path.write_text("a\nb\n", encoding="utf-8")
     with open(path, encoding="utf-8") as one, open(path, encoding="utf-8") as two:
         assert read_handle_digest(one) == read_handle_digest(two)
         assert no_cache_value_digest(one) == read_handle_digest(one)
@@ -21,7 +21,7 @@ def test_two_opens_of_the_same_file_name_the_same_value(tmp_path):
 
 def test_a_read_moves_the_digest(tmp_path):
     path = tmp_path / "data.txt"
-    path.write_text("a\nb\n")
+    path.write_text("a\nb\n", encoding="utf-8")
     with open(path, encoding="utf-8") as fh:
         before = read_handle_digest(fh)
         fh.readline()
@@ -30,17 +30,17 @@ def test_a_read_moves_the_digest(tmp_path):
 
 def test_an_edited_file_names_a_new_value(tmp_path):
     path = tmp_path / "data.txt"
-    path.write_text("a\nb\n")
+    path.write_text("a\nb\n", encoding="utf-8")
     with open(path, encoding="utf-8") as fh:
         before = read_handle_digest(fh)
-    path.write_text("a\nc\nd\n")
+    path.write_text("a\nc\nd\n", encoding="utf-8")
     with open(path, encoding="utf-8") as fh:
         assert read_handle_digest(fh) != before
 
 
 def test_decoding_is_part_of_the_value(tmp_path):
     path = tmp_path / "data.txt"
-    path.write_text("a\n")
+    path.write_text("a\n", encoding="utf-8")
     with open(path, encoding="utf-8") as text, open(path, encoding="latin-1") as other, open(path, "rb") as raw:
         assert len({read_handle_digest(text), read_handle_digest(other), read_handle_digest(raw)}) == 3
 

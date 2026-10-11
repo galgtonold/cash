@@ -20,7 +20,7 @@ SHOW = "print('ROWS', len(parsed), parsed[-1])"
 
 
 def _write(nb_runner, n):
-    (nb_runner.work_dir / "rows.txt").write_text("".join(f"{i},{i * 3}\n" for i in range(n)))
+    (nb_runner.work_dir / "rows.txt").write_text("".join(f"{i},{i * 3}\n" for i in range(n)), encoding="utf-8")
 
 
 def _parse_line(output):
@@ -56,3 +56,32 @@ def test_a_look_at_the_handle_is_never_served_stale(nb_runner):
     assert "AT 4" in nb_runner.get_output(5)
     nb_runner.run_cell(3)
     assert "POS 4" in nb_runner.get_output(3), nb_runner.get_output(3)
+
+
+@pytest.mark.parametrize(
+    "opener, read",
+    [
+        ("f = open('data.csv')\nrd = f.readline", "header = rd()"),
+        ("f = open('data.csv')\ndef rd(fh=f):\n    return fh.readline()", "header = rd()"),
+        ("f = open('data.csv')\ndef rd():\n    return fh.readline()\nfh = f", "header = rd()"),
+        ("files = {'data': open('data.csv')}\nf = files['data']", "header = files['data'].readline()"),
+    ],
+    ids=["bound-method", "default", "global", "dict-entry"],
+)
+def test_a_read_through_another_name_moves_the_file_on_every_run(nb_runner, opener, read):
+    """A read through ``f.readline``, a function holding the handle, or a
+    dict of handles moves the file on as ``f.readline()`` does: served from
+    the cache, it left the next read starting at the header again."""
+    (nb_runner.work_dir / "data.csv").write_text("id,v\n1,2\n3,4\n", encoding="utf-8")
+    setup = SETUP + "\ncash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)"
+    nb_runner.create_notebook(
+        [setup, opener, read + "\nprint('HEADER', repr(header))", "print('REST', repr(f.read()))"]
+    )
+    nb_runner.start_kernel()
+    for _ in range(2):
+        nb_runner.run_all()
+        assert "HEADER 'id,v\\n'" in nb_runner.get_output(3)
+        assert "REST '1,2\\n3,4\\n'" in nb_runner.get_output(4), nb_runner.get_output(4)
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert "REST '1,2\\n3,4\\n'" in nb_runner.get_output(4), nb_runner.get_output(4)

@@ -22,12 +22,14 @@ cache, and only when it would come out the same.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import os
+import types
 from typing import Any
 
-__all__ = ["read_handle_digest", "is_read_handle"]
+__all__ = ["is_read_handle", "reaches_read_handle", "read_handle_digest"]
 
 _FILE_TYPES = (io.TextIOWrapper, io.BufferedReader, io.FileIO)
 
@@ -69,3 +71,37 @@ def read_handle_digest(value: Any) -> str | None:
         str(position),
     )
     return "read-handle:" + hashlib.sha256("\0".join(parts).encode("utf-8", "surrogateescape")).hexdigest()
+
+
+#: Most items `reaches_read_handle` looks at in a container.
+_HANDLE_LOOK_MAX = 64
+
+
+def reaches_read_handle(value: Any) -> bool:
+    """Whether *value* is a file open for reading (`is_read_handle`) or
+    reaches one a step away: a method bound to it (``rd = f.readline``), a
+    function holding it as a default, in its closure or in a global it names
+    (``def rd(fh=f)``), a partial over it, or a small container holding it
+    (``files['data']``).
+    Reading through any of them moves the file on, as reading it does."""
+    if is_read_handle(value):
+        return True
+    near: list[Any] = []
+    owner = getattr(value, "__self__", None) if callable(value) else None
+    if owner is not None:
+        near.append(owner)
+    if isinstance(value, types.FunctionType):
+        namespace = value.__globals__
+        near += [namespace[name] for name in value.__code__.co_names if name in namespace]
+        near += value.__defaults__ or ()
+        near += (value.__kwdefaults__ or {}).values()
+        for cell in value.__closure__ or ():
+            try:
+                near.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                pass
+    elif isinstance(value, functools.partial):
+        near += [value.func, *value.args, *value.keywords.values()]
+    elif type(value) in (dict, list, tuple) and len(value) <= _HANDLE_LOOK_MAX:
+        near += value.values() if type(value) is dict else value
+    return any(is_read_handle(item) for item in near)

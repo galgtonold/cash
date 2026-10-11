@@ -31,7 +31,7 @@ from cash.notebook.cache_key import (
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.consumables import drawn_stream_inputs
-from cash.notebook.read_handles import is_read_handle
+from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -1659,8 +1659,15 @@ class StatementProcessor:
         )
         # By where they hold the outputs' objects, when every place can be
         # set again (`holder_patches`): stored whole, `data` brought along
-        # every other frame it holds into each entry.
-        patches = holder_patches(holders, {name: captured_vars[name] for name in run.outputs if name in captured_vars})
+        # every other frame it holds into each entry. Not after a loop: the
+        # objects its target took on earlier passes are not outputs, so a
+        # patch would put back the last one and lose what the loop did to the
+        # rest (``for r in rows: normalize(r)``).
+        patches = None
+        if not _is_loop(run.tree):
+            patches = holder_patches(
+                holders, {name: captured_vars[name] for name in run.outputs if name in captured_vars}
+            )
         captured_vars.update(patches if patches is not None else holders)
         return None
 
@@ -2045,8 +2052,9 @@ class StatementProcessor:
 
 
 def reads_open_handle(names: Iterable[str], user_ns: Mapping[str, Any]) -> list[str]:
-    """The *names* bound to a file open for reading (`is_read_handle`)."""
-    return sorted(name for name in names if is_read_handle(user_ns.get(name)))
+    """The *names* bound to a file open for reading, or to something that
+    reaches one (`reaches_read_handle`)."""
+    return sorted(name for name in names if reaches_read_handle(user_ns.get(name)))
 
 
 def _open_stream(value: Any) -> bool:
@@ -2057,3 +2065,10 @@ def _open_stream(value: Any) -> bool:
         return not value.closed
     except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
         return True
+
+
+def _is_loop(tree: ast.AST | None) -> bool:
+    """Whether *tree*, a statement's parse, is a ``for`` or ``while`` loop."""
+    body = getattr(tree, "body", None)
+    node = body[0] if isinstance(body, list) and len(body) == 1 else tree
+    return isinstance(node, (ast.For, ast.AsyncFor, ast.While))

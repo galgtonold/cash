@@ -132,3 +132,25 @@ def test_a_list_appended_into_the_container_keeps_its_identity(nb_runner):
     for _ in range(2):
         assert "R True [0, 5]" in nb_runner.get_output(2), nb_runner.get_output(2)
         nb_runner.run_cell(2)
+
+
+def test_a_helper_changing_each_row_in_place_is_kept_on_a_hit(nb_runner):
+    """``normalize(r)`` changes every row of ``rows``, not only the last one
+    the loop variable ends on: a hit put back only that one, and the rows
+    after a restart read as they were before the loop."""
+    nb_runner.create_notebook(
+        [
+            SETUP + "\ncash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)",
+            "def normalize(r):\n    r[0] = r[0] * 10\nrows = [[i, i] for i in range(400)]",
+            "totals = []\nfor r in rows:\n    if r[1] < 0:\n        continue\n    normalize(r)\n"
+            "    totals.append(r[0] + r[1])\nprint('TOTALS', totals[:3])",
+            "print('ROWS', rows[:3], rows[-1] is r)",
+        ]
+    )
+    nb_runner.start_kernel()
+    for restart in (False, False, True):
+        if restart:
+            nb_runner.restart()
+        nb_runner.run_all()
+        assert "TOTALS [0, 11, 22]" in nb_runner.get_output(3)
+        assert "ROWS [[0, 0], [10, 1], [20, 2]] True" in nb_runner.get_output(4), nb_runner.get_output(4)

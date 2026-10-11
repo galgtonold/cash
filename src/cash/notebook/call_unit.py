@@ -68,6 +68,7 @@ from cash.notebook.call_refs import (
 )
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
+from cash.notebook.read_handles import reaches_read_handle
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
@@ -799,6 +800,10 @@ class CallUnit:
             if hands_a_state_changing_callable(fn, args, kwargs):
                 # `run_steps(steps, data)` with `steps = [f]`, `f` appending
                 # to a list: the callee runs `f`, and a hit would skip it.
+                return fn(*args, **kwargs)
+            if reaches_read_handle(fn) or any(map(reaches_read_handle, (*args, *kwargs.values()))):
+                # `rd()` with `def rd(fh=f)`, `f` an open file: the call moves
+                # the file on, and a hit would not.
                 return fn(*args, **kwargs)
             # Globals this callee writes. Resolved per call rather
             # than once per `wrap`, because the underlying source analysis is
