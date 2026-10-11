@@ -1551,7 +1551,7 @@ file on disk is the one you want.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @1f4e4f9e, cash/notebook/shared_objects.py:referring_names @5602736f, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @a3bd8d7c, cash/notebook/shared_objects.py:referring_names @5602736f, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
 **What happened.** After a statement ran, cash looked for the other variables
 that hold an object of its outputs, or are held in one (`data = raw`,
 `config = {"features": features}`), so that a later change through either
