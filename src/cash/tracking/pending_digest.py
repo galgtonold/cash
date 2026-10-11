@@ -57,7 +57,7 @@ class PendingDigest:
     def _run(self, size: int, compute: Callable[[str, int], str | None]) -> None:
         try:
             self._digest = compute(self._path, size)
-        except Exception:  # noqa: BLE001 - an unreadable file: no digest, as on the caller's thread
+        except Exception:
             logger.debug("[TRACKER] Could not hash %r", self._path, exc_info=True)
         finally:
             if PENDING.get(self._path) is self:

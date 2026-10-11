@@ -542,7 +542,7 @@ class NotebookTestRunner:
             if not self._run_async(self.client.km._async_is_alive()):
                 return None
             return int(self.peek("__import__('os').getpid()"))
-        except Exception:  # noqa: BLE001 - no answer: nothing to compare against
+        except Exception:
             return None
 
     def _replace_kernel(self) -> None:

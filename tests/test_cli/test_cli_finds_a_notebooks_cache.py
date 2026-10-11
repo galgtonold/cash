@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.__main__ import cmd_clear, cmd_inspect, notebook_cache_dir
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.backends.file_backend import FileBackend
 from tests._cli_args import cli_args
 

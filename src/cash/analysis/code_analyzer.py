@@ -652,7 +652,7 @@ def static_attribute(obj: Any, name: str) -> Any:
         value = inspect.getattr_static(obj, name, _MISSING)
         if value is _MISSING and isinstance(obj, types.ModuleType) and "__getattr__" in vars(obj):
             value = getattr(obj, name)
-    except Exception as exc:  # noqa: BLE001 - a probe of arbitrary objects
+    except Exception as exc:
         raise AttributeError(name) from exc
     if value is _MISSING:
         raise AttributeError(name)

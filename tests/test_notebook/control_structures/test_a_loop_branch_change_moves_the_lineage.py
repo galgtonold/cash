@@ -15,7 +15,6 @@ import pytest
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
-
 SETUP = (
     "class Box:\n"
     "    def __init__(self):\n"
@@ -40,12 +39,7 @@ def test_a_later_statement_of_the_loop_sees_the_change(cash_magics, change, name
     ns = cash_magics.shell.user_ns
     run_cash_cell(cash_magics, SETUP)
     loop = (
-        "seen = []\n"
-        "for k in range(4):\n"
-        "    if k == trig:\n"
-        f"        {change}\n"
-        f"    n = len({name})\n"
-        "    seen.append(n)"
+        f"seen = []\nfor k in range(4):\n    if k == trig:\n        {change}\n    n = len({name})\n    seen.append(n)"
     )
     for trig, expected in ((1, [0, 1, 1, 1]), (2, [0, 0, 1, 1]), (-1, [0, 0, 0, 0]), (1, [0, 1, 1, 1])):
         run_cash_cell(cash_magics, f"box = Box()\nacc = set()\nd = {{}}\ntrig = {trig}")

@@ -197,10 +197,20 @@ def test_a_container_that_was_shown_still_holds_the_object(cash_magics, statemen
 
 TRACKER = f"{SETUP}\nclass Tracker:\n    def __init__(self):\n        self.items = []\n    def log(self, v):\n        self.items.append(v)"
 HOOKS = {
-    "a bound method": (["tracker = Tracker()", "hooks = {'log': tracker.log, 'n': slow(1)}", "hooks['log'](5)"], "tracker.items"),
-    "a builtin bound method": (["results = []", "hooks = {'add': results.append, 'n': slow(1)}", "hooks['add'](5)"], "results"),
+    "a bound method": (
+        ["tracker = Tracker()", "hooks = {'log': tracker.log, 'n': slow(1)}", "hooks['log'](5)"],
+        "tracker.items",
+    ),
+    "a builtin bound method": (
+        ["results = []", "hooks = {'add': results.append, 'n': slow(1)}", "hooks['add'](5)"],
+        "results",
+    ),
     "a closure": (
-        ["store = []\ndef make(lst):\n    return lambda v: lst.append(v)", "hooks = {'f': make(store), 'n': slow(1)}", "hooks['f'](5)"],
+        [
+            "store = []\ndef make(lst):\n    return lambda v: lst.append(v)",
+            "hooks = {'f': make(store), 'n': slow(1)}",
+            "hooks['f'](5)",
+        ],
         "store",
     ),
 }

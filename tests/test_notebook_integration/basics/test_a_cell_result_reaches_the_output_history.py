@@ -42,5 +42,5 @@ def test_a_result_served_from_the_cache_reaches_the_history(nb_runner):
 
     assert nb_runner.peek("res") == "42"
     log = os.path.join(nb_runner.work_dir, "runs.log")
-    with open(log) as f:
+    with open(log, encoding="utf-8") as f:
         assert f.read() == "r", "the second run was not served from the cache"

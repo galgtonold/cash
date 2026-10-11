@@ -9,8 +9,8 @@ import pytest
 
 pytest.importorskip("pandas")
 
-from tests._cell_driver import run_cash_cell  # noqa: E402 - imported after the importorskip above
-from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S  # noqa: E402 - imported after the importorskip above
+from tests._cell_driver import run_cash_cell
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 BUILD = (
     "import time\nimport numpy as np\nimport pandas as pd\n"
@@ -24,8 +24,7 @@ def test_the_next_cell_writes_the_table_through_its_handles(cash_magics, mock_sh
     assert mock_shell.user_ns["df"] is not None
     run_cash_cell(
         cash_magics,
-        "col = df['x']\ndf['x'].array[0] = -1.0\ncol.array[1] = -2.0\n"
-        "df['when'].array[0] = pd.Timestamp('1999-01-01')",
+        "col = df['x']\ndf['x'].array[0] = -1.0\ncol.array[1] = -2.0\ndf['when'].array[0] = pd.Timestamp('1999-01-01')",
     )
     df = mock_shell.user_ns["df"]
     assert df["x"].iloc[0] == -1.0 and df["x"].iloc[1] == -2.0

@@ -26,7 +26,13 @@ EDITED = {
         "[1, 2, 3, 5]",
     ),
     "an alias changed in a loop": (
-        [SLOW, "raw = [1]\nscale = 1", "data = raw", "for i in range(2):\n    raw.append(i * scale)", "r = slow(data)\nprint(r)"],
+        [
+            SLOW,
+            "raw = [1]\nscale = 1",
+            "data = raw",
+            "for i in range(2):\n    raw.append(i * scale)",
+            "r = slow(data)\nprint(r)",
+        ],
         2,
         "raw = [1]\nscale = 2",
         "[1, 0, 1]",
@@ -86,7 +92,12 @@ def test_an_edited_change_reaches_the_other_name(nb_runner, name):
 #: name -> (cells, what the last cell prints)
 FIRST_RUN = {
     "an alias change kept when the list changes again": (
-        ["history = []\nlog = history", "log.append('start')", "history.append('step 1')", "print(history, log is history)"],
+        [
+            "history = []\nlog = history",
+            "log.append('start')",
+            "history.append('step 1')",
+            "print(history, log is history)",
+        ],
         "['start', 'step 1'] True",
     ),
     "an alias change kept when a loop changes the list": (

@@ -31,8 +31,8 @@ from ...analysis.mutations import accumulator_loop_body_shape, cacheable_accumul
 from ...lineage_tag import own_tag
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
-from ..cache_status import CacheStatus
 from .. import heavy_loops
+from ..cache_status import CacheStatus
 from ..loop_split import loop_source_hash, split_nodes
 from ..restored_var import identity_digest
 from . import helpers as _helpers
@@ -225,7 +225,9 @@ class ForLoopHandler:
             # instead of synthesising one from observed iteration values).
             loop_header = f"for {ast.unparse(node.target)} in {iter_code}:"
 
-            whole = self._run_whole(node, header, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
+            whole = self._run_whole(
+                node, header, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node
+            )
             if whole is not None:
                 return whole
 

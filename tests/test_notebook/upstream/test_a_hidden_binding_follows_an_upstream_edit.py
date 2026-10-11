@@ -19,9 +19,7 @@ BINDERS = {
     "walrus in a for iterable": "for _ in (w := [base * 2]):\n    pass",
     "exec of a literal": "exec('w = base * 2')",
     "global in a function": "def setw():\n    global w\n    w = base * 2\nsetw()",
-    "global in a helper's helper": (
-        "def inner():\n    global w\n    w = base * 2\ndef setw():\n    inner()\nsetw()"
-    ),
+    "global in a helper's helper": ("def inner():\n    global w\n    w = base * 2\ndef setw():\n    inner()\nsetw()"),
 }
 
 

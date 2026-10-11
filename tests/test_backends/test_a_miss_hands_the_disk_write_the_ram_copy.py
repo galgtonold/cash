@@ -65,7 +65,7 @@ def test_an_array_goes_to_disk_as_the_ram_copy():
     tiers, disk = _tiers()
     value = np.arange(1000, dtype=float)
     tiers.set("k", value, dict(_KEEP))
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert private and written is not value
     assert written is tiers.backends[0]._store["k"][1]
     value[0] = -1.0  # the caller's change after the call
@@ -77,7 +77,7 @@ def test_a_table_is_copied_once_for_ram_and_disk_alike():
     tiers, disk = _tiers()
     df = pd.DataFrame({"x": np.arange(1000, dtype=float)})
     tiers.set("k", df, dict(_KEEP))
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     stored = tiers.backends[0]._store["k"][1]
     assert private and np.shares_memory(written["x"].to_numpy(), stored["x"].to_numpy())
     assert not np.shares_memory(written["x"].to_numpy(), df["x"].to_numpy())
@@ -89,7 +89,7 @@ def test_big_records_go_to_disk_read_out_of_the_bytes_the_ram_tier_keeps():
     tiers, disk = _tiers()
     records = [{"id": i, "tags": [i, i + 1]} for i in range(10_000)]
     tiers.set("k", records, dict(_KEEP))
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert private and written == records and written is not records
 
 
@@ -97,7 +97,7 @@ def test_a_value_the_ram_tier_keeps_by_reference_is_not_private():
     tiers, disk = _tiers()
     lock_holder = {"lock": threading.Lock(), "n": 1}  # cannot be copied: kept as it is
     tiers.set("k", lock_holder, {"execution_time": 5.0})
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert not private and written is lock_holder
 
 
@@ -105,7 +105,7 @@ def test_a_value_the_ram_tier_refused_goes_to_disk_as_the_caller_gave_it():
     tiers, disk = _tiers(InMemoryBackend(max_size_bytes=1000))
     value = np.arange(10_000, dtype=float)
     tiers.set("k", value, dict(_KEEP))
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert not private and written is value
 
 
@@ -153,7 +153,7 @@ def test_a_later_persist_hands_the_ram_copy_as_private():
     tiers.set("k", value, dict(_NOTEBOOK))
     assert disk.calls == []  # cheap: kept in RAM only
     assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert private and written is not value and written == value
 
 
@@ -163,7 +163,7 @@ def test_a_later_persist_of_a_value_kept_by_reference_is_not_private():
     tiers.set("k", lock_holder, dict(_NOTEBOOK))
     assert disk.calls == []
     assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert written is lock_holder and not private
 
 
@@ -175,5 +175,5 @@ def test_a_value_marked_no_private_copy_goes_to_disk_as_the_caller_gave_it():
     tiers, disk = _tiers()
     value = {"rows": list(range(100))}
     tiers.set("k", value, {**_KEEP, NO_PRIVATE_COPY: True})
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert not private and written is value

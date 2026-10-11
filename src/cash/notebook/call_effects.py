@@ -323,7 +323,7 @@ class ArgFingerprints:
                 and frame_signature(value) == signature
             ):
                 return digest
-        except Exception:  # noqa: BLE001 - a pandas internals change: hash again
+        except Exception:
             logger.debug("call unit: could not check a remembered frame", exc_info=True)
         self._memo.pop(id(value), None)
         return None
@@ -341,7 +341,7 @@ class ArgFingerprints:
             memo = self._memo
             key = id(value)
             ref = weakref.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup: hash every time
+        except Exception:
             logger.debug("call unit: could not remember a frame", exc_info=True)
             return
         self._memo[key] = (ref, held, signature, digest, since)

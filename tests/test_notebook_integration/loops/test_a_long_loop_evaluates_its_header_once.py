@@ -102,5 +102,9 @@ def test_a_property_in_the_header_is_read_once(nb_runner):
         "        self.epoch += 1\n        return list(range(self.epoch * 1000, self.epoch * 1000 + 300))\n"
         "loader = Loader()"
     )
-    out = _run(nb_runner, loader, "tot = 0\nfor i, x in enumerate(loader.batch):\n    tot += x\nprint(tot, 'epoch', loader.epoch)")
+    out = _run(
+        nb_runner,
+        loader,
+        "tot = 0\nfor i, x in enumerate(loader.batch):\n    tot += x\nprint(tot, 'epoch', loader.epoch)",
+    )
     assert out == "344850 epoch 1", out

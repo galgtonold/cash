@@ -45,8 +45,8 @@ from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
 from .handed_callables import handed_callables
 from .mutations import (
     RECEIVER_READONLY_WRITE_METHODS,
-    assigned_method_call_receivers,
     TopLevelCalls,
+    assigned_method_call_receivers,
     chain_is_pure,
     crossref_reassigned_vars,
     is_pandas_plot_call,
@@ -895,9 +895,7 @@ def statement_effects(
         if not control_body:
             handed = handed_callables(tree, namespace, scope="no_control_bodies")
             callee_globals = (
-                callee_global_mutations(
-                    tree, resolve_source, scope="no_control_bodies", extra_sources=handed.sources
-                )
+                callee_global_mutations(tree, resolve_source, scope="no_control_bodies", extra_sources=handed.sources)
                 | handed.receivers
             )
             if namespace is not None:

@@ -24,8 +24,8 @@ from cash.exceptions import CacheBackendError
 from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
-from ._base import CacheBackend, MetadataDict, entry_expired
 from . import compression
+from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import (
     CacheDirStamp,
@@ -164,7 +164,7 @@ def _finish_before_listing(args: tuple) -> None:
         if writers and not _asked_by_storage():
             for writer in writers:
                 writer.wait_all()
-    except Exception:  # noqa: BLE001 - must never fail the user's listing
+    except Exception:
         logger.debug("Finishing cache writes before a listing failed", exc_info=True)
 
 
@@ -876,7 +876,7 @@ class FileBackend(CacheBackend):
         value, serializer = work
         try:
             serialized_value = self._serialize(value, serializer, copy=False)
-        except Exception as exc:  # noqa: BLE001 - whatever the value's pickling raises
+        except Exception as exc:
             logger.debug("Cache set failed for key %r: %s", key, exc)
             raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
         del value, work  # the buffers hold what the write needs

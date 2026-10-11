@@ -65,7 +65,7 @@ def _token_text(token: Any) -> str:
     if isinstance(token, str):
         return token
     if not isinstance(token, (int, float, bytes, type(None))):
-        from .value_hash import is_bulky, compute_hash
+        from .value_hash import compute_hash, is_bulky
 
         if is_bulky(token) or (
             isinstance(token, (list, tuple, dict, set, frozenset))

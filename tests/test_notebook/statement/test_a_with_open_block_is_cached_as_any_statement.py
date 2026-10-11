@@ -142,7 +142,7 @@ def test_the_probe_after_a_restart_does_not_copy_the_records(tmp_path, monkeypat
     the closed handle by reference: the entry is marked so, and each hit
     asked every variable to be copied."""
     path = _events(tmp_path, 2000)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         records = [json.loads(line) for line in f]
     checker = freshness.CacheFreshnessChecker.__new__(freshness.CacheFreshnessChecker)
     checker.last_miss_reason = None

@@ -446,7 +446,7 @@ class StatementLineageBuilder:
                     tracking_state.variable_hashes[var_name] = set()
                 tracking_state.variable_hashes[var_name].add(content_hash)
                 tracking_state.current_session_hashes[var_name] = content_hash
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - a user value that cannot be hashed
                 logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
 
     def lineage_if_rerun(self, tracking_state: "TrackingState", var_name: str, value: Any, code: str) -> str:

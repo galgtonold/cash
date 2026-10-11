@@ -259,7 +259,6 @@ class MutationRouting:
         self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
         self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
 
-
     def note_module_state(self, run: StatementRun) -> None:
         """Take in the local modules *run* was seen setting state on, and
         record those it set state on for the simulation.
@@ -305,7 +304,7 @@ _PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}
 
 def _is_structure(tree: ast.Module | None) -> bool:
     """Whether *tree* is one loop or branch, run as one unit."""
-    from ..control_structures.common import is_control_structure  # noqa: PLC0415 - imports this package
+    from ..control_structures.common import is_control_structure
 
     return tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0])
 

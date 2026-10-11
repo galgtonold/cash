@@ -11,11 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .._memo import TABLES, LruMemo
 from ..analysis.helper_bindings import resolve_binding
+from ..analysis.helper_code import own_code_is_user, qualname_of
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
-from .._memo import TABLES, LruMemo
-from ..analysis.helper_code import own_code_is_user, qualname_of
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning

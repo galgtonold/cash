@@ -80,7 +80,9 @@ class TestAValueTheRamTierWouldCopy:
 @pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
 class TestATable:
     def _frame(self):
-        return pd.DataFrame({"x": np.arange(100_000, dtype=float), "when": pd.date_range("2024", periods=100_000, freq="s")})
+        return pd.DataFrame(
+            {"x": np.arange(100_000, dtype=float), "when": pd.date_range("2024", periods=100_000, freq="s")}
+        )
 
     def test_is_kept_on_its_first_read_without_a_copy(self, tmp_path):
         _written(tmp_path, "k", self._frame())

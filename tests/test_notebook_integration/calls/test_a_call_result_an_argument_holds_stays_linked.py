@@ -40,4 +40,3 @@ def test_a_second_run_all_hands_back_the_list_itself(nb_runner, tmp_path):
     _check(nb_runner)
     nb_runner.run_all()
     _check(nb_runner)
-

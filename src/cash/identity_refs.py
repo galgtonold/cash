@@ -101,7 +101,9 @@ def find(value: Any, named: Mapping[int, list]) -> list | None:
         if id(value) in named:
             held = [value]
         else:
-            held = _found(_levels(value, frozenset()), lambda flat: _where(flat, map(named.__contains__, map(id, flat))))
+            held = _found(
+                _levels(value, frozenset()), lambda flat: _where(flat, map(named.__contains__, map(id, flat)))
+            )
         if not held:
             return None
         kinds = frozenset(map(type, held))

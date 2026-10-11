@@ -59,7 +59,7 @@ class BackendSlot:
         self._table_dir_set = True
         try:
             use_digest_table(self._backend.local_dir if self._backend is not None else None)
-        except Exception:  # noqa: BLE001 - a backend without a usable dir: no table
+        except Exception:
             logger.debug("No file digest table for this backend", exc_info=True)
 
     def read(self, key: str) -> tuple[Any, Any]:

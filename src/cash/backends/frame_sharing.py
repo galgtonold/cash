@@ -122,7 +122,7 @@ def enabled() -> bool:
         major = int(pd.__version__.split(".", 1)[0])
         cow = major >= 3 or pd.options.mode.copy_on_write is True
         ok = cow and _self_test(pd)
-    except Exception:  # noqa: BLE001 - unknown pandas: copy as before
+    except Exception:
         logger.debug("cash: pandas tables are copied, not shared", exc_info=True)
         ok = False
     _ENABLED.append(ok)
@@ -364,7 +364,7 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
                 setattr(frame, name, frozen)
         _private_axes(frame)
         return True
-    except Exception:  # noqa: BLE001 - a pandas internals change: copy instead
+    except Exception:
         logger.debug("cash: could not freeze a %s", type(frame).__name__, exc_info=True)
         return False
 
@@ -426,7 +426,7 @@ def _pickle_form(values: Any) -> Any:
             return _writable_alias(values)
         alias = _writable_alias(values._ndarray)
         return values if alias is values._ndarray else _same_dates(values, alias)
-    except Exception:  # noqa: BLE001 - pickled as it is: read-only, never wrong
+    except Exception:
         logger.debug("cash: pickling a frozen block as it is", exc_info=True)
         return values
 

@@ -295,7 +295,7 @@ def test_a_redefined_class_s_records_are_keyed_as_before():
     global Point
     first = Point
 
-    class Point:  # noqa: F811 - a cell defining the class again
+    class Point:
         def __init__(self, x, y, name):
             self.x, self.y, self.name = x, y, name
 

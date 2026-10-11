@@ -142,13 +142,22 @@ class TestAPandasWriteStaysInTheTableWritten:
 HANDLE_WRITES = {
     "series_array": lambda d: d["x"].array.__setitem__(0, -1.0),
     "values_made_writable": lambda d: (setattr((v := d["x"].values).flags, "writeable", True), v.__setitem__(0, -1)),
-    "to_numpy_made_writable": lambda d: (setattr((v := d["k"].to_numpy()).flags, "writeable", True), v.__setitem__(0, -1)),
-    "asarray_of_array": lambda d: (setattr((v := np.asarray(d["x"].array)).flags, "writeable", True), v.__setitem__(0, -1)),
+    "to_numpy_made_writable": lambda d: (
+        setattr((v := d["k"].to_numpy()).flags, "writeable", True),
+        v.__setitem__(0, -1),
+    ),
+    "asarray_of_array": lambda d: (
+        setattr((v := np.asarray(d["x"].array)).flags, "writeable", True),
+        v.__setitem__(0, -1),
+    ),
     "date_array": lambda d: d["when"].array.__setitem__(0, pd.Timestamp("1999-01-01")),
     "object_array": lambda d: d.iloc[:, -1].array.__setitem__(0, None),
     "index_array": lambda d: d.index.array.__setitem__(0, -1),
     "columns_array": lambda d: d.columns.array.__setitem__(0, "renamed"),
-    "frame_values_made_writable": lambda d: (setattr((v := d[["x"]].values).flags, "writeable", True), v.__setitem__(0, -1)),
+    "frame_values_made_writable": lambda d: (
+        setattr((v := d[["x"]].values).flags, "writeable", True),
+        v.__setitem__(0, -1),
+    ),
 }
 
 

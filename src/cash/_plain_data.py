@@ -452,7 +452,11 @@ def tree_levels(value: Any, leaves: tuple | None = None):
             return
         # The containers among leaves picked at C speed: a comprehension was
         # a Python step per item, three million for a million records.
-        level = flat if all(t in TREE_NODES for t in types) else list(compress(flat, map(_NODES.__contains__, map(type, flat))))
+        level = (
+            flat
+            if all(t in TREE_NODES for t in types)
+            else list(compress(flat, map(_NODES.__contains__, map(type, flat))))
+        )
     raise _NotPlain  # deeper than MAX_LEVELS, or a cycle
 
 

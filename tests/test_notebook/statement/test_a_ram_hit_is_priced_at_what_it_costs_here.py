@@ -56,7 +56,9 @@ def test_a_slow_copy_makes_a_cheap_statement_over_an_array_stay_uncached(copy_sp
 
 def test_a_fast_copy_keeps_it_cached(copy_speed):
     copy_speed(100e9)
-    skip, _reason, prediction = _store().should_skip_large_object_caching({"y": np.ones(1_000_000)}, execution_time=0.03)
+    skip, _reason, prediction = _store().should_skip_large_object_caching(
+        {"y": np.ones(1_000_000)}, execution_time=0.03
+    )
     assert not skip and prediction["restore_seconds"] < 0.001
 
 

@@ -47,8 +47,8 @@ from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import (
-    DigestHandoff,
     UNWRAP_FAILED,
+    DigestHandoff,
     call_capturing_output,
     capture_globals,
     hash_args,
@@ -423,9 +423,7 @@ def _decide_site(run: _SiteRun, site: CallSite) -> None:
     keyed = statistics.median(run.keyed)
     # Too dear to cache, or a hit could not save a quarter of
     # the call: a hit pays the key and lookup, then the restore.
-    run.plain = (
-        cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain or _nothing_to_serve(run)
-    )
+    run.plain = cached > (1 + _OVERHEAD_FACTOR) * plain or keyed >= _HIT_MUST_SAVE * plain or _nothing_to_serve(run)
     early = run.calls < _GUARD_AFTER_CALLS
     run.decided = run.plain or not early
     if not run.decided:

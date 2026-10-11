@@ -61,7 +61,9 @@ def _runs(counter) -> int:
 
 
 @pytest.mark.parametrize("fn", ["load", "load_quiet"])
-@pytest.mark.parametrize("statement", ["y = {m}.{fn}(1)", "y = {m}.{fn}(1) + 0"], ids=["bare_call", "call_in_an_expression"])
+@pytest.mark.parametrize(
+    "statement", ["y = {m}.{fn}(1)", "y = {m}.{fn}(1) + 0"], ids=["bare_call", "call_in_an_expression"]
+)
 def test_a_warning_call_is_served_on_the_second_run(cash_magics, lib, fn, statement):
     name, counter = lib
     cells = [f"import {name}", statement.format(m=name, fn=fn)]

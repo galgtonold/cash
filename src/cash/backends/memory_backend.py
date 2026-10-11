@@ -187,8 +187,12 @@ class _TableWithBytes:
             if _mutable_labels(frame):
                 return None
             is_series = getattr(frame, "ndim", 2) == 1
-            positions = (0,) if is_series else tuple(i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object")
-            lists = [frame.to_numpy().tolist()] if is_series else [frame.iloc[:, i].to_numpy().tolist() for i in positions]
+            positions = (
+                (0,) if is_series else tuple(i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object")
+            )
+            lists = (
+                [frame.to_numpy().tolist()] if is_series else [frame.iloc[:, i].to_numpy().tolist() for i in positions]
+            )
             writable = tuple(n for n, cells in enumerate(lists) if not _plain_data.immutable_below(cells))
             if not writable:
                 return None
@@ -216,7 +220,7 @@ class _TableWithBytes:
             # Its other object columns passed `immutable_below`: no scan again.
             rest = InMemoryBackend._copy_frame(rest, {id(rest): False}, record_cells)
             return _TableWithBytes(rest, tuple(positions[n] for n in writable), data)
-        except Exception:  # noqa: BLE001 - copied a cell at a time instead
+        except Exception:
             logger.debug("could not keep a %s's cells as bytes", type(frame).__name__, exc_info=True)
             return None
 
@@ -687,7 +691,7 @@ class InMemoryBackend(CacheBackend):
                 return unpickler.load()
             except pickle.PicklingError:
                 logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
-            except Exception:  # noqa: BLE001 - whatever pickle refuses, deepcopy may copy
+            except Exception:
                 logger.debug("could not copy a %s by pickle; deepcopy instead", type(value).__name__, exc_info=True)
                 break
         if by_deepcopy is not None:
@@ -1067,7 +1071,9 @@ class InMemoryBackend(CacheBackend):
             size = facts.size
         elif parts:
             # Each part sized by its walk, the rest as before.
-            size = memory_footprint(_without(value, parts)) + sum(part_facts.size for _part, part_facts in parts.values())
+            size = memory_footprint(_without(value, parts)) + sum(
+                part_facts.size for _part, part_facts in parts.values()
+            )
         elif plain is None:
             size = memory_footprint(value)
         else:
@@ -1140,7 +1146,9 @@ class InMemoryBackend(CacheBackend):
             # (a str subclass with attributes), and ``deepcopy`` trusts a
             # class's ``__deepcopy__``: such a value may still share a part
             # with the caller's.
-            own = not fell_back and not by_deepcopy and all(cells in (_SHARED, _BYTES) for cells in frame_cells.values())
+            own = (
+                not fell_back and not by_deepcopy and all(cells in (_SHARED, _BYTES) for cells in frame_cells.values())
+            )
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
                 # each on its own, each the fastest way it allows. Planned
@@ -1639,7 +1647,7 @@ def _own_metadata(frame: Any, copied: Any) -> bool:
     memo: dict[int, Any] = {}
     try:
         fresh = {name: copy.deepcopy(frame.__dict__[name], memo) for name in names}
-    except Exception:  # noqa: BLE001 - the caller copies another way
+    except Exception:
         logger.debug("could not deep-copy the attributes of a %s", type(frame).__name__, exc_info=True)
         return False
     for name, value in fresh.items():
@@ -1711,6 +1719,8 @@ _TIMED_COPY_BYTES = 1 << 20
 #: fitted model cannot know (a hit of an 80 MB array measured 0.2-0.8 s on
 #: one machine, against 0.02 s fitted). Empty until measured.
 _COPY_SPEED: list[float] = []
+
+
 def _fine_thread_clock() -> Any:
     """The clock a copy is timed with: this thread's CPU time, where it
     resolves a microsecond; else the wall clock (Windows: 15.6 ms ticks).
@@ -1796,7 +1806,7 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
         if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
             if not value.dtype.hasobject:
                 return copy_seconds(size_bytes)
-    except Exception:  # noqa: BLE001 - an estimate it cannot make: the fitted one
+    except Exception:
         logger.debug("no measured hit cost for a %s", kind.__name__, exc_info=True)
     return None
 
@@ -1877,9 +1887,7 @@ def _holds_mutable_cells(frame: Any) -> bool:
             columns = [frame] if str(frame.dtype) == "object" else []
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(not immutable_cells(column) for column in columns) or (
-            _mutable_labels(frame)
-        )
+        return any(not immutable_cells(column) for column in columns) or (_mutable_labels(frame))
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
         return False
 
@@ -1899,6 +1907,4 @@ def _mutable_labels(frame: Any) -> bool:
         arrays.extend(getattr(index, "levels", None) or [index])
     dtypes += [array.dtype for array in arrays]
     arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
-    return any(
-        str(array.dtype) == "object" and not immutable_cells(array) for array in arrays
-    )
+    return any(str(array.dtype) == "object" and not immutable_cells(array) for array in arrays)

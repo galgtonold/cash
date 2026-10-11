@@ -42,7 +42,7 @@ def run_autoreload_now(shell: Any) -> set[str]:
     try:
         with _only_local_modules(reloader):
             reloader.check()
-    except Exception:  # noqa: BLE001 - the extension reports its own failures
+    except Exception:
         logger.debug("autoreload's check failed", exc_info=True)
     # A module seen for the first time is only recorded, not reloaded.
     return {name for name, mtime in mtimes.items() if name in before and before[name] != mtime}

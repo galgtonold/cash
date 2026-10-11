@@ -122,7 +122,12 @@ def test_an_object_table_keys_by_every_cell():
 def test_polars_columns_key_by_their_values():
     pl = pytest.importorskip("polars")
     frame = pl.DataFrame(
-        {"a": [1, 2, 3], "f": [0.5, None, 1.5], "s": ["x", None, "zz"], "c": pl.Series(["u", "v", "u"], dtype=pl.Categorical)}
+        {
+            "a": [1, 2, 3],
+            "f": [0.5, None, 1.5],
+            "s": ["x", None, "zz"],
+            "c": pl.Series(["u", "v", "u"], dtype=pl.Categorical),
+        }
     )
     before = builtin_hash(frame)
     assert builtin_hash(frame.clone()) == before
@@ -136,7 +141,9 @@ def test_polars_columns_key_by_their_values():
     ):
         assert builtin_hash(changed) != before
     assert builtin_hash(frame["s"]) != builtin_hash(frame["s"].fill_null(""))
-    assert builtin_hash(frame.slice(1, 2)) == builtin_hash(pl.DataFrame(frame.slice(1, 2).to_dicts(), schema=frame.schema))
+    assert builtin_hash(frame.slice(1, 2)) == builtin_hash(
+        pl.DataFrame(frame.slice(1, 2).to_dicts(), schema=frame.schema)
+    )
 
 
 def test_pyarrow_tables_key_by_their_rows():

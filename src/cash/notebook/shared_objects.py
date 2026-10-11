@@ -49,7 +49,14 @@ from typing import Any
 from cash import _plain_data
 from cash.tracking.function_tracker import is_local_module
 
-__all__ = ["holds_an_unopened_object", "holds_part_of", "output_history", "referring_names", "share_group", "shared_names"]
+__all__ = [
+    "holds_an_unopened_object",
+    "holds_part_of",
+    "output_history",
+    "referring_names",
+    "share_group",
+    "shared_names",
+]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
 VALUE_TYPES: tuple[type, ...] = (

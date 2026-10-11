@@ -42,7 +42,9 @@ def test_an_open_file_is_left_as_it_is(tmp_path):
 def test_a_hit_restores_the_closed_file(cash_magics, mock_shell, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "data.txt").write_text("hello world\n", encoding="utf-8")
-    cell = f"import time\nwith open('data.txt') as fh:\n    text = fh.read()\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})"
+    cell = (
+        f"import time\nwith open('data.txt') as fh:\n    text = fh.read()\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})"
+    )
     run_cash_cell(cash_magics, cell)
     del mock_shell.user_ns["fh"], mock_shell.user_ns["text"]
     run_cash_cell(cash_magics, cell)

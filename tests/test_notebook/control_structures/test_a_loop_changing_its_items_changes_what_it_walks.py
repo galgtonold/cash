@@ -16,7 +16,9 @@ from cash.analysis.mutation_effects import control_structure_mutations
 
 
 def _mutations(code: str) -> set[str]:
-    return control_structure_mutations(ast.parse(code).body[0], lambda n: n in {"range", "zip"}, lambda n: n in {"np", "os", "glob"})
+    return control_structure_mutations(
+        ast.parse(code).body[0], lambda n: n in {"range", "zip"}, lambda n: n in {"np", "os", "glob"}
+    )
 
 
 @pytest.mark.parametrize(

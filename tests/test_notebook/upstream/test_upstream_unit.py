@@ -245,8 +245,8 @@ class TestForwardProbePopulatesState:
     placeholder values and lineages for resolved broken vars."""
 
     def _make_checker(self):
-        from cash.notebook.tracking_state import TrackingState
         from cash.notebook.restored_var import FORWARD_PROBE_PLACEHOLDER
+        from cash.notebook.tracking_state import TrackingState
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}

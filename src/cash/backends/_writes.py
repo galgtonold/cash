@@ -173,7 +173,7 @@ def _finish_before_child(_args: tuple = ()) -> None:
                 with pending._lock:
                     _GIVEN_UP.update(f for f in pending._pending.values() if not f.done())
                 logger.debug("Started a child process with cache writes still running")
-    except Exception:  # noqa: BLE001 - must never fail the user's call
+    except Exception:
         logger.debug("Finishing cache writes before a child process failed", exc_info=True)
 
 

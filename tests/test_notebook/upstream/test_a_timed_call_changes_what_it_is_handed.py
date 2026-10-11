@@ -16,7 +16,7 @@ import pytest
 from cash.notebook.magic_effects import simulation_cell
 from tests._cell_driver import run_cash_cell
 
-HELPERS = "def train(m, f=10):\n" "    m['w'] = m['k'] * f\n" "def show(m):\n" "    return m['w']"
+HELPERS = "def train(m, f=10):\n    m['w'] = m['k'] * f\ndef show(m):\n    return m['w']"
 MODEL = "model = {'k': 2, 'w': None}"
 
 

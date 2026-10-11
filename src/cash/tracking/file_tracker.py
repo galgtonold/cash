@@ -25,6 +25,7 @@ from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
 from cash.tracking import io_watch
 from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run, remembered_file_digest
+from cash.tracking.pending_digest import PendingDigest
 from cash.tracking.read_classification import (
     RUNTIME_CACHE_SEGMENT,
     RUNTIME_CACHE_SUFFIXES,
@@ -35,7 +36,6 @@ from cash.tracking.read_classification import (
     regular_file_stat,
     stat_key,
 )
-from cash.tracking.pending_digest import PendingDigest
 from cash.tracking.read_credit import credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
 from cash.tracking.reader_patches import install_patches, patch_reader_aliases, remove_patches

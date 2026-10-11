@@ -31,8 +31,8 @@ from ..analysis.code_analyzer import CodeAnalyzer, calls_ipython
 from ..analysis.code_analyzer import python_magic_argument as _python_magic_arg
 from ..analysis.code_analyzer import split_magic_argument as _split_argument
 from ..analysis.mutations import KNOWN_PURE_METHODS
-from ..tracking.randomness import advanced_rng_lineage, get_drawing_rng_modules, rng_virtual_var
 from ..analysis.namespace_effects import bare_call_arguments, call_arguments
+from ..tracking.randomness import advanced_rng_lineage, get_drawing_rng_modules, rng_virtual_var
 
 __all__ = [
     "is_magic_statement",

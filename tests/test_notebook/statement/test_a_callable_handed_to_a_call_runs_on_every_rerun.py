@@ -113,7 +113,7 @@ def _namespace(code: str) -> dict:
     filename = f"<handed-{abs(hash(code))}>"
     linecache.cache[filename] = (len(code), None, code.splitlines(True), filename)
     namespace: dict = {"__name__": "__main__"}
-    exec(compile(code, filename, "exec"), namespace)  # noqa: S102 - the test's own cell text
+    exec(compile(code, filename, "exec"), namespace)
     return namespace
 
 
@@ -146,7 +146,7 @@ def test_a_handed_user_function_without_source_runs_uncached():
     from cash.analysis.handed_callables import handed_callables
 
     ns: dict = {"__name__": "__main__"}
-    exec("def f(v):\n    return v\n", ns)  # noqa: S102 - no source on purpose
+    exec("def f(v):\n    return v\n", ns)
     found = handed_callables(ast.parse("r = s.apply(f)"), ns)
     assert found.unreadable and "'f'" in found.unreadable[0]
 
@@ -164,4 +164,3 @@ def test_a_call_handed_a_list_of_writers_is_not_served():
     assert not hands_a_state_changing_callable(run_steps, ([ns["g"]], [1]), {})
     # A list the callee does not call into is data, and not looked into.
     assert not hands_a_state_changing_callable(total, ([ns["f"]],), {})
-

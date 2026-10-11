@@ -156,6 +156,7 @@ def reached_objects(fn: Any) -> list[Any]:
             found += _attributes_named(owner, names)
     return found
 
+
 class CallEntries:
     """Reads and writes one notebook session's call entries.
 

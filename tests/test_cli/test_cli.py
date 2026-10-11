@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 
-from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.__main__ import (
     HOOK_FILENAME,
     HOOK_MARKER,
@@ -17,6 +16,7 @@ from cash.__main__ import (
     cmd_version,
     main,
 )
+from cash.backends.cache_dir import CACHE_FORMAT_VERSION
 from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry
 from cash.units import human_bytes
 from tests._cli_args import cli_args

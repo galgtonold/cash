@@ -904,7 +904,7 @@ class CashMagics(Magics):
         try:
             # What `%time train(model)` hands to a call, to see it change.
             snapshots = processor.magic_cell_snapshots(raw_cell)
-        except Exception:  # noqa: BLE001 - nothing watched: the magic changes only what it says
+        except Exception:
             logger.debug("Watching what the magics hand to calls failed", exc_info=True)
             snapshots = {}
         try:
@@ -919,12 +919,12 @@ class CashMagics(Magics):
                     rng_after,
                     {var: h for var, h in lineage_before.items() if var.startswith(rng_virtual_var(""))},
                 )
-            except Exception:  # noqa: BLE001 - a later draw is then rewound as before
+            except Exception:
                 logger.debug("Recording the random streams around the cell failed", exc_info=True)
             processor.forget_rebound(before, lineage_before)
             try:
                 processor.record_magic_cell(raw_cell, lineage_before, snapshots)
-            except Exception:  # noqa: BLE001 - the names then keep no lineage, as before
+            except Exception:
                 logger.debug("Recording what the magics bound failed", exc_info=True)
 
     def _substitute_cell_kwargs(self, source: str, kwargs: dict) -> dict:
@@ -1001,7 +1001,7 @@ class CashMagics(Magics):
             return False  # IPython keeps %paste / %cpaste out of the history
         try:
             history.store_inputs(self.shell.execution_count, parsed, raw_cell)
-        except Exception:  # noqa: BLE001 - the stand-in's entry is then kept, as before
+        except Exception:
             logger.debug("Storing the cell's input history failed", exc_info=True)
             return False
         return True

@@ -39,8 +39,8 @@ import pickle
 import sys
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .._memo import DYNAMIC_RESOLUTION_BYTES, DYNAMIC_RESOLUTIONS, DYNAMIC_SOURCE_ENTRIES, LruMemo
@@ -131,7 +131,7 @@ class Resolution:
         tokens; a resolver or token that raises is not shown unchanged."""
         try:
             return self.resolve_now() == self._expected
-        except Exception:  # noqa: BLE001 - the user's resolver or state_token
+        except Exception:
             logger.debug("[CORE] a dynamic_depends_on resolver raised when asked again", exc_info=True)
             return False
 
@@ -216,7 +216,7 @@ def recorded_sources(tracker: Any) -> DynamicSources | None:
         record = {"id": source_id, "token": token}
         try:
             data = pickle.dumps(source, protocol=pickle.HIGHEST_PROTOCOL)
-        except Exception:  # noqa: BLE001 - pickle raises whatever __reduce__ raises
+        except Exception:
             logger.debug("[CORE] dynamic source %s does not pickle", source_id, exc_info=True)
             picklable = False
             data = None
@@ -250,7 +250,7 @@ def _resolver_record(resolution: Resolution) -> dict[str, str]:
     (`_HeldCalls`), as one that does not pickle at all."""
     try:
         data = pickle.dumps(resolution, protocol=pickle.HIGHEST_PROTOCOL)
-    except Exception:  # noqa: BLE001 - a lambda resolver, an argument that does not pickle
+    except Exception:
         logger.debug("[CORE] a dynamic_depends_on resolver call does not pickle", exc_info=True)
         return {"here_only": "1", "bytes": str(resolution.argument_bytes())}
     if len(data) > INLINE_PICKLE_BYTES:
@@ -345,7 +345,7 @@ def _unpickled_resolution(record: dict[str, str], fetch: Callable[[str], Any] | 
     data = base64.b64decode(blob)
     try:
         resolution = pickle.loads(data)
-    except Exception:  # noqa: BLE001 - a resolver gone or renamed since
+    except Exception:
         logger.debug("[CORE] a dynamic_depends_on resolver call does not unpickle", exc_info=True)
         return None
     if not isinstance(resolution, Resolution):
@@ -395,7 +395,7 @@ def _unpickled(record: dict[str, str], fetch: Callable[[str], Any] | None) -> Da
             return known
         try:
             data = fetch(source_key(digest)) if fetch is not None else None
-        except Exception:  # noqa: BLE001 - a backend read that failed: not had
+        except Exception:
             logger.debug("[CORE] dynamic source %s could not be read", record.get("id"), exc_info=True)
             data = None
         if not isinstance(data, bytes) or hashlib.sha256(data).hexdigest() != digest:
@@ -407,7 +407,7 @@ def _unpickled(record: dict[str, str], fetch: Callable[[str], Any] | None) -> Da
         data = base64.b64decode(blob)
     try:
         source = pickle.loads(data)
-    except Exception:  # noqa: BLE001 - a class gone or renamed since: unusable
+    except Exception:
         logger.debug("[CORE] dynamic source %s does not unpickle", record.get("id"), exc_info=True)
         return None
     if not isinstance(source, DataSource):
@@ -441,7 +441,7 @@ def dynamic_sources_fresh(
     for source, record in zip(sources, records):
         try:
             token = state_token_of(source)
-        except Exception:  # noqa: BLE001 - the user's state_token
+        except Exception:
             logger.debug("[CORE] state_token() of %s raised", record.get("id"), exc_info=True)
             return False
         if token != record.get("token"):

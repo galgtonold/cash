@@ -38,4 +38,6 @@ def test_a_lookup_of_a_cache_entry_is_not_resolved(tmp_path, monkeypatch):
     finally:
         io_watch.release()
     assert resolved == [str(user_file)]
-    assert os.path.realpath(user_file) in {os.path.realpath(p) for p in tracker.get_accessed_files() | tracker.absent_files}
+    assert os.path.realpath(user_file) in {
+        os.path.realpath(p) for p in tracker.get_accessed_files() | tracker.absent_files
+    }

@@ -34,7 +34,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
 from ..sizing import estimate_object_size
-from .callee_reach import names_read, module_state_writes, reached_user_code
+from .callee_reach import module_state_writes, names_read, reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
     module_data_digest,
@@ -61,6 +61,7 @@ __all__ = [
 #: ``"env"`` for an environment read, ``"mod"`` for module data.
 _ENV = "env"
 _MOD = "mod"
+
 
 class ReadParts(NamedTuple):
     """``(label, digest)`` of each environment read and each piece of module

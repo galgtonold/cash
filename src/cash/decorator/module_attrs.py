@@ -113,7 +113,9 @@ class ModuleAttrFold:
                     fold(f"{name}.{attr}", getattr(value, attr, None))
         return parts
 
-    def local_binding_parts(self, func: Callable, func_name: str = "?", owner_code: Any = None) -> list[tuple[str, str]]:
+    def local_binding_parts(
+        self, func: Callable, func_name: str = "?", owner_code: Any = None
+    ) -> list[tuple[str, str]]:
         """Key parts for data reached through names the module's globals never see.
 
         Two shapes:

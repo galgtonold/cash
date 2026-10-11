@@ -153,7 +153,10 @@ def test_an_import_whose_module_registers_itself_is_kept_as_a_setting_of_the_mod
     """``import plugin`` where ``plugin.py`` does ``@mylib.register``: the
     import is one of the statements a restart's rebuild of ``mylib`` runs,
     kept for a later kernel as any setting is."""
-    from cash.notebook.cache_key import module_state_key, statement_source_hash  # noqa: PLC0415 - only this test needs the keys
+    from cash.notebook.cache_key import (
+        module_state_key,
+        statement_source_hash,
+    )
 
     name, _ = lib
     cells = [f"import {name}", f"import {name}_plugin", f"x = {name}.names()"]
@@ -200,7 +203,7 @@ def test_a_store_into_the_notebooks_own_objects_does_not(lib, code):
 
 
 def test_an_import_sets_state_on_the_module_its_module_registers_into(lib):
-    from cash.notebook.callee_reach import import_state_writes  # noqa: PLC0415 - added by the fix
+    from cash.notebook.callee_reach import import_state_writes
 
     name, _ = lib
     __import__(f"{name}_plugin")

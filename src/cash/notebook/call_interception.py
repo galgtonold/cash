@@ -433,7 +433,9 @@ def _routed(func: ast.expr, index: int) -> ast.expr:
     reading it twice is reading it once, where an attribute or a call could
     run user code twice.
     """
-    routed = ast.Call(func=ast.Name(id=HELPER_NAME, ctx=ast.Load()), args=[func, ast.Constant(value=index)], keywords=[])
+    routed = ast.Call(
+        func=ast.Name(id=HELPER_NAME, ctx=ast.Load()), args=[func, ast.Constant(value=index)], keywords=[]
+    )
     if not isinstance(func, ast.Name):
         return routed
 

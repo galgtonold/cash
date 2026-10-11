@@ -22,7 +22,6 @@ from cash.exceptions import (
     CashWarning,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
-from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.cache_key import (
     CacheKeyContext,
     CacheKeyResult,
@@ -30,6 +29,7 @@ from cash.notebook.cache_key import (
     statement_source_hash,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
+from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
@@ -41,6 +41,7 @@ from cash.notebook.statement.carrier_advances import (
     carriers_an_entry_advanced,
 )
 from cash.notebook.statement.control_body import is_control_body
+from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
 from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.file_deps import StatementFileDeps
@@ -57,7 +58,6 @@ from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebou
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
 from cash.notebook.statement.mutations import MutationClassifier
-from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.output_refusals import is_history_name, live_shared_reason, unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
@@ -117,10 +117,10 @@ from ..magic_effects import (
     magic_rng_advances,
     simulation_cell,
 )
+from ..pyplot_draws import holds_artists, pyplot_draw_names
 from ..pyplot_state import CHANGED_PYPLOT_REASON, pyplot_state
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
-from ..pyplot_draws import holds_artists, pyplot_draw_names
 from ..run_memo import forget_file_state_this_run
 from ..shared_objects import (
     VALUE_TYPES,
@@ -154,6 +154,7 @@ SHARE_FALLBACK_FLOOR_S = 1.0
 def share_check_budget(cost: float) -> float:
     """Seconds the share check of a statement that took *cost* may take."""
     return max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+
 
 _LOG_DEBUG = "[DEBUG]"
 _LOG_MUTATION = "[MUTATION]"
@@ -948,7 +949,7 @@ class StatementProcessor:
         # it sets state on that its text does not say (`note_module_state`).
         try:
             held = module_globals(run.code, self.shell.user_ns)
-        except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+        except Exception:
             logger.debug("%s could not watch the modules %r reaches", _LOG_PROCESSOR, run.code[:80], exc_info=True)
             held = {}
         # pyplot's figures, to see a statement change them through a name
@@ -1004,7 +1005,7 @@ class StatementProcessor:
             # it ran and the module is loaded.
             try:
                 run.rebound_modules = run.rebound_modules | import_state_writes(run.code, self.shell.user_ns)
-            except Exception:  # noqa: BLE001 - an analysis of arbitrary code
+            except Exception:
                 logger.debug("%s could not read what %r's imports set", _LOG_PROCESSOR, run.code[:80], exc_info=True)
         self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
@@ -1019,7 +1020,7 @@ class StatementProcessor:
         reads = self.tracking_state.reads
         try:
             before = snapshot(reads.watched, code, self.shell.user_ns)
-        except Exception:  # noqa: BLE001 - when unsure, a change counts as made outside
+        except Exception:
             logger.debug("%s could not watch the reads %r may change", _LOG_PROCESSOR, code[:80], exc_info=True)
             before = {}
         try:
@@ -1028,7 +1029,7 @@ class StatementProcessor:
             if before:
                 try:
                     note_writes(before, code, reads)
-                except Exception:  # noqa: BLE001 - a change not noted counts as made outside
+                except Exception:
                     logger.debug("%s could not note what %r changed", _LOG_PROCESSOR, code[:80], exc_info=True)
 
     def _finish(self, run: StatementRun, execution: StatementExecution) -> ProcessResult:
@@ -1726,7 +1727,7 @@ class StatementProcessor:
             if before != run.cache_key:
                 return
             next_key = self._key(code, inputs, outputs, run.occurrence_index, record=not run.skip_cache).cache_key
-        except Exception:  # noqa: BLE001 - the write is skipped once instead
+        except Exception:
             logger.debug("%s Could not key %s with its hidden draw", _LOG_PROCESSOR, code[:80], exc_info=True)
             return
         # The streams it drew from move on from the next run's key, as the

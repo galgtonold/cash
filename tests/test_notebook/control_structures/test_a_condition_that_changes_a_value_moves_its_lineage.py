@@ -37,7 +37,7 @@ SLOW = f"import time\ndef describe(v):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_
     ],
 )
 def test_condition_mutations(test, changed):
-    from cash.analysis.mutation_effects import condition_mutations  # noqa: PLC0415 - the name the fix adds
+    from cash.analysis.mutation_effects import condition_mutations
 
     assert condition_mutations(ast.parse(test, mode="eval").body) == changed
 

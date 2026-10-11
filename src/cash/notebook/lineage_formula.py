@@ -350,7 +350,7 @@ def callee_environment_reads(
     for fn in reach.functions:
         try:
             found |= get_analyzer().analyze(fn).environment_reads
-        except Exception:  # noqa: BLE001 - the analysis of arbitrary user code
+        except Exception:
             logger.debug("Could not analyse %r for the environment it reads", fn, exc_info=True)
     return found
 
@@ -385,7 +385,7 @@ def module_data_digest(label: str, value: Any) -> str:
         if code:
             digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
         return digest
-    except Exception:  # noqa: BLE001 - hashing arbitrary user data
+    except Exception:
         logger.debug("Could not hash module data %s", label, exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
 

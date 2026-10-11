@@ -17,11 +17,12 @@ import numpy as np
 import pytest
 
 from cash.notebook.statement.run import StatementRun
-
 from tests._cell_driver import run_cash_cell
 
 SEED = "import numpy as np\nnp.random.seed(42)"
-HELPER = "import time\ndef make_data(n):\n    time.sleep(0.2)  # slow enough to store\n    return np.random.normal(size=n)"
+HELPER = (
+    "import time\ndef make_data(n):\n    time.sleep(0.2)  # slow enough to store\n    return np.random.normal(size=n)"
+)
 
 
 @pytest.fixture

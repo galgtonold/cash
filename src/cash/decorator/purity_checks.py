@@ -21,7 +21,6 @@ from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
-from ..analysis.purity_visitor import ARGUMENT_MUTATION_NOT_STORED
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
@@ -31,6 +30,7 @@ from ..analysis.purity_report import (
     PurityIssue,
     PurityReport,
 )
+from ..analysis.purity_visitor import ARGUMENT_MUTATION_NOT_STORED
 from ..effect_observer import EffectObserver, observed_label
 from ..effects import EffectKind
 from ..exceptions import (

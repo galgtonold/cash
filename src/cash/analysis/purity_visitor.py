@@ -994,9 +994,7 @@ class PurityVisitor(ast.NodeVisitor):
         depending on whether it hit."""
         root = (base or "").split(".")[0].split("[")[0]
         if root and root in self._param_names:
-            return (
-                f"{kind} mutation that changes the argument '{root}' in place; {ARGUMENT_MUTATION_NOT_STORED}"
-            )
+            return f"{kind} mutation that changes the argument '{root}' in place; {ARGUMENT_MUTATION_NOT_STORED}"
         if root and root in self._param_elements:
             return (
                 f"{kind} mutation that changes an element of the argument "

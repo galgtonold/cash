@@ -206,6 +206,7 @@ def test_an_ignored_argument_is_not_checked_for_in_place_changes(cash_instance):
     """Ignoring a parameter says it does not matter, as ``assume_safe`` says
     of an effect: the call is stored, and the static finding says so rather
     than claiming the call is not stored."""
+
     @cash_instance.cache(ignore=["log"])
     def run(x, log):
         log.append(x)

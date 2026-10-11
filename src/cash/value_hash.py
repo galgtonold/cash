@@ -157,7 +157,7 @@ def compute_hash(obj: Any) -> str:
         return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - see below
         # Whatever a user's `__reduce__` or `__getstate__` raises: the value
         # has no content hash, so it gets the identity tier, which callers
         # recognise as content-blind. Raised to the user, it failed a cell
@@ -171,7 +171,7 @@ def compute_hash(obj: Any) -> str:
 
     try:
         return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
-    except Exception:
+    except Exception:  # noqa: BLE001 - see below
         # Python 3.13 raises AttributeError for an instance of a class
         # defined inside a function ("Can't get local object"); a user's
         # `__reduce__` may raise anything.

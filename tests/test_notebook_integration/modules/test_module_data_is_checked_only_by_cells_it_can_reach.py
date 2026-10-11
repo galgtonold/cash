@@ -14,7 +14,9 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
-LIB = "import time\nTABLE = list(range({k}, {k} + 1000))\ndef from_k(x):\n    time.sleep(0.3)\n    return x * TABLE[0]\n"
+LIB = (
+    "import time\nTABLE = list(range({k}, {k} + 1000))\ndef from_k(x):\n    time.sleep(0.3)\n    return x * TABLE[0]\n"
+)
 
 COUNT = (
     "import cash.notebook.recorded_reads as rr\n"
@@ -40,7 +42,7 @@ def counting(nb_runner):
     yield lambda: nb_runner.peek(f"exec({COUNT!r})")
     try:
         nb_runner.peek(f"exec({UNCOUNT!r})")
-    except Exception:  # noqa: BLE001 - the kernel may be gone
+    except Exception:
         pass
 
 

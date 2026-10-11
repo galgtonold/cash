@@ -52,11 +52,11 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..tracking.function_tracker import is_local_module
 from .ast_util import CallScope, calls_in
 from .callee_effects import (
-    parse_function_source,
     all_param_names,
     callee_global_mutations,
     iterated_sources,
     params_mutated_in_function,
+    parse_function_source,
     source_global_mutations,
 )
 from .mutations import MUTATING_METHODS, chain_is_pure
@@ -649,7 +649,9 @@ def _items(container: Any) -> Iterable[Any]:
     return container
 
 
-def _changes_its_first_argument(fn: types.FunctionType, cls: type, source: str, seen: frozenset[int] = frozenset()) -> bool:
+def _changes_its_first_argument(
+    fn: types.FunctionType, cls: type, source: str, seen: frozenset[int] = frozenset()
+) -> bool:
     """Whether calling the method *fn* of *cls* changes the object it is
     bound to (``self.seen.append(v)``, ``self.n += 1``), itself or through
     another method of the class it calls on it. A call on something the

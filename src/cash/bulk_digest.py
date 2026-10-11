@@ -48,6 +48,7 @@ PARALLEL_MIN_BYTES = 8 << 20
 #: cores, is what limits it.
 MAX_THREADS = 8
 
+
 def hashing_threads() -> int:
     """How many threads a big digest may use: the CPUs this process may
     run on, at most `MAX_THREADS`."""

@@ -18,7 +18,6 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..._clock import perf_counter as _perf_counter
-from ...control_markers import strip_markers
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import (
@@ -30,7 +29,7 @@ from ...analysis.mutation_effects import (
     statement_effects,
 )
 from ...analysis.namespace_effects import call_argument_names, call_arguments
-from ..consumables import watched_call_receivers
+from ...control_markers import strip_markers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
     advanced_rng_lineage,
@@ -43,6 +42,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
+from ..consumables import watched_call_receivers
 from ..lineage_formula import (
     callable_source_component,
     changed_module_environment,
@@ -56,11 +56,11 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     statement_environment_component,
 )
+from ..pyplot_draws import pyplot_draw_names
 from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
-from ..pyplot_draws import pyplot_draw_names
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState

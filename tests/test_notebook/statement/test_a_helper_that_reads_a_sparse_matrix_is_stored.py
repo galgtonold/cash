@@ -25,7 +25,9 @@ np = pytest.importorskip("numpy")
 def _unsorted(fmt: str):
     """A matrix with unsorted indices, as TfidfVectorizer returns it."""
     make = sp.csr_matrix if fmt == "csr" else sp.csc_matrix
-    m = make((np.array([3.0, 1.0, 2.0]), np.array([2, 0, 1]), np.array([0, 3])), shape=(1, 3) if fmt == "csr" else (3, 1))
+    m = make(
+        (np.array([3.0, 1.0, 2.0]), np.array([2, 0, 1]), np.array([0, 3])), shape=(1, 3) if fmt == "csr" else (3, 1)
+    )
     m.has_canonical_format = False
     return m
 

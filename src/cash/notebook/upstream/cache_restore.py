@@ -25,11 +25,11 @@ from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
 from ..holder_patches import HolderPatch, apply_patch
-from ..lineage_store import tag_value
 from ..lineage_formula import (
     held_lineage,
     key_hidden_reads,
 )
+from ..lineage_store import tag_value
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe

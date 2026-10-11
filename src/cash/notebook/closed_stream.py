@@ -55,9 +55,10 @@ def stored_form(value: Any) -> Any:
 def _closed_file(name: str | bytes, mode: str, encoding: str | None, errors: str | None) -> Any:
     """A closed file object as ``open(name, mode)`` makes, without opening
     *name*: the descriptor it is built over is the null device's."""
+
     def null_device(_path: Any, _flags: int) -> int:
         return os.open(os.devnull, os.O_RDONLY)
 
-    stream = open(name, mode, encoding=encoding, errors=errors, opener=null_device)  # noqa: SIM115 - closed at once
+    stream = open(name, mode, encoding=encoding, errors=errors, opener=null_device)
     stream.close()
     return stream

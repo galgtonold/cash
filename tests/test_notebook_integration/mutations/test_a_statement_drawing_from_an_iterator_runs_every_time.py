@@ -11,11 +11,7 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
 SETUP = (
-    "import time, io, csv, itertools\n"
-    "def parse(x):\n"
-    "    time.sleep(0.2)\n"
-    "    return x\n"
-    "LINES = ['h1,h2', '1,2', '3,4']"
+    "import time, io, csv, itertools\ndef parse(x):\n    time.sleep(0.2)\n    return x\nLINES = ['h1,h2', '1,2', '3,4']"
 )
 
 
@@ -26,7 +22,11 @@ SETUP = (
         (["rd = csv.reader(LINES)", "header = parse(next(rd))", "r = list(rd)"], [["1", "2"], ["3", "4"]]),
         (["buf = io.StringIO('\\n'.join(LINES))", "header = parse(buf.readline())", "r = buf.read()"], "1,2\n3,4"),
         (
-            ["src = iter(range(10))", "batch = parse(list(itertools.islice(src, 3)))", "r = list(itertools.islice(src, 3))"],
+            [
+                "src = iter(range(10))",
+                "batch = parse(list(itertools.islice(src, 3)))",
+                "r = list(itertools.islice(src, 3))",
+            ],
             [3, 4, 5],
         ),
     ],

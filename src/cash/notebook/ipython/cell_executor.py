@@ -49,12 +49,12 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from IPython.core.inputtransformer2 import leading_indent
 
 from ..._clock import perf_counter as _perf_counter
-from ...diagnostics import log_diagnostic, warn_diagnostic
-from ...exceptions import CashWarning
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import analyze_statement
+from ...diagnostics import log_diagnostic, warn_diagnostic
+from ...exceptions import CashWarning
 from ...remote_source import measured_validation as _measured_validation
 from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
@@ -716,7 +716,7 @@ class CellExecutor:
         tracked and its readers' lineage moves."""
         try:
             reloaded = run_autoreload_now(self.shell) - reloaded_by_cash
-        except Exception:  # noqa: BLE001 - a third-party extension's state
+        except Exception:
             logger.debug("Running autoreload before the cell failed", exc_info=True)
             return []
         ft = self._statement_processor.function_tracker

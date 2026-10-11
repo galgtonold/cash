@@ -26,12 +26,12 @@ from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...source_norm import exact_source_digest
 from .._protocols import ShellProtocol
+from ..callee_reach import one_walk, reached_user_code
 from ..control_structures import is_control_structure
 from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
 )
-from ..callee_reach import one_walk, reached_user_code
 from ..magic_effects import (
     is_magic_statement,
     is_rerun_magic,

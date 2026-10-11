@@ -95,6 +95,6 @@ def pyplot_state() -> tuple[Any, ...] | object:
         active = gcf.get_active()
         current = _figure_state(active.canvas.figure) if active is not None else None
         return (tuple(map(id, managers.values())), tuple(managers), current)
-    except Exception:  # noqa: BLE001 - an unreadable registry counts as changed
+    except Exception:
         logger.debug("could not read pyplot's figures", exc_info=True)
         return object()

@@ -599,7 +599,7 @@ def size_probe(texts: tuple[str, ...], sizes: dict[str, int | None]):
     def probe(value: Any, index: int) -> Any:
         try:
             sizes[texts[index]] = len(value)
-        except Exception:  # user __len__; unknown is safe
+        except Exception:  # noqa: BLE001 - a user __len__; unknown is safe
             sizes[texts[index]] = None
         return value
 

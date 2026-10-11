@@ -39,8 +39,7 @@ class TestTooStrict:
         """The reported header, verbatim."""
         ns = {"frame": list(range(3131)), "STEP": 5}
         assert _left("range(0, len(frame), STEP)", ns), (
-            "len() cannot drain or mutate anything; refusing this header "
-            "builds it once more than plain Python does"
+            "len() cannot drain or mutate anything; refusing this header builds it once more than plain Python does"
         )
 
     @pytest.mark.parametrize(

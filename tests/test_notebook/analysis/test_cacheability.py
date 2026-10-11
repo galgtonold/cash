@@ -14,8 +14,8 @@ import pytest
 from cash.analysis.aliases import aliased_sources, bare_alias_targets
 from cash.analysis.cacheability import StatementAnalysis, analyze_statement
 from cash.analysis.callee_effects import (
-    callee_global_mutations,
     call_arg_targets,
+    callee_global_mutations,
     function_arg_mutations,
     mutating_partials,
     params_mutated_in_function,

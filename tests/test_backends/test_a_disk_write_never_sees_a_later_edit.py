@@ -67,7 +67,7 @@ def test_a_value_that_may_share_a_part_goes_to_disk_as_the_caller_gave_it(name):
     tiers, disk = _tiers()
     value = NOT_OWN[name]()
     tiers.set("k", value, dict(_KEEP))
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert not private and written is value
     assert not tiers.backends[0].holds_own_copy("k")
 
@@ -89,7 +89,7 @@ def test_a_value_that_is_cash_s_own_still_goes_to_disk_as_the_ram_copy(name):
     tiers, disk = _tiers()
     value = OWN[name]()
     tiers.set("k", value, dict(_KEEP))
-    (_key, written, private), = disk.calls
+    ((_key, written, private),) = disk.calls
     assert private and written is not value
 
 
@@ -99,7 +99,7 @@ def test_a_later_persist_of_a_value_that_may_share_a_part_is_not_private():
     tiers.set("k", value, dict(_NOTEBOOK))
     assert disk.calls == []
     assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
-    (_key, _written, private), = disk.calls
+    ((_key, _written, private),) = disk.calls
     assert not private
 
 

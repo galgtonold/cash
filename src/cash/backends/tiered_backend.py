@@ -364,7 +364,7 @@ class TieredBackend(CacheBackend):
             return _NO_COPY
         try:
             return private_copy(key, _NO_COPY, metadata)
-        except Exception:  # noqa: BLE001 - the caller's value, serialized as before
+        except Exception:
             logger.debug("no private copy of %r", key, exc_info=True)
             return _NO_COPY
 
@@ -488,9 +488,7 @@ class TieredBackend(CacheBackend):
         # copy's object cells): the caller may change that while a
         # background write serializes it, so it is serialized now.
         holds_own_copy = getattr(self.backends[0], "holds_own_copy", None)
-        private = (
-            not stored_metadata.get("by_reference") and holds_own_copy is not None and bool(holds_own_copy(key))
-        )
+        private = not stored_metadata.get("by_reference") and holds_own_copy is not None and bool(holds_own_copy(key))
         writes = self._write_persistent_tiers(
             key,
             entry[1],

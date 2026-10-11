@@ -30,10 +30,10 @@ from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
+from ..analysis.helper_code import own_code_is_user
 from ..analysis.mutations import MUTATING_METHODS
 from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..analysis.helper_code import own_code_is_user
 from ..tracking.function_tracker import is_local_module
 from ..tracking.randomness import get_seeding_rng_modules
 from ..value_types import IMMUTABLE_PRIMS, INTERPRETER_MANAGED_GLOBALS, is_runtime_machinery
@@ -97,7 +97,6 @@ def one_walk() -> Iterator[None]:
         yield
     finally:
         _WALKS.pop()
-
 
 
 def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: bool = True) -> Reach:
@@ -836,7 +835,7 @@ def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, struct
     if not code or not namespace:
         return frozenset()
     if not structure:
-        from .control_structures.common import is_control_structure  # noqa: PLC0415 - imports this module
+        from .control_structures.common import is_control_structure
 
         tree = parse_cached(code)
         if tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0]):

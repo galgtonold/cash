@@ -47,11 +47,14 @@ def _expected(start: int, scale: int, steps: dict[int, int], k: int) -> str:
 
 
 def _write_helper(tmp_path, k: int, module: str = "helper") -> None:
-    (tmp_path / f"{module}.py").write_text(textwrap.dedent(f"""\
+    (tmp_path / f"{module}.py").write_text(
+        textwrap.dedent(f"""\
         K = {k}
         def bump(x):
             return x + K
-        """), encoding="utf-8")
+        """),
+        encoding="utf-8",
+    )
 
 
 def _set_start(tmp_path, start: int) -> None:

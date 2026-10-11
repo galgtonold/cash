@@ -603,7 +603,7 @@ class CallRouting:
         if callable(fold):
             try:
                 fold()
-            except Exception:  # noqa: BLE001 - a count is never worth an error
+            except Exception:
                 logger.debug("%s Failed to fold plain-run call counts", _LOG_PROCESSOR, exc_info=True)
 
     def cash_time_marks(self) -> CashMarks:

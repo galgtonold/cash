@@ -569,11 +569,9 @@ def watch_array_handles() -> None:
     if _WATCHING:
         return
     import pandas as pd
-    from pandas.core.indexes.datetimelike import DatetimeIndexOpsMixin
-
     from pandas.core.base import IndexOpsMixin
     from pandas.core.generic import NDFrame
-    from pandas.core.indexes.datetimelike import DatetimeTimedeltaMixin
+    from pandas.core.indexes.datetimelike import DatetimeIndexOpsMixin, DatetimeTimedeltaMixin
 
     for cls, name, outside_only in (
         (pd.Series, "array", False),

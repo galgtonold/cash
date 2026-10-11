@@ -28,8 +28,8 @@ from ...analysis.annotations import (
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import condition_mutations, control_structure_mutations, is_module_name
 from ...value_types import BUILTIN_NAMES
-from ..cache_status import CacheStatus
 from ..cache_key import statement_source_hash
+from ..cache_status import CacheStatus
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
 from ..pyplot_draws import holds_artists, pyplot_draw_names
@@ -395,9 +395,7 @@ class LoopPass:
             known = self._changes[id(test)] = (test, condition_mutations(test))
         return known[1]
 
-    def if_ran(
-        self, shell, statement_processor, node: ast.If, tests: list[ast.expr], body: list[ast.stmt]
-    ) -> None:
+    def if_ran(self, shell, statement_processor, node: ast.If, tests: list[ast.expr], body: list[ast.stmt]) -> None:
         """The ``if`` *node* in the loop body evaluated the conditions *tests*
         (the ``if``'s and each ``elif``'s up to the one taken) and ran the
         branch *body* (empty when none was taken)."""
