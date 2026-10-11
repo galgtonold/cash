@@ -74,7 +74,46 @@ EDITED = {
         "[1, 3]",
         "[1, 4]",
     ),
+    "a numpy view of an array changed in place": (
+        [
+            SLOW + "\nimport numpy as np",
+            "big = np.arange(10.0)",
+            "head = big[:5]",
+            "big *= 2",
+            "r = slow(head)\nprint(r)",
+        ],
+        4,
+        "big *= 3",
+        "array([0., 2., 4., 6., 8.])",
+        "array([ 0.,  3.,  6.,  9., 12.])",
+    ),
 }
+
+#: Something that is not a variable holds the list too (``features`` and
+#: the cell making it); the dict or object a variable binds holding it must
+#: still follow a change made through the list's own name.
+for _label, _other, _holder, _reader in [
+    (
+        "a function default",
+        "def pick(row, cols=features):\n    return [row[c] for c in cols]",
+        "config = {'features': features}",
+        "config",
+    ),
+    ("a class attribute", "class Model:\n    cols = features", "config = {'features': features}", "config"),
+    ("an argparse namespace", "import argparse", "args = argparse.Namespace(features=features)", "args"),
+    ("a deque", "from collections import deque", "args = deque([features])", "args"),
+]:
+    _shown = {
+        "config": "{{'features': ['a', 'b', '{}']}}",
+        "args": "Namespace(features=['a', 'b', '{}'])" if "Namespace" in _holder else "deque([['a', 'b', '{}']])",
+    }[_reader]
+    EDITED[f"a list {_label} holds too, changed through its own name"] = (
+        [SLOW, "features = ['a', 'b']", _other, _holder, "features.append('zip')", f"r = slow({_reader})\nprint(r)"],
+        5,
+        "features.append('vat')",
+        _shown.format("zip"),
+        _shown.format("vat"),
+    )
 
 
 @pytest.mark.parametrize("name", list(EDITED))

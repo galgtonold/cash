@@ -13,7 +13,7 @@ from typing import Any
 
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
-from ..shared_objects import output_history, share_group, shared_names
+from ..shared_objects import GaveUp, output_history, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
@@ -62,7 +62,7 @@ def unrestorable_output_reason(
     cash_held: Iterable[Any] = (),
     shell: Any = None,
     holders: dict[str, Any] | None = None,
-    gave_up: list[bool] | None = None,
+    gave_up: list[GaveUp] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. *cash_held* are containers cash itself
@@ -72,8 +72,10 @@ def unrestorable_output_reason(
     With *holders*, a variable of the notebook that holds an output's object
     too does not refuse the statement: it is added to *holders*, to be
     stored and restored with the outputs (`shared_output_reason`), and its
-    value must pass the same checks. *gave_up* gets True appended when the
-    check for those holders ran and found a holder that is not a variable.
+    value must pass the same checks. *gave_up* gets a `GaveUp` appended when
+    the check for those holders ran and found a holder that is not a
+    variable: the variables it found holding the outputs' objects all the
+    same, to link though the statement is not stored.
 
     ``identity_coupled_reason`` refuses an object identity-coupled to a
     library global: the RAM tier's deep copy of a matplotlib Figure
@@ -116,7 +118,7 @@ def shared_output_reason(
     cash_held: Iterable[Any] = (),
     shell: Any = None,
     holders: dict[str, Any] | None = None,
-    gave_up: list[bool] | None = None,
+    gave_up: list[GaveUp] | None = None,
 ) -> str | None:
     """Nor an output whose object, or one inside it, something else holds too
     (`shared_names`): a restore would bind a copy, and that holder would keep
@@ -143,6 +145,7 @@ def shared_output_reason(
         del roots
     else:
         hidden = getattr(shell, "user_ns_hidden", None) or {}
+        partial = GaveUp()
         found, shared = share_group(
             names,
             captured_vars,
@@ -150,11 +153,12 @@ def shared_output_reason(
             [*cash_held, *history],
             named,
             foreign=lambda name: name in hidden or is_history_name(name),
+            gave_up=partial,
         )
         holders.update(found)
         del found
         if shared and gave_up is not None:
-            gave_up.append(True)
+            gave_up.append(partial)
     return _shared_reason(shared)
 
 

@@ -131,11 +131,15 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:GaveUp @a3ee6e04, cash/notebook/shared_objects.py:view_base_names @34cf5190 -->
 When a statement leaves two names sharing an object, cash links them: an alias
 (`log = history`), a container holding another variable's object (`config =
 {"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
-(`train = data["train"]`). A change made later through either name moves both,
+(`train = data["train"]`), and a numpy view and the array it views (`head =
+big[:5]`). This holds when something that is not a variable holds the object
+too (a function default `def pick(row, cols=features)`, a class attribute, an
+`argparse.Namespace` or a `deque`): the variables are still linked. A change
+made later through either name moves both,
 so the cells that read the other one re-run, on Run All and on a cell re-run
 alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)
 changes `rows`, and a pyplot call that draws on the current figure
@@ -149,6 +153,7 @@ the cells that read the name keep their cached results:
 ```python { .nb-cell }
 get = lambda: x
 get().append(5)        # changes x through a closure
+pick.__defaults__[0].append("vat")   # changes features through the default
 ```
 
 **Fix:** change the object through its own name (`x.append(5)`), or rebind
