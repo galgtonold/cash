@@ -5,6 +5,9 @@ from __future__ import annotations
 import builtins
 import copy
 import ctypes
+import datetime
+import decimal
+import functools
 import gc
 import io
 import logging
@@ -1414,6 +1417,59 @@ IMMUTABLE_CELLS = frozenset(
 )
 
 
+#: Exact types of a cell no one can change in place, for an object array
+#: `infer_dtype` calls "mixed": ints beside strings in an index a row was
+#: added to by label (``df.loc['action_time'] = ...``), floats (NaN) beside
+#: dates. Exact, since a subclass of str can carry a ``__dict__``.
+_IMMUTABLE_CELL_TYPES: frozenset[type] = frozenset(
+    {
+        int,
+        float,
+        complex,
+        bool,
+        str,
+        bytes,
+        type(None),
+        datetime.date,
+        datetime.datetime,
+        datetime.time,
+        datetime.timedelta,
+        decimal.Decimal,
+    }
+)
+
+
+def immutable_cells(array: Any) -> bool:
+    """Is every cell of the object *array* a value no one can change in place?
+
+    ``infer_dtype`` answers at C speed for one kind of cell; for a mix it
+    says only "mixed", and the cells' exact types are read instead, also at
+    C speed. A 1.7-million-row frame with such an index was copied through a
+    pickle round trip for the RAM tier: 6 s of a 4.4 s statement.
+    """
+    from pandas.api.types import infer_dtype
+
+    kind = infer_dtype(array, skipna=True)
+    if kind in IMMUTABLE_CELLS:
+        return True
+    if kind not in ("mixed", "mixed-integer", "mixed-integer-float"):
+        return False
+    return _immutable_cell_types().issuperset(map(type, array))
+
+
+@functools.cache
+def _immutable_cell_types() -> frozenset[type]:
+    """`_IMMUTABLE_CELL_TYPES` and pandas' and numpy's scalars."""
+    import numpy as np
+    import pandas as pd
+
+    return (
+        _IMMUTABLE_CELL_TYPES
+        | {pd.Timestamp, pd.Timedelta, type(pd.NaT), np.datetime64, np.timedelta64}
+        | {t for t in np.sctypeDict.values() if issubclass(t, np.number) or t is np.bool_}
+    )
+
+
 #: `_cheap_to_keep` looks this far into a value, at containers this small.
 _CHEAP_DEPTH = 3
 _CHEAP_ITEMS = 64
@@ -1695,13 +1751,11 @@ def _holds_mutable_cells(frame: Any) -> bool:
     its cells.
     """
     try:
-        from pandas.api.types import infer_dtype
-
         if getattr(frame, "ndim", 2) == 1:
             columns = [frame] if str(frame.dtype) == "object" else []
         else:
             columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(infer_dtype(column, skipna=True) not in IMMUTABLE_CELLS for column in columns) or (
+        return any(not immutable_cells(column) for column in columns) or (
             _mutable_labels(frame)
         )
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
@@ -1716,8 +1770,6 @@ def _mutable_labels(frame: Any) -> bool:
     hashable object with mutable state (a sensor keyed by name that carries
     its calibration) stayed one object shared by the entry and every hit.
     """
-    from pandas.api.types import infer_dtype
-
     indexes = [frame.index] if getattr(frame, "ndim", 2) == 1 else [frame.index, frame.columns]
     dtypes = [frame.dtype] if getattr(frame, "ndim", 2) == 1 else list(frame.dtypes)
     arrays = []
@@ -1726,5 +1778,5 @@ def _mutable_labels(frame: Any) -> bool:
     dtypes += [array.dtype for array in arrays]
     arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
     return any(
-        str(array.dtype) == "object" and infer_dtype(array, skipna=True) not in IMMUTABLE_CELLS for array in arrays
+        str(array.dtype) == "object" and not immutable_cells(array) for array in arrays
     )

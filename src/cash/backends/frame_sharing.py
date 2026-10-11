@@ -196,11 +196,9 @@ def _ndarray_parts(values: Any) -> list[tuple[str, Any]] | None:
 
 def _cells_unchangeable(array: Any) -> bool:
     """Is every cell of an object array a value nothing can change in place?"""
-    from pandas.api.types import infer_dtype
+    from .memory_backend import immutable_cells
 
-    from .memory_backend import IMMUTABLE_CELLS
-
-    return infer_dtype(array.ravel(), skipna=True) in IMMUTABLE_CELLS
+    return immutable_cells(array.ravel())
 
 
 def _freezable_values(values: Any, cells_known: bool = False) -> bool:
