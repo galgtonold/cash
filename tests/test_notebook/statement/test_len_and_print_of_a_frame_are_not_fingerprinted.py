@@ -63,3 +63,24 @@ def test_print_to_a_file_may_write_so_its_handle_is_a_candidate(tmp_path):
         assert _candidates("print(df, file=handle)", df=pd.DataFrame({"a": [1]}), handle=handle) == frozenset(
             {"df", "handle"}
         )
+
+
+def test_a_read_only_library_function_is_no_candidate():
+    """``np.quantile(deltas, 0.95)`` over 1.7 million values took 38.7 s
+    against 0.4 s plain: the list was pickled before and after."""
+    ns = {"np": np, "deltas": [np.timedelta64(1, "s")] * 3, "df": pd.DataFrame({"a": [1]})}
+    assert _candidates("np.quantile(deltas, 0.95)", **ns) == frozenset()
+    assert _candidates("np.mean(deltas)", **ns) == frozenset()
+
+
+def test_a_function_of_the_same_name_is_not_trusted():
+    fake = type("np", (), {"quantile": staticmethod(lambda x, q: x)})
+    assert _candidates("np.quantile(deltas, 0.95)", np=fake, deltas=[1, 2]) == frozenset({"deltas"})
+
+
+def test_a_read_only_library_function_on_a_notebooks_own_type_is_a_candidate():
+    class Thing:
+        def __array__(self, dtype=None, copy=None):
+            return np.zeros(2)
+
+    assert _candidates("np.mean(thing)", np=np, thing=Thing()) == frozenset({"thing"})

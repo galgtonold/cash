@@ -117,9 +117,11 @@ __all__ = ["StatementProcessor", "is_control_body"]
 _LOG_PROCESSOR = "[PROCESSOR]"
 
 #: How long the share check of a statement's outputs may take: a multiple of
-#: what the statement cost, but not less than a second.
+#: what the statement cost, but not less than a tenth of a second. A second
+#: let a 0.05 s loop over a big list of sessions take 1.1 s, every run: past
+#: the budget the statement only re-runs, which costs what it is worth.
 SHARE_CHECK_FACTOR = 2.0
-SHARE_CHECK_FLOOR_S = 1.0
+SHARE_CHECK_FLOOR_S = 0.1
 _LOG_DEBUG = "[DEBUG]"
 _LOG_MUTATION = "[MUTATION]"
 _LOG_CACHE_HIT = "[CACHE_HIT_DEBUG]"

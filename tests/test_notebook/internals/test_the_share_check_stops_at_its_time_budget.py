@@ -39,3 +39,11 @@ def test_no_budget_set_means_no_limit():
     values = {"session": ns["session"], "actions": ns["actions"]}
     holders, _shared = share_group(["session", "actions"], values, ns)
     assert set(holders) == {"sessions"}
+
+
+def test_a_cheap_statement_gets_a_short_budget():
+    """A floor of a second let 15 cheap cells of one notebook take 1.1 s
+    each, every run, against 0.01-0.17 s plain."""
+    from cash.notebook.statement import processor
+
+    assert processor.SHARE_CHECK_FLOOR_S <= 0.1

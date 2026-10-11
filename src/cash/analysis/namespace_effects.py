@@ -43,6 +43,7 @@ from .file_effects import (
     get_base_name,
     locally_opened_handles,
 )
+from .read_only_callees import reads_its_arguments_only
 
 __all__ = [
     "statement_calls_user_writer",
@@ -1037,17 +1038,21 @@ _READ_SAFE_LIBRARIES = frozenset({"builtins", "pandas", "numpy"})
 
 
 def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
-    """``len(df)``, ``print(arr)``: the unshadowed builtin, on pandas, numpy or
-    builtin values only.
+    """``len(df)``, ``print(arr)``, ``np.quantile(deltas, 0.95)``: the
+    unshadowed builtin or a library function that only reads its arguments
+    (`reads_its_arguments_only`), on pandas, numpy or builtin values only.
 
     Such a statement is no candidate for a change in place, so its arguments
     are not fingerprinted before and after: for a frame that is a hash of
-    every value, twice, 14 s for ``len(df)`` over 1.7 million rows.
+    every value, twice, 14 s for ``len(df)`` over 1.7 million rows; for a
+    list of 1.7 million values, 38.7 s for an ``np.quantile`` plain Python
+    ran in 0.4 s.
     """
     func = call.func
-    if not (isinstance(func, ast.Name) and func.id in _READING_BUILTINS):
-        return False
-    if func.id in user_ns and user_ns[func.id] is not getattr(builtins, func.id):
+    if isinstance(func, ast.Name) and func.id in _READING_BUILTINS:
+        if func.id in user_ns and user_ns[func.id] is not getattr(builtins, func.id):
+            return False
+    elif not reads_its_arguments_only(resolve_callee(func, user_ns)):
         return False
     return all(
         type(user_ns[name]).__module__.partition(".")[0] in _READ_SAFE_LIBRARIES

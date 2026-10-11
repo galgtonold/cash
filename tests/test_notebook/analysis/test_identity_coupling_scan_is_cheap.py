@@ -75,3 +75,23 @@ def test_a_container_with_an_object_beside_plain_bulk_still_gets_the_walk(visite
 
     assert decision.identity_coupled_reason("v", [_log(10), Thing()]) is None
     assert any(isinstance(v, Thing) for v in visited), "an object in the value is looked at"
+
+
+def test_a_list_of_numpy_scalars_is_asked_once_per_type(visited):
+    """``plt.hist(deltas)`` over 1.7 million numpy timedeltas took 3.6 s
+    longer than plain, asking each item."""
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("matplotlib.figure")
+    deltas = [np.timedelta64(i, "s") for i in range(300)] + [np.float64(i) for i in range(300)]
+    assert decision.receiver_is_identity_coupled(deltas) is False
+    assert len(visited) <= 4
+
+
+def test_an_axes_after_many_scalars_or_in_an_object_array_is_still_found():
+    np = pytest.importorskip("numpy")
+    figure_mod = pytest.importorskip("matplotlib.figure")
+    ax = figure_mod.Figure().add_subplot()
+    assert decision.receiver_is_identity_coupled([np.float64(i) for i in range(300)] + [ax]) is True
+    holder = np.empty(1, dtype=object)
+    holder[0] = ax
+    assert decision.receiver_is_identity_coupled([np.zeros(3), np.zeros(2), holder]) is True

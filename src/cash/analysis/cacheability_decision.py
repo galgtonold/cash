@@ -169,13 +169,19 @@ def _coupled_kind_in_container(value: Any) -> str | None:
     if not _coupled_classes_loaded() or _plain_data.is_tree(value):
         return None
     seen = {id(value)}
+    # Types already found to be neither coupled nor a container: whether an
+    # item is either is a question of its type, but for an array, whose dtype
+    # decides. A list of 1.7 million numpy timedeltas asked it of each item:
+    # 3.6 s for a ``plt.hist(deltas)`` plain Python ran in 4.5 s.
+    leaves = set(_SCALAR_TYPES)
     stack = [iter(root_items)]
     while stack:
         item = next(stack[-1], _EXHAUSTED)
         if item is _EXHAUSTED:
             stack.pop()
             continue
-        if type(item) in _SCALAR_TYPES:
+        item_type = type(item)
+        if item_type in leaves:
             continue
         kind = _coupled_kind(item)
         if kind is not None:
@@ -186,6 +192,8 @@ def _coupled_kind_in_container(value: Any) -> str | None:
         if items is not None:
             seen.add(id(item))
             stack.append(iter(items))
+        elif item_type.__name__ != "ndarray":
+            leaves.add(item_type)
     return None
 
 

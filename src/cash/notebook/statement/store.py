@@ -480,6 +480,11 @@ class StatementStore:
         """
         if run.force_persist or self._reads_files(execution, file_dependencies):
             return False
+        if _only_shows_a_name(run.tree):
+            # ``data`` alone: its cost is the display, which a hit repeats.
+            # Stored, the value was copied and pickled again, 0.6 s for a
+            # list of 87,000 sessions, then refused as not worth its bytes.
+            return True
         # On a contended machine a trivial statement can measure tens of ms
         # and clear the floor, so nothing may assume this branch is taken
         # for a given statement (the floor-exit test pins the threshold
@@ -732,3 +737,13 @@ class StatementStore:
                 backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
+
+
+def _only_shows_a_name(tree: ast.Module | None) -> bool:
+    """Whether the statement is a bare name, which only shows its value."""
+    return (
+        tree is not None
+        and len(tree.body) == 1
+        and isinstance(tree.body[0], ast.Expr)
+        and isinstance(tree.body[0].value, ast.Name)
+    )
