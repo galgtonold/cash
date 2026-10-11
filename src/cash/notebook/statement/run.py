@@ -135,6 +135,20 @@ class StatementRun:
     mut_observe: set[str] = field(default_factory=set)
     mut_assumed: set[str] = field(default_factory=set)
     mut_record: bool = False
+    #: What the mutation verdict of the statement is recorded under:
+    #: ``source_hash``, but the text without its iteration marker for a
+    #: statement of a loop or branch body, so each pass shares it.
+    verdict_hash: str = ""
+    #: For a statement of a loop or branch body, or a structure run as one
+    #: unit: the names it changes in place that are not its outputs. It
+    #: runs every time for them, and the loop it is in owns their lineage.
+    in_place: set[str] = field(default_factory=set)
+    #: It decides a verdict as it runs, so it must run rather than be
+    #: restored (an entry would leave what it changes unseen).
+    must_run: bool = False
+    #: For a loop run as one unit whose watch is learning (``loop_watch``):
+    #: the loop's code, the watch's name.
+    loop_watch: str | None = None
     #: Estimator-fit receivers cached under ``# @cash:cache-fit``.
     est_fit: set[str] = field(default_factory=set)
     #: What actually executes: ``code`` with eligible calls routed through

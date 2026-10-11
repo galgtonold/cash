@@ -52,7 +52,7 @@ per statement, which the badge reports as cash's own overhead.
 
 ## Fine-grained caching: loops and branches
 
-<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @92c967cb -->
+<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @a5910229 -->
 A `for` loop is cached one iteration at a time. Each iteration's statements
 are keyed with the loop variable's value, so changing one item of the list
 does not throw away the others.
@@ -91,7 +91,20 @@ chain: each iteration depends only on its own item. See
 [call-level caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls)
 and [reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @92d2fcf2, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @198f9c8f -->
+<!-- claim: cash/notebook/statement/in_loop.py:InLoopChanges.moved @928c2115, cash/notebook/loop_watch.py:LoopWatch.finish @47cec88f -->
+A body statement that changes an object in place (`history.append(loss * lr)`,
+`tr.step(lr)`, `add_tax(r)` with a function of yours) moves that object on for
+the passes after it, so `loss = score(history, epoch)` in a later pass is keyed
+on what the earlier passes appended, and an edit of `lr` above reaches every
+pass. Such a statement runs every time, as the same line does in a cell: a
+restore would bring back only what it binds. A loop that hands an object to a
+library function cash cannot judge (`heapq.heappush(h, x)`, `np.copyto(a, b)`,
+`x = dq.popleft()`) is watched the first time each version of the loop runs:
+the objects are hashed before and after, and the ones that changed are
+recorded for that loop's text, so later runs, a restart and the upstream check
+move the same names.
+
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @92d2fcf2, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b99280d5 -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,

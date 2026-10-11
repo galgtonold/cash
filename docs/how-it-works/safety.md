@@ -129,7 +129,9 @@ A method call has no assignment target, so cash classifies its object:
   counts as changed. A variable handed to a function of your own (one defined
   in the notebook or in a module of your project) is fingerprinted wherever
   the call is: `summary = add_features(df)`, `r = work(s.d)` (the whole of `s`),
-  `rs = [work(d) for d in ds]` (all of `ds`). There one that cannot be
+  `rs = [work(d) for d in ds]` (all of `ds`), and so are the items a
+  comprehension or `map` calls a method on (`[r.update(tax=1) for r in
+  records]`, `map(lambda r: r.update(tax=1), records)`: all of `records`). There one that cannot be
   fingerprinted, such as a database connection, does not count as changed. A
   library function whose result is kept (`m = np.mean(arr)`) is not watched,
   unless the call asks it to write into what it is handed: an `out=`,

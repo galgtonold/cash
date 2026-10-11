@@ -213,6 +213,8 @@ class ControlStructureProcessor:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes)
         finally:
             self._unit_frame = None
+            # A structure that failed part way leaves no watch open.
+            sp.in_loop.drop_watches()
             if positions:
                 try:
                     sp.advance_carriers_of_a_structure(
@@ -635,14 +637,18 @@ class ControlStructureProcessor:
         annotation, and clean-traceback line offset can never drift apart.
         """
         # After execution, update lineage for mutated variables
-        if update_lineage and metrics.get("status") in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+        status = metrics.get("status")
+        if update_lineage and status in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
             _helpers.update_lineage_after_execution(
                 self.shell,
                 self.statement_processor,
                 node,
                 code,
                 unit_digest=self._unit_digest(node, code, metrics),
+                also=self.statement_processor.in_loop.close_watch(code, ran=status == CacheStatus.COMPUTED),
             )
+        elif update_lineage:
+            self.statement_processor.in_loop.close_watch(code, ran=False)
 
         # Annotate metrics with control structure body statements
         # so the badge can show individual statements instead of the

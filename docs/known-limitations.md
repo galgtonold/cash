@@ -490,6 +490,19 @@ build the list with a comprehension, which is cached at any length.
 out = [fetch(e) for e in entities]
 ```
 
+### The first run of a loop hashes what it hands to a library
+
+<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @d18ee8ce -->
+cash cannot tell from the text whether a library function changes what it is
+handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not). The first time a
+version of a loop runs, cash hashes each such object before and after it, about
+1 s per GB, and records which ones changed for that loop's text; later runs,
+hits and restarts use the record. Editing the loop, or splitting a long one into
+a head and a rest, pays it again once. Builtins that only read (`len`, `sum`,
+`print`), methods known to only read, and functions of yours that do not change
+their arguments are not hashed. While a version is being learned, the loop runs
+rather than being served from the cache.
+
 ### Reordering a loop's items re-runs the tail
 
 A loop that folds into a running total (`s += compute(x)`) keys each iteration

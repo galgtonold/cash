@@ -69,7 +69,13 @@ class ControlSimulation:
             node,
             self.statements.is_unbound_builtin,
             lambda name: is_module_name(name, user_ns, virtual_modules),
+            namespace=user_ns,
+            resolve_source=self.statements.function_source,
         )
+        # What the runtime saw the loop change through a library call
+        # (``heapq.heappush(h, x)``), as it recorded it; before it has run
+        # this loop, every name such a call is handed.
+        mutated_vars |= self.statements.loop_watch_changes(node, virtual_modules)
         vars_mutated_by_loops.update(mutated_vars)
         # A local module the structure sets state on moves on too, as the
         # runtime's ``update_lineage_after_execution`` moves it; but it is

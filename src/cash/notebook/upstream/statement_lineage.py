@@ -25,6 +25,7 @@ from ...analysis.mutation_effects import (
     captured_call_receiver_names,
     cell_definitions,
     classify_receivers,
+    is_module_name,
     live_function_source,
     statement_effects,
 )
@@ -57,6 +58,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     statement_environment_component,
 )
+from ..loop_watch import loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
@@ -207,6 +209,27 @@ class StatementLineage:
         if verdict is not None:
             self.tracking_state.mutation_verdicts.setdefault(source_hash, verdict)
         return verdict
+
+    def function_source(self, name: str) -> str | None:
+        """Source of function *name*, as the simulation reads it (`_function_source`)."""
+        return self._function_source(name)
+
+    def loop_watch_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
+        """What the loop *node* changed through code its text cannot decide
+        (``loop_watch``): what the runtime recorded when it ran this loop
+        source, this session or an earlier one; before it has, every name
+        the loop hands to such code."""
+        if not isinstance(node, (ast.For, ast.While)):
+            return set()
+        verdict = self._mutation_verdict(loop_watch_hash(ast.unparse(node)))
+        if verdict is not None:
+            return set(verdict)
+        user_ns = self.shell.user_ns
+        return set(
+            watch_candidates(
+                node, user_ns, lambda name: is_module_name(name, user_ns, virtual_modules), self._function_source
+            )
+        )
 
     def recorded_mutations(self, stmt_code: str) -> set[str] | None:
         """What the runtime recorded *stmt_code* changing in place when it
