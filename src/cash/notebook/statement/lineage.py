@@ -83,7 +83,7 @@ def _record_file_reads(
     return file_hash_component
 
 
-def _clear_rebound_edges(
+def clear_rebound_edges(
     tracking_state: "TrackingState", outputs: set[str], inputs: set[str], user_ns: dict[str, Any]
 ) -> None:
     """Drop the derivation-alias edges of the outputs a statement rebinds.
@@ -137,8 +137,18 @@ class StatementLineageBuilder:
         tree: ast.Module | None = None,
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
+        replay_bumps: bool = True,
+        lineage_reads: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
         """Capture output variables, compute their lineage, and update tracking state.
+
+        *lineage_reads* are outputs changed without being read as inputs
+        (the current figure a ``plt.plot`` draws on): their lineage before
+        joins every output's, as an input's would.
+
+        *replay_bumps* False leaves the derivation bumps to the caller
+        (:meth:`replay_derivation_bumps`), which knows by then which
+        variables the statement's entry moves on itself.
 
         *no_cache* marks a ``# @cash:no-cache`` statement: each output's
         lineage then also carries a digest of its value
@@ -166,14 +176,14 @@ class StatementLineageBuilder:
         # lineage makes the reconstruction re-run the producing fit, which mints
         # yet another model, so a consumer never agrees with the value recorded
         # beside it -- measured, it broke even the first clean run.
-        lineage_inputs = inputs | lineage_hidden_reads(code)
+        lineage_inputs = inputs | lineage_hidden_reads(code) | lineage_reads
         # The environment and the data of the user's modules it read, as its
         # key folds them: a new value is a new lineage, so what is built on an
         # output misses too.
         environment = recorded_reads_lineage_component(tracking_state, cache_key, code, user_ns)
         value_digests: dict[str, str] = {}
 
-        _clear_rebound_edges(tracking_state, outputs, inputs, user_ns)
+        clear_rebound_edges(tracking_state, outputs, inputs | lineage_reads, user_ns)
 
         # The inputs as the statement read them, taken once before any output
         # is recorded. Read inside the loop, an output that is also an input
@@ -223,21 +233,46 @@ class StatementLineageBuilder:
             else:
                 tracking_state.no_cache_values.pop(cache_key, None)
 
-        # After all outputs' lineages are recorded, replay derivation bumps:
-        # a mutation of a base/frame bumps its live-alias derivatives
-        # . Skip-inputs rule keeps view *creation* from
-        # invalidating its base. Runtime attaches the live value so the bumped
-        # var's ``_cash_lineage_hash`` stays paired with its dict entry.
-        bump_derived_lineages(
+        if replay_bumps:
+            self.replay_derivation_bumps(tracking_state, outputs, inputs)
+
+        return captured_vars
+
+    def replay_derivation_bumps(
+        self,
+        tracking_state: "TrackingState",
+        outputs: set[str],
+        inputs: set[str],
+        skip: set[str] | frozenset[str] = frozenset(),
+    ) -> set[str]:
+        """Move on the variables a statement with *outputs* changed through
+        another name (`bump_derived_lineages`); the names moved.
+
+        A mutation of a base/frame bumps its live-alias derivatives, a change
+        to a list bumps every other variable bound to it or holding it. The
+        skip-inputs rule keeps view *creation* from invalidating its base.
+        The live value is attached so the bumped var's tag stays paired with
+        its dict entry, and its session content hash follows the change: the
+        value changed through the alias is the value a later cell starts
+        from, not this cell's own prior output (`StaleValueGuard`).
+        """
+        user_ns = self.shell.user_ns
+
+        def record(target: str, lineage_hash: str) -> None:
+            value = user_ns.get(target)
+            tracking_state.lineage.record(target, lineage_hash, value=value)
+            if target in tracking_state.current_session_hashes:
+                self._update_variable_content_hashes(tracking_state, target, value, lineage_hash)
+
+        return bump_derived_lineages(
             tracking_state.derivation_edges,
             tracking_state.variable_lineage,
             outputs,
             inputs,
-            record=lambda t, h: tracking_state.lineage.record(t, h, value=user_ns.get(t)),
+            record=record,
             present=lambda t: t in user_ns,
+            skip=skip,
         )
-
-        return captured_vars
 
     def _record_output(
         self,

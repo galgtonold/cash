@@ -1,10 +1,11 @@
-"""Known indirect-mutation channels not yet reset on isolated re-run.
+"""Indirect-mutation channels on an isolated re-run.
 
-Same root family as the alias-reset fixes: an object reachable from an upstream variable
-is mutated in the cell, but the mutation is attributed to a different name, so
-the upstream holder is never reset and the value doubles on re-run. A fix covered
-the bare `Name = Name` alias channel (incl. DataFrame aliases). These four remain
-as tracked limitations; each xfail flips to XPASS when its channel is fixed.
+An object reachable from an upstream variable is mutated in the cell through
+another name. The statement that made the two names share the object links
+them, so the upstream holder is reset and the value does not double on
+re-run: an attribute store (``b.ref = x``), a tuple holding a list, a
+conditional alias. The walrus receiver is still a tracked limitation; its
+xfail flips to XPASS when its channel is fixed.
 """
 
 import pytest
@@ -21,7 +22,6 @@ def _rerun(nb_runner, setup, cell, expect):
     assert expect in nb_runner.get_output(2), f"re-run: {nb_runner.get_output(2)!r}"
 
 
-@pytest.mark.xfail(reason="attribute-store alias not tracked")
 def test_alias_via_attribute(nb_runner):
     _rerun(
         nb_runner,
@@ -31,7 +31,6 @@ def test_alias_via_attribute(nb_runner):
     )
 
 
-@pytest.mark.xfail(reason="container-element aliasing not tracked")
 def test_tuple_holds_mutable(nb_runner):
     _rerun(nb_runner, "lst = [1, 2]", "t = (lst,)\nt[0].append(3)\nprint(lst)", "[1, 2, 3]")
 
@@ -43,6 +42,5 @@ def test_walrus_alias_mutate(nb_runner):
     _rerun(nb_runner, "x = [1, 2]", "(y := x).append(3)\nprint(x)", "[1, 2, 3]")
 
 
-@pytest.mark.xfail(reason="ternary alias is flow-sensitive (two sources)")
 def test_conditional_alias(nb_runner):
     _rerun(nb_runner, "x = [1, 2]\nz = [9]", "y = x if True else z\ny.append(3)\nprint(x)", "[1, 2, 3]")

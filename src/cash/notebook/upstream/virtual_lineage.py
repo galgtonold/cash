@@ -649,6 +649,8 @@ class VirtualLineage:
             # where its text does not name it (`set_k(5)` imported from it):
             # a rebuild runs the import before it.
             inputs = set(inputs) | (outputs & self.statements.module_state_outputs(stmt_code))
+            # So does one that draws on pyplot's current figure and axes.
+            inputs |= outputs & self.statements.pyplot_draw_outputs(stmt_code, parse_cached(stmt_code))
 
         if outputs:
             produced_lineages = {out: virtual_lineage[out] for out in outputs if out in virtual_lineage}

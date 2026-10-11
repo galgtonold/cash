@@ -16,8 +16,10 @@ from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.control_markers import has_marker
+from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import (
     CacheKeyComputationError,
+    CashWarning,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.call_effects import DigestHandoff
@@ -51,11 +53,12 @@ from cash.notebook.statement.imports import (
     redundant_import_names,
 )
 from cash.notebook.statement.input_change import input_change_reason
-from cash.notebook.statement.lineage import StatementLineageBuilder
+from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
 from cash.notebook.statement.mutations import MutationClassifier
-from cash.notebook.statement.output_refusals import live_shared_reason, unrestorable_output_reason
+from cash.notebook.statement.derivation_edges import record_shared_object_edges
+from cash.notebook.statement.output_refusals import is_history_name, live_shared_reason, unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
@@ -117,8 +120,18 @@ from ..magic_effects import (
 from ..pyplot_state import CHANGED_PYPLOT_REASON, pyplot_state
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
+from ..pyplot_draws import holds_artists, pyplot_draw_names
 from ..run_memo import forget_file_state_this_run
-from ..shared_objects import WalkBudgetExceeded, walk_budget
+from ..shared_objects import (
+    VALUE_TYPES,
+    WalkBudgetExceeded,
+    is_value,
+    library_value_types,
+    output_history,
+    referring_names,
+    share_group,
+    walk_budget,
+)
 from ..write_observer import observe_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
@@ -130,6 +143,16 @@ _LOG_PROCESSOR = "[PROCESSOR]"
 #: what the statement cost, but not less than a second.
 SHARE_CHECK_FACTOR = 2.0
 SHARE_CHECK_FLOOR_S = 1.0
+#: The least time the search for the variables sharing an object with a
+#: statement's outputs takes when the share check could not say
+#: (`referring_names`).
+SHARE_FALLBACK_FLOOR_S = 1.0
+
+
+def share_check_budget(cost: float) -> float:
+    """Seconds the share check of a statement that took *cost* may take."""
+    return max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+
 _LOG_DEBUG = "[DEBUG]"
 _LOG_MUTATION = "[MUTATION]"
 _LOG_CACHE_HIT = "[CACHE_HIT_DEBUG]"
@@ -177,6 +200,8 @@ class StatementProcessor:
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
 
         self._amplification = AmplificationGuard()
+        #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
+        self._share_unchecked_warned: set[str] = set()
 
         # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
         analytics = getattr(cash_instance, "analytics", None)
@@ -802,6 +827,11 @@ class StatementProcessor:
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        # What changed through an alias moves on as a run moves it, past the
+        # variables the entry restored with its outputs (moved on already).
+        moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
+        clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns)
+        self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
         self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
@@ -1302,6 +1332,7 @@ class StatementProcessor:
         self._records.persist_import_bindings(run.code, run.tree)
 
         self._key_a_newly_seen_draw(run)
+        self._route_pyplot_draws(run)
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
             run.outputs,
@@ -1313,12 +1344,16 @@ class StatementProcessor:
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
             no_cache=(run.annotation is not None and run.annotation.no_cache) or self._binds_a_stream(run),
+            replay_bumps=False,
+            lineage_reads=run.pyplot_drawn,
         )
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.
         with _plain_data.one_look(captured_vars):
+            holders = None
             if not run.skip_cache:
-                self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+                holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+            self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
             self._record_file_effects(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
@@ -1338,7 +1373,11 @@ class StatementProcessor:
                 )
             else:
                 logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
-        self._move_holders(run, saved_metadata)
+        moved = self._move_holders(run, saved_metadata)
+        # After the holders moved: a variable the entry stores moves as a hit
+        # of it moves it (`held_lineage`), not through its edges, so a hit,
+        # a run and the simulation leave it alike.
+        self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
@@ -1358,7 +1397,7 @@ class StatementProcessor:
 
     def _refuse_unrestorable_outputs(
         self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = (), cost: float = 0.0
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Skip-cache *run* when one of its output values cannot be stored and
         restored faithfully (:func:`unrestorable_output_reason`).
 
@@ -1376,7 +1415,9 @@ class StatementProcessor:
         # The check may not take longer than the statement is worth: a hit
         # saves `cost`, and finding the holders of a loop variable that is
         # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
-        budget = max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+        budget = share_check_budget(cost)
+        found: dict[str, Any] | None = None
+        gave_up: list[bool] = []
         try:
             with walk_budget(budget):
                 reason = unrestorable_output_reason(
@@ -1386,21 +1427,167 @@ class StatementProcessor:
                     cash_held=[*self._calls.held_call_results(), echo, run.metrics],
                     shell=self.shell,
                     holders=holders,
+                    gave_up=gave_up,
                 )
                 if reason is None and echo:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
                 if reason is None and holders:
+                    found = dict(holders)
                     reason = self._take_holders(run, captured_vars, holders)
         except WalkBudgetExceeded:
+            run.share_unchecked = True
             reason = (
                 f"finding which other variables hold objects of its outputs would take longer than "
                 f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
             )
+        if reason is None and found is not None:
+            return found
+        # Gave up on a holder that is not a variable: no variable to link,
+        # and asking again would cost the check twice.
+        run.share_gave_up = bool(gave_up)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
+            return None
+        return holders
 
-    def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> None:
+    def _route_pyplot_draws(self, run: StatementRun) -> None:
+        """Take the names bound to pyplot's current figure and axes for
+        changed by *run* when it drew through pyplot (`pyplot_draw_names`):
+        outputs whose lineage folds in the one they had, so it moves with the
+        statement's code, as ``ax.plot(...)`` moves ``ax``'s. Recorded for the
+        simulation (``TrackingState.pyplot_draw_outputs``). A loop or branch
+        body is left to its structure (``update_lineage_after_execution``).
+        """
+        if is_control_body(run.code):
+            return
+        names = pyplot_draw_names(run.tree, self.shell.user_ns)
+        known = self.tracking_state.pyplot_draw_outputs
+        if names or run.source_hash in known:
+            known[run.source_hash] = names
+        if not names:
+            return
+        # Outputs, and inputs too, so their new lineage folds in the one
+        # they had and the simulation chains the draws of a figure in order.
+        run.outputs = run.outputs | names
+        run.inputs = run.inputs | names
+        run.pyplot_drawn = names
+        if not run.skip_cache:
+            run.skip_cache = True
+            run.metrics["uncacheable_reasons"].append(
+                f"Draws through pyplot on: {', '.join(sorted(names))} (statement re-executes)"
+            )
+
+    def _record_shared_object_edges(
+        self,
+        run: StatementRun,
+        captured_vars: dict[str, Any],
+        holders: dict[str, Any] | None,
+        echo: tuple[Any, ...] = (),
+        cost: float = 0.0,
+    ) -> None:
+        """Record an edge between each output and every other variable bound
+        to its object, holding it or held in it (`record_shared_object_edges`),
+        so a later change through one name moves the other's lineage too.
+
+        *holders* is what the share check of a stored statement found
+        already (`_refuse_unrestorable_outputs`); for any other statement --
+        one that re-executes every run, like ``raw.append(x)`` -- the same
+        check (`share_group`) is asked here, within the same time budget.
+        When its budget ran out, the variables are looked for from the
+        outputs up (`referring_names`); when that is cut short too, some may
+        be missing, and the NOTEBOOK-SHARE-UNCHECKED warning says so. A
+        holder that is not a variable (a closure, a library's registry) links
+        no variable. A loop or branch body is
+        left to its structure, which moves what it changed when it ends
+        (``update_lineage_after_execution``).
+        """
+        if is_control_body(run.code):
+            return
+        outputs = [name for name in run.outputs if name in captured_vars]
+        if not outputs:
+            return
+        complete = True
+        if holders is not None:
+            names = set(holders)
+        else:
+            names, complete = self._holders_of(run, outputs, captured_vars, echo, cost)
+        if names:
+            record_shared_object_edges(self.tracking_state.derivation_edges, outputs, names)
+        if not complete:
+            self._warn_share_unchecked(run, outputs, cost)
+
+    def _holders_of(
+        self, run: StatementRun, outputs: list[str], captured_vars: dict[str, Any], echo: tuple[Any, ...], cost: float
+    ) -> tuple[set[str], bool]:
+        """``(names, complete)``: the variables holding an object of *outputs*
+        too, or held in one. Keeps no output value in a local: the check
+        counts references."""
+        value_types = VALUE_TYPES + library_value_types()
+        # A figure or axes is held by pyplot's registry, which the check
+        # gives up on; how a figure's axes reach it is a derivation edge of
+        # its own (`detect_derivation_edges`).
+        names = [
+            name
+            for name in outputs
+            if not is_value(captured_vars.get(name), value_types) and not holds_artists(captured_vars.get(name))
+        ]
+        if not names:
+            return set(), True
+        user_ns = self.shell.user_ns
+        history, named = output_history(user_ns, self.shell)
+        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
+
+        def foreign(name: str) -> bool:
+            return name in hidden or is_history_name(name)
+
+        budget = share_check_budget(cost)
+        if run.share_gave_up:
+            return set(), True
+        timed_out = run.share_unchecked
+        if not timed_out:
+            try:
+                with walk_budget(budget):
+                    found, shared = share_group(names, captured_vars, user_ns, cash_held, named, foreign=foreign)
+                if not shared:
+                    return set(found), True
+                # A holder that is not a variable (pyplot's figure registry,
+                # a library's cache, a closure): no variable to link, and a
+                # search from the outputs up would climb through the library
+                # until its budget ran out, on every plot statement.
+                return set(), True
+            except WalkBudgetExceeded:
+                timed_out = True
+        found_names, complete = referring_names(
+            [captured_vars[name] for name in names],
+            user_ns,
+            max(budget, SHARE_FALLBACK_FLOOR_S),
+            skip_name=lambda name: foreign(name) or name in names,
+            ignore=[captured_vars, run.metrics, echo, *cash_held],
+        )
+        return found_names, complete
+
+    def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
+        """Warn, once per statement, that the variables sharing an object
+        with *outputs* may not all be known (``NOTEBOOK-SHARE-UNCHECKED``)."""
+        if run.source_hash in self._share_unchecked_warned:
+            return
+        self._share_unchecked_warned.add(run.source_hash)
+        listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+        what = (
+            f"cash could not find, within {share_check_budget(cost):.1f}s, every other variable that holds "
+            f"an object of {listed} or is held in one. A later change made in place through such a variable "
+            f"may not re-run the cells that read {listed}, or the other way round."
+        )
+        fix = (
+            "if a later cell changes these objects in place through another name, rebind instead "
+            "(x = x + [v]) or re-run the cells that read them yourself."
+        )
+        log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
+
+    def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores
         with its outputs (`held_lineage`), as a hit of it does, once the entry
         holds them; and record that for the simulation (``held_with``).
@@ -1421,7 +1608,7 @@ class StatementProcessor:
         if holders or run.entry_holders or cache_key in self.tracking_state.held_with:
             self.tracking_state.held_with[cache_key] = dict(holders or {})
         if not holders:
-            return
+            return set()
         for name, before in holders.items():
             apply_held_var(
                 self.tracking_state,
@@ -1430,6 +1617,7 @@ class StatementProcessor:
                 held_lineage(before, cache_key),
                 compute_hash=self.compute_hash,
             )
+        return set(holders)
 
     def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
         """Store *holders*, the variables holding an output's object too, with

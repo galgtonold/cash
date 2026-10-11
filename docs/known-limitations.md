@@ -127,29 +127,41 @@ s = stamp(1)
 
 ## Changes cash cannot see
 
-Each of these applies a change a second time, or misses one, on an isolated
-re-run. Run All is not affected.
+Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/analysis/aliases.py:bare_alias_targets @311a21c3, cash/analysis/aliases.py:reference_alias_targets @f052d224 -->
-cash tracks a change through the name the object is bound to. Through another
-name it is invisible, so a re-run applies it twice:
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16 -->
+When a statement leaves two names sharing an object, cash links them: an alias
+(`log = history`), a container holding another variable's object (`config =
+{"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
+(`train = data["train"]`). A change made later through either name moves both,
+so the cells that read the other one re-run, on Run All and on a cell re-run
+alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)
+changes `rows`, and a pyplot call that draws on the current figure
+(`plt.plot(...)`, `plt.title(...)`) changes the names bound to that figure and
+its axes; such a call runs every time.
+
+A change made through an object cash cannot link to a name is invisible, and
+the cells that read the name keep their cached results:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
 ```python { .nb-cell }
-b.ref = x
-b.ref.append(99)       # changes x, but cash sees only b
-
-t = (lst,)
-t[0].append(3)         # changes lst
-
-y = x if flag else z
-y.append(3)            # x or z?
+get = lambda: x
+get().append(5)        # changes x through a closure
 ```
 
-**Fix:** change the object through its own name (`x.append(99)`), or rebind
-(`x = x + [99]`).
+**Fix:** change the object through its own name (`x.append(5)`), or rebind
+(`x = x + [5]`).
+
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+A cell that changes a value in place (`history.append(x)`) and is re-run on its
+own normally starts from the value as the cells above leave it, so the change
+is not applied twice. When a cell below has made another name share that value
+(`log = history`), rebuilding it would leave the two names with different
+objects, so cash keeps the value as it is, applies the change on top of the
+last one, as a plain re-run does, and says so with
+[NOTEBOOK-SHARED-KEPT](warnings.md#notebook-shared-kept).
 
 ### Mutating an object created in an earlier cell
 

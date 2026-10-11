@@ -29,8 +29,10 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import condition_mutations, control_structure_mutations, is_module_name
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
+from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
+from ..pyplot_draws import holds_artists, pyplot_draw_names
 from .common import extract_target_names
 
 logger = logging.getLogger(__name__)
@@ -290,6 +292,14 @@ def update_lineage_after_execution(
     state_names = module_state_names(code, user_ns, structure=True) | state_holders(seen, code, user_ns)
     mutated_vars |= state_names
     statement_processor.note_module_state(code, state_names, module_state_writes(code, user_ns) | seen)
+    # Drawing through pyplot changes the current figure and axes
+    # (``pyplot_draws``); recorded for the simulation as a statement's is.
+    drawn = pyplot_draw_names(node, user_ns)
+    draws = state.pyplot_draw_outputs
+    digest = statement_source_hash(ast.unparse(node))
+    if drawn or digest in draws:
+        draws[digest] = drawn
+    mutated_vars |= drawn
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)
@@ -568,7 +578,14 @@ def update_mutated_variable_lineages(
     *unit_digest*, when given, stands in for the value hash: what went into a
     loop whose outcome is a function of its key, which names the value
     without reading it.
+
+    Then every other variable bound to, holding or held in what moved
+    (``data = raw`` before ``for x in xs: raw.append(x)``) moves on with
+    it, through the edges the statements recorded (`bump_derived_lineages`),
+    as after a single statement. What the structure moved itself is not
+    moved again.
     """
+    moved: set[str] = set()
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
             continue
@@ -581,7 +598,15 @@ def update_mutated_variable_lineages(
 
         try:
             loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
-            value_hash = f"unit={unit_digest}" if unit_digest else statement_processor.compute_hash(val)
+            if unit_digest:
+                value_hash = f"unit={unit_digest}"
+            elif holds_artists(val):
+                # A figure's content is a pickle of the whole figure, which
+                # no check reads (`hashed_by_lineage`): the loop's code, what
+                # it read and the lineage before name it.
+                value_hash = "artists"
+            else:
+                value_hash = statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
             prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)
@@ -596,11 +621,16 @@ def update_mutated_variable_lineages(
             new_lineage = hashlib.sha256(":".join(lineage_components).encode()).hexdigest()
 
             statement_processor.tracking_state.lineage.record(var_name, new_lineage, value=val)
+            moved.add(var_name)
 
             logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...", var_name, new_lineage[:20])
 
         except (TypeError, ValueError, AttributeError) as e:
             logger.debug("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
+    if moved and statement_processor.tracking_state.derivation_edges:
+        statement_processor.lineage_builder.replay_derivation_bumps(
+            statement_processor.tracking_state, moved, set(mutated_vars)
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -30,8 +30,10 @@ SHAPES = {
     ),
     "a nested loop's own target": (
         "rows = [[], []]\nout = []",
+        # ``row`` is rebound each pass, but what it is bound to is an item of
+        # ``rows``: changing it changes ``rows``.
         "for i in range(2):\n    for row in rows:\n        row.append(i)\n    out.append(i)\n",
-        {"out"},
+        {"out", "rows"},
     ),
     "a builtin name the user bound": (
         "list = []\nseen = []",

@@ -1362,6 +1362,8 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+| [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
+| [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
 
@@ -1544,6 +1546,53 @@ fig.savefig("chart.png")
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
+
+### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @1f4e4f9e, cash/notebook/shared_objects.py:referring_names @5602736f -->
+**What happened.** After a statement ran, cash looked for the other variables
+that hold an object of its outputs, or are held in one (`data = raw`,
+`config = {"features": features}`), so that a later change through either
+name re-runs the cells reading the other. The search takes at most twice
+what the statement took (at least a second), and it ran out of time before
+it was sure it had found them all. The message names the outputs. It is
+shown once per statement.
+
+**Why it matters.** A later change made in place through a variable it
+missed (`raw.append(x)`) does not re-run the cells that read the outputs,
+or the other way round, and they keep their cached results.
+
+**What to do.** If a later cell changes these objects in place through
+another name, rebind instead (`raw = raw + [x]`), or re-run the cells that
+read them yourself.
+
+**When it is safe to ignore.** When nothing below changes these objects in
+place, through any name.
+
+### NOTEBOOK-SHARED-KEPT {#notebook-shared-kept}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+**What happened.** You re-ran on its own a cell that changes a value in place
+(`history.append(x)`), and a cell below makes another name share that value
+(`log = history`, `cfg = {"features": features}`). cash normally rebuilds the
+value as the cells above leave it before such a re-run, so the change is not
+applied twice. Here it kept the value as it is: the cell's change applies again
+on top of the one it made last time, as in a plain re-run.
+
+**Why it matters.** A rebuilt value would be a new object under the cell's own
+name only. The name below would keep the old one, and from then on a change
+made through either name would no longer reach the other, which no run of the
+notebook from the top does.
+
+**What to do.** For the value a run from the top gives, run the notebook from
+the top, or from the cell that creates the value.
+
+**When it is safe to ignore.** When the cell's change is meant to accumulate,
+or applying it twice does not change the result (`s.add(x)` on a set).
 
 ## Randomness {#random-codes}
 

@@ -174,6 +174,17 @@ class StatementRun:
     #: outputs (``module_state_names``).
     state_modules: frozenset[str] = frozenset()
     state_names: frozenset[str] = frozenset()
+    #: The names bound to pyplot's current figure and axes, when the
+    #: statement drew through pyplot (``pyplot_draws``): outputs and inputs
+    #: both, so their lineage folds in where they were.
+    pyplot_drawn: frozenset[str] = frozenset()
+    #: The share check of its outputs ran out of time
+    #: (``StatementProcessor._refuse_unrestorable_outputs``), so which other
+    #: variables hold them is not known from it.
+    share_unchecked: bool = False
+    #: The share check of its outputs found a holder that is not a variable
+    #: (a library's registry, a closure), so no variable shares them.
+    share_gave_up: bool = False
     #: The local modules running it was seen rebinding a global of
     #: (``callee_reach.rebound_modules``).
     rebound_modules: frozenset[str] = frozenset()
