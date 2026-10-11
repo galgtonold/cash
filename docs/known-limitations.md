@@ -131,14 +131,16 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:GaveUp @a3ee6e04, cash/notebook/shared_objects.py:view_base_names @34cf5190 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:GaveUp @a3ee6e04, cash/notebook/shared_objects.py:view_base_names @34cf5190, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
 When a statement leaves two names sharing an object, cash links them: an alias
 (`log = history`), a container holding another variable's object (`config =
 {"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
 (`train = data["train"]`), and a numpy view and the array it views (`head =
 big[:5]`). This holds when something that is not a variable holds the object
 too (a function default `def pick(row, cols=features)`, a class attribute, an
-`argparse.Namespace` or a `deque`): the variables are still linked. A change
+`argparse.Namespace` or a `deque`): the variables are still linked. A loop,
+`if` or `try` block that makes two names share an object (`for name, rows in
+pairs: splits[name] = rows`) links them when it ends. A change
 made later through either name moves both,
 so the cells that read the other one re-run, on Run All and on a cell re-run
 alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)

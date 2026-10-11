@@ -34,6 +34,7 @@ from ..callee_reach import module_state_names, module_state_writes, state_holder
 from ..compiled_source import is_cash_filename
 from ..pyplot_draws import holds_artists, pyplot_draw_names
 from .common import extract_target_names
+from .share_candidates import share_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,9 @@ def update_lineage_after_execution(
     body_files: set[str] | None = None,
     unchanged: frozenset[str] | set[str] = frozenset(),
     unit_digest: str | None = None,
+    link_shares: bool = True,
+    cost: float = 0.0,
+    held: tuple[Any, ...] = (),
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -277,6 +281,16 @@ def update_lineage_after_execution(
     *unit_digest* names what a loop run as one unit left by what went in
     (``ControlStructureProcessor._unit_digest``); it then stands in for the
     hash of each changed value.
+
+    With *link_shares*, the variables the structure may have made share an
+    object (`share_candidates`) are linked to every other variable they
+    share one with (``StatementProcessor.record_structure_share_edges``),
+    once, before any lineage moves: ``for name, rows in pairs:
+    splits[name] = rows`` makes ``splits`` hold ``train_rows``, which a body
+    statement does not record. Off for a structure inside a decomposed loop,
+    which the loop's own call covers when it ends. *cost* is what the
+    structure took, for the check's time budget, and *held* what cash still
+    holds of it (the loop's iterable), which is no other holder.
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
@@ -300,6 +314,9 @@ def update_lineage_after_execution(
     if drawn or digest in draws:
         draws[digest] = drawn
     mutated_vars |= drawn
+    if link_shares:
+        names, static = share_candidates(node, mutated_vars, user_ns)
+        statement_processor.record_structure_share_edges(code, names, cost, static=static, held=held)
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)
@@ -404,7 +421,7 @@ class LoopPass:
         branch = _evaluated_chain(node, tests, body)
         own = _evaluated_chain(node, tests, _without_branches(body) or [ast.Pass()])
         self.fired |= structure_mutations(shell, statement_processor, own)
-        update_lineage_after_execution(shell, statement_processor, branch, ast.unparse(node))
+        update_lineage_after_execution(shell, statement_processor, branch, ast.unparse(node), link_shares=False)
 
     def unchanged(self, shell, statement_processor, node: ast.For) -> set[str]:
         """The variables only an ``if`` branch of *node*'s body may change,

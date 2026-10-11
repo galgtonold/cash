@@ -642,6 +642,8 @@ class ControlStructureProcessor:
                 node,
                 code,
                 unit_digest=self._unit_digest(node, code, metrics),
+                link_shares=_helpers.current_loop_pass(self) is None,
+                cost=metrics.get("execution_time", 0.0),
             )
 
         # Annotate metrics with control structure body statements
