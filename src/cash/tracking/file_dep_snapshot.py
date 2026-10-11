@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "snapshot_file_deps",
+    "walk_dataset_dir",
     "snapshot_remote_deps",
     "snapshot_absent_deps",
     "snapshot_present_deps",
@@ -375,6 +376,50 @@ def _read_digest(path: str, size: int) -> str:
                     break
                 hasher.update(view[:n])
     return hasher.hexdigest()
+
+
+def walk_dataset_dir(path: str, keep_dir: Any = None) -> Iterable[tuple[str, list[str], list[str]]]:
+    """``os.walk(path)`` as a dataset reader walks a folder: into linked
+    sub-folders too, each real folder once.
+
+    pandas, pyarrow and polars follow a symlinked (or junctioned) sub-folder
+    of a dataset folder; ``os.walk`` by default does not, so the files under
+    one were never recorded and an edit there kept serving the old result.
+    A link that leads back up the tree is entered once, not forever.
+    *keep_dir* filters sub-folder names (hidden ones, for a dataset reader).
+    """
+    seen: set[Any] = set()
+    top = _folder_identity(path)
+    if top is not None:
+        seen.add(top)
+    for root, dirs, files in os.walk(path, followlinks=True):
+        kept = []
+        for name in sorted(dirs):
+            if keep_dir is not None and not keep_dir(name):
+                continue
+            identity = _folder_identity(os.path.join(root, name))
+            if identity is None or identity in seen:
+                continue
+            seen.add(identity)
+            kept.append(name)
+        dirs[:] = kept
+        yield root, dirs, files
+
+
+def _folder_identity(path: str) -> Any:
+    """Which folder *path* is, through links, or None when it cannot be
+    stat'ed. A file system that reports no inode number is told apart by the
+    resolved path."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    if st.st_ino:
+        return (st.st_dev, st.st_ino)
+    try:
+        return os.path.normcase(os.path.realpath(path))
+    except (OSError, ValueError):
+        return None
 
 
 def snapshot_file_deps(

@@ -7,7 +7,7 @@ import hashlib
 import os
 
 from .data_source import DataSource
-from .tracking.file_dep_snapshot import file_content_hash
+from .tracking.file_dep_snapshot import file_content_hash, walk_dataset_dir
 
 __all__ = ["FileDataSource"]
 
@@ -25,7 +25,8 @@ class FileDataSource(DataSource):
     by its listing; a glob pattern is each match so, and the list of
     matches -- as ``file_depends_on=`` checks them. The directory's own
     mtime does not move when a file in it is edited, and a pattern names no
-    file that exists, so either alone never moved.
+    file that exists, so either alone never moved. A linked sub-folder is
+    walked into, as pandas and pyarrow read it.
     """
 
     def __init__(self, filepath: str):
@@ -45,8 +46,7 @@ def _path_token(path: str) -> str:
     """The token of one file or directory (see `FileDataSource`)."""
     if os.path.isdir(path):
         parts = []
-        for root, dirs, files in os.walk(path):
-            dirs.sort()
+        for root, dirs, files in walk_dataset_dir(path):
             rel = os.path.relpath(root, path)
             parts.append(f"dir:{rel}:{sorted(dirs)!r}")
             parts.extend(

@@ -70,7 +70,7 @@ version, an ETag, a row count with a last-modified time, a digest.
 The same class works in `depends_on=[...]` when the source is fixed; see
 [Custom data sources](../../api/data_sources.md#custom-data-sources).
 
-<!-- claim: cash/file_source.py:FileDataSource @ec702e4c broad="the content-digest contract is a property of the whole class" -->
+<!-- claim: cash/file_source.py:FileDataSource @8fcd6765 broad="the content-digest contract is a property of the whole class" -->
 `FileDataSource(path)` is the built-in source for a file. Its token is the
 file's **content digest**, the same check an automatically tracked read gets:
 a `touch` that leaves the bytes alone keeps the entry, and an edit recomputes

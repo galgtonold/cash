@@ -316,7 +316,7 @@ All parameters are keyword-only and optional:
 | `ttl=` | `None`: no expiry | Seconds an entry stays valid, or a `datetime.timedelta` |
 | `cache_if=` | `None`: store every result | Predicate `(result) -> bool`. A falsy answer returns the result without storing it |
 | `depends_on=` | `None` | A callable or `DataSource` object, or a list of them, to add to the key. Anything else (a path: use `file_depends_on=`) raises `TypeError` |
-| `file_depends_on=` | `None` | A path or list of paths, tracked by content as if the body read them. A directory covers every file under it, a glob pattern its matches |
+| `file_depends_on=` | `None` | A path or list of paths, tracked by content as if the body read them. A directory covers every file under it (through linked sub-folders too), a glob pattern its matches |
 | `dynamic_depends_on=` | `None` | A callable (or list) that gets the call's arguments and returns `DataSource` objects |
 | `frozen=` | `False` | Promise that nothing modifies the result after it is returned, so a cached function receiving it skips hashing it |
 | `strict=` | `False` | Raise `CashImpureFunctionError` on any purity finding. For CI |
