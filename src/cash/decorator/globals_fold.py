@@ -320,13 +320,15 @@ class GlobalsFold:
             # catch it.
             return
         v = g[name]
-        # Skip modules, classes, and plain callables (helpers/deps handled
-        # elsewhere). Containers of callables (dispatch dicts) ARE folded.
+        # Modules are skipped; classes and plain callables are keyed by name
+        # here, their code elsewhere (helpers/deps). Containers of callables
+        # (dispatch dicts) ARE folded.
         if isinstance(v, type):
             # A class's code is keyed as code; what it holds and what its
             # methods read is data (`ClassDataFold.class_parts`).
             if is_user_class(v, fold.own_pkg):
                 fold.classes.append(v)
+            self._code_ref_part(fold, name, v)
             return
         if isinstance(v, types.ModuleType):
             return
@@ -342,6 +344,7 @@ class GlobalsFold:
             # global; plain callables are the helper walk's.
             payload = carried_payload(v)
             if payload is None or payload[0] != "instance":
+                self._code_ref_part(fold, name, v)
                 return
         plain = plain_data_kind(v)
         if not self._fold_value(fold, name, v, plain):
@@ -351,6 +354,17 @@ class GlobalsFold:
             # instance and no code anywhere inside for the walks below.
             return
         fold.parts.extend(self._held_code_parts(fold, name, v))
+
+    def _code_ref_part(self, fold: _ReadsFold, name: str, v: Any) -> None:
+        """Key the class or callable global *name* by what it names
+        (`GlobalValues.code_ref_part`): ``DTYPE = np.float32`` edited to
+        ``np.float64``, or ``AGG = sum`` rebound to ``max``, moves the key.
+        Read again on every key build, so a rebinding in this process moves
+        it too; nothing for the drift guard, as a call cannot change what a
+        name refers to without writing the global, which is never folded."""
+        ref = self._values.code_ref_part(v, getattr(fold.func, "__module__", None), fold.func_name, name)
+        if ref is not None:
+            fold.parts.append((f"{name}#ref", ref))
 
     def _fold_value(self, fold: _ReadsFold, name: str, v: Any, plain: str | None) -> bool:
         """Add the digest of global *name*'s value *v* to *fold*, watched by

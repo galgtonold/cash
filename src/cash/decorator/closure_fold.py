@@ -27,7 +27,7 @@ from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
-from .key_values import SYNC_TYPES, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
+from .key_values import SYNC_TYPES, code_ref, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
 from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
@@ -520,15 +520,17 @@ class HelperIdentity:
     """A helper's identity for the key: its code, its parameter defaults and
     the immutable values its closure captured."""
 
-    def __init__(self, args: ArgHasher, captures: CaptureAnalysis) -> None:
+    def __init__(self, args: ArgHasher, captures: CaptureAnalysis, mutations: LearnedMutations) -> None:
         self._args = args
         self._captures = captures
+        self._mutations = mutations
         # id(helper) -> (helper, __defaults__, __kwdefaults__, what its read
         # cells held, identity snapshots of the mutable values it keyed,
-        # identity); see `identity`. Holding the helper keeps its id from
-        # being recycled while the entry lives. A helper that keyed a mutable
-        # value no snapshot can watch has no entry and is hashed per call.
-        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str]] = LruMemo(CODE_OBJECTS)
+        # identity, the drift guard's entries); see `identity`. Holding the
+        # helper keeps its id from being recycled while the entry lives. A
+        # helper that keyed a mutable value no snapshot can watch has no
+        # entry and is hashed per call.
+        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str, dict]] = LruMemo(CODE_OBJECTS)
 
     def _read_cells(self, fn: Callable) -> tuple:
         """What each closure cell *fn* reads (not writes) holds now, in order:
@@ -550,9 +552,9 @@ class HelperIdentity:
         return tuple(held)
 
     def _capture_part(self, fn: Callable) -> str:
-        return self._captures_of(fn)[0]
+        return self._captures_of(fn, {})[0]
 
-    def _captures_of(self, fn: Callable) -> tuple[str, list]:
+    def _captures_of(self, fn: Callable, watch: dict) -> tuple[str, list]:
         """Digest of the values a helper's closure captured and only reads, or "".
 
         A decorator's arguments live there: ``@scale(10)`` builds a wrapper
@@ -568,6 +570,13 @@ class HelperIdentity:
         value that cannot be hashed raises KEY-UNHASHABLE-CAPTURE
         (`unhashable_capture`), rather than being left out of the key.
 
+        A value the helper calls a method on or passes to a call
+        (``weights.sum()``, ``model.predict(x)``, ``np.sum(a)``) is keyed as
+        the cached function's own capture is: provisionally, with its digest
+        put in *watch* for the drift guard
+        (`PurityChecks.learn_mutating_captures`), which stops keying it once
+        a call is seen to change it.
+
         Returns the digest and the values it keyed that can change in place
         (a config dict the helper only reads), which `identity` watches.
         """
@@ -577,10 +586,11 @@ class HelperIdentity:
             return "", []
         mutable: list = []
         written = self._captures.written_freevars(code)
+        learned = self._mutations.of(code, "closure")
         unsafe: frozenset | None = None
         captures = []
         for name, cell in zip(code.co_freevars, closure):
-            if name in written or name in _CLASS_BODY_CELLS:
+            if name in written or name in _CLASS_BODY_CELLS or name in learned:
                 continue
             try:
                 value = cell.cell_contents
@@ -601,29 +611,39 @@ class HelperIdentity:
             if isinstance(value, SYNC_TYPES):
                 continue
             if callable(value) or isinstance(value, types.ModuleType):
+                # Code: the user's is followed as a helper in its own right.
+                # What it names is keyed here, for the code the helper walk
+                # does not follow: `make(np.float32)` and `make(np.float64)`,
+                # `make(sum)` and `make(max)` shared one key.
+                ref = None if isinstance(value, types.ModuleType) or is_cash_wrapper(value) else code_ref(value)
+                if ref is not None:
+                    captures.append((name, f"ref:{ref}"))
                 continue
+            watched = False
             if not (is_immutable_capture(value) or isinstance(value, IMMUTABLE_VALUE_TYPES)):
                 # A value the helper only READS is data like any other:
                 # `lambda: when` with `when` a list, a dict or a datetime (a
                 # frozen-clock fixture), `x * cfg.weight` with `cfg` a frozen
                 # dataclass. What the body mutates (a decorator's cache
                 # dict, a counter list) stays out: folding it would make
-                # every call miss. An
-                # object that is not a plain container is also left out when
-                # the body calls a method on it or passes it on, which may
-                # change it where the source does not show.
+                # every call miss. A value it calls a method on or passes on
+                # (`weights.sum()`, `model.predict(x)`) is keyed and watched,
+                # as the cached function's own capture is: left out, a
+                # factory helper over a new array or model served the old
+                # result, in this process and the next.
                 if unsafe is None:
                     unsafe = self._captures.unsafe_uses(fn)
                 if name in unsafe:
                     continue
-                if not isinstance(value, (list, dict, set, tuple, frozenset)):
-                    provisional = self._captures.provisional(code) or frozenset()
-                    if name in provisional:
-                        continue
+                provisional = self._captures.provisional(code)
+                watched = provisional is None or name in provisional
             try:
-                captures.append((name, capture_digest(self._args, value)))
+                digest = capture_digest(self._args, value)
             except _UNHASHABLE_CAPTURE_ERRORS as e:
                 raise unhashable_capture(fn, name, value, e) from e
+            captures.append((name, digest))
+            if watched:
+                watch[f"{name}@helper:{id(fn)}"] = (digest, "helper", (fn, name), fn)
             if not _cannot_change(value):
                 # A config dict the helper only reads: `weights["a"] = 3`
                 # changes it under the same object.
@@ -683,6 +703,10 @@ class HelperIdentity:
             and all(map(operator.is_, cached[3], cells))
             and not any(map(_snapshot_moved, cached[4]))
         ):
+            if cached[6]:
+                pending = CAPTURE_WATCH.get()
+                if pending is not None:
+                    pending.update(cached[6])
             return cached[5]
         # After the memo: its entry already holds the captures, and hashing
         # a captured object on every call only to throw the digest away cost
@@ -691,7 +715,8 @@ class HelperIdentity:
         # watched by identity snapshot (`_snapshot_of`); one that cannot be
         # watched leaves no entry, and is hashed on every call, as a data
         # global is.
-        captured, mutable = ("", []) if is_class else self._captures_of(fn)
+        watch: dict = {}
+        captured, mutable = ("", []) if is_class else self._captures_of(fn, watch)
         if captured:
             source = f"{source}:captures:{captured}"
         pos, kwd = ((), {}) if is_class else defaults_of(fn)
@@ -725,8 +750,12 @@ class HelperIdentity:
                     f"cash.register_hasher({bad_type}, ...).",
                 ) from e
         identity = f"{source}:defaults:{digest}"
+        if watch:
+            pending = CAPTURE_WATCH.get()
+            if pending is not None:
+                pending.update(watch)
         if snapshots is not None:
-            self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, cells, snapshots, identity)
+            self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, cells, snapshots, identity, watch)
         else:
             self._defaults_memo.pop(memo_key, None)
         return identity
@@ -915,10 +944,16 @@ class ClosureFold:
         provably only reads it."""
         if is_immutable_capture(v):
             return (name, v)
-        if isinstance(v, SYNC_TYPES) or (callable(v) and not is_user_callable_instance(v)):
-            # A lock holds no data. A class, an ``lru_cache`` wrapper or
-            # another callable is code, followed by the helper walk.
+        if isinstance(v, SYNC_TYPES):
+            # A lock holds no data.
             return None
+        if callable(v) and not is_user_callable_instance(v):
+            # A class, an ``lru_cache`` wrapper or another callable is code,
+            # the user's followed by the helper walk; keyed here by what it
+            # names, for the code that walk does not follow
+            # (`make(np.float32)`, `make(np.add)`).
+            ref = code_ref(v)
+            return None if ref is None else (name, f"ref:{ref}")
         if read_only:
             # Read-only mutable capture: fold its content hash. One that
             # cannot be hashed runs the call uncached rather than being

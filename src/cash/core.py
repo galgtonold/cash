@@ -371,8 +371,8 @@ class Cash:
         self._code = CodeSurface(self._args)
         self._pins = OwnSourcePins()
         self._captures = CaptureAnalysis()
-        self._helpers = HelperIdentity(self._args, self._captures)
         self._mutations = LearnedMutations()
+        self._helpers = HelperIdentity(self._args, self._captures, self._mutations)
         # Deep seam over the registries above: folds source/dependency/
         # helper state into the cache key's ``state_hash`` segment. Borrows
         # the registry dicts by reference so later registrations are seen.

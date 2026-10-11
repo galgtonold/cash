@@ -156,6 +156,12 @@ class CodeArgs:
         # `_warn_untrackable_in_carrier_once`): once per carrier and function.
         self._warned_unhashable_code: set[tuple] = set()
         self._warned_untrackable_carrier: set[tuple] = set()
+        # id(report) -> (report, the attribute names its function and helpers
+        # load); see `_attribute_names`.
+        self._attribute_names_memo: LruMemo[int, tuple[Any, frozenset[str]]] = LruMemo(CODE_OBJECTS)
+        # (id(class), names) -> (class, its MRO's dict sizes, (name, owner
+        # class, attribute, user code it holds)...); see `_installed_code`.
+        self._installed_memo: LruMemo[tuple[int, frozenset[str]], tuple[type, tuple, tuple]] = LruMemo(CODE_OBJECTS)
 
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
         """Say once that code reached through an argument resolves a dependency
@@ -566,7 +572,14 @@ class CodeArgs:
         return cls if is_user_code_object(cls) else None
 
     def fold_code_args(
-        self, args: tuple, kwargs: dict, state_hash: str, func_name: str = "?", owner_code: Any = None
+        self,
+        args: tuple,
+        kwargs: dict,
+        state_hash: str,
+        func_name: str = "?",
+        owner_code: Any = None,
+        func: Any = None,
+        report: Any = None,
     ) -> str:
         """Fold user code reached through the arguments into the key.
 
@@ -581,12 +594,101 @@ class CodeArgs:
         """
         parts: list[str] = []
         seen_carriers: set[int] = set()
+        names: frozenset[str] | None = None
         for param, value in (*((None, a) for a in args), *kwargs.items()):
             parts.extend(self.carrier_parts(value, func_name, param, seen_carriers, owner_code))
+            if func is None or type(value) in CODELESS_PRIMS or isinstance(value, (type, types.ModuleType)):
+                continue
+            if names is None:
+                names = self._attribute_names(func, report)
+            if names:
+                for cls in _accessor_classes(type(value)):
+                    for name, carrier in self._installed_code(cls, names):
+                        for part in self.carrier_parts(carrier, func_name, param, seen_carriers, owner_code):
+                            parts.append(f"installed:{name}:{part}")
         if not parts:
             return state_hash
         payload = ":".join(sorted(set(parts)))
         return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode("utf-8")).hexdigest()
+
+    def _attribute_names(self, func: Any, report: Any) -> frozenset[str]:
+        """The attribute names *func* and the helpers its purity *report*
+        resolves load (``df.money``, ``df.report``): what `_installed_code`
+        looks up on an argument's class. A superset (global names too) does
+        no harm. Kept per report: a new analysis is a new report."""
+        memo_key = id(report) if report is not None else id(getattr(func, "__code__", func))
+        entry = self._attribute_names_memo.get(memo_key)
+        if entry is not None and entry[0] is (report if report is not None else getattr(func, "__code__", func)):
+            return entry[1]
+        functions: list[Any] = [func]
+        if report is not None:
+            for module_name, chain in report.helper_resolution_paths.values():
+                target: Any = sys.modules.get(module_name)
+                for attr in chain:
+                    target = getattr(target, attr, None)
+                if isinstance(target, type):
+                    functions.extend(class_functions(target))
+                elif target is not None:
+                    functions.append(target)
+            for ref in report.helper_objects.values():
+                target = ref() if callable(ref) and not isinstance(ref, types.FunctionType) else ref
+                if target is not None:
+                    functions.append(target)
+        names: set[str] = set()
+        for fn in functions:
+            code = getattr(getattr(fn, "__func__", fn), "__code__", None)
+            if isinstance(code, types.CodeType):
+                for scope in _code_scopes(code):
+                    names.update(scope.co_names)
+        result = frozenset(names)
+        self._attribute_names_memo[memo_key] = (
+            report if report is not None else getattr(func, "__code__", func),
+            result,
+        )
+        return result
+
+    def _installed_code(self, cls: type, names: frozenset[str]) -> tuple[tuple[str, Any], ...]:
+        """The user code installed on a LIBRARY class *cls* under one of
+        *names*, as ``(name, carrier)``: an accessor the project registers
+        (``@pd.api.extensions.register_dataframe_accessor("money")``), a
+        function of the user's patched on (``pd.DataFrame.report = report``),
+        a property. The value's own pickle names none of it, and the helper
+        walk never reaches it, so editing it or a global it reads served the
+        old result.
+
+        Kept per class and *names* while the sizes of the class's MRO
+        dicts and each found attribute stay the same: a rebinding replaces
+        the attribute, an added one grows a dict.
+        """
+        memo_key = (id(cls), names)
+        entry = self._installed_memo.get(memo_key)
+        mro = cls.__mro__
+        if entry is not None and entry[0] is cls:
+            sizes = entry[1]
+            if len(sizes) == len(mro) and all(len(k.__dict__) == n for k, n in zip(mro, sizes)):
+                if all(owner.__dict__.get(name) is attr for name, owner, attr, _ in entry[2]):
+                    return tuple((name, carrier) for name, _, _, carrier in entry[2])
+        found: list[tuple[str, type, Any, Any]] = []
+        if not self._is_user_instance_class(cls):
+            for name in sorted(names):
+                for klass in mro:
+                    attr = klass.__dict__.get(name, _MISSING)
+                    if attr is _MISSING:
+                        continue
+                    for carrier in _installed_user_code(attr):
+                        found.append((name, klass, attr, carrier))
+                    break
+        self._installed_memo[memo_key] = (cls, tuple(len(k.__dict__) for k in mro), tuple(found))
+        return tuple((name, carrier) for name, _, _, carrier in found)
+
+    def _is_user_instance_class(self, cls: type) -> bool:
+        """Is *cls* user code? Its own code is walked as an argument's is."""
+        key = ("user-class", id(cls))
+        verdict = self._attribute_walk_verdicts.get(key)
+        if verdict is None or verdict[0] is not cls:
+            verdict = (cls, is_user_code_object(cls))
+            self._attribute_walk_verdicts[key] = verdict
+        return verdict[1]
 
     def carrier_parts(
         self,
@@ -739,6 +841,57 @@ class CodeArgs:
             return []
         digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)
         return [f"argglobal:{getattr(fn, '__qualname__', '?')}:{digest}"] if digest else []
+
+
+_MISSING = object()
+
+#: The classes a library lets a project register accessors or namespaces on,
+#: per top-level package: a frame argument reaches its columns
+#: (``df["a"].money``) and expressions (``pl.col("a").money``) too.
+_ACCESSOR_FAMILIES = {
+    "pandas": ("DataFrame", "Series", "Index"),
+    "polars": ("DataFrame", "LazyFrame", "Series", "Expr"),
+}
+
+
+def _accessor_classes(cls: type) -> list[type]:
+    """*cls*, and the classes of its library's accessor family that are loaded."""
+    top = (getattr(cls, "__module__", None) or "").partition(".")[0]
+    family = _ACCESSOR_FAMILIES.get(top)
+    module = sys.modules.get(top) if family else None
+    if module is None:
+        return [cls]
+    found = [cls]
+    for name in family:
+        sibling = getattr(module, name, None)
+        if isinstance(sibling, type) and sibling not in found:
+            found.append(sibling)
+    return found
+
+
+def _code_scopes(code: types.CodeType):
+    """*code* and the code objects nested in it (comprehensions, lambdas)."""
+    yield code
+    for const in code.co_consts or ():
+        if isinstance(const, types.CodeType):
+            yield from _code_scopes(const)
+
+
+def _installed_user_code(attr: Any) -> list[Any]:
+    """The user code a class attribute *attr* stands for: a function or class
+    of the user's itself, what a ``staticmethod``, ``classmethod`` or
+    ``property`` wraps, or the functions and classes a library descriptor
+    holds (pandas' accessor keeps the registered class in ``_accessor``)."""
+    if isinstance(attr, (staticmethod, classmethod)):
+        attr = attr.__func__
+    if isinstance(attr, property):
+        candidates = [attr.fget, attr.fset, attr.fdel]
+    elif isinstance(attr, (types.FunctionType, type)):
+        candidates = [attr]
+    else:
+        held = getattr(attr, "__dict__", None)
+        candidates = list(held.values()) if isinstance(held, dict) else []
+    return [c for c in candidates if isinstance(c, (types.FunctionType, type)) and defined_in_user_code(c)]
 
 
 def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:

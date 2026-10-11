@@ -158,10 +158,14 @@ class ModuleAttrFold:
                 return None
 
         def fold(label: str, value: Any) -> None:
-            if isinstance(value, (types.ModuleType, type)):
+            if isinstance(value, types.ModuleType):
                 return
-            if callable(value) and not isinstance(value, (dict, list, tuple, set)):
-                return  # code: the helper walk follows it
+            if isinstance(value, type) or (callable(value) and not isinstance(value, (dict, list, tuple, set))):
+                # Code: the helper walk follows the user's; what it names is keyed here.
+                ref = self._values.code_ref_part(value, root_module, func_name, label)
+                if ref is not None:
+                    parts.append((f"{label}#ref", ref))
+                return
             try:
                 parts.append((label, self._values.data_digest(value)))
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
@@ -245,11 +249,15 @@ class ModuleAttrFold:
         if isinstance(value, type):
             # `cfg.Cfg.RATE`, `cfg.Color.RED.value`: the pair is (cfg, Cfg)
             # and the constant is one attribute further in.
-            if is_mod and is_user_class(value, own_pkg):
-                return self._classes.class_parts(
+            if not is_mod:
+                return []
+            class_parts: list[tuple[str, str]] = []
+            if is_user_class(value, own_pkg):
+                class_parts = self._classes.class_parts(
                     value, func_name, owner_code=reader.owner_code, seen=reader.seen, reader=func
                 )
-            return []
+            # `settings.DTYPE = np.float32` edited to `np.float64`.
+            return class_parts + self._ref_parts(reader, label, value)
         if isinstance(value, types.ModuleType):
             return []
         parts: list[tuple[str, str]] = []
@@ -267,6 +275,7 @@ class ModuleAttrFold:
             # module-level helper's own constants here.
             if is_mod:
                 parts.extend(self._module_callable_parts(reader, obj, attr, label, value))
+                parts.extend(self._ref_parts(reader, label, value))
             return parts
         h = self._values.safe_global_hash(value, func_name, label)
         if h is not None:
@@ -279,6 +288,13 @@ class ModuleAttrFold:
             if self._held_code is not None and plain_data_kind(value) is None:
                 parts.extend(self._held_code(label, value, func_name, reader.owner_code, own_pkg))
         return parts
+
+    def _ref_parts(self, reader: _AttrReader, label: str, value: Any) -> list[tuple[str, str]]:
+        """The key part naming a class or callable a user module holds
+        (`GlobalValues.code_ref_part`): ``settings.AGG = sum`` edited to
+        ``max``."""
+        ref = self._values.code_ref_part(value, getattr(reader.func, "__module__", None), reader.func_name, label)
+        return [(f"{label}#ref", ref)] if ref is not None else []
 
     def _held_class_parts(self, reader: _AttrReader, label: str, value: Any) -> list[tuple[str, str]]:
         """Key parts for the user classes of the instances *value* holds: their
@@ -328,9 +344,12 @@ class ModuleAttrFold:
             if inner not in helper_globals:
                 continue
             iv = helper_globals[inner]
-            if isinstance(iv, types.ModuleType) or isinstance(iv, type):
+            if isinstance(iv, types.ModuleType):
                 continue
-            if callable(iv) and not isinstance(iv, (dict, list, tuple, set)):
+            if isinstance(iv, type) or (callable(iv) and not isinstance(iv, (dict, list, tuple, set))):
+                ref = self._values.code_ref_part(iv, getattr(value, "__module__", None), func_name, f"{label}.{inner}")
+                if ref is not None:
+                    parts.append((f"{label}.{inner}#ref", ref))
                 continue
             h = self._values.safe_global_hash(iv, func_name, f"{label}.{inner}")
             if h is not None:

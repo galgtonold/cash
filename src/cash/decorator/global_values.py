@@ -20,7 +20,7 @@ from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
-from .key_values import carried_payload, held_partials, reduced_state, stabilize_for_global_hash
+from .key_values import carried_payload, code_ref, held_partials, reduced_state, stabilize_for_global_hash
 from .user_code import is_cash_wrapper
 
 if TYPE_CHECKING:
@@ -207,6 +207,52 @@ class GlobalValues:
         return not (
             set(report.helper_source_hashes) - {qualname_of(fn)} or report.helper_bindings or report.cached_callees
         )
+
+    def code_ref_part(self, value: Any, root_module: str | None, func_name: str, label: str) -> str | None:
+        """What a class or a callable read by name (*label*) is keyed by
+        when no other channel keys it: its ``module:qualname`` (`code_ref`).
+
+        ``DTYPE = np.float32``, ``AGG = sum``, ``E = ValueError``: the helper
+        walk keys the user's own code and nothing else, so changing the line
+        to ``np.float64`` or ``max`` -- or rebinding the name while the
+        program runs -- served the old result. A callable OBJECT with no
+        name of its own is keyed by its class when it carries nothing,
+        else by its value. None for a mock, a cached function, one that
+        runs the user's code (the helper walk keys it), or a value that
+        cannot be hashed, which warns KEY-UNHASHABLE-GLOBAL once.
+        """
+        ref = code_ref(value)
+        if ref is not None:
+            return ref
+        if is_mock(value) or is_cash_wrapper(value):
+            return None
+        try:
+            if any(own_code_is_user(layer, root_module) for layer in callable_layers(value)):
+                return None
+        except Exception:  # noqa: BLE001 - undecidable: hash it below
+            pass
+        cls_ref = code_ref(type(value))
+        if cls_ref is not None and not getattr(value, "__dict__", None) and reduced_state(value) is None:
+            # Pickled as a global name (`typing.Any`): that name is what it is.
+            try:
+                reduced = value.__reduce_ex__(4)
+            except Exception:  # noqa: BLE001 - carries nothing else to key
+                reduced = None
+            return f"{cls_ref}:{reduced}" if isinstance(reduced, str) else f"{cls_ref}()"
+        try:
+            return "value:" + self.data_digest(value)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError, RecursionError):
+            self._notices.warn_once(
+                CashImpurityWarning,
+                func_name,
+                label,
+                f"@cash.cache on {func_name}: reads '{label}', a callable "
+                f"{type(value).__qualname__} that could not be hashed, so changes "
+                f"to it will NOT invalidate the cache.",
+                code="KEY-UNHASHABLE-GLOBAL",
+                fix=UNHASHABLE_GLOBAL_FIX,
+            )
+            return None
 
     def carried_state_digest(self, value: Any) -> str | None:
         """Digest of the data a callable carries besides its code, or None.

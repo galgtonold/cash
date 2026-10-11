@@ -70,6 +70,38 @@ def reduced_state(value: Any) -> Any:
     return reduced[:3]
 
 
+def code_ref(value: Any) -> str | None:
+    """``module:qualname`` naming the class or callable *value*, or None when
+    it has no such name (an instance, a mock).
+
+    What a global or a capture holding library code or a class is keyed by
+    when nothing else keys it: ``DTYPE = np.float32``, ``AGG = sum``, ``OP =
+    math.floor``, ``E = ValueError``. The helper walk keys the user's own
+    code, not these, so rebinding the name to ``np.float64`` or ``max``
+    reached no channel. A method bound to a class names the class it is
+    bound to, which a subclass's inherited classmethod does not show.
+    """
+    if is_mock(value):
+        return None
+    try:
+        owner = getattr(value, "__self__", None)
+        if isinstance(value, types.MethodType) and isinstance(owner, type):
+            bound = code_ref(owner)
+            name = getattr(value, "__name__", None)
+            return f"{bound}.{name}" if bound is not None and isinstance(name, str) else None
+        module = getattr(value, "__module__", None)
+        if module is None:
+            # A method descriptor (``str.upper``) names no module; its class does.
+            objclass = getattr(value, "__objclass__", None)
+            module = getattr(objclass, "__module__", None)
+        qualname = getattr(value, "__qualname__", None)
+    except Exception:  # noqa: BLE001 - an object answering any name
+        return None
+    if isinstance(module, str) and isinstance(qualname, str):
+        return f"{module}:{qualname}"
+    return None
+
+
 def held_partials(value: Any) -> list[tuple[tuple, dict]]:
     """The arguments of the ``functools.partial`` objects a wrapper instance
     holds as attributes (``np.vectorize.pyfunc``), for a wrapper that is not

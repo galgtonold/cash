@@ -465,7 +465,12 @@ class KeyBuilder:
             if spec.arg_key is not None:
                 keyed = self.key_arguments(spec, args, kwargs, normalized_args)
             state_hash = self._code_args.fold_code_args(
-                *keyed, state_hash, func_name=func_name, owner_code=getattr(func, "__code__", None)
+                *keyed,
+                state_hash,
+                func_name=func_name,
+                owner_code=getattr(func, "__code__", None),
+                func=func,
+                report=self._registry.report_for(func, func_name),
             )
             chain.append(state_hash)
             dynamic_sources: list = []
