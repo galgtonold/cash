@@ -19,7 +19,6 @@ import collections
 import copy as _copy
 import dis as _dis
 import functools
-import inspect as _inspect
 import logging
 import sys
 import types as _types
@@ -37,6 +36,7 @@ from cash.decorator.arg_hashing import (
 )
 from cash.notebook._tee import TeeWriter
 from cash.sizing import pandas_nbytes
+from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.tracker_context import active_tracker
 from cash.value_hash import compute_hash, is_identity_fallback_hash
@@ -188,18 +188,19 @@ def replay_output(metadata: Mapping[str, Any]) -> None:
 def closure_cells(fn) -> dict[str, _types.CellType]:
     """*fn*'s closure cells, by the name its code reads each one under.
 
-    Those of the function under any ``functools.wraps`` wrapper, whose
-    source is the one analysed for what the call writes.
+    Those of every layer of a ``functools.wraps`` wrapper
+    (`wrapper_layers`): calling it runs the wrapper's body and the wrapped
+    one's, and each is analysed for what the call writes. Where two layers
+    read a cell under one name, the outer layer's is the one given.
     """
-    try:
-        target = _inspect.unwrap(fn)
-    except ValueError:  # a __wrapped__ cycle
-        return {}
-    code = getattr(target, "__code__", None)
-    closure = getattr(target, "__closure__", None)
-    if not isinstance(code, _types.CodeType) or not closure:
-        return {}
-    return dict(zip(code.co_freevars, closure))
+    cells: dict[str, _types.CellType] = {}
+    for layer in wrapper_layers(fn):
+        code = getattr(layer, "__code__", None)
+        closure = getattr(layer, "__closure__", None)
+        if isinstance(code, _types.CodeType) and closure:
+            for name, cell in zip(code.co_freevars, closure):
+                cells.setdefault(name, cell)
+    return cells
 
 
 #: What a closure's object can be to be put back in place on a hit: a
@@ -239,13 +240,12 @@ def rebinds_its_closure(fn) -> bool:
     captured and restored (:func:`capture_globals`); a cell is not a global,
     so such a callee is not cached.
     """
-    try:
-        code = getattr(_inspect.unwrap(fn), "__code__", None)
-    except ValueError:  # a __wrapped__ cycle
-        return False
-    if not isinstance(code, _types.CodeType) or not code.co_freevars:
-        return False
-    return _rebinds(code, frozenset(code.co_freevars))
+    for layer in wrapper_layers(fn):
+        # Every layer of a ``functools.wraps`` wrapper runs.
+        code = getattr(layer, "__code__", None)
+        if isinstance(code, _types.CodeType) and code.co_freevars and _rebinds(code, frozenset(code.co_freevars)):
+            return True
+    return False
 
 
 @functools.lru_cache(maxsize=4096)

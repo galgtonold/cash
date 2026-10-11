@@ -240,7 +240,7 @@ def _compute_def(counter, sleep, mult=10):
     # storing 6 calls and failing at 54/60. Emit no sleep at all when there is
     # none to take; callers passing a real duration are unaffected.
     body_sleep = f"    time.sleep({sleep})\n" if sleep else ""
-    return f"def compute(v):\n    open(r'{counter}', 'a').write('X')\n{body_sleep}    return v * {mult}"
+    return f"def compute(v):\n    open(r'{counter}', 'a').write('X')  # @cash:assume-safe (a test counter)\n{body_sleep}    return v * {mult}"
 
 
 # ---------------------------------------------------------------------------

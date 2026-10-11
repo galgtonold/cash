@@ -30,7 +30,7 @@ def tidy(values):
 
 
 def note(msg):
-    """An APPEND, which a cache hit is understood to skip, like a print."""
+    """An APPEND: a write a cache hit would skip, like a replacing one."""
     with open("run.log", "a", encoding="utf-8") as fh:
         fh.write(msg + "\n")
 

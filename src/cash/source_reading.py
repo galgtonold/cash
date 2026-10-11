@@ -34,6 +34,7 @@ __all__ = [
     "settled_source_version",
     "source_version_unchanged",
     "stat_has_settled",
+    "wrapper_layers",
 ]
 
 #: How long a file must have been left alone before something read from it is
@@ -284,3 +285,30 @@ def own_source(fn: object) -> str:
     if isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__"):
         return getsource(fn.__code__)
     return getsource(fn)
+
+
+def wrapper_layers(fn: object) -> list[object]:
+    """*fn* and each function under it a ``functools.wraps`` wrapper names
+    by ``__wrapped__``, outermost first, each once.
+
+    Calling a wrapper runs its own body and the wrapped function's, so what
+    the call does is what every layer does: a ``counted`` decorator's
+    ``calls[fn.__name__] += 1`` as much as the wrapped body. ``inspect``'s
+    ``unwrap`` and ``getsource`` jump to the innermost layer; read each
+    layer with `own_source`."""
+    layers = [fn]
+    seen = {id(fn)}
+    current = fn
+    while True:
+        # Read from the object's own ``__dict__``, where ``functools.wraps``
+        # puts it: no ``__getattr__`` runs, and a mock's made-up attributes
+        # do not lead on forever.
+        try:
+            own = object.__getattribute__(current, "__dict__")
+        except (AttributeError, TypeError):
+            return layers
+        current = own.get("__wrapped__") if isinstance(own, dict) else None
+        if current is None or id(current) in seen:
+            return layers
+        seen.add(id(current))
+        layers.append(current)

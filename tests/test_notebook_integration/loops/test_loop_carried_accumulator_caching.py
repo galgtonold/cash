@@ -35,7 +35,7 @@ SETUP = "import cash\n%cash_on\n%cash_badge print\nimport time"
 
 
 def _slow_def(counter):
-    return f"def slow(e):\n    open(r'{counter}', 'a').write('X')\n    time.sleep(0.03)\n    return e * 10"
+    return f"def slow(e):\n    open(r'{counter}', 'a').write('X')  # @cash:assume-safe (a test counter)\n    time.sleep(0.03)\n    return e * 10"
 
 
 def _cold_warm_calls(nb_runner, tmp_path, loop_src, tail, loop_idx=4):

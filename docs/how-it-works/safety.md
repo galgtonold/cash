@@ -166,7 +166,7 @@ into a module; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @5c88d0c7 -->
+<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @b05c975d -->
 cash spots side effects from the statement's source, without running it. So:
 
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
@@ -181,12 +181,18 @@ cash spots side effects from the statement's source, without running it. So:
 - A call to a function of yours whose body writes a file counts as a write
   (`save(fig, "chart.png")`), whether it is defined in the notebook or in a
   module of your project (`helpers.save(fig, "chart.png")`), and so does one
-  that writes through another of your functions. A function of an installed
+  that writes through another of your functions, one handed to a call
+  (`map(save, figs)`, `s.apply(save)`), and one that appends (`open(p, "a")`,
+  an experiment log): a log started afresh above and read back below would
+  lose the rows a hit skips. Put `# @cash:assume-safe` on the statement when
+  the write may be skipped, or on the write in your function to cover every
+  caller (a call counter, a debug log). A function of an installed
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
-A statement that reads the clock (`time.time()`, `datetime.now()`), makes a
+A statement that reads the clock (`time.time()`, `time.perf_counter_ns()`,
+`datetime.now()`), makes a
 fresh id (`uuid.uuid4()`), reads random bytes from the system (`os.urandom()`,
 `secrets.token_hex()`) or asks for input (`input()`, `getpass.getpass()`)
 runs every time too. A statement that reads an environment variable by name

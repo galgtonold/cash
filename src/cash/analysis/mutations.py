@@ -231,6 +231,10 @@ def extract_base_name(node: ast.AST) -> str | None:
     if isinstance(node, (ast.Subscript, ast.Attribute)):
         return extract_base_name(node.value)
     if isinstance(node, ast.Call):
+        if _is_type_of(node):
+            # ``type(self).n += 1`` changes the class of ``self``, as
+            # ``self.__class__.n += 1`` does: rooted at ``self``.
+            return extract_base_name(node.args[0])
         # For chained calls like obj.method1().method2(), walk through the Call
         # to find the root variable.
         if isinstance(node.func, ast.Attribute):
@@ -238,6 +242,17 @@ def extract_base_name(node: ast.AST) -> str | None:
         if isinstance(node.func, ast.Name):
             return node.func.id
     return None
+
+
+def _is_type_of(node: ast.Call) -> bool:
+    """``type(x)``: the one-argument call of the name ``type``."""
+    return (
+        isinstance(node.func, ast.Name)
+        and node.func.id == "type"
+        and len(node.args) == 1
+        and not node.keywords
+        and not isinstance(node.args[0], ast.Starred)
+    )
 
 
 def _extract_receiver_base_name(node: ast.AST) -> str | None:
@@ -266,6 +281,9 @@ def _extract_receiver_base_name(node: ast.AST) -> str | None:
         return _extract_receiver_base_name(node.value)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return _extract_receiver_base_name(node.func.value)
+    if isinstance(node, ast.Call) and _is_type_of(node):
+        # ``type(self).registry.append(x)``: the class of ``self``.
+        return _extract_receiver_base_name(node.args[0])
     return None
 
 

@@ -46,3 +46,36 @@ def test_the_cell_below_sees_the_new_values(nb_runner, helper, body):
         "the summary was restored for the old values: " + nb_runner.get_raw_output(5)
     )
     assert nb_runner.peek("s").strip() == expected
+
+
+#: The same helpers in the user's own module.
+TOOLS = (
+    "import time, uuid\n\n\ndef stamp(i):\n    return int(time.time() * 1e6) % 100000\n\n\n"
+    "def tag(i):\n    return uuid.uuid4().int % 1000\n"
+)
+
+
+@pytest.mark.parametrize(
+    "helper, body",
+    [
+        ("import tools", "out.append(tools.stamp(i))"),
+        ("import tools", "out.append(tools.tag(i))"),
+        (
+            "import itertools\nclass IdGen:\n    def __init__(self):\n        self.c = itertools.count(1)\n"
+            "    def next(self, i):\n        return next(self.c)\nidgen = IdGen()",
+            "out.append(idgen.next(i))",
+        ),
+        (
+            "class Clock:\n    def read(self, i):\n        return time.time_ns() % 100000\nclock = Clock()",
+            "out.append(clock.read(i))",
+        ),
+        ("def pc(i):\n    return time.perf_counter_ns() % 100000", "out.append(pc(i))"),
+    ],
+    ids=["a module's clock", "a module's uuid", "a method's counter", "a method's clock", "perf_counter_ns"],
+)
+def test_a_helper_of_a_module_or_a_class_is_read_too(nb_runner, helper, body):
+    """A function of the user's module, a method of their class drawing on
+    what its object holds, and a ``_ns`` timer: the loop's key named the
+    list, and the cell below was restored with the old result."""
+    (nb_runner.work_dir / "tools.py").write_text(TOOLS, encoding="utf-8")
+    test_the_cell_below_sees_the_new_values(nb_runner, helper, body)

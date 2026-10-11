@@ -17,7 +17,6 @@ import dis as _dis
 import fractions as _fractions
 import functools
 import hashlib
-import inspect as _inspect
 import logging
 import pathlib as _pathlib
 import sys
@@ -35,6 +34,7 @@ from cash.install_paths import is_user_path
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
 from cash.sizing import pandas_nbytes
+from cash.source_reading import own_source, wrapper_layers
 from cash.value_hash import compute_hash
 
 if TYPE_CHECKING:
@@ -96,8 +96,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
 #: the whole cost of the analysis and would otherwise be paid on every
 #: intercepted call. A redefined function has a new code object, so an edit is
 #: never served the old verdict. It is the code of the function ``getsource``
-#: reads, after ``inspect.unwrap``: every function one ``functools.wraps``
-#: decorator returns shares the wrapper's code.
+#: reads: a ``functools.wraps`` wrapper's own code, each layer read apart.
 _GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
 
 
@@ -115,19 +114,42 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     globals_dict = getattr(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
         return ()
-    # The functions *fn* reaches in the same namespace write those globals
-    # too, at any depth: a hit skips them along with *fn*.
-    cached = sorted(
-        {name for reached in _functions_reached_in(globals_dict, fn) for name in _source_mutations(reached)}
-    )
-    # Filtered per call, not memoised: whether a name is bound (and not a
-    # module) can change between calls, and the memo is about the source.
-    capturable = capturable_globals(cached, globals_dict)
     # A name the callee reads from its closure is one too: `seen.append(x)`
-    # on a list a factory made. Not in any namespace, so the filter above
+    # on a list a factory made. Not in any namespace, so the filter below
     # drops it, and the second `add('a')` was served the first one's length.
     cells = closure_cells(fn)
-    return tuple(n for n in cached if n in cells or n in capturable)
+    found: set[str] = set()
+    # Every layer of a ``functools.wraps`` wrapper runs: a ``counted``
+    # decorator's ``calls[name] += 1`` as much as the wrapped body.
+    for layer in wrapper_layers(fn):
+        layer_globals = getattr(layer, "__globals__", None)
+        if not isinstance(layer_globals, dict):
+            continue
+        # The functions the layer reaches in the same namespace write those
+        # globals too, at any depth: a hit skips them along with *fn*.
+        cached = {
+            name for reached in _functions_reached_in(layer_globals, layer) for name in _source_mutations(reached)
+        }
+        if not cached:
+            continue
+        # Filtered per call, not memoised: whether a name is bound (and not
+        # a module) can change between calls, and the memo is about the
+        # source.
+        capturable = capturable_globals(cached, layer_globals)
+        written = {n for n in cached if n in cells or n in capturable}
+        if layer_globals is globals_dict:
+            found |= written
+        elif written:
+            # Globals of another module, which the capture (reading *fn*'s
+            # own globals) cannot put back: a name no namespace holds makes
+            # the capture refuse, so the call is never stored.
+            found.add(FOREIGN_GLOBALS)
+    return tuple(sorted(found))
+
+
+#: What `callee_mutated_globals` names for globals a wrapped layer writes in
+#: another module's namespace: no namespace holds it, so no entry is stored.
+FOREIGN_GLOBALS = "<globals of another module>"
 
 
 #: ``code object -> _code_names(code)``, so a call does not disassemble its
@@ -158,15 +180,14 @@ def _functions_reached_in(globals_dict: dict, fn) -> list:
 
 
 def _source_mutations(fn) -> tuple[str, ...]:
-    """The free names *fn*'s source mutates in place, sorted, memoised on its code."""
-    try:
-        memo_key = getattr(_inspect.unwrap(fn), "__code__", None)
-    except ValueError:  # a __wrapped__ cycle; getsource cannot read it either
-        return ()
+    """The free names *fn*'s own source mutates in place, sorted, memoised
+    on its code: a ``functools.wraps`` wrapper's own body, not the wrapped
+    function's (`own_source`)."""
+    memo_key = getattr(fn, "__code__", None)
     cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
     if cached is None:
         try:
-            cached = tuple(sorted(source_global_mutations(_inspect.getsource(fn))))
+            cached = tuple(sorted(source_global_mutations(own_source(fn))))
         except SOURCE_RETRIEVAL_ERRORS:
             cached = ()
         if memo_key is not None:

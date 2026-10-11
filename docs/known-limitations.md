@@ -176,12 +176,14 @@ df = df.assign(score=expensive(df))
 A statement that changes an object made in an earlier cell runs every time. The
 same statement on an object made in the same cell caches normally. When
 another variable holds that object too (`d = dfs[0]`, `b = a`), directly or in
-a list, dict or attribute of one, or the result holds an object that already
+a list, dict, `deque`, `UserDict`, object array or attribute of one (a
+`__slots__` attribute too), or the result holds an object that already
 existed (`models = {"m": m}`), those variables are stored with the statement
 and a hit restores them as one object, as running it would leave them. When
-something else holds it -- a closure, a library's module or registry -- or the
-statement is in a loop body (`for d in dfs:`), a restored copy would not be
-that object, so the statement runs every time. IPython's output history
+something else holds it -- a closure, a library's module or registry, a pandas
+`.attrs` (pandas copies it apart) -- or the statement is in a loop body
+(`for d in dfs:`), a restored copy would not be that object, so the statement
+runs every time. IPython's output history
 (`Out`, `_`) holding a value you displayed is not such a holder. **Fix:**
 rebind with `df = df.assign(...)`.
 
@@ -194,19 +196,25 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @9327197c, cash/analysis/handed_callables.py:hands_a_state_changing_callable @dc85c3c3 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @a7f8b0a4, cash/analysis/handed_callables.py:hands_a_state_changing_callable @a623ddfa -->
 A function handed to a call counts as called, however it is handed: by name
 (`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
 as a method that changes its object (`s.apply(tracker.record)`), as an object
 whose class defines `__call__` and changes it, as a closure that changes what
-it closes over, or in a list or dict that a function of yours calls into
-(`run_steps(steps, data)` with `steps = [f]`). The statement runs every time,
-and the call of yours that is handed it is not served from the cache. A method
-counts as changing its object when its code changes it, or calls a method on
-something the object holds that cash does not know to leave it unchanged
-(`self.model.fit(x)`). A function of yours handed over whose source cannot be
-read makes the statement run uncached. A list or dict of functions handed to a
-library function is looked into only for `agg`, `aggregate` and `transform`.
+it closes over, picked by an expression (`ops.get("dbl")`, `ops[key]`,
+`f if flag else g`, `getattr(tracker, "record")`), called from a lambda
+(`s.map(lambda v: tally.record(v))`), or in a list, dict, deque or object of
+your class that a function of yours calls into (`run_steps(steps, data)` with
+`steps = [f]`, `run(pipe, data)` calling `pipe.steps`). The statement runs
+every time, and the call of yours that is handed it is not served from the
+cache. A method counts as changing its object when its code changes it, or
+calls a method on something the object holds that cash does not know to leave
+it unchanged (`self.model.fit(x)`). A function of yours handed over whose
+source cannot be read, or one that only running code can tell
+(`s.apply(make_scorer(2))`, the result of a call of yours), makes the
+statement run uncached, with the reason on its badge. A list or dict of
+functions handed to a library function is looked into only for `agg`,
+`aggregate` and `transform`.
 
 <!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 The same for a statement that sets state on one of your modules

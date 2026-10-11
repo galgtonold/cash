@@ -26,7 +26,8 @@ from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
 from ..purity import is_pure
-from ..source_reading import getsource
+from ..source_reading import own_source, wrapper_layers
+from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import called_names, resolve_callee
 from .callee_effects import (
     argument_roots,
@@ -37,12 +38,14 @@ from .callee_effects import (
 )
 from .file_effects import (
     READ_TEXT_MARKERS,
+    REPEATABILITY_ACCUMULATING,
     REPEATABILITY_REPLACING,
     WRITE_TEXT_MARKERS,
     call_repeatability,
     get_base_name,
     locally_opened_handles,
 )
+from .handed_callables import handed_callable_values
 from .mutations import RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
 from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
 
@@ -73,6 +76,8 @@ def statement_calls_user_writer(
     code: str,
     namespace: "Mapping[str, Any] | None",
     tree: "ast.Module | None" = None,
+    *,
+    appends: bool = True,
 ) -> str | None:
     """The user function that writes files when *code* runs, or None.
 
@@ -96,8 +101,11 @@ def statement_calls_user_writer(
     whether user code may be cached. A writer reached as a method on an
     instance is therefore still not seen; that is a narrower gap, and closing
     it needs a way to look up the attribute without evaluating it.
+
+    Without *appends*, a function that only appends to files is not a
+    writer (see :func:`user_callee_writing_files`).
     """
-    found = statement_user_writer_call(code, namespace, tree)
+    found = statement_user_writer_call(code, namespace, tree, appends=appends)
     return found[1] if found else None
 
 
@@ -105,6 +113,8 @@ def statement_user_writer_call(
     code: str,
     namespace: "Mapping[str, Any] | None",
     tree: "ast.Module | None" = None,
+    *,
+    appends: bool = True,
 ) -> tuple[str, str] | None:
     """``(callee as spelled, writing function)`` for the first call in *code*
     into user code that writes files, or None.
@@ -118,10 +128,33 @@ def statement_user_writer_call(
         return None
     calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
     for node in calls:
-        found = user_callee_writing_files(resolve_callee(node.func, namespace))
+        found = user_callee_writing_files(resolve_callee(node.func, namespace), appends=appends)
         if found:
             return ast.unparse(node.func), found
+        if node.args or node.keywords:
+            # ``map(save, xs)``, ``s.apply(save)``, ``s.apply(lambda v:
+            # save(v))``: the callee calls what it is handed, as a call by
+            # name does.
+            for value in handed_callable_values(node, namespace):
+                found = user_callee_writing_files(_function_called(value), appends=appends)
+                if found:
+                    return getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
+
+
+def _function_called(value: Any) -> Any:
+    """The function calling *value* runs first: a method's function, a
+    class's ``__init__``, a callable object's ``__call__``; *value* itself
+    for anything else."""
+    if isinstance(value, types.MethodType):
+        return value.__func__
+    if isinstance(value, types.FunctionType) or not callable(value):
+        return value
+    owner = value if isinstance(value, type) else type(value)
+    try:
+        return inspect.getattr_static(owner, "__init__" if isinstance(value, type) else "__call__")
+    except AttributeError:
+        return value
 
 
 @functools.lru_cache(maxsize=STATEMENTS)
@@ -149,7 +182,7 @@ _CALLEE_LIMIT = 5_000
 _TOO_MANY_CALLEES = f"<more than {_CALLEE_LIMIT} functions to follow>"
 
 #: A function's file and code object -> whether its body itself replaces a
-#: file, and the callee expressions of its calls; None when cash does not look
+#: file, whether it appends to one, and the callee expressions of its calls; None when cash does not look
 #: into it (an installed package's code, no source, a body that does not
 #: parse). Keyed by the code that RUNS, so a redefined function is read again,
 #: and by its file, because code objects compare equal across files: the same
@@ -158,18 +191,20 @@ _TOO_MANY_CALLEES = f"<more than {_CALLEE_LIMIT} functions to follow>"
 #: body says: the callees are resolved again on every question, because a
 #: name the body calls can be rebound, and a verdict memoised with the
 #: callee it had then answered for one that was no longer there.
-_body_cache: LruMemo[tuple[str, types.CodeType], "tuple[bool, tuple[ast.expr, ...]] | None"] = LruMemo(USER_CALLEES)
+_body_cache: LruMemo[tuple[str, types.CodeType], "tuple[bool, bool, tuple[ast.expr, ...]] | None"] = LruMemo(
+    USER_CALLEES
+)
 #: A miss in `_body_cache`, whose entries may be None.
 _NOT_SEEN = object()
 
 
-def _read_body(func: types.FunctionType) -> "tuple[bool, tuple[ast.expr, ...]] | None":
+def _read_body(func: types.FunctionType) -> "tuple[bool, bool, tuple[ast.expr, ...]] | None":
     """What *func*'s own source says: see :data:`_body_cache`."""
     code_obj = func.__code__
     if not is_user_code_file(code_obj.co_filename):
         return None
     try:
-        source = textwrap.dedent(getsource(func))
+        source = textwrap.dedent(own_source(func))
     except (OSError, TypeError):
         return None
     try:
@@ -178,7 +213,21 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, tuple[ast.expr, ...]] |
         return None
     handles = frozenset(locally_opened_handles(tree))
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-    replaces = any(call_repeatability(node, handles) == REPEATABILITY_REPLACING for node in calls)
+    # ``# @cash:assume-safe`` on a write, or ``with cash.assume_safe():``
+    # around it, is the user's word that skipping it on a hit is fine; on the
+    # ``def`` line it covers the whole body. In a helper it covers every
+    # caller, as it does for the analyzer's other findings.
+    waived, whole_body = audited_lines(source) if "@cash:" in source else (frozenset(), False)
+    if "with" in source:
+        waived = waived | assume_safe_block_lines(tree, func)
+    if whole_body:
+        calls = []
+    elif waived:
+        # A waived call to another helper waives what that helper writes.
+        calls = [node for node in calls if node.lineno not in waived]
+    verdicts = {call_repeatability(node, handles) for node in calls}
+    replaces = REPEATABILITY_REPLACING in verdicts
+    appends = REPEATABILITY_ACCUMULATING in verdicts
     # One of each spelling, and only the ones a name lookup can resolve
     # (``helper``, ``module.helper``): ``df.assign(...)`` ten times over is
     # one lookup, and ``make()(...)`` resolves to nothing at all.
@@ -191,19 +240,16 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, tuple[ast.expr, ...]] |
             expr = expr.value
         if isinstance(expr, ast.Name):
             callees.setdefault((expr.id, *reversed(parts)), node.func)
-    return replaces, tuple(callees.values())
+    return replaces, appends, tuple(callees.values())
 
 
-def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, tuple[ast.expr, ...]] | None":
-    """``(function, replaces a file itself, callee expressions)`` for a user
-    function cash can read, or None for anything else: not a Python function,
-    ``@pure``, from an installed package, or without source."""
+def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, tuple[ast.expr, ...]] | None":
+    """``(function, replaces a file itself, appends to one itself, callee
+    expressions)`` for a user function cash can read, or None for anything
+    else: not a Python function, ``@pure``, from an installed package, or
+    without source."""
     if not isinstance(func, types.FunctionType):
         func = inspect.unwrap(func) if callable(func) else func
-        if not isinstance(func, types.FunctionType):
-            return None
-    elif hasattr(func, "__wrapped__"):
-        func = inspect.unwrap(func)
         if not isinstance(func, types.FunctionType):
             return None
     if is_pure(func):
@@ -216,10 +262,10 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, tuple[ast.expr
         _body_cache[memo_key] = known
     if known is None:
         return None
-    return func, known[0], known[1]
+    return func, known[0], known[1], known[2]
 
 
-def user_callee_writing_files(func: Any) -> str | None:
+def user_callee_writing_files(func: Any, *, appends: bool = True) -> str | None:
     """The user function that writes files when *func* is called, or None.
 
     ``save(fig, "chart.png")``, where ``save`` calls ``fig.savefig``, writes a
@@ -229,13 +275,17 @@ def user_callee_writing_files(func: Any) -> str | None:
     call into USER code whose body writes a file, directly or through another
     user function it calls, is judged like the write itself.
 
-    Only a write that REPLACES a file counts: a chart, an export, a model
-    file -- something a later run expects to find. An append (a log line, a
-    call counter) is the side effect a cache hit is understood to skip, like
-    a ``print``, and counting it would stop every function that logs from
-    caching. Code from an installed package is not looked into: its source
-    says nothing about what this call does with the user's files. ``@pure``
-    is the user's word that the function has no effect; it is taken.
+    A write that replaces a file counts (a chart, an export, a model file),
+    and so does an append (``open(p, "a")``, ``to_csv(mode="a")``): an
+    experiment log the notebook starts afresh and reads back below loses the
+    rows a cache hit skips, in this kernel and in the next process that reads
+    it. ``# @cash: assume-safe`` on the statement is the user's word that the
+    write may be skipped. Without *appends* only a replacing write counts:
+    the upstream replay asks that way, as re-firing an append would write
+    its rows twice. Code from an installed package is not looked into: its
+    source says nothing about what this call does with the user's files.
+    ``@pure`` is the user's word that the function has no effect; it is
+    taken.
 
     Every user function the call reaches is followed, however deep; a seen
     set ends call cycles. Calls were once followed three deep, and a write
@@ -243,15 +293,18 @@ def user_callee_writing_files(func: Any) -> str | None:
     :data:`_CALLEE_LIMIT` functions is taken for a writer, with a warning:
     the statement runs every time rather than be served without a write.
     """
-    root = _examined_body(func)
-    if root is None:
+    # A ``functools.wraps`` wrapper's own body runs as well as the wrapped
+    # function's: each layer is read by its own source.
+    roots = [body for layer in wrapper_layers(func) if (body := _examined_body(layer)) is not None]
+    if not roots:
         return None
-    seen: set[int] = {id(root[0])}
-    held = [root[0]]  # keeps every examined function alive, so no id is reused
-    stack = [root]
+    root = roots[0]
+    seen: set[int] = {id(body[0]) for body in roots}
+    held = [body[0] for body in roots]  # keeps every examined function alive, so no id is reused
+    stack = list(reversed(roots))
     while stack:
-        current, replaces, callees = stack.pop()
-        if replaces:
+        current, replaces, appends_itself, callees = stack.pop()
+        if replaces or (appends and appends_itself):
             return current.__name__
         found = []
         for expr in callees:

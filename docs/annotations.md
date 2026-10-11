@@ -87,7 +87,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @28ae25ec -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b7e83403 -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows a plain `EXECUTED` row. A statement below that reads its
 result is cached as usual and computed again when the value changes.
@@ -156,7 +156,7 @@ directive and has no such caveat.
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @28ae25ec, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:decide_cacheability @b7e83403, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached
@@ -223,13 +223,15 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
-<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @153b62a4, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @aae46ee9, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
 A call whose result is or holds an object the notebook can also reach is not
 cached: one of its arguments or an object inside one, a global the function
 names (`return MODELS[1]`, `return {'model': MODEL}`, a lazily built
 `global _DATA`), a class attribute (`return Config.items`), a bound method of a
 global (`return LOG.append`), or a numpy view of any of these
-(`return arr[i:i+3]`, `return np.split(arr, 2)`). A hit would hand back a copy, so writes through the
+(`return arr[i:i+3]`, `return np.split(arr, 2)`). The same goes for a result
+something else holds when cash cannot tell what (a library object, a cache of
+the function's own). A hit would hand back a copy, so writes through the
 result would no longer reach the original. Such a call runs every time.
 
 !!! warning "A cached call skips effects cash cannot see"

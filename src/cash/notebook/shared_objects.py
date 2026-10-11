@@ -31,6 +31,7 @@ classes, functions bound to nothing, enum members, numpy scalars and dtypes,
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import dataclasses
 import datetime
@@ -50,7 +51,7 @@ from cash import _plain_data
 from cash.tracking.function_tracker import is_local_module
 
 __all__ = [
-    "holds_an_unopened_object",
+    "attrs_copied_apart",
     "holds_part_of",
     "output_history",
     "referring_names",
@@ -214,8 +215,41 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     try:
         own = object.__getattribute__(value, "__dict__")
     except (AttributeError, TypeError):
+        own = None
+    if own is not None and type(own) is not dict:
         return None
-    return own if type(own) is dict else None
+    slots = _slot_members(cls)
+    if not slots:
+        return own
+    # ``__slots__`` values live outside ``__dict__``: an object of such a
+    # class holds them as surely as its attributes (``Slotted(rows).rows``).
+    found = {}
+    for name, member in slots:
+        try:
+            found[name] = member.__get__(value, cls)
+        except AttributeError:
+            continue  # a slot never set holds nothing
+    if own:
+        found.update(own)
+    return found
+
+
+_SLOT_MEMBERS: dict[type, tuple[tuple[str, Any], ...]] = {}
+
+
+def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
+    """``(name, member descriptor)`` for each ``__slots__`` entry along
+    *cls*'s MRO, read from each class's own ``__dict__`` (a private slot
+    under its mangled name)."""
+    known = _SLOT_MEMBERS.get(cls)
+    if known is None:
+        found: list[tuple[str, Any]] = []
+        for klass in cls.__mro__:
+            for name, member in vars(klass).items():
+                if isinstance(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
+                    found.append((name, member))
+        known = _SLOT_MEMBERS[cls] = tuple(found)
+    return known
 
 
 def _values_only(value: Any, exact: frozenset[type]) -> bool:
@@ -244,7 +278,123 @@ def children_of(value: Any) -> Iterable[Any] | None:
         except ValueError:
             return None
     attrs = attributes_of(value)
-    return None if attrs is None else list(attrs.values())
+    if attrs is not None:
+        return list(attrs.values())
+    return _library_children(value)
+
+
+#: The standard library's wrapping containers, each holding its contents in
+#: its own ``__dict__`` (``UserDict.data``, ``ChainMap.maps``).
+_WRAPPING_CONTAINERS = (collections.UserDict, collections.UserList, collections.ChainMap)
+
+
+def _library_children(value: Any) -> list[Any] | None:
+    """What a container of the standard library or of numpy or pandas holds
+    that a restore copies with it, or None for a leaf: a ``deque``'s items,
+    a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
+    items (one that owns them: a view's items are its base's), and a
+    pandas object's ``attrs``."""
+    kind = _LIBRARY_KINDS.get(type(value))
+    if kind is None:
+        kind = _library_kind(type(value))
+    if kind is _LEAF:
+        return None
+    if kind is _DEQUE:
+        return list(value)
+    if kind is _WRAPPING:
+        try:
+            own = object.__getattribute__(value, "__dict__")
+        except (AttributeError, TypeError):
+            return None
+        return list(own.values()) if type(own) is dict else None
+    if kind is _ARRAY:
+        if value.dtype.kind == "O" and value.base is None:
+            return list(value.flat)
+        return None
+    attrs = _pandas_attrs(value)
+    return [attrs] if attrs else None
+
+
+_LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
+
+#: `_library_kind` by type: a walk asks for every leaf it meets.
+_LIBRARY_KINDS: dict[type, str] = {}
+
+
+def _library_kind(cls: type) -> str:
+    """Which of `_library_children`'s containers *cls* is, if any."""
+    if issubclass(cls, collections.deque):
+        kind = _DEQUE
+    elif issubclass(cls, _WRAPPING_CONTAINERS):
+        kind = _WRAPPING
+    else:
+        np = sys.modules.get("numpy")
+        pd = sys.modules.get("pandas")
+        if np is not None and issubclass(cls, np.ndarray):
+            kind = _ARRAY
+        elif pd is not None and issubclass(cls, (pd.DataFrame, pd.Series)):
+            kind = _PANDAS
+        else:
+            kind = _LEAF
+    if len(_LIBRARY_KINDS) > 4096:
+        _LIBRARY_KINDS.clear()
+    _LIBRARY_KINDS[cls] = kind
+    return kind
+
+
+def _pandas_attrs(value: Any) -> dict | None:
+    """A pandas object's own ``attrs`` dict, without making one (pandas
+    copies it to every object derived from this one, so it is this one's)."""
+    try:
+        attrs = object.__getattribute__(value, "_attrs")
+    except AttributeError:
+        return None
+    return attrs if type(attrs) is dict else None
+
+
+def attrs_copied_apart(roots: Iterable[Any]) -> bool:
+    """Whether a deep copy of *roots* would part an object a pandas object's
+    ``attrs`` holds from another place in *roots* that holds it too.
+
+    pandas deep-copies ``attrs`` itself, without the copy's memo, so a
+    restored frame's ``attrs`` holds copies of their own: ``df.attrs['rows']
+    = rows`` restored with ``rows`` leaves two lists where the run left one.
+    JSON-like roots hold no pandas object: they are walked only when a
+    pandas object with ``attrs`` was found, for what they share with it.
+    """
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return False
+    value_types = VALUE_TYPES + library_value_types()
+    frames: list[dict] = []
+    seen: set[int] = set()
+    roots = list(roots)
+    trees = [_plain_data.is_tree(root, TREE_LEAVES) for root in roots]
+    stack = [root for root, tree in zip(roots, trees) if not tree]
+    while stack:
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if isinstance(obj, (pd.DataFrame, pd.Series)):
+            attrs = _pandas_attrs(obj)
+            if attrs:
+                frames.append(attrs)
+            continue
+        children = children_of(obj)
+        if not children or EXACT_VALUE_TYPES.issuperset(map(type, children)):
+            continue
+        stack.extend(children)
+    if not frames:
+        return False
+    inside: dict[int, int] = {}
+    for index, attrs in enumerate(frames):
+        for key in _identities(attrs, value_types):
+            if inside.setdefault(key, index) != index:
+                return True  # in the attrs of two pandas objects
+    if any(key in seen for key in inside):
+        return True
+    return any(key in inside for root, tree in zip(roots, trees) if tree for key in _identities(root, value_types))
 
 
 def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
@@ -310,26 +460,6 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     if not own:
         return False
     return any(key in own for source in sources for key in _identities(source, value_types))
-
-
-def holds_an_unopened_object(sources: Iterable[Any]) -> bool:
-    """Whether *sources* are or hold an object `holds_part_of` cannot look
-    inside: not a value, not a builtin container, and no attributes it opens
-    (a library object, an object with ``__slots__``). Something in there may
-    hold a result that `holds_part_of` cannot see."""
-    value_types = VALUE_TYPES + library_value_types()
-    seen: set[int] = set()
-    stack = list(sources)
-    while stack:
-        obj = stack.pop()
-        if is_value(obj, value_types) or id(obj) in seen:
-            continue
-        seen.add(id(obj))
-        children = children_of(obj)
-        if children is None:
-            return True
-        stack.extend(children)
-    return False
 
 
 def excess_refs(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:

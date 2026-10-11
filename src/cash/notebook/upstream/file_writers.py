@@ -696,7 +696,9 @@ class FileWriterScheduler:
         by_text = _writer_by_text(stmt_code)
         if by_text is not None:
             return by_text
-        if statement_calls_user_writer(stmt_code, self._user_ns()) is not None:
+        # A function of the user's that only appends is not re-fired: as for
+        # an inline append, a replay would write its rows twice.
+        if statement_calls_user_writer(stmt_code, self._user_ns(), appends=False) is not None:
             return True
         defs = self._trace_defs(simulation_trace)
         seen: set[str] = set()

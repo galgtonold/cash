@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.integration]
 SETUP = (
     "import time\n"
     "def score(c, a):\n"
-    "    open('calls.log', 'a').write(f'score {c} {a}\\n')\n"
+    "    open('calls.log', 'a').write(f'score {c} {a}\\n')  # @cash:assume-safe (a test counter)\n"
     "    time.sleep(0.05)\n"
     "    return c * a\n"
     "CUTOFFS = (1, 2, 3)\n"

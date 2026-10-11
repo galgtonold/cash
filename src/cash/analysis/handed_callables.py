@@ -36,6 +36,8 @@ statement and the live namespace.
 from __future__ import annotations
 
 import ast
+import builtins
+import collections
 import functools
 import inspect
 import operator
@@ -49,6 +51,7 @@ from typing import Any, NamedTuple
 from .. import _plain_data
 from .._memo import CODE_OBJECTS, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
 from .ast_util import CallScope, calls_in
 from .callee_effects import (
@@ -67,6 +70,7 @@ __all__ = [
     "handed_callables",
     "handed_values",
     "hands_a_state_changing_callable",
+    "users_object_attributes",
 ]
 
 
@@ -80,13 +84,36 @@ class HandedCallables(NamedTuple):
     receivers: frozenset[str] = frozenset()
     #: Why a handed user callable could not be read, one line each.
     unreadable: tuple[str, ...] = ()
+    #: The functions whose sources are in `sources`, each with the globals
+    #: its names are read from.
+    functions: tuple[types.FunctionType, ...] = ()
 
 
 _NONE = HandedCallables()
 
 #: Containers opened for the callables they hold: their items are read at C
-#: speed and no code of the user's runs.
-_OPENED = frozenset({list, tuple, set, frozenset, dict, OrderedDict, defaultdict})
+#: speed and no code of the user's runs. A ``UserList`` or ``UserDict`` is
+#: read through its ``.data``.
+_OPENED = frozenset(
+    {
+        list,
+        tuple,
+        set,
+        frozenset,
+        dict,
+        OrderedDict,
+        defaultdict,
+        collections.deque,
+        collections.UserList,
+        collections.UserDict,
+    }
+)
+_HELD_IN_DATA = (collections.UserList, collections.UserDict)
+
+#: How many objects of the user's classes one statement's handed arguments
+#: may lead through (`_Found.add`). Not a depth: each is opened once. Past
+#: it the statement is told the arguments cannot be read, and runs uncached.
+_INSTANCE_LIMIT = 10_000
 
 
 def handed_callables(
@@ -101,38 +128,72 @@ def handed_callables(
         return _NONE
     found = _Found(namespace)
     for call in calls:
+        if isinstance(call.func, (ast.Name, ast.Attribute)):
+            # ``dbl(3)`` with ``dbl`` a ``functools.wraps`` wrapper: its
+            # source, read by name, is the wrapped function's, so what the
+            # wrapper's own body does is read here.
+            wrapper = _wrapper_called(call.func, namespace)
+            if wrapper is not None:
+                found.add(*wrapper, False)
+            elif isinstance(call.func, ast.Attribute):
+                found.class_changed_by(call.func, namespace)
         if not call.args and not call.keywords and not isinstance(call.func, ast.Subscript):
             continue
-        opened: _Opened | None = None
+        calling: _Opened | None = None
         for position, keyword, arg in _arguments(call):
-            for value, root in handed_values(arg, namespace):
-                if type(value) in _OPENED and opened is None:
-                    opened = _opened_by(_callee_of(call.func, namespace), call.func)
-                found.add(value, root, opened is not None and opened.opens(position, keyword))
+            resolved = _resolve_argument(arg, namespace)
+            for value, root in resolved.values:
+                opens = False
+                if _openable(value):
+                    if calling is None:
+                        calling = _calling_positions(call, namespace)
+                    opens = calling.opens(position, keyword)
+                found.add(value, root, opens)
+            if resolved.any_of or resolved.unknown:
+                if calling is None:
+                    calling = _calling_positions(call, namespace)
+                if calling.opens(position, keyword):
+                    for value, root in resolved.any_of:
+                        found.add(value, root, True)
+                    for node in resolved.unknown:
+                        found.unreadable.append(_cannot_resolve(node, call))
         if isinstance(call.func, ast.Subscript):
             # ``ops['dbl'](v)``: a callable read out of a container is called.
             for value, root in handed_values(call.func, namespace):
                 found.add(value, root, False)
     if not (found.sources or found.receivers or found.unreadable):
         return _NONE
-    return HandedCallables(tuple(found.sources), frozenset(found.receivers), tuple(found.unreadable))
+    return HandedCallables(
+        tuple(found.sources), frozenset(found.receivers), tuple(found.unreadable), tuple(found.functions)
+    )
 
 
 def handed_callable_values(call: ast.Call, namespace: Mapping[str, Any]) -> list[Any]:
     """The callables *call* is handed, as *namespace* holds them: its
-    arguments (`handed_values`), and the ones inside a builtin container
-    when the callee calls what it is handed there. Functions, methods,
-    classes and callable objects, each once; a partial's function."""
-    opened: _Opened | None = None
+    arguments (`handed_values`), the ones inside a builtin container or an
+    object of the user's when the callee calls what it is handed there, and
+    the functions a lambda among them calls. Functions, methods, classes and
+    callable objects, each once; a partial's function."""
+    calling: _Opened | None = None
     out: dict[int, Any] = {}
     for position, keyword, arg in _arguments(call):
-        for value, _root in handed_values(arg, namespace):
-            if type(value) in _OPENED:
-                if opened is None:
-                    opened = _opened_by(_callee_of(call.func, namespace), call.func)
-                items = _callables_in(value) if opened.opens(position, keyword) else []
-            else:
-                items = [value]
+        resolved = _resolve_argument(arg, namespace)
+        candidates = [(value, False) for value, _root in resolved.values]
+        if resolved.any_of:
+            if calling is None:
+                calling = _calling_positions(call, namespace)
+            if calling.opens(position, keyword):
+                candidates.extend((value, True) for value, _root in resolved.any_of)
+        for value, any_of in candidates:
+            items = [value]
+            if _openable(value):
+                if not any_of:
+                    if calling is None:
+                        calling = _calling_positions(call, namespace)
+                    any_of = calling.opens(position, keyword)
+                items = _callables_reached(value)[0] if any_of else []
+                if callable(value) and not isinstance(value, type):
+                    items.append(value)
             for item in items:
                 while isinstance(item, functools.partial):
                     item = item.func
@@ -163,26 +224,328 @@ def _callee_of(func: ast.expr, namespace: Mapping[str, Any]) -> Any:
     return None
 
 
+def _calling_positions(call: ast.Call, namespace: Mapping[str, Any]) -> _Opened:
+    """The arguments of *call* the callee calls, or calls what is inside
+    of: those `_opened_by` opens, and the function argument of a library's
+    higher-order call (``s.apply(f)``, ``map(f, rows)``, ``sorted(xs,
+    key=f)``)."""
+    opened = _opened_by(_callee_of(call.func, namespace), call.func)
+    name = call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, "attr", None)
+    where = _FUNCTION_ARGUMENT.get(name) if name else None
+    if where is None:
+        return opened
+    if isinstance(where, int):
+        return opened._replace(positions=opened.positions | {where}, keywords=opened.keywords | {"func"})
+    return opened._replace(keywords=opened.keywords | {where})
+
+
+def _cannot_resolve(node: ast.expr, call: ast.Call) -> str:
+    """The reason given for an argument part *node* of *call* that cannot be
+    resolved to what it hands."""
+    return (
+        f"{_short(node)} is handed to {_short(call.func)}(), and cash cannot tell which function it is "
+        "without running it"
+    )
+
+
+def _short(node: ast.expr) -> str:
+    text = ast.unparse(node)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
 def handed_values(arg: ast.expr, namespace: Mapping[str, Any]) -> list[tuple[Any, str | None]]:
     """``(value, root)`` for each value the argument expression *arg* hands
     over that can be found without running code, *root* the name it was read
-    from (None for a literal's element built in place)."""
-    out: list[tuple[Any, str | None]] = []
+    from (None for a literal's element built in place). Both branches of a
+    conditional (``f if flag else g``) and of ``or``/``and``; ``getattr(obj,
+    'name')`` and ``d.get('key')`` read like ``obj.name`` and ``d['key']``;
+    and what a lambda among them calls (`_resolve_argument`)."""
+    return _resolve_argument(arg, namespace).values
+
+
+class _Resolved(NamedTuple):
+    """What an argument expression hands over (`_resolve_argument`)."""
+
+    #: ``(value, root)`` handed over for certain.
+    values: list[tuple[Any, str | None]]
+    #: ``(value, root)`` whose items or attributes, any of them, may be what
+    #: is handed: ``ops[key]`` with a variable key, ``random.choice(fns)``.
+    any_of: list[tuple[Any, str | None]]
+    #: Parts that cannot be resolved without running code: the result of a
+    #: call of the user's (``make_scorer(2)``), a property of the user's.
+    unknown: list[ast.expr]
+
+
+#: What a constant argument hands over. Never changed: the lists stay empty.
+_NOTHING_HANDED = _Resolved([], [], [])
+
+
+def _resolve_argument(arg: ast.expr, namespace: Mapping[str, Any]) -> _Resolved:
+    """What *arg* hands over, read without running code (see `_Resolved`).
+
+    A lambda is transparent: what its body calls, and the names it reads,
+    are handed over with it. ``any_of`` and ``unknown`` matter only where the
+    callee calls the argument (`_calling_positions`); elsewhere an
+    argument is data."""
+    kind = type(arg)
+    if kind is ast.Name:  # the common case, read without the walk
+        value = namespace.get(arg.id, _MISSING)  # type: ignore[attr-defined]
+        return _Resolved([] if value is _MISSING else [(value, arg.id)], [], [])  # type: ignore[attr-defined]
+    if kind is ast.Constant:
+        return _NOTHING_HANDED
+    out = _Resolved([], [], [])
     pending: list[ast.expr] = [arg]
     while pending:
         node = pending.pop()
-        if isinstance(node, ast.Starred):
+        if isinstance(node, (ast.Starred, ast.NamedExpr)):
             pending.append(node.value)
         elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             pending.extend(node.elts)
         elif isinstance(node, ast.Dict):
             pending.extend(v for v in node.values if v is not None)
             pending.extend(k for k in node.keys if k is not None)
+        elif isinstance(node, ast.IfExp):
+            pending.extend((node.body, node.orelse))
+        elif isinstance(node, ast.BoolOp):
+            pending.extend(node.values)
         elif isinstance(node, (ast.Name, ast.Attribute, ast.Subscript)):
             found = _static_value(node, namespace)
             if found is not None:
-                out.append(found)
+                out.values.append(found)
+            else:
+                _unresolved_reference(node, namespace, out, pending)
+        elif isinstance(node, ast.Call):
+            _resolve_call(node, namespace, out, pending)
+        elif isinstance(node, ast.Lambda):
+            _lambda_reach(node, namespace, out)
+        elif isinstance(node, ast.BinOp):
+            pending.extend((node.left, node.right))
+        elif isinstance(node, ast.UnaryOp):
+            pending.append(node.operand)
+        elif not isinstance(node, (ast.Constant, ast.JoinedStr, ast.Compare)):
+            out.unknown.append(node)  # a comprehension, an ``await``: built by running code
     return out
+
+
+def _lambda_reach(node: ast.Lambda, namespace: Mapping[str, Any], out: _Resolved) -> None:
+    """What calling the lambda *node* runs: the functions its body calls
+    (``tally.record`` in ``lambda v: tally.record(v)``, ``ops[k]`` in
+    ``lambda v: ops[k](v)``) and the callables it reads by a free name, each
+    handed over as the lambda is. A function of the user's that a call in
+    it returns is unknown."""
+    params = {a.arg for a in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)}
+    params.update(a.arg for a in (node.args.vararg, node.args.kwarg) if a is not None)
+    for sub in ast.walk(node.body):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id not in params:
+            value = namespace.get(sub.id, _MISSING)
+            if value is not _MISSING and callable(value):
+                out.values.append((value, sub.id))
+        if not isinstance(sub, ast.Call):
+            continue
+        func = sub.func
+        if isinstance(func, (ast.Attribute, ast.Subscript)):
+            root: ast.expr = func
+            while isinstance(root, (ast.Attribute, ast.Subscript)):
+                root = root.value
+            if not isinstance(root, ast.Name) or root.id in params:
+                continue  # a method of a value the lambda computes or is given
+            found = _static_value(func, namespace)
+            if found is not None:
+                out.values.append(found)
+            else:
+                _unresolved_reference(func, namespace, out, [])
+        elif isinstance(func, ast.Call) and _is_users_callable(_callee_of(func.func, namespace)):
+            out.unknown.append(func)
+
+
+def _unresolved_reference(
+    node: ast.Name | ast.Attribute | ast.Subscript, namespace: Mapping[str, Any], out: _Resolved, pending: list
+) -> None:
+    """Sort out a name, attribute chain or subscript `_static_value` could
+    not read: an item of a container under a key known only when it runs
+    (``ops[key]``: any of its items), a property or ``__getitem__`` of the
+    user's (unknown), or a part of a library object (data)."""
+    steps: list[ast.expr] = []
+    root_node: ast.expr = node
+    while isinstance(root_node, (ast.Attribute, ast.Subscript)):
+        steps.append(root_node)
+        root_node = root_node.value
+    if not isinstance(root_node, ast.Name):
+        # ``make()[0]``, ``df.set_index('k')['v']``: what the call hands over.
+        pending.append(root_node)
+        for step in steps:
+            if isinstance(step, ast.Subscript):
+                pending.append(step.slice)
+        return
+    value = namespace.get(root_node.id, _MISSING)
+    if value is _MISSING:
+        return  # not bound yet: a builtin, or a name the statement binds
+    root = root_node.id
+    for step in reversed(steps):
+        if isinstance(step, ast.Subscript):
+            following = _item(value, step.slice)
+            if following is _MISSING:
+                if type(value) in _OPENED:
+                    out.any_of.append((value, root))
+                elif _is_users_object(value) and _class_member(type(value), "__getitem__") is not None:
+                    out.unknown.append(step)
+                return
+        else:
+            following = _attribute(value, step.attr)
+            if following is _MISSING:
+                if not isinstance(value, types.ModuleType) and (
+                    _is_users_object(value) or (isinstance(value, type) and _is_users_class(value))
+                ):
+                    out.unknown.append(step)
+                return
+        value = following
+
+
+def _resolve_call(node: ast.Call, namespace: Mapping[str, Any], out: _Resolved, pending: list) -> None:
+    """What the result of the call *node* can hand over."""
+    callee = _callee_of(node.func, namespace)
+    if callee is None and isinstance(node.func, ast.Name) and node.func.id not in namespace:
+        callee = vars(builtins).get(node.func.id)
+    if callee is builtins.getattr and len(node.args) >= 2 and not node.keywords:
+        name = node.args[1]
+        if isinstance(name, ast.Constant) and isinstance(name.value, str) and name.value.isidentifier():
+            pending.append(ast.Attribute(value=node.args[0], attr=name.value, ctx=ast.Load()))
+            pending.extend(node.args[2:])
+        else:
+            out.unknown.append(node)
+        return
+    if isinstance(node.func, ast.Attribute) and node.func.attr == "get" and node.args:
+        owner = _static_value(node.func.value, namespace)
+        if owner is not None and isinstance(owner[0], (dict, collections.UserDict)):
+            # ``ops.get('dbl')`` as ``ops['dbl']``; under a key known only
+            # when it runs, any of its items.
+            container, root = owner
+            key = node.args[0]
+            if isinstance(key, ast.Constant):
+                item = _item(container, key)
+                if item is not _MISSING:
+                    out.values.append((item, root))
+            else:
+                out.any_of.append((container, root))
+            pending.extend(node.args[1:])
+            return
+    if callee is None or _is_users_callable(callee):
+        # What a function of the user's returns is known only by running
+        # it; so is what a call of a value that cannot be read returns.
+        if callee is not None or not _unbound(node.func, namespace):
+            out.unknown.append(node)
+        return
+    # A library's call (``functools.partial(f, 2)``, ``random.choice(fns)``,
+    # ``np.vectorize(f)``) hands over what it was given, or a part of it.
+    inner = _Resolved([], [], [])
+    parts: list[ast.expr] = [*node.args, *(kw.value for kw in node.keywords)]
+    if isinstance(node.func, ast.Attribute):
+        parts.append(node.func.value)
+    for part in parts:
+        found = _resolve_argument(part, namespace)
+        inner.any_of.extend(found.values)
+        inner.any_of.extend(found.any_of)
+        inner.unknown.extend(found.unknown)
+    out.any_of.extend(inner.any_of)
+    out.unknown.extend(inner.unknown)
+
+
+def _unbound(func: ast.expr, namespace: Mapping[str, Any]) -> bool:
+    """Whether the call target *func* starts at a name *namespace* does not
+    hold: a builtin, or a name bound by the statement itself."""
+    while isinstance(func, (ast.Attribute, ast.Subscript)):
+        func = func.value
+    return isinstance(func, ast.Name) and func.id not in namespace
+
+
+def _is_users_callable(value: Any) -> bool:
+    """A function, method, class or callable object of the user's: calling
+    it runs their code."""
+    if isinstance(value, functools.partial):
+        return _is_users_callable(value.func)
+    if isinstance(value, types.FunctionType):
+        return _is_users(value)
+    if isinstance(value, types.MethodType):
+        fn = value.__func__
+        return isinstance(fn, types.FunctionType) and _is_users(fn)
+    if isinstance(value, type):
+        return _is_users_class(value)
+    return _is_users_object(value) and callable(value)
+
+
+#: ``class -> whether it is the user's`` (`_is_users_class`).
+_USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
+
+
+def _is_users_class(cls: type) -> bool:
+    """A class defined in a cell or in a local module: by its module, or by
+    the functions it defines (a class made by ``exec`` names no module)."""
+    known = _USERS_CLASSES.get(cls)
+    if known is None:
+        name = getattr(cls, "__module__", None)
+        try:
+            module = sys.modules.get(name) if isinstance(name, str) else None
+            known = name == "__main__" or (module is not None and is_local_module(module))
+            if not known and (module is None or name == "builtins"):
+                own = vars(cls).values()
+                known = any(isinstance(v, types.FunctionType) and _is_users(v) for v in own)
+        except (TypeError, AttributeError):
+            known = False
+        _USERS_CLASSES[cls] = known
+    return known
+
+
+def _is_users_object(value: Any) -> bool:
+    """An instance of a class of the user's (not a class, function or module)."""
+    if isinstance(value, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+        return False
+    return _is_users_class(type(value))
+
+
+def _openable(value: Any) -> bool:
+    """A value `_Found.add` looks inside of where the callee calls what it
+    is handed: a builtin container, or an object of the user's."""
+    return type(value) in _OPENED or _is_users_object(value)
+
+
+def _wraps_another(value: Any) -> bool:
+    """A function of the user's that wraps another (``functools.wraps``)."""
+    return isinstance(value, types.FunctionType) and "__wrapped__" in vars(value) and _is_users(value)
+
+
+def _wrapper_called(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
+    """``(callable, root)`` when the call target *func* is a ``functools.wraps``
+    wrapper of the user's, or a method that is one."""
+    found = _users_target(func, namespace)
+    if found is None:
+        return None
+    value = found[0]
+    fn = value.__func__ if isinstance(value, types.MethodType) else value
+    return found if _wraps_another(fn) else None
+
+
+def _users_target(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
+    """``(value, root)`` of the call target *func*, followed through modules
+    and the user's own classes and objects only: a library object's
+    attributes are not looked up for every call made on it."""
+    attrs: list[str] = []
+    node: ast.expr = func
+    while isinstance(node, ast.Attribute):
+        attrs.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    value = namespace.get(node.id, _MISSING)
+    for attr in reversed(attrs):
+        if isinstance(value, types.ModuleType):
+            value = vars(value).get(attr, _MISSING)
+        elif (isinstance(value, type) and _is_users_class(value)) or _is_users_object(value):
+            value = _attribute(value, attr)
+        else:
+            return None
+        if value is _MISSING:
+            return None
+    return value, node.id
 
 
 _MISSING = object()
@@ -216,11 +579,13 @@ def _static_value(node: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
 def _item(container: Any, index: ast.expr) -> Any:
     if not isinstance(index, ast.Constant) or type(container) not in _OPENED:
         return _MISSING
+    if isinstance(container, _HELD_IN_DATA):
+        container = container.data
     try:
         if isinstance(container, dict):
             # ``dict.get``: a defaultdict's factory does not run.
             return dict.get(container, index.value, _MISSING)
-        if isinstance(container, (list, tuple)):
+        if isinstance(container, (list, tuple, collections.deque)):
             return container[index.value]
     except (IndexError, TypeError):
         pass
@@ -276,19 +641,48 @@ class _Found:
         self._seen: set[tuple[int, str | None]] = set()
 
     def add(self, value: Any, root: str | None, open_containers: bool) -> None:
-        """Add what calling *value* changes. A builtin container is opened
-        for the callables it holds only with *open_containers*: when the
-        callee calls what it is handed there."""
-        if type(value) in _OPENED:
-            if open_containers and (id(value), root) not in self._seen:
-                self._seen.add((id(value), root))
-                for item in _callables_in(value):
-                    self.add(item, root, False)
+        """Add what calling *value* changes. A builtin container, or an
+        object of the user's class, is opened for the callables it holds
+        only with *open_containers*: when the callee calls what it is handed
+        there (`_callables_reached`)."""
+        if open_containers and _openable(value):
+            if (id(value), root, True) in self._seen:
+                return
+            self._seen.add((id(value), root, True))
+            items, complete = _callables_reached(value)
+            if not complete:
+                label = repr(root) if root else "an argument"
+                self.unreadable.append(
+                    f"{label} is handed to a call that calls what it holds, and holds more than "
+                    f"{_INSTANCE_LIMIT} objects of your classes to look through"
+                )
+            for item in items:
+                self.add(item, root, False)
+            if type(value) in _OPENED or not callable(value):
+                return
+        elif type(value) in _OPENED:
             return
         if (id(value), root) in self._seen:
             return
         self._seen.add((id(value), root))
         self._callable(value, root)
+
+    def class_changed_by(self, func: ast.Attribute, namespace: Mapping[str, Any]) -> None:
+        """A method of the user's called by name (``m.fit(3)``) whose body
+        changes the class of its object (``type(self).fitted += 1``) changes
+        the class every instance shares: the names bound to it are changed.
+        What it changes on the object itself is seen when it runs."""
+        found = _users_target(func, namespace)
+        if found is None or not isinstance(found[0], types.MethodType):
+            return
+        owner, fn = found[0].__self__, found[0].__func__
+        if isinstance(owner, type) or not isinstance(fn, types.FunctionType) or not self._users(fn):
+            return
+        for layer in wrapper_layers(fn):
+            source = _source_of(layer) if isinstance(layer, types.FunctionType) else None
+            if source is not None and _changes_its_class(source):
+                self._changed(type(owner), None)
+                return
 
     def _changed(self, obj: Any, root: str | None) -> None:
         """*obj*, which *root* holds or is, is changed in place by the call."""
@@ -315,22 +709,29 @@ class _Found:
             self.add(value.func, root, False)
             return
         if isinstance(value, types.FunctionType):
-            if not self._users(value):
-                return
-            source = self._source(value, label)
-            if source is not None and value.__closure__:
-                free = set(value.__code__.co_freevars)
-                if free & source_global_mutations(source):
-                    self._changed(value, root)
+            # A ``functools.wraps`` wrapper and each function under it: the
+            # call runs the wrapper's body as well as the wrapped one's.
+            for layer in wrapper_layers(value):
+                if not isinstance(layer, types.FunctionType) or not self._users(layer):
+                    continue
+                source = self._source(layer, label)
+                if source is not None and layer.__closure__:
+                    free = set(layer.__code__.co_freevars)
+                    if free & source_global_mutations(source):
+                        self._changed(value, root)
             return
         if isinstance(value, types.MethodType):
-            owner, fn = value.__self__, value.__func__
-            if not isinstance(fn, types.FunctionType) or not self._users(fn):
-                return
-            source = self._source(fn, label)
-            if source is not None and not isinstance(owner, types.ModuleType):
-                if _changes_its_first_argument(fn, owner if isinstance(owner, type) else type(owner), source):
-                    self._changed(owner, root)
+            owner = value.__self__
+            cls = owner if isinstance(owner, type) else type(owner)
+            for fn in wrapper_layers(value.__func__):
+                if not isinstance(fn, types.FunctionType) or not self._users(fn):
+                    continue
+                source = self._source(fn, label)
+                if source is not None and not isinstance(owner, types.ModuleType):
+                    if _changes_its_first_argument(fn, cls, source):
+                        self._changed(owner, root)
+                        if not isinstance(owner, type) and _reaches_its_class(source):
+                            self._changed(cls, None)
             return
         if isinstance(value, (types.BuiltinMethodType, types.MethodWrapperType)):
             owner = getattr(value, "__self__", None)
@@ -351,6 +752,8 @@ class _Found:
             source = self._source(call, label)
             if source is not None and _changes_its_first_argument(call, type(value), source):
                 self._changed(value, root)
+                if _reaches_its_class(source):
+                    self._changed(type(value), None)
 
     def _users(self, fn: types.FunctionType) -> bool:
         return fn.__globals__ is self.namespace or _is_users(fn)
@@ -375,11 +778,13 @@ _SOURCES: LruMemo[Any, str | None] = LruMemo(CODE_OBJECTS)
 
 
 def _source_of(fn: types.FunctionType) -> str | None:
+    """*fn*'s own source: a ``functools.wraps`` wrapper's, not the wrapped
+    function's (`own_source`), as the memo is keyed by the code that runs."""
     code = fn.__code__
     if code in _SOURCES:
         return _SOURCES.get(code)
     try:
-        source: str | None = inspect.getsource(fn)
+        source: str | None = own_source(fn)
     except SOURCE_RETRIEVAL_ERRORS:
         source = None
     _SOURCES[code] = source
@@ -394,8 +799,9 @@ def hands_a_state_changing_callable(fn: Any, args: tuple, kwargs: Mapping[str, A
     """Whether calling *fn* with *args* and *kwargs* hands it a user callable
     that changes state when called: a function that changes a global or what
     it closes over, a method or a callable object that changes its object,
-    or one whose source cannot be read. A builtin container among the
-    arguments is looked into when *fn* calls what it is handed there.
+    or one whose source cannot be read. A builtin container or an object of
+    the user's class among the arguments is looked into when *fn* calls
+    what it is handed there.
 
     ``run_steps(steps, data)`` with ``steps = [f]`` runs ``f``; served from
     the cache, ``f``'s writes would not happen."""
@@ -404,17 +810,20 @@ def hands_a_state_changing_callable(fn: Any, args: tuple, kwargs: Mapping[str, A
     for position, keyword, value in chain(
         zip(range(len(args)), repeat(None), args), zip(repeat(None), kwargs.keys(), kwargs.values())
     ):
-        kind = type(value)
-        if kind in _ATOMS or not (kind in _OPENED or callable(value)):
+        if type(value) in _ATOMS:
             continue
-        if kind in _OPENED:
+        opens = False
+        if _openable(value):
             if opened is None:
                 opened = _opened_by(fn, None)
-            if not opened.opens(position, keyword):
+            opens = opened.opens(position, keyword)
+            if not opens and not callable(value):
                 continue
+        elif not callable(value):
+            continue
         if found is None:
             found = _Found({})
-        found.add(value, None, True)
+        found.add(value, None, opens)
     if found is None:
         return False
     if found.changes or found.unreadable:
@@ -556,10 +965,19 @@ def _read_call_facts(node: ast.FunctionDef | ast.AsyncFunctionDef) -> _CallFacts
 
     def roots(expr: ast.expr) -> frozenset[str]:
         while True:
-            if isinstance(expr, ast.Subscript):
+            if isinstance(expr, (ast.Subscript, ast.Attribute)):
+                # ``ops['dbl'](x)``; ``pipe.steps[0](x)``, or ``st(x)`` for
+                # ``st`` in ``pipe.steps``: what the parameter holds.
                 expr = expr.value
             elif isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "get":
                 expr = expr.func.value  # ``ops.get('dbl')(x)``
+            elif (
+                isinstance(expr, ast.Call)
+                and isinstance(expr.func, ast.Name)
+                and expr.func.id == "getattr"
+                and expr.args
+            ):
+                expr = expr.args[0]  # ``getattr(obj, name)(x)``
             elif isinstance(expr, ast.Starred):
                 expr = expr.value
             else:
@@ -624,29 +1042,158 @@ def _class_member(cls: type, name: str) -> Any:
         return None
 
 
-def _callables_in(container: Any) -> list[Any]:
-    """The callables in *container* and in the builtin containers it holds,
-    however deeply nested, each once. A level at a time, at C speed."""
-    if _plain_data.is_tree(container):
-        return []  # lists and tuples of plain values only
+def _callables_reached(value: Any) -> tuple[list[Any], bool]:
+    """``(callables, complete)``: the callables *value* holds -- a builtin
+    container's items, an object of the user's class's attributes (its
+    ``__dict__`` and ``__slots__``, read without running code) -- and those
+    the containers and objects of the user's among them hold, however deeply
+    nested, each once. A level at a time, the types sorted at C speed.
+    *complete* is False when more than `_INSTANCE_LIMIT` objects of the
+    user's classes had to be opened, and the walk stopped."""
+    if _plain_data.is_tree(value):
+        return [], True  # lists and tuples of plain values only
     found: list[Any] = []
-    seen = {id(container)}
-    level = [container]
+    seen = {id(value)}
+    level = [value]
+    users_objects = 0
     while level:
-        items = list(chain.from_iterable(_items(c) for c in level))
+        items = list(chain.from_iterable(map(_items, level)))
         if not items:
             break
         found.extend(filter(callable, items))
-        nested = [c for c in compress(items, map(_OPENED.__contains__, map(type, items))) if id(c) not in seen]
+        kinds = set(map(type, items))
+        opened = {kind for kind in kinds if kind in _OPENED or _users_instance_type(kind)}
+        if not opened:
+            break
+        nested = [c for c in compress(items, map(opened.__contains__, map(type, items))) if id(c) not in seen]
         seen.update(map(id, nested))
+        users_objects += sum(1 for c in nested if type(c) not in _OPENED)
+        if users_objects > _INSTANCE_LIMIT:
+            return found, False
         level = nested
-    return found
+    return found, True
+
+
+def _users_instance_type(kind: type) -> bool:
+    """Whether objects of the type *kind* are objects of the user's class:
+    not classes, functions or modules."""
+    if issubclass(kind, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+        return False
+    return _is_users_class(kind)
 
 
 def _items(container: Any) -> Iterable[Any]:
-    if isinstance(container, dict):
-        return chain(dict.keys(container), dict.values(container))
-    return container
+    """What `_callables_reached` looks at in *container*: a builtin
+    container's items (a dict's keys and values), an object's attributes."""
+    if type(container) in _OPENED:
+        if isinstance(container, _HELD_IN_DATA):
+            container = container.data
+        if isinstance(container, dict):
+            return chain(dict.keys(container), dict.values(container))
+        return container
+    return _attributes_of(container)
+
+
+def users_object_attributes(value: Any) -> list[Any]:
+    """The values of the instance attributes of *value* when it is an object
+    of the user's class (its ``__dict__`` and ``__slots__``, read without
+    running code); empty for anything else."""
+    return _attributes_of(value) if _is_users_object(value) else []
+
+
+def _attributes_of(obj: Any) -> list[Any]:
+    """The values of *obj*'s instance attributes: its ``__dict__`` and its
+    ``__slots__``, read through the slot descriptors so no property or
+    ``__getattr__`` runs."""
+    values = list(_instance_dict(obj).values())
+    for cls in type(obj).__mro__:
+        slots = cls.__dict__.get("__slots__")
+        if slots is None:
+            continue
+        for name in (slots,) if isinstance(slots, str) else slots:
+            member = cls.__dict__.get(name)
+            if type(member) is types.MemberDescriptorType:
+                try:
+                    values.append(member.__get__(obj, cls))
+                except AttributeError:
+                    pass  # an unset slot
+    return values
+
+
+@functools.lru_cache(maxsize=4096)
+def _changes_its_class(source: str) -> bool:
+    """Whether the method *source* changes the class of its first argument
+    in place: a store, a delete or an augmented assignment under, or a
+    mutating method called on, ``type(self)`` or ``self.__class__``."""
+    node = parse_function_source(source)
+    if node is None:
+        return False
+    params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
+    if not params:
+        return False
+    first = params[0]
+
+    def through_class(expr: ast.expr) -> bool:
+        while isinstance(expr, (ast.Attribute, ast.Subscript)):
+            if isinstance(expr, ast.Attribute) and expr.attr == "__class__":
+                return isinstance(expr.value, ast.Name) and expr.value.id == first
+            expr = expr.value
+        return (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Name)
+            and expr.func.id == "type"
+            and len(expr.args) == 1
+            and isinstance(expr.args[0], ast.Name)
+            and expr.args[0].id == first
+        )
+
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.Assign, ast.Delete)):
+            targets = sub.targets
+        elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
+            targets = [sub.target]
+        elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in MUTATING_METHODS:
+            if through_class(sub.func.value):
+                return True
+            continue
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, (ast.Attribute, ast.Subscript)) and through_class(target.value):
+                return True
+    return False
+
+
+@functools.lru_cache(maxsize=4096)
+def _reaches_its_class(source: str) -> bool:
+    """Whether the method *source* reaches the class of its first argument
+    (``type(self)``, ``self.__class__``): a change made there is a change to
+    the class every instance shares, and to the names bound to it."""
+    node = parse_function_source(source)
+    if node is None:
+        return True
+    params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
+    if not params:
+        return False
+    first = params[0]
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "type"
+            and len(sub.args) == 1
+            and isinstance(sub.args[0], ast.Name)
+            and sub.args[0].id == first
+        ):
+            return True
+        if (
+            isinstance(sub, ast.Attribute)
+            and sub.attr == "__class__"
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == first
+        ):
+            return True
+    return False
 
 
 def _changes_its_first_argument(

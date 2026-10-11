@@ -308,7 +308,10 @@ def decide_cacheability(
         found = None if waived else statement_user_writer_call(code, user_ns, tree)
         if found:
             name, writer = found
-            return False, [f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write"]
+            return False, [
+                f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write "
+                "(# @cash:assume-safe caches it anyway)"
+            ]
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
         return False, [analysis_failed("check the functions the statement calls", exc)]
 

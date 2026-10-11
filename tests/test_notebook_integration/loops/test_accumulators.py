@@ -495,7 +495,7 @@ def _n(path):
 
 
 def _compute_def(counter):
-    return f"def compute(v):\n    open(r'{counter}', 'a').write('X')\n    time.sleep(0.03)\n    return v * 10"
+    return f"def compute(v):\n    open(r'{counter}', 'a').write('X')  # @cash:assume-safe (a test counter)\n    time.sleep(0.03)\n    return v * 10"
 
 
 def _fast_path_cell(items):

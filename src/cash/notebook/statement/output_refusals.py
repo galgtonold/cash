@@ -13,7 +13,7 @@ from typing import Any
 
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
-from ..shared_objects import output_history, share_group, shared_names
+from ..shared_objects import attrs_copied_apart, output_history, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
@@ -88,7 +88,20 @@ def unrestorable_output_reason(
         reason = _value_refusal(set(holders), holders, user_ns, cash_held)
         if reason is not None:
             holders.clear()
+    if reason is None and _attrs_parted(outputs, captured_vars, holders):
+        reason = (
+            "a pandas object's .attrs holds an object that the statement's other values hold too; "
+            "pandas copies .attrs apart on restore, so the statement re-runs every time"
+        )
+        if holders:
+            holders.clear()
     return reason
+
+
+def _attrs_parted(outputs: set[str], captured_vars: dict[str, Any], holders: dict[str, Any] | None) -> bool:
+    """`attrs_copied_apart` for the values the entry would store together."""
+    roots = [captured_vars[out] for out in outputs if captured_vars.get(out) is not None]
+    return attrs_copied_apart([*roots, *(holders or {}).values()])
 
 
 def _value_refusal(

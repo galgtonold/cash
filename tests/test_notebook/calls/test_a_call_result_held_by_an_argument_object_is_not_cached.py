@@ -94,3 +94,42 @@ def test_a_new_result_from_an_object_with_slots_is_still_served(call_cache, myli
     results, hits = _hits(call_cache, mylib.row_count, ds)
     assert hits == [False, True]
     assert results == [[2], [2]]
+
+
+def test_a_list_a_user_dict_or_an_object_array_holds_is_handed_back_itself(call_cache, mylib):
+    """``UserDict.data`` and an object array's items are looked inside, as a
+    dict's values are."""
+    import collections
+
+    np = pytest.importorskip("numpy")
+    rows = [1, 2]
+    arr = np.empty(1, dtype=object)
+    arr[0] = rows
+    for holder in (collections.UserDict(train=rows), collections.ChainMap({"train": rows}), arr):
+        assert holds_part_of(rows, [holder]), type(holder)
+
+
+def test_a_result_held_where_cash_cannot_look_is_not_stored(call_cache, tmp_path, monkeypatch):
+    """Something else holds the result, and no argument or global the function
+    reaches is a holder cash can name (a ``queue.Queue`` keeps its items out
+    of sight): served as a copy, ``queued.pop()`` would not empty the list the
+    queue holds."""
+    name = f"_queued_rows_{os.getpid()}_{id(tmp_path)}"
+    (tmp_path / f"{name}.py").write_text(
+        "import queue, time\nQ = queue.Queue()\n"
+        f"def queued(n):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    rows = list(range(n))\n"
+        "    Q.put(rows)\n    return rows\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        mod = importlib.import_module(name)
+        call_cache.set_sites([CallSite(source="queued(n)", free_names=frozenset({"n"}), occurrence_index=0)])
+        cached = call_cache.resolve(mod.queued)
+        first, second = cached(3), cached(3)
+        hits = [e["cache_hit"] for e in call_cache.drain_call_log()]
+        assert hits == [False, False]
+        assert second is mod.Q.queue[-1]
+        assert first is mod.Q.queue[0]
+    finally:
+        sys.modules.pop(name, None)
