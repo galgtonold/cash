@@ -1551,14 +1551,17 @@ file on disk is the one you want.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @1f4e4f9e, cash/notebook/shared_objects.py:referring_names @5602736f -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @1f4e4f9e, cash/notebook/shared_objects.py:referring_names @5602736f, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
 **What happened.** After a statement ran, cash looked for the other variables
 that hold an object of its outputs, or are held in one (`data = raw`,
 `config = {"features": features}`), so that a later change through either
 name re-runs the cells reading the other. The search takes at most twice
-what the statement took (at least a second), and it ran out of time before
-it was sure it had found them all. The message names the outputs. It is
-shown once per statement.
+what the statement took (at least a second; for what a loop, `if` or `try`
+block changed, checked once when the block ends, at least a tenth of a
+second), and it ran out of time, or past a holder that is not a variable (a
+function default, a library object) met more objects than it follows,
+before it was sure it had found them all. The message names the outputs. It
+is shown once per statement.
 
 **Why it matters.** A later change made in place through a variable it
 missed (`raw.append(x)`) does not re-run the cells that read the outputs,

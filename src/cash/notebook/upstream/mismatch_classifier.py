@@ -23,6 +23,7 @@ from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
+from ..statement.derivation_edges import shared_object_partners
 from ..tracking_state import TrackingState
 from ._types import (
     CellCheck,
@@ -742,12 +743,70 @@ class MismatchClassifier:
             required_inputs, virtual_lineage, sim.virtual_modules, result.broken_vars, result.stale_magic_vars
         )
         self._repair_upstream_rerun_bindings(required_inputs, sim.trace, result.broken_vars)
+        self._rebuild_what_shares_a_rebuilt_object(result.broken_vars, sim.trace, check)
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("[UPSTREAM_DEBUG] Broken vars: %s", result.broken_vars)
             if not result.broken_vars:
                 logger.debug("[UPSTREAM_DEBUG] No broken vars, nothing to re-execute")
         return result
+
+    def _rebuild_what_shares_a_rebuilt_object(
+        self, broken_vars: set[str], simulation_trace: list, check: CellCheck | None = None
+    ) -> None:
+        """Add to *broken_vars* every variable that shares an object with one
+        already in it, through the edges the runtime recorded
+        (``TrackingState.derivation_edges``, either way: ``g =
+        df.groupby('k')`` holds ``df``, ``head = big[:5]`` views ``big``,
+        ``data = raw`` is ``raw``).
+
+        A broken variable is rebuilt as a new object. Left alone, a variable
+        that held the old one keeps it: after an edited loop changing ``df``
+        in place and a run of that cell alone, ``g`` still grouped the frame
+        from before. Rebuilt too, it is made again from the rebuilt value.
+
+        When such a variable has no statement in the notebook to make it
+        again (its cell was deleted, or it was bound by hand), rebuilding
+        would leave it holding the old object: the variable and every broken
+        one it shares an object with are then left as they are, and the cell
+        runs on the live objects, as a plain kernel runs it."""
+        edges = self.tracking_state.derivation_edges
+        if not edges or not broken_vars:
+            return
+        user_ns = self.shell.user_ns
+        produced = {out for entry in simulation_trace or () for out in entry.outputs or ()}
+        in_cells: set[str] | None = None
+        for root in sorted(broken_vars):
+            if root not in broken_vars:
+                continue
+            group = {root}
+            todo = [root]
+            while todo:
+                name = todo.pop()
+                for partner in shared_object_partners(edges, name):
+                    if partner not in group and partner in user_ns:
+                        group.add(partner)
+                        todo.append(partner)
+            added = group - broken_vars
+            if not added:
+                continue
+            orphans = {name for name in added if name not in produced}
+            if orphans:
+                if in_cells is None:
+                    in_cells = _bound_in_cells(check)
+                orphans -= in_cells
+            if orphans:
+                logger.debug(
+                    "[UPSTREAM_DEBUG]   -> %s share an object with %s and have no producer above. Kept live.",
+                    sorted(orphans),
+                    sorted(group & broken_vars),
+                )
+                broken_vars -= group
+                continue
+            logger.debug(
+                "[UPSTREAM_DEBUG]   -> %s share an object with rebuilt '%s'. Marking broken.", sorted(added), root
+            )
+            broken_vars |= added
 
     def _magic_bound(self, name: str, sim: SimulationResult) -> bool:
         """Whether a magic is the last to bind or change *name* above
@@ -1238,3 +1297,23 @@ def _statements_of(cell_code: str) -> set[str]:
             except (ValueError, TypeError, RecursionError):
                 continue
     return found
+
+
+def _bound_in_cells(check: CellCheck | None) -> set[str]:
+    """The names some statement of the notebook's cells, the running one
+    included, binds or changes."""
+    if check is None:
+        return set()
+    cells = list(check.notebook_cells or [])
+    if check.cell_code:
+        cells.append(check.cell_code)
+    bound: set[str] = set()
+    for cell in cells:
+        tree = parse_cell_source(cell)
+        if tree is None:
+            continue
+        try:
+            bound |= CodeAnalyzer.analyze_code_block(cell, tree=tree)[1]
+        except (SyntaxError, ValueError):
+            continue
+    return bound
