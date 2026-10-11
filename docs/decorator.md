@@ -232,7 +232,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903, cash/decorator/code_args.py:CodeArgs.fold_code_args @61607ad9 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903, cash/decorator/code_args.py:CodeArgs.fold_code_args @03aa0bbc -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -249,7 +249,10 @@ changed. The second list is what cash does not see, and what to do about it.
       (an editable `pip install -e` counts) or in the package the cached
       function itself is in.
     - **Module globals** read by the function or its helpers, parameter
-      defaults, and captured variables.
+      defaults, and captured variables, also those of a helper a factory
+      made (`score = make_scorer(weights)` over an array or a model). A
+      global naming a library class or a builtin (`DTYPE = np.float32`,
+      `AGG = sum`) counts by what it names.
     - The **classes it uses**: their code, their class attributes, and the
       module globals their methods read, inherited ones included.
     - Another **cached function** it reaches, directly, through a helper or
@@ -260,7 +263,9 @@ changed. The second list is what cash does not see, and what to do about it.
       also inside a library object (a transformer in an sklearn
       pipeline), and what that code reads, its environment reads included:
       a handler in a dispatch table, a step in a list (a `lambda` too), a
-      property or dunder method of a settings object. A table of plain
+      property or dunder method of a settings object. Also code your project
+      installs on an argument's library class: a pandas accessor, a polars
+      namespace, a function patched onto `pd.DataFrame`. A table of plain
       functions is keyed once per version of it: a hit on a table of 1000
       handlers costs about 3 ms, not a re-analysis of each handler.
     - A **file** read by a
@@ -502,7 +507,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @c3c0e6a8 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489 -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key
