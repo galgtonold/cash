@@ -1840,12 +1840,23 @@ handle), or on Windows a file held open by another process.
 
 ### STORE-INPUT-CHANGED {#store-input-changed}
 
-<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d20722f, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @b6d6c4b7 -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @57e71e71, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @538d7a29 -->
-**What happened.** A file the function read changed before it returned. The
-result was returned but not stored.
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @98e0fdb4, cash/notebook/statement/processor.py:StatementProcessor._post_execute @3b2a3a02 -->
+=== "Decorator"
+
+    **What happened.** A file the function read changed before it returned.
+    The result was returned but not stored.
+
+=== "Notebook"
+
+    **What happened.** A file the statement read changed before it finished,
+    another process replacing it, say. The statement's value is kept for this
+    run but not stored, and the statements below it that use the value are
+    not served from what they stored for it; the next run reads the settled
+    file. The warning comes once per statement.
 
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
@@ -1861,9 +1872,9 @@ loader runs again when the file is replaced or deleted. A folder that was alread
 there is not one the function made, so `os.makedirs(d, exist_ok=True)` leaves
 the files under `d` inputs.
 
-**What to do.** Usually nothing: the next call caches normally. If it fires on
-every run, the function probably reads a file and then writes to it. Split the
-read from the write:
+**What to do.** Usually nothing: the next call or run caches normally. If it
+fires on every run, the function or statement probably reads a file and then
+writes to it. Split the read from the write:
 
 <!-- test:skip reason="illustrative: the point is the split, not a value" -->
 ```python

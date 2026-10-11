@@ -169,6 +169,11 @@ _LOG_ANNOTATION = "[ANNOTATION]"
 #: Why a statement that runs a magic or a shell command is not cached.
 _IPYTHON_REASON = "Runs an IPython magic or shell command, which cash cannot see into, so it runs every time"
 
+#: Why a statement that read a file replaced while it ran is not cached.
+INPUT_CHANGED_REASON = (
+    "A file it read changed while it ran, so this run is not cached: the next run reads the settled file"
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -976,7 +981,13 @@ class StatementProcessor:
                 make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured,
             ):
                 execution.captured = captured
-                with observe_writes() as written_paths, FileAccessTracker(self.shell.user_ns) as file_tracker:
+                # Hashed as read, as the decorator does: a file replaced while
+                # the statement runs is then caught at store time
+                # (`StatementStore.save`), and the snapshot reuses the digest.
+                with (
+                    observe_writes() as written_paths,
+                    FileAccessTracker(self.shell.user_ns, hash_on_read=not run.skip_cache) as file_tracker,
+                ):
                     user_ns = self.shell.user_ns
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
                     if handed:
@@ -996,6 +1007,7 @@ class StatementProcessor:
                                 user_ns[LOOP_ITERABLE_NAME] = shadowed
                 execution.accessed_files = file_tracker.get_accessed_files() | run.header_files
                 execution.written_paths = frozenset(written_paths)
+                execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
                 # The keyed form (`run.code`), not what ran: a call routed
                 # through the call cache rewrites the text, and the key and
@@ -1350,6 +1362,15 @@ class StatementProcessor:
 
         self._key_a_newly_seen_draw(run)
         self._route_pyplot_draws(run)
+        # A file it read was replaced while it ran: its outputs are not what
+        # that file holds now, and their lineage, which folds the file's
+        # present stat, would say they are. Run uncached, and keyed by value
+        # as a no-cache statement's are, so nothing below is stored under a
+        # lineage a settled run gives again.
+        inputs_moved = not run.skip_cache and self._store.inputs_moved(run, execution)
+        if inputs_moved:
+            run.skip_cache = True
+            run.metrics["uncacheable_reasons"].append(INPUT_CHANGED_REASON)
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
             run.outputs,
@@ -1360,7 +1381,9 @@ class StatementProcessor:
             accessed_files=execution.accessed_files,
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
-            no_cache=(run.annotation is not None and run.annotation.no_cache) or self._binds_a_stream(run),
+            no_cache=(run.annotation is not None and run.annotation.no_cache)
+            or inputs_moved
+            or self._binds_a_stream(run),
             replay_bumps=False,
             lineage_reads=run.pyplot_drawn,
         )

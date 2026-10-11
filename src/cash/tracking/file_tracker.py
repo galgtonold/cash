@@ -280,6 +280,16 @@ class FileAccessTracker:
                 moved.append(path)
         return moved
 
+    def known_reads(self) -> dict[str, tuple[Any, ...]]:
+        """``{path: (stat when read, digest when read, when it was hashed)}``
+        for each file hashed as it was read (``hash_on_read``): what a
+        snapshot reuses while the stat is unchanged (`snapshot_file_deps`)."""
+        return {
+            path: (self.read_stats[path], digest, self.read_hashed_at.get(path))
+            for path, digest in self.read_digests.items()
+            if path in self.read_stats
+        }
+
     def note_ctime_unreliable(self, path) -> None:
         """Compare *path* by size and mtime only in the mid-call check, here
         and in the enclosing trackers (see ``ctime_unreliable``)."""
