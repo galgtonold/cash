@@ -40,7 +40,9 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import inspect
 import sys
+import types
 import uuid
 from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
@@ -50,11 +52,19 @@ from IPython.core.inputtransformer2 import leading_indent
 
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import get_statement_annotations
+from ...analysis.ast_util import resolve_callee
+from ...analysis.callee_effects import (
+    argument_roots,
+    iterated_sources,
+    params_mutated_in_function,
+    resolve_function_def,
+    statement_calls,
+)
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import analyze_statement
+from ...analysis.mutation_effects import analyze_statement, statement_effects
 from ...diagnostics import log_diagnostic, warn_diagnostic
-from ...exceptions import CashWarning
+from ...exceptions import SOURCE_RETRIEVAL_ERRORS, CashWarning
 from ...remote_source import measured_validation as _measured_validation
 from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
@@ -163,17 +173,100 @@ def _read_names(node: ast.AST) -> set[str]:
     return in_cell_scope | (loads(ast.walk(node)) - local)
 
 
-def _changed_by_a_failed_step(node: ast.stmt) -> set[str]:
+def _changed_by_a_failed_step(
+    node: ast.stmt,
+    namespace: dict[str, Any] | None = None,
+    resolve_source: Callable[[str], str | None] | None = None,
+) -> set[str]:
     """The names statement *node* may have changed before it raised: what it
     changes in place (``lst.append(x)``), and for a loop or branch also what
-    its body binds, since part of it ran."""
+    its body binds, since part of it ran.
+
+    With *namespace* and *resolve_source*, also what the functions it calls
+    change: an argument a helper fills (``proc.fill(tot, data)``), a global a
+    function of the notebook's sets (``put(u)`` doing ``tot[u] = ...``), a
+    receiver of a callable it hands over. When a callee cannot be read, every
+    name the statement hands to a call, or calls a method on, may have
+    changed.
+    """
     try:
         changed = set(analyze_statement(ast.unparse(node), node).all_mutated_vars)
     except Exception:  # noqa: BLE001 - an analysis of arbitrary code: assume nothing changed in place
         changed = set()
     if is_control_structure(node):
         changed |= _stored_names(node)
+    if namespace is not None and resolve_source is not None:
+        changed |= _changed_by_its_callees(node, namespace, resolve_source)
     return changed
+
+
+def _changed_by_its_callees(
+    node: ast.stmt, namespace: dict[str, Any], resolve_source: Callable[[str], str | None]
+) -> set[str]:
+    """What the functions statement *node* calls may change in the cell's
+    scope (`statement_effects`): the globals they set, the arguments they
+    change in place, and the receivers of callables it hands over. Not the
+    names the statement itself binds: a raise stopped it before it bound
+    them."""
+    tree = ast.Module(body=[node], type_ignores=[])
+    try:
+        effects = statement_effects(ast.unparse(node), tree, namespace=namespace, resolve_source=resolve_source)
+        bound = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)}
+        changed = set(effects.callee_globals | effects.arg_mutations | (effects.outputs - bound))
+        if effects.unanalysed:
+            changed |= _handed_or_called_on(tree)
+        return changed | _arguments_its_callees_change(tree, namespace, resolve_source)
+    except Exception:  # noqa: BLE001 - unknown writes: as for an unreadable callee
+        return _handed_or_called_on(tree)
+
+
+def _arguments_its_callees_change(
+    tree: ast.Module, namespace: dict[str, Any], resolve_source: Callable[[str], str | None]
+) -> set[str]:
+    """The variables a call in *tree* hands to a parameter its function
+    changes in place, for the calls `statement_effects` leaves to the run
+    itself: through a module (``proc.fill(tot, data)``) and in a loop's
+    body. A function whose source cannot be read may change any of them."""
+    iterated = iterated_sources(tree)
+    changed: set[str] = set()
+    for call in statement_calls(tree):
+        fn = resolve_callee(call.func, namespace)
+        if not isinstance(fn, types.FunctionType):
+            continue
+        handed = [argument_roots(arg, iterated) for arg in call.args]
+        by_keyword = [(kw.arg, argument_roots(kw.value, iterated)) for kw in call.keywords]
+        try:
+            fdef = resolve_function_def(fn, inspect.getsource)
+        except SOURCE_RETRIEVAL_ERRORS:
+            fdef = None
+        if fdef is None:
+            changed.update(*handed, *(roots for _, roots in by_keyword))
+            continue
+        mutated = params_mutated_in_function(fdef, resolve_source, frozenset({fdef.name}))
+        if not mutated:
+            continue
+        positional = [a.arg for a in (*fdef.args.posonlyargs, *fdef.args.args)]
+        open_ended = any(isinstance(arg, ast.Starred) for arg in call.args)
+        for index, roots in enumerate(handed):
+            if open_ended or (index < len(positional) and positional[index] in mutated):
+                changed |= roots
+        for name, roots in by_keyword:
+            if name is None or name in mutated:
+                changed |= roots
+    return changed
+
+
+def _handed_or_called_on(tree: ast.Module) -> set[str]:
+    """Every variable *tree* hands to a call or calls a method on, the roots
+    of each (``f(s.d)`` hands over ``s``)."""
+    iterated = iterated_sources(tree)
+    names: set[str] = set()
+    for call in statement_calls(tree):
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            names |= argument_roots(arg, iterated)
+        if isinstance(call.func, ast.Attribute):
+            names |= argument_roots(call.func.value, iterated)
+    return names
 
 
 def _owed_by_skips(
@@ -181,6 +274,7 @@ def _owed_by_skips(
     skipped: set[int],
     failed: int,
     restored: frozenset[int] | set[int] = frozenset(),
+    in_place: set[str] | None = None,
 ) -> tuple[list[int], set[str]]:
     """What to run after statement *failed* raised, so the cell leaves each
     name as a plain run does.
@@ -193,7 +287,9 @@ def _owed_by_skips(
     *restored*) while a writer at or after the failure stands for it is
     owed -- the overwrite never completed. A name the failed statement may
     have changed in place is never owed: running its writer again would wipe
-    what that statement had done before it raised.
+    what that statement had done before it raised. *in_place* is what it may
+    have changed (`_changed_by_a_failed_step`), read from its text alone when
+    not given.
 
     Returns ``(steps, lost)``. *steps* are the statements to run, in cell
     order: the last writer of each owed name, plus every statement whose
@@ -207,7 +303,8 @@ def _owed_by_skips(
     longer hold what a plain run leaves.
     """
     writers = [_stored_names(node) for node in body]
-    in_place = _changed_by_a_failed_step(body[failed]) if failed < len(body) else set()
+    if in_place is None:
+        in_place = _changed_by_a_failed_step(body[failed]) if failed < len(body) else set()
     planned = set(skipped) | set(restored)
 
     def last_writer(name: str, before: int) -> int | None:
@@ -1048,14 +1145,16 @@ class CellExecutor:
                 # against no lineage, so each name it may have changed no longer
                 # matches the run that made it: a re-run must rebuild it, and
                 # a cell below keeps it as the failed run left it.
-                left = _changed_by_a_failed_step(node)
+                left = _changed_by_a_failed_step(
+                    node, self.shell.user_ns, self._statement_processor.resolve_live_function_source
+                )
                 for name in left:
                     self.tracking_state.lineage.discard(name)
                 self.tracking_state.failed_cell_names[digest] = frozenset(left)
                 # The plan skipped or restored statements by the version the
                 # whole cell ends with; a name a statement at or after this one
                 # writes holds a version a plain run never reached here.
-                owed, lost = _owed_by_skips(tree.body, skipped, i, restored)
+                owed, lost = _owed_by_skips(tree.body, skipped, i, restored, left)
                 if any(k not in texts_by_index for k in owed):
                     owed, lost = [], lost | set().union(*(_stored_names(tree.body[k]) for k in owed))
                 if lost:

@@ -1426,7 +1426,8 @@ If it is not code, delete it or make it a markdown cell.
 not what a run of the cells from the top gives. The message names the cell
 and the variables. It comes in two cases.
 
-A cell above raised part way, say in a loop filling `tot`, and the cell you
+A cell above raised part way, say in a loop filling `tot` or in a function
+it calls that fills `tot` (`proc.fill(tot, data)`), and the cell you
 ran reads `tot`, or something built from it since (`final = {... tot ...}`).
 No run of the cells gives those values: the lines before the error leave
 `tot` empty, and the whole cell raises. So cash keeps them as they are, as a

@@ -4,7 +4,9 @@
 was changed). Running a cell further down, cash re-ran ``tot = {}`` and the
 cell between (``final = {... tot ...}``) on that state, silently: tot came
 back empty and final with it. A plain kernel keeps the partial tot and the
-previous final; after a restart final is not there at all.
+previous final; after a restart final is not there at all. The same when
+the dict is filled by a module helper or by a function of the notebook's
+called in the loop.
 """
 
 import os
@@ -19,7 +21,19 @@ def weight(s):
     if s > {limit}:
         raise ValueError(s)
     return s ** 0.5
+def fill(tot, by_user):
+    for u in by_user:
+        tot[u] = sum(weight(s) for s in by_user[u])
 """
+
+FILLS = {
+    "inline": "tot = {}\nfor u in by_user:\n    tot[u] = sum(proc.weight(s) for s in by_user[u])\nprint(tot)",
+    "helper": "tot = {}\nproc.fill(tot, by_user)\nprint(tot)",
+    "cell_function": (
+        "tot = {}\ndef put(u):\n    tot[u] = sum(proc.weight(s) for s in by_user[u])\n"
+        "for u in by_user:\n    put(u)\nprint(tot)"
+    ),
+}
 
 CELLS = [
     "import cash\n%cash_on",
@@ -37,7 +51,7 @@ def _write(nb_runner, limit, stamp):
 
 
 def _run_until_error(nb_runner):
-    for n in range(1, len(CELLS) + 1):
+    for n in range(1, len(nb_runner.nb.cells) + 1):
         try:
             nb_runner.run_cell(n)
         except CellExecutionError:
@@ -45,9 +59,10 @@ def _run_until_error(nb_runner):
     return None
 
 
-def test_a_cell_below_a_failed_loop_sees_what_the_loop_left(nb_runner):
+@pytest.mark.parametrize("fill", list(FILLS))
+def test_a_cell_below_a_failed_loop_sees_what_the_loop_left(nb_runner, fill):
     _write(nb_runner, 99, 1_700_000_000)
-    nb_runner.create_notebook(CELLS)
+    nb_runner.create_notebook([*CELLS[:2], FILLS[fill], *CELLS[3:]])
     nb_runner.start_kernel()
     assert _run_until_error(nb_runner) is None
 
