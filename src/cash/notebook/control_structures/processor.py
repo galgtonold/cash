@@ -34,6 +34,7 @@ import contextlib
 import hashlib
 import logging
 import types
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.cacheability import statement_writes_files
@@ -157,7 +158,7 @@ class ControlStructureProcessor:
         parent_context: dict[str, Any] | None = None,
         raw_cell: str | None = None,
         inherited_annotation: "CacheAnnotation | None" = None,
-        prev_node: ast.stmt | None = None,
+        prior_nodes: Sequence[ast.stmt] = (),
     ) -> ControlStructureResult:
         """
         Process a control structure node.
@@ -175,16 +176,16 @@ class ControlStructureProcessor:
                 comments). ``None`` disables them.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
-            prev_node: The top-level statement just before this one in the
-                cell, or ``None``. The for-loop's single-unit branch needs an
-                ``out = []`` seed there to compute ``force_outputs`` (see
-                ``mutations.cacheable_accumulator_loop``).
+            prior_nodes: The top-level statements before this one in the
+                cell, in order. A for loop run as one unit needs the empty
+                seeds of the containers it fills there to compute
+                ``force_outputs`` (see ``mutations.seeded_accumulator_loop``).
 
         Returns:
             ControlStructureResult with metrics
         """
         if parent_context is not None:
-            return self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
+            return self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes)
         # Record what this structure left behind, for the simulation -- see
         # TrackingState.control_outcomes.
         sp = self.statement_processor
@@ -209,7 +210,7 @@ class ControlStructureProcessor:
         result = None
         try:
             with observe_writes() as written:
-                result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prev_node)
+                result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes)
         finally:
             self._unit_frame = None
             if positions:
@@ -447,7 +448,7 @@ class ControlStructureProcessor:
         parent_context: dict[str, Any] | None,
         raw_cell: str | None,
         inherited_annotation: "CacheAnnotation | None",
-        prev_node: ast.stmt | None,
+        prior_nodes: Sequence[ast.stmt],
     ) -> ControlStructureResult:
         if isinstance(node, ast.For):
             # A loop with break/continue, or with an ``else`` (which runs only
@@ -461,6 +462,7 @@ class ControlStructureProcessor:
                     silent,
                     raw_cell,
                     inherited_annotation,
+                    force_outputs=ForLoopHandler._single_unit_outputs(node, prior_nodes),
                 )
             return self._for_handler.process(
                 node,
@@ -469,7 +471,7 @@ class ControlStructureProcessor:
                 parent_context,
                 raw_cell,
                 inherited_annotation,
-                prev_node,
+                prior_nodes,
             )
         if isinstance(node, ast.If):
             return self._if_handler.process(

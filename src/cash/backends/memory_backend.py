@@ -134,7 +134,9 @@ def _read_parts(value: dict, memo: dict[int, Any], depth: int = 0) -> None:
             _read_parts(item, memo, depth + 1)
 
 
-def _marshal_parts(value: dict, depth: int = 0, found: dict | None = None) -> dict[int, tuple[Any, Any]]:
+def _marshal_parts(
+    value: dict, depth: int = 0, found: dict | None = None, skip: Any = frozenset()
+) -> dict[int, tuple[Any, Any]]:
     """``{id(part): (part, facts)}`` for the values of *value*, and of the
     small dicts in it, that are kept as marshal bytes (`_marshals`).
 
@@ -146,15 +148,50 @@ def _marshal_parts(value: dict, depth: int = 0, found: dict | None = None) -> di
     found = {} if found is None else found
     for item in value.values():
         kind = type(item)
-        if kind is not dict and kind is not list and kind is not tuple or id(item) in found:
+        if kind is not dict and kind is not list and kind is not tuple or id(item) in found or id(item) in skip:
             continue
         facts = _plain_data.tree_facts(item)
         if facts is not None and facts.held_once and _marshals(facts):
             found[id(item)] = (item, facts)
         elif kind is dict and depth < _PARTS_DEPTH and len(item) <= _PARTS_KEYS:
             # A namespace of variables, one of which another name holds.
-            _marshal_parts(item, depth + 1, found)
+            _marshal_parts(item, depth + 1, found, skip)
     return found
+
+
+#: `_shared_parts` takes a list or tuple of at least this many rows: below
+#: it marshal's bytes cost a hit little.
+_SHARED_ROWS_MIN = _MARSHAL_NODES_MIN
+
+
+def _shared_parts(value: dict, depth: int = 0, found: dict | None = None) -> dict[int, list | tuple]:
+    """``{id(part): part}`` for the big lists and tuples of rows -- tuples
+    of strings, numbers and tuples -- in *value* and the small dicts in it
+    (`_marshal_parts`' reach): kept as new lists over the same rows, and
+    copied so by every hit.
+
+    Read back out of marshal bytes, 300,000 parsed ``(str, str, str)`` rows
+    cost a hit 1.3 s, twice what parsing them took; a list over the same
+    rows, which nothing can write into, costs milliseconds."""
+    found = {} if found is None else found
+    for item in value.values():
+        kind = type(item)
+        if kind is list or kind is tuple:
+            if (
+                id(item) not in found
+                and len(item) >= _SHARED_ROWS_MIN
+                and type(item[0]) is tuple
+                and _plain_data.immutable_below(item)
+            ):
+                found[id(item)] = item
+        elif kind is dict and depth < _PARTS_DEPTH and len(item) <= _PARTS_KEYS:
+            _shared_parts(item, depth + 1, found)
+    return found
+
+
+def _shared_copies(shared: dict[int, list | tuple]) -> dict[int, list | tuple]:
+    """A hit's copy of each part `_shared_parts` found, by the stored part's id."""
+    return {part_id: list(part) if type(part) is list else part for part_id, part in shared.items()}
 
 
 class _TableWithBytes:
@@ -360,6 +397,10 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value holds parts kept as marshal bytes
         #: (`_marshal_parts`): only a copy reads them out.
         self._holds_bytes: builtins.set[str] = set()
+        #: Per key, the big lists and tuples of immutables in the stored value
+        #: (`_shared_parts`), by id: a hit gives each a new list over the same
+        #: items.
+        self._shared: dict[str, dict[int, list | tuple]] = {}
         #: Keys whose stored value is cash's own by construction: nothing
         #: in it is an object the caller's value also holds (`private_copy`).
         self._own: builtins.set[str] = set()
@@ -962,13 +1003,15 @@ class InMemoryBackend(CacheBackend):
             known_cells = self._frame_cells.get(key)
             plan = self._copy_plans.get(key)
             holds_bytes = key in self._holds_bytes
+            shared = self._shared.get(key)
 
         if type(value) is _Marshalled:
             return metadata, _plain_data.marshal_loads(value.data)
-        if holds_bytes:
+        if holds_bytes or shared:
             # Parts kept as bytes: only a copy reads them out, never a plan
-            # or the stored value itself.
-            copied = self._copy_holding_bytes(value, key, known_cells)
+            # or the stored value itself. Parts kept as lists over shared
+            # immutables go into the copy as new lists.
+            copied = self._copy_holding_bytes(value, key, known_cells, shared)
             if copied is _UNSERVABLE:
                 with self._lock:
                     entry = self._store.get(key)
@@ -993,7 +1036,9 @@ class InMemoryBackend(CacheBackend):
                 return metadata, copied
         return metadata, self._safe_deep_copy(value, key, known_cells=known_cells)
 
-    def _copy_holding_bytes(self, value: Any, key: str, known_cells: dict[int, bool] | None) -> Any:
+    def _copy_holding_bytes(
+        self, value: Any, key: str, known_cells: dict[int, bool] | None, shared: dict[int, Any] | None = None
+    ) -> Any:
         """A copy of a stored *value* holding parts kept as marshal bytes
         (`_marshal_parts`) with every part read out, or `_UNSERVABLE`.
 
@@ -1010,7 +1055,7 @@ class InMemoryBackend(CacheBackend):
         """
         # Each part read out once, for the copy of the whole and, should
         # that fail, for the copy a value at a time.
-        memo: dict[int, Any] = {}
+        memo: dict[int, Any] = _shared_copies(shared) if shared else {}
         if type(value) is dict:
             _read_parts(value, memo)
         fell_back: list[bool] = []
@@ -1071,14 +1116,24 @@ class InMemoryBackend(CacheBackend):
         # with numpy's RNG state beside the variables -- has such parts kept
         # as bytes (`_marshal_parts`), and the rest copied as before.
         facts = walk = parts = None
+        # Big lists of rows of strings and numbers (`_shared_parts`) are not
+        # kept as bytes: a hit gets a new list over the same rows. In an
+        # entry JSON-like throughout, the copy a container at a time shares
+        # them on the store and the first hit's plan gives each a new list
+        # (`copy_plan`); in any other, they are kept beside the rest.
+        shared: dict[int, list | tuple] = {}
         if plain is None and dict_rows_size is None:
+            if type(value) is dict:
+                shared = _shared_parts(value)
             if _plain_data.in_a_look():
                 facts = _plain_data.tree_facts(value)
             else:
                 facts, walk = _plain_data.tree_facts_and_walk(value)
             if facts is None and type(value) is dict:
-                parts = _marshal_parts(value)
-        whole = facts is not None and _marshals(facts)
+                parts = _marshal_parts(value, skip=shared)
+        whole = not shared and facts is not None and _marshals(facts)
+        if facts is not None:
+            shared = {}
         if whole:
             walk = None  # not copied a container at a time
         if dict_rows_size is not None:
@@ -1134,6 +1189,10 @@ class InMemoryBackend(CacheBackend):
                         premade[part_id] = _Marshalled(data)
             elif facts is not None and walk is None:
                 walk = _plain_data.tree_walk(value)  # for the copy, a container at a time
+            marshalled_parts = bool(premade)
+            if shared:
+                # Stored as new lists over the same rows, by the copy below.
+                premade = {**(premade or {}), **_shared_copies(shared)}
             # Only for a decorator entry, where the stored value IS what the
             # next call hands back. A notebook statement's payload is the
             # variables a cell left behind, and one unisolatable variable among
@@ -1154,7 +1213,10 @@ class InMemoryBackend(CacheBackend):
                 premade=premade,
                 by_deepcopy=by_deepcopy,
             )
-            holds_bytes = (bool(premade) or _BYTES in frame_cells.values()) and not fell_back
+            holds_bytes = (marshalled_parts or _BYTES in frame_cells.values()) and not fell_back
+            if shared and not fell_back:
+                kept = {id(premade[part_id]): premade[part_id] for part_id in shared}
+                shared = kept
             # Its own only when every part was copied in a way that leaves
             # nothing of the caller's in it: a pickle round trip, a spine
             # copy, arrays, parts read out of bytes, and frozen tables. A
@@ -1218,6 +1280,10 @@ class InMemoryBackend(CacheBackend):
                 self._holds_bytes.add(key)
             else:
                 self._holds_bytes.discard(key)
+            if shared and own:
+                self._shared[key] = shared
+            else:
+                self._shared.pop(key, None)
             if own:
                 self._own.add(key)
             else:
@@ -1245,6 +1311,7 @@ class InMemoryBackend(CacheBackend):
         self._frame_cells.pop(key, None)
         self._copy_plans.pop(key, None)
         self._holds_bytes.discard(key)
+        self._shared.pop(key, None)
         self._own.discard(key)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
@@ -1264,6 +1331,7 @@ class InMemoryBackend(CacheBackend):
             self._frame_cells.clear()
             self._copy_plans.clear()
             self._holds_bytes.clear()
+            self._shared.clear()
             self._own.clear()
             self._gdsf_base.clear()
             self._seq_by_key.clear()

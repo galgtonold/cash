@@ -8,7 +8,7 @@ bare method call, and the accumulator-loop shapes.
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from .file_effects import SideEffectVisitor
@@ -38,7 +38,7 @@ __all__ = [
     "top_level_calls",
     "selfref_reassignment_targets",
     "accumulator_loop_body_shape",
-    "cacheable_accumulator_loop",
+    "seeded_accumulator_loop",
 ]
 
 
@@ -1273,11 +1273,11 @@ def accumulator_loop_body_shape(
 ) -> tuple[str, tuple[str, ...]] | None:
     """Detect the accumulator shape from the BODY alone, ignoring any seed.
 
-    Returns ``(acc, loop_vars)`` or ``None``. This is
-    :func:`cacheable_accumulator_loop` minus its requirement (2), the
-    fresh-empty-seed check on the immediately-preceding sibling.
+    Returns ``(acc, loop_vars)`` or ``None``: a body that is exactly one
+    ``acc.append(...)``-style call, with no check of how ``acc`` was seeded.
 
-    **Why dropping (2) is safe here and not there.** Requirement (2) exists
+    **Why no seed check is safe here and not elsewhere.**
+    :func:`seeded_accumulator_loop` requires a fresh-empty seed
     because caching a loop that appends to an ALREADY-POPULATED accumulator
     would drop or double its prefix -- the entry cannot know what the
     accumulator held going in. The one caller is a split loop's tail
@@ -1288,11 +1288,7 @@ def accumulator_loop_body_shape(
     different misses instead of restoring over it.
 
     Do NOT reach for this anywhere the prefix is not re-derived that way; use
-    :func:`cacheable_accumulator_loop`, which refuses the case outright.
-
-    Deliberately a sibling rather than a generalisation of that function: its
-    exact shape gate is depended on by a large body of integration tests, and
-    this duplication is cheaper than the risk of changing its behaviour.
+    :func:`seeded_accumulator_loop`, which refuses the case outright.
     """
     if for_node.orelse or len(for_node.body) != 1:
         return None
@@ -1317,78 +1313,177 @@ def accumulator_loop_body_shape(
     return acc, tuple(loop_vars)
 
 
-def cacheable_accumulator_loop(
-    for_node: ast.For,
-    prev_node: ast.stmt | None,
-) -> tuple[str, tuple[str, ...], ast.expr, ast.Call] | None:
-    """Detect the NARROW cacheable accumulator-loop shape.
+#: Builtins that read an accumulator and hand back a NEW value (a number, a
+#: bool, a fresh container), so passing the accumulator to one shares nothing.
+_ACCUMULATOR_READERS = frozenset(
+    {"len", "sum", "min", "max", "sorted", "any", "all", "bool", "list", "tuple", "set", "dict", "frozenset"}
+)
 
-    Returns ``(acc, loop_vars, iterable_node, expr_call)`` when *for_node* is a
-    pure accumulator loop seeded by its immediately-preceding sibling
-    *prev_node*, else ``None``. A pure accumulator loop (``out = []`` then
-    ``for e in it: out.append(f(e))``) is byte-identical to a comprehension yet
-    is refused caching today because the ``append`` reads as an in-place
-    mutation; matching this shape lets the caller compute the ``force_outputs``
-    that make the whole loop cacheable as one unit, capturing BOTH the
-    accumulator and the leaked loop variable as outputs.
+#: In-place operator an accumulator of each seed kind may be grown with.
+_ACCUMULATOR_AUG_OPS: dict[str, tuple[type[ast.operator], ...]] = {
+    "list": (ast.Add,),
+    "set": (ast.BitOr,),
+    "dict": (ast.BitOr,),
+}
 
-    ALL of the following are required; anything else returns ``None`` so the
-    caller falls back to today's per-iteration behaviour:
 
-    1. ``for_node.body`` is EXACTLY one bare ``Expr(Call(Attribute(Name(acc),
-       meth, ...)))`` with ``meth in {'append','extend','add','update'}`` and no
-       ``for``/``else`` clause.
-    2. *prev_node* is ``acc = <fresh empty seed>`` whose seed kind matches the
-       method (``[]``/``list()`` for append/extend, ``set()`` for add,
-       ``{}``/``dict()``/``set()`` for update). A non-empty or prior-cell seed is
-       rejected — caching a partial accumulator would drop or double its prefix.
-    3. No ``break``/``continue`` (guaranteed by (1); re-checked defensively).
-    4. The append argument(s) write no files and mutate no variable but *acc*.
-    5. The loop target is a bare ``Name`` or a tuple/list of bare ``Name``s.
+def _seed_kinds(node: ast.stmt) -> dict[str, str]:
+    """``{name: seed kind}`` for the names *node* binds to fresh-empty
+    containers: ``acc = []`` or ``a, b = [], set()``. Empty for any other
+    statement, and for ``a = b = []`` (two names, one object)."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+        return {}
+    target, value = node.targets[0], node.value
+    if isinstance(target, ast.Name):
+        kind = _empty_seed_kind(value)
+        return {target.id: kind} if kind else {}
+    if not (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+    ):
+        return {}
+    seeds: dict[str, str] = {}
+    for name, elt in zip(target.elts, value.elts, strict=True):
+        kind = _empty_seed_kind(elt)
+        if not isinstance(name, ast.Name) or kind is None or name.id in seeds:
+            return {}
+        seeds[name.id] = kind
+    return seeds
+
+
+def _fresh_seed_kind(name: str, prior_nodes: Sequence[ast.stmt]) -> str | None:
+    """Seed kind of *name* when the last of *prior_nodes* to mention it binds
+    it to a fresh-empty container, else ``None``.
+
+    Any mention after that seed -- ``alias = acc``, ``acc.append(0)``, a
+    function body that names it -- refuses: the loop would then not start from
+    the empty container, or another name would share it.
     """
-    # (2) The preceding sibling must be ``acc = <empty seed>`` — a single bare
-    # Name target bound to a fresh-empty container.
-    if not (
-        isinstance(prev_node, ast.Assign) and len(prev_node.targets) == 1 and isinstance(prev_node.targets[0], ast.Name)
-    ):
-        return None
-    acc = prev_node.targets[0].id
-    seed_kind = _empty_seed_kind(prev_node.value)
-    if seed_kind is None:
-        return None
-
-    # (1) Body is exactly one bare-Expr accumulator-method call on ``acc``, with
-    # no for/else clause.
-    if for_node.orelse or len(for_node.body) != 1:
-        return None
-    stmt = for_node.body[0]
-    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
-        return None
-    call = stmt.value
-    if not (
-        isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == acc
-    ):
-        return None
-    meth = call.func.attr
-    seeds_for_method = _ACCUMULATOR_SEED_KINDS.get(meth)
-    if seeds_for_method is None or seed_kind not in seeds_for_method:
-        return None
-
-    # (5) Loop target is a simple Name / tuple of Names.
-    loop_vars = _simple_loop_target_names(for_node.target)
-    if not loop_vars:
-        return None
-
-    # (3) No break/continue (the one-Expr body cannot contain them, but a nested
-    # comprehension/lambda could technically parse; re-check to be safe).
-    for child in ast.walk(stmt):
-        if isinstance(child, (ast.Break, ast.Continue)):
+    for node in reversed(prior_nodes):
+        kind = _seed_kinds(node).get(name)
+        if kind is not None:
+            return kind
+        if any(isinstance(sub, ast.Name) and sub.id == name for sub in ast.walk(node)):
             return None
+    return None
 
-    # (4) The append argument(s) must be side-effect-free and mutate nothing but
-    # ``acc`` — a file write or a foreign mutation makes the loop uncacheable.
-    for arg in (*call.args, *(kw.value for kw in call.keywords)):
-        if _expr_has_side_effects_or_foreign_mutation(arg, acc):
+
+def _accumulator_use_ok(name_node: ast.Name, parents: dict[ast.AST, ast.AST], kind: str) -> bool:
+    """True if this mention of an accumulator inside the loop grows it, reads
+    from it, or changes something inside it -- never one that hands the
+    container itself to another name or callee.
+
+    Allowed: a method call on it or on something inside it
+    (``acc.append(x)``, ``d.setdefault(k, []).append(v)``, ``d[k].add(v)``),
+    a store or delete into it (``d[k] = v``, ``d[k] += 1``), an element read
+    (``acc[-1]``), ``acc += [...]`` with its kind's operator, ``x in acc``,
+    and the reading builtins (``len(acc)``). Refused: ``x = acc``,
+    ``f(acc)``, ``other.append(acc)``, ``for x in acc``, ``m = acc.append``,
+    and rebinding it.
+    """
+    parent = parents.get(name_node)
+    if isinstance(name_node.ctx, ast.Store):
+        return (
+            isinstance(parent, ast.AugAssign)
+            and parent.target is name_node
+            and isinstance(parent.op, _ACCUMULATOR_AUG_OPS[kind])
+        )
+    if not isinstance(name_node.ctx, ast.Load):
+        return False
+    top: ast.AST = name_node
+    while True:
+        up = parents.get(top)
+        if isinstance(up, (ast.Subscript, ast.Attribute)) and up.value is top:
+            top = up
+        elif isinstance(up, ast.Call) and up.func is top:
+            top = up
+        else:
+            break
+    if top is name_node:
+        if isinstance(parent, ast.Call) and name_node in parent.args:
+            return isinstance(parent.func, ast.Name) and parent.func.id in _ACCUMULATOR_READERS
+        if isinstance(parent, ast.Compare) and name_node in parent.comparators:
+            op = parent.ops[parent.comparators.index(name_node)]
+            return isinstance(op, (ast.In, ast.NotIn))
+        return False
+    # A bound method read but not called (``m = acc.append``) keeps the
+    # container alive under another name.
+    return not (isinstance(top, ast.Attribute) and isinstance(top.ctx, ast.Load))
+
+
+def seeded_accumulator_loop(
+    for_node: ast.For,
+    prior_nodes: Sequence[ast.stmt],
+) -> frozenset[str] | None:
+    """The ``force_outputs`` that make a single-unit loop which fills
+    containers in place cacheable, or ``None``.
+
+    A loop that grows lists, dicts or sets it starts from empty
+    (``deltas = []`` / ``for g in groups: for d in g: deltas.append(d)``) is
+    refused by the cache as an in-place mutation, which leaves it and every
+    cell downstream of what it fills uncached. When each container it changes
+    in place was seeded empty earlier in the SAME cell, the loop's result is a
+    function of its inputs alone, exactly like the comprehension it could
+    have been written as, so it can be stored and restored as one unit.
+
+    Returns the containers plus every name the loop and its nested loops bind
+    as their target (they leak after the loop and must come back on a hit)
+    when ALL hold, else ``None`` and the loop keeps today's behaviour:
+
+    1. Every variable the loop changes in place (other than ``n += 1`` on a
+       plain name, which rebinds) is bound to a fresh-empty container
+       (``[]``, ``list()``, ``{}``, ``dict()``, ``set()``) by one of
+       *prior_nodes*, its top-level siblings before it in the cell, and no
+       sibling after that seed mentions it. A container filled in an earlier
+       cell, or seeded non-empty, is refused: the entry could not know what it
+       held going in.
+    2. Inside the loop each such container is only grown, read from or
+       changed inside (see :func:`_accumulator_use_ok`); never handed to
+       another name or callee, and never rebound.
+    3. Every loop target, nested ones included, is a bare name or a tuple of
+       bare names.
+    4. The loop defines no function or class and declares no ``global`` or
+       ``nonlocal``.
+
+    ``break``, ``continue``, nested loops, conditions and other statements in
+    the body are fine. Everything else that makes a statement uncacheable (a
+    file write, a callee that mutates a global, an unpicklable output, an
+    output sharing its object with another variable) is still decided by the
+    statement pipeline: these outputs only lift the in-place refusal for the
+    containers proven fresh.
+    """
+    targets: set[str] = set()
+    for sub in ast.walk(for_node):
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Global, ast.Nonlocal)):
             return None
+        if isinstance(sub, (ast.For, ast.AsyncFor)):
+            names = _simple_loop_target_names(sub.target)
+            if not names:
+                return None
+            targets.update(names)
 
-    return acc, tuple(loop_vars), for_node.iter, call
+    visitor = MutationVisitor()
+    visitor.visit(for_node)
+    rebound = {
+        sub.target.id
+        for sub in ast.walk(for_node)
+        if isinstance(sub, ast.AugAssign) and isinstance(sub.target, ast.Name)
+    }
+    mutated = {m.variable for m in visitor.mutations}
+    kinds: dict[str, str] = {}
+    for name in mutated:
+        kind = _fresh_seed_kind(name, prior_nodes)
+        if kind is None:
+            if name in rebound and all(m.kind == "augmented_assign" for m in visitor.mutations if m.variable == name):
+                continue  # ``n += 1``: a rebind, the pipeline's own output
+            return None
+        kinds[name] = kind
+    if not kinds:
+        return None
+
+    parents = {child: node for node in ast.walk(for_node) for child in ast.iter_child_nodes(node)}
+    for sub in ast.walk(for_node):
+        if isinstance(sub, ast.Name) and sub.id in kinds and not _accumulator_use_ok(sub, parents, kinds[sub.id]):
+            return None
+    return frozenset(kinds) | targets

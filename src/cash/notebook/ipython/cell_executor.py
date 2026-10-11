@@ -1235,7 +1235,7 @@ class CellExecutor:
                     ttl=cell.ttl,
                     silent=True,
                     raw_cell=raw_cell,
-                    prev_node=cell.tree.body[i - 1] if i > 0 else None,
+                    prior_nodes=cell.tree.body[:i],
                 )
         finally:
             self._statement_processor.end_control_log(control_log)
