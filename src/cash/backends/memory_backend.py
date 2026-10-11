@@ -1825,14 +1825,25 @@ def _ticks_finely(clock: Any) -> bool:
 
     The reported resolution is not enough: Windows reports 1e-07 for
     `thread_time`, but GetThreadTimes moves in 15.6 ms ticks, so a copy timed
-    with it reads 0 s.
+    with it reads 0 s. Nor is seeing it move: one of those ticks falls in
+    the half millisecond about one time in thirty, and the process then
+    timed every copy with it. A fine clock moves by less than
+    `_FINE_STEP_S` from one reading to the next.
     """
     deadline = time.perf_counter() + 5e-4
-    first = clock()
+    last = clock()
     while time.perf_counter() < deadline:
-        if clock() != first:
-            return True
+        now = clock()
+        if now != last:
+            if now - last <= _FINE_STEP_S:
+                return True
+            last = now  # a tick, or this thread was descheduled between readings
     return False
+
+
+#: The most a clock `_ticks_finely` takes to be fine moves between two
+#: readings of it in a busy loop.
+_FINE_STEP_S = 1e-4
 
 
 _copy_clock = _fine_thread_clock()
