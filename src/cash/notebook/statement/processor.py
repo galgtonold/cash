@@ -1796,6 +1796,21 @@ class StatementProcessor:
         captured_vars.update(patches if patches is not None else holders)
         return None
 
+    def _writes_through_user_code(self, run: StatementRun) -> bool:
+        """Whether the upstream replay takes *run* for a file writer through
+        a function of the user's (``FileWriterScheduler._is_file_writer``)
+        though no write was seen as it ran: a helper handed to a timer or a
+        thread writes after the statement returns (``threading.Timer(1.0,
+        save)``). Recorded as run all the same, or the replay took it for an
+        edited writer and fired it again before every cell below. Asked only
+        of a statement that is not stored, as such a writer never is."""
+        if not run.skip_cache or "(" not in run.code:
+            return False
+        try:
+            return statement_calls_user_writer(run.code, self.shell.user_ns, run.tree, appends=False) is not None
+        except Exception:  # noqa: BLE001 - unjudged: as before, not recorded
+            return False
+
     def _record_file_effects(self, run: StatementRun, execution: StatementExecution) -> None:
         """Record the files *run* wrote and read, for the upstream simulation
         and for a reader after a restart."""
@@ -1807,7 +1822,11 @@ class StatementProcessor:
         # is in the helper) counts too: it was observed (``write_observer``).
         written = self._records.user_written_paths(execution.written_paths)
         try:
-            if written or any(e.kind == "file_write" for e in run.analysis.side_effects):
+            if (
+                written
+                or any(e.kind == "file_write" for e in run.analysis.side_effects)
+                or self._writes_through_user_code(run)
+            ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
