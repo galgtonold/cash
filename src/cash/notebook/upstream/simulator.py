@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import functools
 import logging
 import os
 import sys
@@ -23,7 +24,7 @@ from typing import Any
 
 from cash.control_markers import strip_markers
 
-from ...analysis.ast_util import resolve_callee
+from ...analysis.ast_util import parse_cached, resolve_callee
 from ...analysis.mutation_effects import CellEffects
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
@@ -742,6 +743,8 @@ class NotebookSimulator:
                 }
             if broken and not restored_by_index:
                 return None  # nothing on disk to jump to: run as usual
+            if not _plan_makes_each_name(trace, broken, run_set, restored_by_index):
+                return None  # a name would keep a value no statement of the cell makes: run as usual
             return planned
         except Exception:  # a plan that cannot be made is the ordinary run
             logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
@@ -963,3 +966,53 @@ def _cell_digest(check: CellCheck, idx: int) -> str:
 
 def _names(names: list[str]) -> str:
     return ", ".join(f"'{n}'" for n in names)
+
+
+@functools.lru_cache(maxsize=4096)
+def _named_in(code: str) -> frozenset[str]:
+    """Every name *code*'s own text binds, reads or changes: what a
+    statement does to a name without naming it (a lineage moved along a
+    recorded alias, a global a callee sets) is not in it."""
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.alias):
+            names.add(node.asname or node.name.partition(".")[0])
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            names.update(node.names)
+    return frozenset(names)
+
+
+def _plan_makes_each_name(trace: list, broken: set[str], run: set[int], restored_by_index: dict[int, dict]) -> bool:
+    """Does a cell-run plan leave each name the cell changes at the version
+    the cell ends with?
+
+    A name the live namespace already holds at that version (not *broken*)
+    is left as it is. Any other must get it from the statement that makes
+    it: the last one in *trace* whose text names it, which must run or be
+    restored with it. A statement credited with a name only through a
+    recorded alias (``y = f(x)`` once returned ``x`` itself, so ``x = x + 2``
+    moves ``y``'s lineage) does not make its value: ``y = g(x)`` skipped
+    there left ``y`` the old line's value under the new lineage. When no
+    statement names it (a global a callee sets), the last one that writes
+    it must run or be restored.
+    """
+    for name in broken:
+        writers = [i for i, entry in enumerate(trace) if name in entry.outputs]
+        if not writers:
+            continue
+        named = [i for i in writers if name in _named_in(trace[i].stmt_code)]
+        maker = (named or writers)[-1]
+        if maker in run:
+            continue
+        restored = restored_by_index.get(maker)
+        if restored is not None and name in (restored.get("restored_vars") or ()):
+            continue
+        return False
+    return True

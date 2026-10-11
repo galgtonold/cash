@@ -935,7 +935,7 @@ class CallUnit:
         ticket = self._invocations[-1].ticket if self._invocations else (0, 0)
         arg_hashes_before = (
             None
-            if reads_its_arguments_only(call.fn)
+            if reads_its_arguments_only(call.fn, call.args, call.kwargs)
             else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket))
         )
         module_before = _module_globals(call.fn)
