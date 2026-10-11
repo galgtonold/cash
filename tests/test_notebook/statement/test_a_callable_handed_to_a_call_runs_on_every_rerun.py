@@ -264,3 +264,45 @@ def test_a_lambda_hands_over_what_it_calls(statement):
         "tracker = Tracker()\nOPS = {'rec': tracker.record}\nkey = 'rec'\n"
     )
     assert set(handed_callables(ast.parse(statement), ns).receivers) >= {"tracker"}
+
+
+_COUNTERS = (
+    "class Model:\n    fitted = 0\n    def fit(self, v):\n        type(self).fitted += 1\n        return v * 2\n"
+    "    def predict(self, v):\n        return v * type(self).fitted\n"
+    "class Counted:\n    n = 0\n    def __call__(self, v):\n        type(self).n += 1\n        return v\n"
+    "class Registry:\n    seen = []\n    def note(self, v):\n        self.__class__.seen.append(v)\n"
+    "m = Model()\ncnt = Counted()\nreg = Registry()\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("statement", "changed"),
+    [
+        ("y = m.fit(3)", {"Model"}),
+        ("r = s.apply(cnt)", {"cnt", "Counted"}),
+        ("r = s.apply(m.fit)", {"m", "Model"}),
+        ("reg.note(1)", {"Registry"}),
+    ],
+)
+def test_a_method_that_changes_its_class_changes_the_class(statement, changed):
+    """``type(self).fitted += 1`` changes the class every instance shares:
+    called by name or handed to a call, the names bound to the class are
+    changed, so the statement runs again and the counter counts."""
+    from cash.analysis.handed_callables import handed_callables
+
+    found = handed_callables(ast.parse(statement), _namespace(_COUNTERS))
+    assert set(found.receivers) >= changed
+
+
+def test_a_method_that_only_reads_its_class_changes_nothing():
+    from cash.analysis.handed_callables import handed_callables
+
+    assert handed_callables(ast.parse("y = m.predict(3)"), _namespace(_COUNTERS)).receivers == frozenset()
+
+
+def test_a_change_through_type_of_an_object_is_rooted_at_the_object():
+    from cash.analysis.callee_effects import params_mutated_in_function, source_global_mutations
+
+    method = ast.parse("def fit(self, v):\n    type(self).fitted += 1\n").body[0]
+    assert params_mutated_in_function(method) == {"self"}
+    assert source_global_mutations("def bump():\n    type(model).registry.append(1)\n") == {"model"}

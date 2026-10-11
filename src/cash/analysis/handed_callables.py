@@ -131,6 +131,8 @@ def handed_callables(
             wrapper = _wrapper_called(call.func, namespace)
             if wrapper is not None:
                 found.add(*wrapper, False)
+            elif isinstance(call.func, ast.Attribute):
+                found.class_changed_by(call.func, namespace)
         if not call.args and not call.keywords and not isinstance(call.func, ast.Subscript):
             continue
         calling: _Opened | None = None
@@ -507,7 +509,17 @@ def _wraps_another(value: Any) -> bool:
 
 def _wrapper_called(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
     """``(callable, root)`` when the call target *func* is a ``functools.wraps``
-    wrapper of the user's, or a method that is one. Followed through modules
+    wrapper of the user's, or a method that is one."""
+    found = _users_target(func, namespace)
+    if found is None:
+        return None
+    value = found[0]
+    fn = value.__func__ if isinstance(value, types.MethodType) else value
+    return found if _wraps_another(fn) else None
+
+
+def _users_target(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
+    """``(value, root)`` of the call target *func*, followed through modules
     and the user's own classes and objects only: a library object's
     attributes are not looked up for every call made on it."""
     attrs: list[str] = []
@@ -527,8 +539,7 @@ def _wrapper_called(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]
             return None
         if value is _MISSING:
             return None
-    fn = value.__func__ if isinstance(value, types.MethodType) else value
-    return (value, node.id) if _wraps_another(fn) else None
+    return value, node.id
 
 
 _MISSING = object()
@@ -650,6 +661,23 @@ class _Found:
         self._seen.add((id(value), root))
         self._callable(value, root)
 
+    def class_changed_by(self, func: ast.Attribute, namespace: Mapping[str, Any]) -> None:
+        """A method of the user's called by name (``m.fit(3)``) whose body
+        changes the class of its object (``type(self).fitted += 1``) changes
+        the class every instance shares: the names bound to it are changed.
+        What it changes on the object itself is seen when it runs."""
+        found = _users_target(func, namespace)
+        if found is None or not isinstance(found[0], types.MethodType):
+            return
+        owner, fn = found[0].__self__, found[0].__func__
+        if isinstance(owner, type) or not isinstance(fn, types.FunctionType) or not self._users(fn):
+            return
+        for layer in wrapper_layers(fn):
+            source = _source_of(layer) if isinstance(layer, types.FunctionType) else None
+            if source is not None and _changes_its_class(source):
+                self._changed(type(owner), None)
+                return
+
     def _changed(self, obj: Any, root: str | None) -> None:
         """*obj*, which *root* holds or is, is changed in place by the call."""
         self.changes = True
@@ -696,6 +724,8 @@ class _Found:
                 if source is not None and not isinstance(owner, types.ModuleType):
                     if _changes_its_first_argument(fn, cls, source):
                         self._changed(owner, root)
+                        if not isinstance(owner, type) and _reaches_its_class(source):
+                            self._changed(cls, None)
             return
         if isinstance(value, (types.BuiltinMethodType, types.MethodWrapperType)):
             owner = getattr(value, "__self__", None)
@@ -716,6 +746,8 @@ class _Found:
             source = self._source(call, label)
             if source is not None and _changes_its_first_argument(call, type(value), source):
                 self._changed(value, root)
+                if _reaches_its_class(source):
+                    self._changed(type(value), None)
 
     def _users(self, fn: types.FunctionType) -> bool:
         return fn.__globals__ is self.namespace or _is_users(fn)
@@ -1073,6 +1105,82 @@ def _attributes_of(obj: Any) -> list[Any]:
                 except AttributeError:
                     pass  # an unset slot
     return values
+
+
+@functools.lru_cache(maxsize=4096)
+def _changes_its_class(source: str) -> bool:
+    """Whether the method *source* changes the class of its first argument
+    in place: a store, a delete or an augmented assignment under, or a
+    mutating method called on, ``type(self)`` or ``self.__class__``."""
+    node = parse_function_source(source)
+    if node is None:
+        return False
+    params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
+    if not params:
+        return False
+    first = params[0]
+
+    def through_class(expr: ast.expr) -> bool:
+        while isinstance(expr, (ast.Attribute, ast.Subscript)):
+            if isinstance(expr, ast.Attribute) and expr.attr == "__class__":
+                return isinstance(expr.value, ast.Name) and expr.value.id == first
+            expr = expr.value
+        return (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Name)
+            and expr.func.id == "type"
+            and len(expr.args) == 1
+            and isinstance(expr.args[0], ast.Name)
+            and expr.args[0].id == first
+        )
+
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.Assign, ast.Delete)):
+            targets = sub.targets
+        elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
+            targets = [sub.target]
+        elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in MUTATING_METHODS:
+            if through_class(sub.func.value):
+                return True
+            continue
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, (ast.Attribute, ast.Subscript)) and through_class(target.value):
+                return True
+    return False
+
+
+@functools.lru_cache(maxsize=4096)
+def _reaches_its_class(source: str) -> bool:
+    """Whether the method *source* reaches the class of its first argument
+    (``type(self)``, ``self.__class__``): a change made there is a change to
+    the class every instance shares, and to the names bound to it."""
+    node = parse_function_source(source)
+    if node is None:
+        return True
+    params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
+    if not params:
+        return False
+    first = params[0]
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "type"
+            and len(sub.args) == 1
+            and isinstance(sub.args[0], ast.Name)
+            and sub.args[0].id == first
+        ):
+            return True
+        if (
+            isinstance(sub, ast.Attribute)
+            and sub.attr == "__class__"
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == first
+        ):
+            return True
+    return False
 
 
 def _changes_its_first_argument(
