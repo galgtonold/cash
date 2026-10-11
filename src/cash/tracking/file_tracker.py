@@ -190,6 +190,15 @@ class FileAccessTracker:
         # on every call as "changed while the call was running".
         self.created_files: set[str] = set()
         self.created_dirs: list[str] = []
+        # Reads of those paths, as the spellings a read records. Not inputs
+        # while the block runs (no `read_stats`, so writing, reading back and
+        # appending is not "changed while the call was running"), but one
+        # still there when the block ends is: a "download if missing, then
+        # read" loader reads that file on every later call, and an entry with
+        # no dependency on it never saw the user replace it. The scratch file
+        # the block removed is gone by then and stays out
+        # (`get_accessed_files`).
+        self.created_then_read: set[str] = set()
 
     def __enter__(self):
         # The first open tracker installs the wrappers (see
@@ -241,7 +250,19 @@ class FileAccessTracker:
         reset_in_any_context(active_tracker, token)
 
     def get_accessed_files(self) -> set[str]:
-        return self.accessed_files
+        """The paths this block read, once it has ended: what it read of its
+        own output counts too while that is still there (`created_then_read`),
+        snapshotted with its content as it is now."""
+        if not self.created_then_read:
+            return self.accessed_files
+        kept = set()
+        for path in self.created_then_read:
+            try:
+                if os.path.exists(path):
+                    kept.add(path)
+            except (OSError, ValueError):
+                pass
+        return self.accessed_files | kept if kept else self.accessed_files
 
     def inputs_changed_since_read(self) -> list[str]:
         """Regular files whose stat moved between their first read and now.
@@ -373,7 +394,8 @@ class FileAccessTracker:
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
             return
         if (self.created_files or self.created_dirs) and self.created_by_block(abs_path):
-            logger.debug("[TRACKER] Ignoring a read of %r, which this block created", abs_path)
+            logger.debug("[TRACKER] A read of %r, which this block created: an input if it stays", abs_path)
+            self._add_created_read(abs_path, self._unresolved_spelling(path, abs_path))
             return
         why = incidental_read(abs_path, self._own_package)
         if why is not None:
@@ -386,33 +408,48 @@ class FileAccessTracker:
             credit_read_to_stack(abs_path, self)
         except Exception:  # attribution is an aid; the read counts regardless
             logger.debug("[TRACKER] Could not credit %r to the stack", abs_path, exc_info=True)
-        # a RELATIVE read path also records the UN-resolved relative
-        # string as its own dependency. The realpath above is frozen to the cwd
-        # at track time, so after an ``os.chdir`` edit it still looks fresh even
-        # though a re-run would read a different file. The relative dep is
-        # re-resolved against the CURRENT cwd at each freshness check
-        # (``resolve_file_dep_path``), so a collision - a different file with the
-        # same relative name in the new directory - is caught via its mtime/size.
+        twin = self._unresolved_spelling(path, abs_path)
+        if twin is not None:
+            self.add_tracked(twin)
+
+    @staticmethod
+    def _unresolved_spelling(path, abs_path: str) -> str | None:
+        """The read path as written, when a read records it beside *abs_path*.
+
+        A RELATIVE read path also records the UN-resolved relative string as
+        its own dependency. The realpath is frozen to the cwd at track time,
+        so after an ``os.chdir`` edit it still looks fresh even though a
+        re-run would read a different file. The relative dep is re-resolved
+        against the CURRENT cwd at each freshness check
+        (``resolve_file_dep_path``), so a collision - a different file with
+        the same relative name in the new directory - is caught via its
+        mtime/size.
+
+        An ABSOLUTE path through a junction or symlink gets the same
+        treatment: its unresolved form is recorded too. The realpath resolved
+        the link at WRITE time, so after the link is re-pointed every check
+        stats the old target -- which still exists and has not changed; a
+        rollback would return the NEWER release's answer. Checked through the
+        link as it points NOW, the switch is seen; the realpath entry keeps
+        catching an edit to the target itself.
+        """
         try:
             raw = str(path)
             if raw and not os.path.isabs(raw):
                 rel = normalize_path(raw)
-                if rel != abs_path:
-                    self.add_tracked(rel)
-            elif raw:
-                # An ABSOLUTE path through a junction or symlink gets the same
-                # treatment: its unresolved form is recorded too. The realpath
-                # above resolved the link at WRITE time, so after the link is
-                # re-pointed every check stats the old target -- which still
-                # exists and has not changed; a rollback would return the
-                # NEWER release's answer. Checked through the link as it
-                # points NOW, the switch is seen; the realpath entry keeps
-                # catching an edit to the target itself.
+                return rel if rel != abs_path else None
+            if raw:
                 link = normalize_path(os.path.abspath(raw))
-                if os.path.normcase(link) != os.path.normcase(abs_path):
-                    self.add_tracked(link)
+                return link if os.path.normcase(link) != os.path.normcase(abs_path) else None
         except (TypeError, ValueError, OSError):
             logger.debug("[TRACKER] Could not record unresolved path for %r", path)
+        return None
+
+    def _add_created_read(self, *paths: str | None) -> None:
+        """Record a read of the block's own output (`created_then_read`), here
+        and on the parents."""
+        for tracker in self._self_and_parents():
+            tracker.created_then_read.update(p for p in paths if p is not None)
 
     def _note_if_unstatable(self, raw_path: str, abs_path: str) -> None:
         """Fail closed when the recorded spelling of a read cannot be stat'ed.
@@ -613,7 +650,10 @@ class FileAccessTracker:
         if incidental_read(os.path.abspath(raw), self._own_package) is not None:
             return None
         if (self.created_files or self.created_dirs) and self.created_by_block(normalize_path(os.path.realpath(raw))):
-            return None  # the block's own output: whether it is there is its doing
+            # The block's own output: whether it is there is its doing, while
+            # it runs. Kept, it is checked as a read would be.
+            self._add_created_read(normalized)
+            return None
         return normalized
 
     def add_tracked_absent(self, path: str) -> None:

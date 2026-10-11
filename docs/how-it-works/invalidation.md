@@ -121,7 +121,12 @@ A reader counts however a script or a module of your code names it:
 such as `reader = pl.read_csv`. In a notebook cell, and wrapped in
 `functools.partial`, only the module spelling (`pq.read_table(...)`) is seen.
 
-A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e -->
+A file opened for writing only (`'w'`, `'x'`) is not a dependency. A file
+the code creates (or one in a folder it makes) and then reads counts only if
+it is still there when the function or statement ends, with its content at
+that moment: a scratch file it removes is not a dependency, a file it
+downloaded and keeps is. For a file
 read another way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 

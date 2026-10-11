@@ -1850,11 +1850,14 @@ result was returned but not stored.
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e, cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e, cash/tracking/read_events.py:_on_mkdir @006fdec4 -->
 A file the function creates itself (opened for writing, in a directory it made
 with `tempfile.TemporaryDirectory`, `mkdtemp` or `os.mkdir`, or by
-`tempfile.mkstemp`) is its own output, not an input: writing a scratch file,
-reading it back and removing it caches normally. A folder that was already
+`tempfile.mkstemp`) is its own output while the function runs: writing a
+scratch file, reading it back and removing it caches normally. A file it
+created and read that is still there when it returns is an input from then on,
+checked against its content at that moment: a "download if missing, then read"
+loader runs again when the file is replaced or deleted. A folder that was already
 there is not one the function made, so `os.makedirs(d, exist_ok=True)` leaves
 the files under `d` inputs.
 
