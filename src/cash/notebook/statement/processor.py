@@ -7,7 +7,7 @@ import io
 import logging
 import secrets
 import types
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -31,6 +31,7 @@ from cash.notebook.cache_key import (
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.consumables import drawn_stream_inputs
+from cash.notebook.read_handles import is_read_handle
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -798,6 +799,18 @@ class StatementProcessor:
             )
             run.skip_cache = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
+        if looked_at:
+            # The handle's lineage names where it stood when it was opened,
+            # not where it stands now: ``pos = fh.tell()`` after a read must
+            # not be served the position an earlier run saw before it.
+            run.metrics["uncacheable_reasons"].append(
+                f"Reads {', '.join(repr(n) for n in looked_at)}, an open file: "
+                f"where it stands changes as it is read, so the statement runs every time"
+            )
+            run.skip_cache = True
+            run.drew_from_stream = True
 
     def _lookup(
         self, run: StatementRun, analysis_time: float, hash_time: float
@@ -2029,6 +2042,11 @@ class StatementProcessor:
             raise result.error from None
         logger.debug("[SILENT] Error in statement: %s", result.error)
         return False
+
+
+def reads_open_handle(names: Iterable[str], user_ns: Mapping[str, Any]) -> list[str]:
+    """The *names* bound to a file open for reading (`is_read_handle`)."""
+    return sorted(name for name in names if is_read_handle(user_ns.get(name)))
 
 
 def _open_stream(value: Any) -> bool:

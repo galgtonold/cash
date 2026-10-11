@@ -32,6 +32,7 @@ from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import compute_hash, is_identity_fallback_hash
 from .callee_reach import Reach, reached_user_code
 from .held_code import held_code_digest
+from .read_handles import read_handle_digest
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +228,13 @@ def no_cache_value_digest(value: Any) -> str:
     below misses when the value changed and still hits when it did not. A
     value whose content cannot be hashed gets a digest of its own each run, so
     its readers always recompute: the identity fallback stays the same under
-    in-place change, and a new object can reuse an old one's address.
+    in-place change, and a new object can reuse an old one's address. A file
+    open for reading is named by its file and position instead
+    (:func:`read_handle_digest`), so what is read from it can be cached.
     """
+    handle = read_handle_digest(value)
+    if handle is not None:
+        return handle
     digest = compute_hash(value)
     if is_identity_fallback_hash(value, digest):
         return "fresh:" + secrets.token_hex(16)
