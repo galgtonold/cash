@@ -162,10 +162,15 @@ class ForLoopHandler:
            an ``# __iteration_context__: <hash>`` comment prepended, and with
            its own ``@cash:`` annotation resolved from *raw_cell*.
 
-        The statement processor's mutation detection (which runs before any
-        cache lookup) will automatically set ``skip_cache=True`` for
-        statements that mutate external variables, ensuring they always
-        re-execute.
+        A body statement that changes in place an object it does not bind
+        (``tr.step(lr)``, ``push(st, v)``, ``history.append(x)``) is not
+        served from the cache: a restore brings back only what it binds, so
+        it runs every time (``MutationRouting``, before the lookup). Each such
+        change moves the object's lineage on for the passes after it (the
+        iteration overlay of ``InLoopChanges``), and the overlay is taken back
+        at loop end, where the loop gives every name it changed its lineage
+        as a whole. What the loop hands to a library call is watched around
+        the whole loop (``LoopWatch``).
 
         **Fast-loop optimization**: When the estimated per-iteration caching
         overhead exceeds the likely computation cost (e.g., tight numeric
@@ -572,6 +577,13 @@ class ForLoopHandler:
         passes = getattr(self.dispatcher, "loop_passes", None)
         if isinstance(passes, list):
             passes.append(loop_pass)
+        # What the body changes through a library call is watched around
+        # the whole loop; what a body statement changes in place moves on for
+        # the passes after it, until the loop's own update takes over.
+        loop_code = ast.unparse(node)
+        in_loop = self.statement_processor.in_loop
+        in_loop.open_watch(node, loop_code, self.statement_processor.resolve_live_function_source)
+        overlay = in_loop.push_overlay(_helpers.target_roots(self.shell, self.statement_processor, node))
         try:
             for idx, iteration_value in enumerate(iterable):
                 total_iterations += 1
@@ -608,6 +620,7 @@ class ForLoopHandler:
         finally:
             if isinstance(passes, list) and passes and passes[-1] is loop_pass:
                 passes.pop()
+            moved = in_loop.pop_overlay(overlay)
 
         if run_rest:
             logger.debug("[CONTROL] %d passes over an iterator: the rest runs as one unit", total_iterations)
@@ -630,9 +643,10 @@ class ForLoopHandler:
             self.shell,
             self.statement_processor,
             node,
-            ast.unparse(node),
+            loop_code,
             body_files=body_files,
             unchanged=set() if run_rest else loop_pass.unchanged(self.shell, self.statement_processor, node),
+            also=moved | in_loop.close_watch(loop_code, ran=True),
         )
         return total_iterations, cached_iterations
 

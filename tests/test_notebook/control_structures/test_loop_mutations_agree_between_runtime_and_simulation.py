@@ -64,6 +64,26 @@ SHAPES = {
         "for name in []:\n    os.remove(name)\n    gone.append(name)\n",
         {"gone"},
     ),
+    # A function of the user's that changes what it is handed changes it in
+    # a loop too, an item of what the loop walks included.
+    "a function of the user's changing what it is handed": (
+        "def add_tax(r):\n    r['tax'] = 1\ndef push(st, v):\n    st['n'] = v\nrecords = [{}, {}]\nst = {}",
+        "for r in records:\n    add_tax(r)\n    push(st, 1)\n",
+        {"records", "st"},
+    ),
+    # Items a function of the user's hands out are items of what it reads.
+    "items a function of the user's hands out": (
+        "records = [{'on': True}]\ndef active():\n    return [r for r in records if r['on']]",
+        "for r in active():\n    r['tax'] = 1\n",
+        {"records"},
+    ),
+    # A tree of the user's whose method is named like a file listing.
+    "a tree's walk": (
+        "class Tree:\n    def __init__(self):\n        self.nodes = [{}]\n    def walk(self):\n"
+        "        yield from self.nodes\ntree = Tree()",
+        "for n in tree.walk():\n    n['tax'] = 1\n",
+        {"tree"},
+    ),
 }
 
 
@@ -79,8 +99,8 @@ def test_runtime_and_simulation_pick_the_same_mutated_vars(
     runtime: list[set[str]] = []
     collect = helpers.control_structure_mutations
 
-    def spy(n, is_builtin, is_module):
-        found = collect(n, is_builtin, is_module)
+    def spy(n, is_builtin, is_module, **names):
+        found = collect(n, is_builtin, is_module, **names)
         if ast.unparse(n) == ast.unparse(node):
             runtime.append(found)
         return found

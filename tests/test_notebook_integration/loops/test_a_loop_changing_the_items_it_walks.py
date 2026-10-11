@@ -61,3 +61,81 @@ def test_an_edited_loop_reaches_the_reader(nb_runner, name):
     nb_runner.set_cell_source(3, edited)
     nb_runner.run_all()
     assert nb_runner.get_output(4).strip() == after
+
+
+# The walk is a method named like a file listing, a function of the
+# user's hands the items over, or each item is handed to a function of the
+# user's. The edit is to the loop or to a cell above it.
+WALKS = {
+    "a tree's walk()": (
+        [
+            "import time\nclass Tree:\n    def __init__(self, vals):\n        self.nodes = [{'v': v} for v in vals]\n"
+            "    def walk(self):\n        yield from self.nodes\n"
+            "def summarize(t):\n    time.sleep(0.2)\n    return [n['v'] * 100 + n['tax'] for n in t.nodes]\n"
+            "tree = Tree([1, 2, 3])",
+            "for n in tree.walk():\n    n['tax'] = n['v'] * 2",
+            "s = summarize(tree)\nprint(s)",
+        ],
+        (2, "for n in tree.walk():\n    n['tax'] = n['v'] * 3"),
+        3,
+        "[102, 204, 306]",
+        "[103, 206, 309]",
+    ),
+    "records a function returns": (
+        [
+            "import time\nrecords = [{'v': v, 'on': v % 2 == 1} for v in range(1, 7)]\n"
+            "def active():\n    return [r for r in records if r['on']]\n"
+            "def summarize(rs):\n    time.sleep(0.2)\n    return [r.get('tax') for r in rs]\nrate = 2",
+            "for r in active():\n    r['tax'] = r['v'] * rate",
+            "s = summarize(records)\nprint(s)",
+        ],
+        (
+            1,
+            "import time\nrecords = [{'v': v, 'on': v % 2 == 1} for v in range(1, 7)]\n"
+            "def active():\n    return [r for r in records if r['on']]\n"
+            "def summarize(rs):\n    time.sleep(0.2)\n    return [r.get('tax') for r in rs]\nrate = 3",
+        ),
+        3,
+        "[2, None, 6, None, 10, None]",
+        "[3, None, 9, None, 15, None]",
+    ),
+    "each item handed to a function": (
+        [
+            "import time\ndef summarize(recs):\n    time.sleep(0.2)\n    return sorted(set(k for r in recs for k in r))",
+            "def add_tax(r):\n    r['tax'] = r['p'] * 0.2",
+            "records = [{'p': 1}, {'p': 2}, {'p': 3}]",
+            "for r in records:\n    add_tax(r)",
+            "fields = summarize(records)\nprint(fields)",
+        ],
+        (2, "def add_tax(r):\n    r['vat'] = r['p'] * 0.2"),
+        5,
+        "['p', 'tax']",
+        "['p', 'vat']",
+    ),
+    "each frame handed to a function": (
+        [
+            "import time\nimport pandas as pd\ndef summarize(frames):\n    time.sleep(0.2)\n"
+            "    return [list(f.columns) for f in frames]",
+            "def add_features(df):\n    df['tax'] = df['p'] * 2",
+            "frames = [pd.DataFrame({'p': [1, 2]}), pd.DataFrame({'p': [3]})]",
+            "for df in frames:\n    add_features(df)",
+            "cols = summarize(frames)\nprint(cols)",
+        ],
+        (2, "def add_features(df):\n    df['vat'] = df['p'] * 2"),
+        5,
+        "[['p', 'tax'], ['p', 'tax']]",
+        "[['p', 'vat'], ['p', 'vat']]",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(WALKS))
+def test_an_edit_reaches_the_reader_of_what_the_loop_walks(nb_runner, name):
+    cells, (edit_at, edited), read_at, before, after = WALKS[name]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.get_output(read_at).strip() == before
+    nb_runner.set_cell_source(edit_at, edited)
+    nb_runner.run_all()
+    assert nb_runner.get_output(read_at).strip() == after

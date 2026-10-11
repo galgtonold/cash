@@ -135,6 +135,7 @@ class MutationClassifier:
         tree: ast.Module | None,
         source_hash: str,
         outputs: set[str],
+        extra_arguments: frozenset[str] = frozenset(),
     ) -> tuple[set[str], set[str], set[str], bool]:
         """Classify a statement's standalone method-call receivers.
 
@@ -149,9 +150,14 @@ class MutationClassifier:
         * ``assumed`` — tier-3 receivers assumed-mutating without observation
           (recorded into the verdict so the simulation reproduces them).
         * ``record_verdict`` — True when this statement's verdict is being learned.
+
+        *extra_arguments* are watched as the arguments of a bare call are:
+        what a statement of a loop body hands to code whose effect on it is
+        unknown (``statement_watch_candidates``).
         """
         verdict = self.tracking_state.mutation_verdicts.get(source_hash)
         arguments, kept_only = self._call_arguments(tree, outputs)
+        arguments = arguments | (extra_arguments - outputs)
         classes = classify_receivers(tree, self.shell.user_ns, lambda: verdict, arguments=arguments)
         pre_route = set(classes.mutated)
         observe: set[str] = set()

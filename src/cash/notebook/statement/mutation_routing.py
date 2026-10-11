@@ -16,6 +16,15 @@ import ast
 from typing import TYPE_CHECKING
 
 from ...analysis.ast_util import called_names
+from ...analysis.mutation_effects import (
+    control_structure_mutations,
+    is_module_name,
+    live_function_source,
+    statement_watch_candidates,
+)
+from ...control_markers import strip_markers
+from ...value_types import BUILTIN_NAMES
+from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
 from .control_body import is_control_body
@@ -24,6 +33,7 @@ if TYPE_CHECKING:
     from ...analysis.mutation_effects import StatementEffects
     from .._protocols import ShellProtocol
     from ..tracking_state import TrackingState
+    from .in_loop import InLoopChanges
     from .mutations import MutationClassifier
     from .records import StatementRecords
     from .run import StatementRun
@@ -41,11 +51,15 @@ class MutationRouting:
         tracking_state: TrackingState,
         classifier: MutationClassifier,
         records: StatementRecords,
+        in_loop: InLoopChanges | None = None,
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
         self._classifier = classifier
         self._records = records
+        self._in_loop = in_loop
+        #: Loop-body statement texts an earlier kernel recorded no verdict for.
+        self._unrecorded: set[str] = set()
 
     # ------------------------------------------------------------------
     # Before execution
@@ -144,17 +158,92 @@ class MutationRouting:
         estimator fitted in place, still skip-caches the body statement.
         """
         tree = run.tree
+        run.verdict_hash = run.source_hash
         if is_control_body(run.code):
             draw_only = self._classifier.identity_coupled_call_receivers(tree)
             fit_only = self._classifier.fitted_receivers(tree)
-            return set(), draw_only, fit_only
+            # What else it changes in place it changes on every run, as the
+            # same line does at cell level: classified like one, its verdict
+            # shared by every pass (the text without its marker), but the
+            # names stay out of its outputs (`_route_receivers`).
+            run.verdict_hash = statement_source_hash(strip_markers(run.code))
+            self._recall_verdict(run.verdict_hash)
+            user_ns = self.shell.user_ns
+            extra = statement_watch_candidates(
+                tree,
+                user_ns,
+                lambda name: is_module_name(name, user_ns),
+                lambda name: live_function_source(name, user_ns),
+            )
+            changed, run.mut_observe, run.mut_assumed, run.mut_record = self._classifier.classify(
+                tree, run.verdict_hash, run.outputs, extra
+            )
+            run.must_run = run.mut_record
+            return changed - draw_only - fit_only, draw_only, fit_only
         mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._classifier.classify(
             tree,
             run.source_hash,
             run.outputs,
         )
         run.est_fit = self._classifier.estimator_fit_receivers(tree, run.outputs) if run.cache_fit else set()
+        self._route_unit(run)
         return mut_pre_route, set(), set()
+
+    def _recall_verdict(self, verdict_hash: str) -> None:
+        """Take in the verdict an earlier kernel recorded for a statement of
+        a loop body, once per text: learnt again after every restart, its
+        first pass would run instead of being restored."""
+        verdicts = self.tracking_state.mutation_verdicts
+        if verdict_hash in verdicts or verdict_hash in self._unrecorded:
+            return
+        recorded = self._records.recorded_mutation_verdict(verdict_hash)
+        if recorded is None:
+            self._unrecorded.add(verdict_hash)
+        else:
+            verdicts[verdict_hash] = recorded
+
+    def _route_unit(self, run: StatementRun) -> None:
+        """For a loop or branch run as one unit: skip-cache it when it
+        changes in place a name it does not store, as the same calls do at
+        cell level (``st.push(v)``, ``push(st, v)``, ``tag(df, i)`` in its
+        body); the structure's own lineage update moves those names. A loop
+        that hands names to code whose effect is unknown is watched as it
+        runs (``loop_watch``), and must run while its verdict is learned."""
+        tree = run.tree
+        if not _is_structure(tree):
+            return
+        node = tree.body[0]
+        user_ns = self.shell.user_ns
+        lineage = self.tracking_state.variable_lineage
+
+        def resolve(name: str) -> str | None:
+            return live_function_source(name, user_ns)
+
+        try:
+            changed = control_structure_mutations(
+                node,
+                lambda name: name in BUILTIN_NAMES and name not in lineage,
+                lambda name: is_module_name(name, user_ns),
+                namespace=user_ns,
+                resolve_source=resolve,
+            )
+        except Exception:  # noqa: BLE001 - what the body changes is unknown: it runs
+            _skip(run, "Could not tell what the loop changes in place (statement re-executes)")
+            return
+        if self._in_loop is not None:
+            watch = self._in_loop.open_watch(node, run.code, resolve)
+            if watch is not None:
+                if watch.verdict is not None:
+                    changed |= watch.verdict
+                elif watch.learning:
+                    run.loop_watch = run.code
+                    run.must_run = True
+        run.in_place = set(changed) - run.outputs
+        if run.in_place:
+            _skip(
+                run,
+                f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)",
+            )
 
     def _route_receivers(self, run: StatementRun, effects: StatementEffects, mut_pre_route: set[str]) -> None:
         """Add the mutated receivers and arguments to *run*'s outputs, and
@@ -199,6 +288,17 @@ class MutationRouting:
         """
         est_fit = run.est_fit
         fam = effects.arg_mutations - run.outputs
+        if is_control_body(run.code):
+            # The loop or branch owns what its body changes: the statement
+            # runs every time, and the names stay out of its outputs.
+            run.in_place = (mut_pre_route | fam) - run.outputs
+            if run.in_place:
+                _skip(
+                    run,
+                    f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)"
+                    + self._classifier.cache_fit_hint(run.in_place),
+                )
+            return
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
             run.outputs = run.outputs | mut_pre_route | est_fit | fam
@@ -228,36 +328,73 @@ class MutationRouting:
         capture_and_track so a newly-detected mutation is in the outputs (its
         lineage gets bumped) and skip-caches the statement. The verdict is
         recorded for the upstream simulation, which cannot observe execution.
+
+        A statement of a loop or branch body keeps what it changed out of its
+        outputs (the structure owns it) and moves it on for the passes after
+        it (``InLoopChanges.moved``). A loop run as one unit that was being
+        watched learns what it changed (``loop_watch``).
         """
-        if not run.mut_record:
-            return
-        metrics, source_hash = run.metrics, run.source_hash
-        newly_mutated = self._classifier.observed_mutations(run.mut_observe, source_hash)
-        if newly_mutated:
-            # ``run.est_fit`` is non-empty only under ``# @cash:cache-fit``.
-            # Those receivers still enter the outputs (source-based lineage
-            # bump + fitted value capture) and are still recorded in
-            # ``mutation_verdicts`` below (so the upstream simulation bumps
-            # downstream lineage on a data edit), but they are NOT
-            # skip-cached -- they cache + restore in place. Every
-            # other observed mutation -- including a bare fit WITHOUT the
-            # directive -- still skip-caches its receiver.
-            run.outputs = run.outputs | newly_mutated
-            # The metrics hold their own copy of the outputs: without this the
-            # badge row would say "Produced -" for ``sc.pp.normalize_total(adata)``
-            # on its first run.
-            produced = metrics.setdefault("evaluated_vars", [])
-            produced.extend(n for n in sorted(newly_mutated) if n not in produced)
-            skip_observed = newly_mutated - run.est_fit
-            if skip_observed:
+        self._observe_unit(run)
+        body = is_control_body(run.code)
+        if run.mut_record:
+            newly_mutated = self._observe_receivers(run, body)
+            verdict_hash = run.verdict_hash or run.source_hash
+            self.tracking_state.mutation_verdicts[verdict_hash] = set(run.mut_assumed) | newly_mutated
+            self._records.persist_mutation_verdict(verdict_hash, self.tracking_state.mutation_verdicts[verdict_hash])
+        if body and run.in_place and self._in_loop is not None:
+            self._in_loop.moved(run.in_place, run.cache_key)
+
+    def _observe_receivers(self, run: StatementRun, body: bool) -> set[str]:
+        metrics = run.metrics
+        newly_mutated = self._classifier.observed_mutations(run.mut_observe, run.verdict_hash or run.source_hash)
+        if not newly_mutated:
+            return newly_mutated
+        if body:
+            fresh = newly_mutated - run.outputs - run.in_place
+            run.in_place |= newly_mutated - run.outputs
+            if fresh:
                 run.skip_cache = True
                 metrics.setdefault("uncacheable_reasons", []).append(
-                    f"In-place mutation on: {', '.join(sorted(skip_observed))} "
-                    "(observed; receiver lineage bumped; statement re-executes)"
-                    + self._classifier.cache_fit_hint(skip_observed)
+                    f"In-place mutation on: {', '.join(sorted(fresh))} (observed; statement re-executes)"
                 )
-        self.tracking_state.mutation_verdicts[source_hash] = set(run.mut_assumed) | newly_mutated
-        self._records.persist_mutation_verdict(source_hash, self.tracking_state.mutation_verdicts[source_hash])
+            return newly_mutated
+        # ``run.est_fit`` is non-empty only under ``# @cash:cache-fit``.
+        # Those receivers still enter the outputs (source-based lineage
+        # bump + fitted value capture) and are still recorded in
+        # ``mutation_verdicts`` (so the upstream simulation bumps
+        # downstream lineage on a data edit), but they are NOT
+        # skip-cached -- they cache + restore in place. Every
+        # other observed mutation -- including a bare fit WITHOUT the
+        # directive -- still skip-caches its receiver.
+        run.outputs = run.outputs | newly_mutated
+        # The metrics hold their own copy of the outputs: without this the
+        # badge row would say "Produced -" for ``sc.pp.normalize_total(adata)``
+        # on its first run.
+        produced = metrics.setdefault("evaluated_vars", [])
+        produced.extend(n for n in sorted(newly_mutated) if n not in produced)
+        skip_observed = newly_mutated - run.est_fit
+        if skip_observed:
+            run.skip_cache = True
+            metrics.setdefault("uncacheable_reasons", []).append(
+                f"In-place mutation on: {', '.join(sorted(skip_observed))} "
+                "(observed; receiver lineage bumped; statement re-executes)"
+                + self._classifier.cache_fit_hint(skip_observed)
+            )
+        return newly_mutated
+
+    def _observe_unit(self, run: StatementRun) -> None:
+        """A loop run as one unit whose watch was learning ran: what it
+        changed among the names it was watched for is a change it does not
+        store, so it is skip-cached for them too."""
+        if run.loop_watch is None or self._in_loop is None:
+            return
+        seen = self._in_loop.finish_watch(run.loop_watch) - run.outputs - run.in_place
+        if seen:
+            run.in_place |= seen
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(
+                f"In-place mutation on: {', '.join(sorted(seen))} (observed; statement re-executes)"
+            )
 
     def note_module_state(self, run: StatementRun) -> None:
         """Take in the local modules *run* was seen setting state on, and

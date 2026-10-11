@@ -54,6 +54,7 @@ from cash.notebook.statement.imports import (
     import_source_modules,
     redundant_import_names,
 )
+from cash.notebook.statement.in_loop import InLoopChanges
 from cash.notebook.statement.input_change import input_change_reason
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
@@ -268,7 +269,10 @@ class StatementProcessor:
         # Stateless w.r.t. tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(shell=shell, compute_hash=compute_hash_fn)
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
-        self._mutation_routing = MutationRouting(shell, self.tracking_state, self._mutations, self._records)
+        self._in_loop = InLoopChanges(shell, self.tracking_state, self._records)
+        self._mutation_routing = MutationRouting(
+            shell, self.tracking_state, self._mutations, self._records, self._in_loop
+        )
 
         # Used to prevent the "redundant import" optimization from skipping
         # import statements for modules that need re-execution after source changes.
@@ -295,6 +299,11 @@ class StatementProcessor:
             rebuild_cost=self._rebuild_cost,
             calls=self._calls,
         )
+
+    @property
+    def in_loop(self) -> InLoopChanges:
+        """What the statements of the loops running now change (`InLoopChanges`)."""
+        return self._in_loop
 
     def get_cash_instance(self) -> CashInstanceProtocol | None:
         """Return the Cash instance for decorator call tracking.
@@ -678,6 +687,9 @@ class StatementProcessor:
         self._randomness.stamp_random_effect(run.metrics, run.code, run.unseeded_calls, unseeded_fits)
 
         metadata, cached_data = self._lookup(run, analysis_time, hash_time)
+        if run.must_run:
+            # It learns what it changes as it runs: a restore would not.
+            metadata, cached_data = None, None
         run.entry_holders = bool(metadata is not None and metadata.holders)
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None

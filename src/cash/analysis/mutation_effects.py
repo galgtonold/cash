@@ -18,6 +18,8 @@ from __future__ import annotations
 import ast
 import functools
 import inspect
+import os
+import pathlib
 import types
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -33,17 +35,22 @@ from .ast_util import called_names
 from .cacheability import analyze_statement
 from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
+    all_param_names,
+    argument_roots,
     callee_global_mutations,
     function_arg_mutations,
     mutating_partials,
     partial_arg_mutations,
     reduce_free_mutations,
+    resolve_function_def,
     stateful_closure_vars,
     stateful_self_functions,
+    statement_calls,
 )
 from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
 from .handed_callables import handed_callables
 from .mutations import (
+    MUTATING_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
     TopLevelCalls,
     assigned_method_call_receivers,
@@ -56,7 +63,7 @@ from .mutations import (
     subscript_view_bindings,
     top_level_calls,
 )
-from .namespace_effects import capturable_globals, fits_its_receiver
+from .namespace_effects import call_only_reads, capturable_globals, fits_its_receiver
 from .object_protocol import ObjectProtocolResets, object_protocol_mutations
 
 __all__ = [
@@ -73,6 +80,9 @@ __all__ = [
     "drawn_on_arguments",
     "is_module_name",
     "live_function_source",
+    "loop_target_roots",
+    "loop_watch_candidates",
+    "statement_watch_candidates",
     "statement_effects",
 ]
 
@@ -366,8 +376,69 @@ def _loop_targets(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
 
 
+@dataclass(frozen=True)
+class _LoopNames:
+    """How the engine reading a control structure resolves the names in it.
+
+    The runtime and the simulation build one each, from the same kinds of
+    answer: which names are modules, the namespace the kernel holds, and the
+    source of a function called by name (the live one at run time, the
+    notebook's cell text in the simulation). The rules that read it are the
+    same for both, so both count the same names as changed.
+    """
+
+    is_module: Callable[[str], bool]
+    namespace: Mapping[str, Any] | None = None
+    resolve_source: SourceResolver | None = None
+
+    def user_source(self, name: str) -> str | None:
+        """The source of the function of the user's that *name* calls, or None."""
+        if self.resolve_source is None:
+            return None
+        try:
+            return self.resolve_source(name)
+        except Exception:  # noqa: BLE001 - an unreadable callee is not one of the user's that is read
+            return None
+
+    def holds_a_path(self, receiver: ast.expr) -> bool:
+        """Whether *receiver* is a module (``os``, ``glob``) or holds a
+        ``pathlib`` path or an ``os.DirEntry``: what a listing method on it
+        yields is read from the file system, fresh. A call (``Path(d)``)
+        builds a fresh object no variable holds, so it counts too. Anything
+        else, a tree of the user's with a ``walk()`` method, is not one."""
+        if isinstance(receiver, ast.Call):
+            return True
+        dotted = _dotted(receiver)
+        if not dotted:
+            return False
+        base, _, rest = dotted.partition(".")
+        if not rest and self.is_module(base):
+            return True
+        if self.namespace is None or base not in self.namespace:
+            return False
+        value = self.namespace[base]
+        for attr in rest.split(".") if rest else ():
+            try:
+                value = inspect.getattr_static(value, attr)
+            except AttributeError:
+                return False
+        if isinstance(value, types.ModuleType):
+            return True
+        return _is_path_value(value)
+
+
+def _is_path_value(value: Any) -> bool:
+    """A ``pathlib`` path or an ``os.DirEntry``."""
+    return isinstance(value, (pathlib.PurePath, os.DirEntry))
+
+
 def control_structure_mutations(
-    node: ast.AST, is_builtin: Callable[[str], bool], is_module: Callable[[str], bool]
+    node: ast.AST,
+    is_builtin: Callable[[str], bool],
+    is_module: Callable[[str], bool],
+    *,
+    namespace: Mapping[str, Any] | None = None,
+    resolve_source: SourceResolver | None = None,
 ) -> set[str]:
     """Names a control structure changes in place or accumulates into.
 
@@ -380,27 +451,35 @@ def control_structure_mutations(
     counts as a change to the receiver: the loop's per-statement path never
     classifies its body, so a receiver missed here keeps its pre-loop
     lineage and a statement reading it afterwards is served the value an
-    earlier version of the loop left. A module is never changed
-    (*is_module*): ``os.remove(f)`` is not ``list.remove``. A loop target
-    is a rebinding, not a mutation, so a loop's targets are left out within
-    its body, and so are names *is_builtin* says are builtins. The condition
-    of an ``if`` or ``while`` counts too (``condition_mutations``): it runs
-    whichever branch is taken.
+    earlier version of the loop left. So does a name handed to a function
+    of the user's that changes that parameter (``add_tax(r)``,
+    ``push(st, v)``), read through *resolve_source*. A module is never
+    changed (*is_module*): ``os.remove(f)`` is not ``list.remove``. A loop
+    target is a rebinding, not a mutation, so a loop's targets are left
+    out within its body, and so are names *is_builtin* says are builtins.
+    The condition of an ``if`` or ``while`` counts too
+    (``condition_mutations``): it runs whichever branch is taken.
+
+    What a library function does to the names it is handed
+    (``heapq.heappush(h, x)``) the text cannot say: the runtime watches
+    those (:func:`loop_watch_candidates`) and records what it saw.
 
     The runtime (``update_lineage_after_execution``) and the simulation
-    (``VirtualLineage``) both call this, each with its own builtin rule over
-    the same lineage, so a loop bumps the same lineages on both sides.
+    (``VirtualLineage``) both call this, each with its own builtin rule,
+    namespace and source of functions over the same lineage, so a loop
+    bumps the same lineages on both sides.
     """
-    in_place, rebound, called = _branch_mutations(_branches(node), is_module)
-    in_place |= _header_mutations(node)
+    names = _LoopNames(is_module, namespace, resolve_source)
+    in_place, rebound, called = _branch_mutations(_branches(node), names)
+    in_place |= _header_mutations(node, names)
     if isinstance(node, ast.For):
-        in_place, rebound, called = _through_loop_targets(node, in_place, rebound, called)
+        in_place, rebound, called = _through_loop_targets(node, in_place, rebound, called, names)
     # ``os.remove(f)`` reads as ``list.remove`` on ``os``; a module's lineage
     # is its code, which no call through it changes.
     return {v for v in in_place | rebound if not is_builtin(v) and not is_module(v)}
 
 
-def condition_mutations(test: ast.expr) -> frozenset[str]:
+def condition_mutations(test: ast.expr, resolve_source: SourceResolver | None = None) -> frozenset[str]:
     """Names the condition *test* of an ``if`` or ``while`` changes in place.
 
     A condition is code that runs: ``if opts.pop('debug', False):`` removes
@@ -408,48 +487,74 @@ def condition_mutations(test: ast.expr) -> frozenset[str]:
     taken. Its result is used, so it counts as the statement ``_ = test``
     would: a method known to change its receiver (``pop``, ``add``,
     ``setdefault``), not every method whose result is dropped -- ``if
-    name.startswith('a'):`` changes nothing.
+    name.startswith('a'):`` changes nothing -- and a name handed to a
+    function of the user's that changes it (``if add(seen, x):``), read
+    through *resolve_source*.
     """
     try:
-        return analyze_statement(ast.unparse(test), None).all_mutated_vars
+        found = set(analyze_statement(ast.unparse(test), None).all_mutated_vars)
     except (SyntaxError, ValueError, AttributeError, TypeError):
-        return frozenset()
+        found = set()
+    if resolve_source is not None:
+        found |= _user_callee_changes(_as_statement(test), resolve_source)
+    return frozenset(found)
 
 
-def _header_mutations(node: ast.AST) -> set[str]:
+def _as_statement(test: ast.expr) -> ast.Module:
+    """``_ = test``: how a condition runs, as a statement."""
+    assign = ast.Assign(targets=[ast.Name(id="_", ctx=ast.Store())], value=test, lineno=1)
+    return ast.Module(body=[assign], type_ignores=[])
+
+
+def _user_callee_changes(tree: ast.Module, resolve_source: SourceResolver) -> set[str]:
+    """The names *tree* hands to a function of the user's that changes the
+    matching parameter (``function_arg_mutations``). An unreadable callee is
+    left to the runtime's watch (:func:`loop_watch_candidates`)."""
+    try:
+        return set(function_arg_mutations(tree, resolve_source))
+    except Exception:  # noqa: BLE001 - what a callee does is then left to the watch
+        return set()
+
+
+def _header_mutations(node: ast.AST, names: _LoopNames | None = None) -> set[str]:
     """What the condition of *node* (an ``if`` or ``while``) changes."""
     if not isinstance(node, (ast.If, ast.While)):
         return set()
-    return set(condition_mutations(node.test))
+    return set(condition_mutations(node.test, names.resolve_source if names is not None else None))
 
 
 _Changes = tuple[set[str], set[str], set[str]]
 
 
-def _through_loop_targets(node: ast.For, in_place: set[str], rebound: set[str], called: set[str]) -> _Changes:
+def _through_loop_targets(
+    node: ast.For, in_place: set[str], rebound: set[str], called: set[str], names: _LoopNames | None = None
+) -> _Changes:
     """A loop body's changes (`_branch_mutations`) as seen from outside the
     loop.
 
     A loop target is a rebinding, not a mutation, so it is left out. But a
     target changed in place (``for r in records: r['tax'] = ...``,
-    ``for a in arrays: a += 1``) is an element of what the loop iterates
-    over, so that changed: the names the iterable is built from
-    (``records``, ``enumerate(rows)``, ``zip(a, b)``, ``d.values()``,
-    ``axes.flat``, ``recs[1:]``) count as changed in place instead. A bare
-    method call on a target counts too, even one known to leave a frame
+    ``for a in arrays: a += 1``, ``for r in records: add_tax(r)``) is an
+    element of what the loop iterates over, so that changed: the names the
+    iterable is built from (``records``, ``enumerate(rows)``, ``zip(a, b)``,
+    ``d.values()``, ``axes.flat``, ``recs[1:]``, and the globals a function
+    of the user's walks, ``active()``) count as changed in place instead. A
+    bare method call on a target counts too, even one known to leave a frame
     alone (``for ax in axes: ax.plot(...)`` draws on each Axes): a call
     whose result the loop drops is made for what it does. A target only
     rebound (``line = line.strip()``) changes nothing the iterable holds.
     """
     targets = _loop_targets(node)
     if (in_place | called) & targets:
-        in_place = in_place | _iterable_roots(node.iter)
+        in_place = in_place | _iterable_roots(node.iter, names)
     return in_place - targets, rebound - targets, called - targets
 
 
 #: Calls whose items are made fresh for the loop -- paths or names read from
 #: the file system -- so no variable holds them: ``old.unlink()`` in
-#: ``for old in OUT.glob('*.txt')`` changes a file, not ``OUT``.
+#: ``for old in OUT.glob('*.txt')`` changes a file, not ``OUT``. A method
+#: counts only on a module, a path or a fresh object (`_LoopNames.holds_a_path`):
+#: ``tree.walk()`` on a tree of the user's yields what the tree holds.
 _FILE_LISTING_METHODS = frozenset({"glob", "rglob", "iterdir", "walk"})
 _FILE_LISTING_FUNCTIONS = frozenset(
     {"os.listdir", "os.scandir", "os.walk", "glob.glob", "glob.iglob", "listdir", "scandir", "glob", "iglob"}
@@ -469,23 +574,67 @@ def _dotted(node: ast.expr) -> str:
     return ".".join(reversed(parts))
 
 
-def _iterable_roots(node: ast.expr) -> set[str]:
+def _lists_files(node: ast.expr, names: _LoopNames | None) -> bool:
+    """Whether the call *node* lists the file system (`_FILE_LISTING_METHODS`,
+    `_FILE_LISTING_FUNCTIONS`)."""
+    if not isinstance(node, ast.Call):
+        return False
+    if _dotted(node.func) in _FILE_LISTING_FUNCTIONS:
+        return True
+    func = node.func
+    if not (isinstance(func, ast.Attribute) and func.attr in _FILE_LISTING_METHODS):
+        return False
+    if names is None:
+        return isinstance(func.value, ast.Call)
+    return names.holds_a_path(func.value)
+
+
+def _iterable_roots(node: ast.expr, names: _LoopNames | None = None) -> set[str]:
     """The names *node* reads that are not called: the containers a loop
     takes its elements from, not the functions that walk them. None when
-    the items are fresh objects read from the file system
-    (``_FILE_LISTING_METHODS``, ``_FILE_LISTING_FUNCTIONS``)."""
+    the items are fresh objects read from the file system (`_lists_files`).
+
+    A function of the user's called by name (``for r in active():``) hands
+    out what it reads: the globals its body reads join the roots, read
+    through *names*' source of functions, as its arguments already do."""
     while isinstance(node, ast.Call) and _dotted(node.func) in {"sorted", "list", "tuple", "reversed"} and node.args:
         node = node.args[0]
-    if isinstance(node, ast.Call) and (
-        (isinstance(node.func, ast.Attribute) and node.func.attr in _FILE_LISTING_METHODS)
-        or _dotted(node.func) in _FILE_LISTING_FUNCTIONS
-    ):
+    if _lists_files(node, names):
         return set()
     functions = {id(sub.func) for sub in ast.walk(node) if isinstance(sub, ast.Call)}
-    return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and id(sub) not in functions}
+    roots = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and id(sub) not in functions}
+    if names is not None:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                source = names.user_source(sub.func.id)
+                if source:
+                    roots |= _function_global_reads(source)
+    return roots
 
 
-def _branch_mutations(stmts: list[ast.stmt], is_module: Callable[[str], bool]) -> _Changes:
+@functools.lru_cache(maxsize=1024)
+def _function_global_reads(source: str) -> frozenset[str]:
+    """The names a function's body reads and does not bind or call: the
+    globals whose objects it can hand out (``records`` in ``def active():
+    return [r for r in records if r['on']]``)."""
+    fdef = resolve_function_def("f", lambda _name: source)
+    if fdef is None:
+        return frozenset()
+    bound = set(all_param_names(fdef))
+    callees = {id(sub.func) for sub in ast.walk(fdef) if isinstance(sub, ast.Call)}
+    reads: set[str] = set()
+    for sub in ast.walk(fdef):
+        if isinstance(sub, ast.Name):
+            if not isinstance(sub.ctx, ast.Load):
+                bound.add(sub.id)
+            elif id(sub) not in callees:
+                reads.add(sub.id)
+        elif isinstance(sub, ast.arg):
+            bound.add(sub.arg)
+    return frozenset(reads - bound - BUILTIN_NAMES)
+
+
+def _branch_mutations(stmts: list[ast.stmt], names: _LoopNames) -> _Changes:
     """``(in place, self-referential rebinds, bare-call receivers)``: the
     names *stmts* change in place, those they rebind from themselves
     (``total += b``, ``total = total + b``), and the receivers of the method
@@ -494,12 +643,13 @@ def _branch_mutations(stmts: list[ast.stmt], is_module: Callable[[str], bool]) -
     in_place: set[str] = set()
     rebound: set[str] = set()
     called: set[str] = set()
+    is_module = names.is_module
     for stmt in stmts:
         if isinstance(stmt, _COMPOUND):
-            changes = _branch_mutations(_branches(stmt), is_module)
-            changes = (changes[0] | _header_mutations(stmt), changes[1], changes[2])
+            changes = _branch_mutations(_branches(stmt), names)
+            changes = (changes[0] | _header_mutations(stmt, names), changes[1], changes[2])
             if isinstance(stmt, ast.For):
-                changes = _through_loop_targets(stmt, *changes)
+                changes = _through_loop_targets(stmt, *changes, names)
             in_place |= changes[0]
             rebound |= changes[1]
             called |= changes[2]
@@ -511,10 +661,12 @@ def _branch_mutations(stmts: list[ast.stmt], is_module: Callable[[str], bool]) -
         rebound.update(selfref_reassignment_targets(stmt))
         in_place.update(_bare_call_receivers(stmt, is_module))
         called.update(_bare_call_receivers(stmt, is_module, pure_too=True))
+        if names.resolve_source is not None:
+            in_place.update(_user_callee_changes(ast.Module(body=[stmt], type_ignores=[]), names.user_source))
         # `%time acc.append(x)` in the body changes `acc` as the plain line does.
         inner_stmts = magic_python(ast.Module(body=[stmt], type_ignores=[])).body[1:]
         if inner_stmts:
-            changes = _branch_mutations(inner_stmts, is_module)
+            changes = _branch_mutations(inner_stmts, names)
             in_place |= changes[0]
             rebound |= changes[1]
             called |= changes[2]
@@ -538,6 +690,184 @@ def _bare_call_receivers(stmt: ast.stmt, is_module: Callable[[str], bool], *, pu
             continue
         receivers.add(base)
     return receivers
+
+
+# ---------------------------------------------------------------------------
+# What a loop hands to code whose effect the text cannot decide
+# ---------------------------------------------------------------------------
+
+
+def loop_watch_candidates(
+    node: ast.AST,
+    namespace: Mapping[str, Any],
+    is_module: Callable[[str], bool],
+    resolve_source: SourceResolver | None = None,
+) -> frozenset[str]:
+    """The names a loop hands to code whose effect on them its text cannot
+    decide, to watch around the loop: what a library function is handed
+    (``heapq.heappush(h, x)``, ``np.copyto(a, b)``, ``rng.shuffle(xs)``,
+    ``if heapq.heappop(h) > t:``), what a method is handed, the receiver of
+    a method whose result is used (``x = dq.popleft()``), and what a
+    function of the user's whose source cannot be read is handed. A loop
+    target counts as the names its loop iterates (``for xs in lists:
+    random.shuffle(xs)`` hands over items of ``lists``).
+
+    Not candidates: what :func:`control_structure_mutations` already decides
+    from the text (a bare method call's receiver, a function of the user's
+    that is read), what a call known only to read is handed (``print(df)``,
+    ``len(xs)``, ``sum(xs)``), modules, classes, functions and immutable
+    values. The runtime fingerprints the candidates before and after the
+    loop runs and records which changed, per loop source; the simulation and
+    a restored loop apply that record.
+    """
+    if not isinstance(node, (ast.For, ast.While)):
+        return frozenset()
+    names = _LoopNames(is_module, namespace, resolve_source)
+    found: set[str] = set()
+    targets: dict[str, set[str]] = {}
+    _watch_statements([node], names, found, targets)
+    resolved: set[str] = set()
+    pending = list(found)
+    seen: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in targets:
+            pending.extend(targets[name])
+        else:
+            resolved.add(name)
+    return frozenset(name for name in resolved if _watchable(name, namespace, is_module))
+
+
+def loop_target_roots(
+    node: ast.For,
+    namespace: Mapping[str, Any] | None,
+    is_module: Callable[[str], bool],
+    resolve_source: SourceResolver | None = None,
+) -> dict[str, frozenset[str]]:
+    """Each target of the loop *node*, with the names its values come out of
+    (``records`` for ``r`` in ``for r in records:``): a change to the target
+    in place is a change to what those hold (`_through_loop_targets`)."""
+    roots = frozenset(_iterable_roots(node.iter, _LoopNames(is_module, namespace, resolve_source)))
+    return {target: roots for target in _loop_targets(node)}
+
+
+def statement_watch_candidates(
+    tree: ast.Module | None,
+    namespace: Mapping[str, Any],
+    is_module: Callable[[str], bool],
+    resolve_source: SourceResolver | None = None,
+) -> frozenset[str]:
+    """What the one statement *tree* of a loop or branch body hands to code
+    whose effect on it its text cannot decide (:func:`loop_watch_candidates`
+    for one statement): ``x = heapq.heappop(h)``, ``x = dq.popleft()``."""
+    if tree is None or len(tree.body) != 1 or isinstance(tree.body[0], _COMPOUND):
+        return frozenset()
+    names = _LoopNames(is_module, namespace, resolve_source)
+    found = _handed_to_unknown_code(tree, names, bare=True)
+    return frozenset(name for name in found if _watchable(name, namespace, is_module))
+
+
+def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str], targets: dict[str, set[str]]) -> None:
+    """Gather into *found* what each of *stmts* hands to unknown code, and
+    into *targets* the names each loop among them iterates, per target. A
+    ``def`` or ``class`` in the loop runs nothing until called."""
+    for stmt in stmts:
+        if isinstance(stmt, _COMPOUND):
+            if isinstance(stmt, ast.For):
+                roots = _iterable_roots(stmt.iter, names)
+                for target in _loop_targets(stmt):
+                    targets.setdefault(target, set()).update(roots)
+            if isinstance(stmt, (ast.If, ast.While)):
+                found |= _handed_to_unknown_code(_as_statement(stmt.test), names, bare=False)
+            _watch_statements(_branches(stmt), names, found, targets)
+            continue
+        found |= _handed_to_unknown_code(ast.Module(body=[stmt], type_ignores=[]), names, bare=True)
+
+
+#: Builtins that read what they are handed and change none of it.
+_READING_BUILTINS = frozenset(
+    {
+        "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "format", "frozenset", "hash",
+        "int", "isinstance", "issubclass", "len", "list", "max", "min", "print", "range", "repr", "reversed",
+        "round", "set", "sorted", "str", "sum", "tuple", "type", "zip", "id", "callable", "chr", "ord",
+    }
+)  # fmt: skip
+
+
+def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) -> set[str]:
+    """The names the one statement *tree* hands to code whose effect on
+    them its text cannot decide (see :func:`loop_watch_candidates`)."""
+    namespace = names.namespace or {}
+    stmt = tree.body[0] if tree.body else None
+    outer = stmt.value if bare and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) else None
+    calls = statement_calls(tree, control_bodies=False)
+    # A call a chain goes on from (``df.groupby('a')`` in
+    # ``df.groupby('a').sum()``) is judged with the chain's last method.
+    chained = {id(inner) for call in calls for inner in _chain_calls(call.func)}
+    out: set[str] = set()
+    for call in calls:
+        func = call.func
+        if isinstance(func, ast.Name) and names.user_source(func.id):
+            continue  # its source says what it changes
+        if isinstance(func, ast.Attribute) and call is not outer and id(call) not in chained:
+            base = _receiver_root(func.value)
+            inner = frozenset(c.func.attr for c in _chain_calls(func) if isinstance(c.func, ast.Attribute))
+            if base and func.attr not in RECEIVER_READONLY_WRITE_METHODS and not chain_is_pure(func.attr, inner):
+                out.add(base)
+        if isinstance(func, ast.Name) and func.id in _READING_BUILTINS and func.id not in namespace:
+            continue
+        if isinstance(func, ast.Attribute) and _stores_what_it_is_handed(func, namespace):
+            continue
+        args = [*call.args, *(kw.value for kw in call.keywords)]
+        arg_names = [arg.id for arg in args if isinstance(arg, ast.Name)]
+        if call_only_reads(call, arg_names, namespace):
+            continue
+        for arg in args:
+            out |= argument_roots(arg, {})
+    return out
+
+
+def _stores_what_it_is_handed(func: ast.Attribute, namespace: Mapping[str, Any]) -> bool:
+    """A method known to change its receiver (``acc.append(x)``), or any
+    method of a builtin container or scalar: it keeps or reads what it is
+    handed, and changes none of it."""
+    if func.attr in MUTATING_METHODS:
+        return True
+    base = _receiver_root(func.value)
+    return base is not None and isinstance(namespace.get(base), _KNOWN_METHOD_TYPES)
+
+
+def _chain_calls(func: ast.expr) -> list[ast.Call]:
+    """The calls a method chain makes on the way to *func*:
+    ``df.groupby('a')`` for ``df.groupby('a').sum``."""
+    found: list[ast.Call] = []
+    node: ast.AST = func
+    while True:
+        if isinstance(node, ast.Attribute | ast.Subscript):
+            node = node.value
+        elif isinstance(node, ast.Call):
+            found.append(node)
+            node = node.func
+        else:
+            return found
+
+
+def _watchable(name: str, namespace: Mapping[str, Any], is_module: Callable[[str], bool]) -> bool:
+    """Whether a call could change *name*'s value in place: bound, and not
+    a module, class, function or immutable value."""
+    if is_module(name) or name not in namespace:
+        return False
+    value = namespace[name]
+    if isinstance(value, (types.ModuleType, type, *_IMMUTABLE_VALUES)):
+        return False
+    return not inspect.isroutine(value)
+
+
+#: Values no call can change in place.
+_IMMUTABLE_VALUES = (int, float, complex, str, bytes, bool, type(None), frozenset, tuple, range)
 
 
 def _is_live_ndarray(val: Any) -> bool:
@@ -1076,3 +1406,17 @@ def classify_receivers(
         mutated |= {name for name in args if name in verdict}
         unknown_args = frozenset()
     return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args)
+
+
+def _receiver_root(node: ast.AST) -> str | None:
+    """The name a method call's receiver is reached from: ``groups`` in
+    ``groups.setdefault(k, []).append(v)``; None for an object a call of a
+    bare name builds (``Path(p).write_text(x)``), which no name holds."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, (ast.Subscript, ast.Attribute)):
+        return _receiver_root(node.value)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return _receiver_root(node.func.value)
+    return None
+

@@ -35,4 +35,6 @@ def fake_statement_processor() -> MagicMock:
     processor.cash_instance = Cash(backend=InMemoryBackend(), register_magic=False)
     processor.compute_hash = MagicMock(return_value="fakehash")
     processor.process_statement.return_value = computed_metrics()
+    # No function of the user's to read: the loops here call none.
+    processor.resolve_live_function_source.return_value = None
     return processor

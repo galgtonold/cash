@@ -26,7 +26,12 @@ from ...analysis.annotations import (
     parse_annotations_in_range,
 )
 from ...analysis.code_analyzer import CodeAnalyzer
-from ...analysis.mutation_effects import condition_mutations, control_structure_mutations, is_module_name
+from ...analysis.mutation_effects import (
+    condition_mutations,
+    control_structure_mutations,
+    is_module_name,
+    loop_target_roots,
+)
 from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
@@ -262,6 +267,7 @@ def update_lineage_after_execution(
     body_files: set[str] | None = None,
     unchanged: frozenset[str] | set[str] = frozenset(),
     unit_digest: str | None = None,
+    also: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -277,13 +283,17 @@ def update_lineage_after_execution(
     *unit_digest* names what a loop run as one unit left by what went in
     (``ControlStructureProcessor._unit_digest``); it then stands in for the
     hash of each changed value.
+
+    *also* names what the loop was seen changing beyond its text: through a
+    library call it was watched for (``loop_watch``), or by a body statement
+    that moved a name on for the passes after it (``InLoopChanges.moved``).
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
         return
 
     user_ns = shell.user_ns
-    mutated_vars = structure_mutations(shell, statement_processor, node) - set(unchanged)
+    mutated_vars = (structure_mutations(shell, statement_processor, node) - set(unchanged)) | set(also)
     # A local module the structure sets state on changes like any receiver:
     # one its text says, or one its body was seen setting state on. Recorded
     # for the simulation, which cannot run it (``module_state_outputs``).
@@ -334,6 +344,20 @@ def structure_mutations(shell, statement_processor, node: ast.AST) -> set[str]:
         node,
         lambda name: name in BUILTIN_NAMES and name not in lineage,
         lambda name: is_module_name(name, user_ns),
+        namespace=user_ns,
+        resolve_source=statement_processor.resolve_live_function_source,
+    )
+
+
+def target_roots(shell, statement_processor, node: ast.For) -> dict[str, frozenset[str]]:
+    """Each target of *node* with the names its values come out of
+    (``loop_target_roots``), with the runtime's rules for modules."""
+    user_ns = shell.user_ns
+    return loop_target_roots(
+        node,
+        user_ns,
+        lambda name: is_module_name(name, user_ns),
+        statement_processor.resolve_live_function_source,
     )
 
 
@@ -389,17 +413,18 @@ class LoopPass:
         # pass: the body's nodes are the same on every pass.
         self._changes: dict[int, tuple[ast.expr, frozenset[str]]] = {}
 
-    def _condition_changes(self, test: ast.expr) -> frozenset[str]:
+    def _condition_changes(self, test: ast.expr, statement_processor) -> frozenset[str]:
         known = self._changes.get(id(test))
         if known is None or known[0] is not test:
-            known = self._changes[id(test)] = (test, condition_mutations(test))
+            changes = condition_mutations(test, statement_processor.resolve_live_function_source)
+            known = self._changes[id(test)] = (test, changes)
         return known[1]
 
     def if_ran(self, shell, statement_processor, node: ast.If, tests: list[ast.expr], body: list[ast.stmt]) -> None:
         """The ``if`` *node* in the loop body evaluated the conditions *tests*
         (the ``if``'s and each ``elif``'s up to the one taken) and ran the
         branch *body* (empty when none was taken)."""
-        if not body and not any(self._condition_changes(test) for test in tests):
+        if not body and not any(self._condition_changes(test, statement_processor) for test in tests):
             return
         branch = _evaluated_chain(node, tests, body)
         own = _evaluated_chain(node, tests, _without_branches(body) or [ast.Pass()])

@@ -219,6 +219,20 @@ class StatementRecords:
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s mutation-verdict persistence failed", _LOG_PROCESSOR)
 
+    def recorded_mutation_verdict(self, source_hash: str) -> set[str] | None:
+        """The verdict an earlier kernel recorded under *source_hash*
+        (:meth:`persist_mutation_verdict`), or None."""
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return None
+        try:
+            record = backend.get_metadata(mutation_verdict_key(source_hash))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        if not record or not record.get("mutation_verdict"):
+            return None
+        return set(record.get("receivers") or ())
+
     def note_module_state(self, code: str, names: Iterable[str], modules: Iterable[str]) -> None:
         """Record that the statement *code* set state on the local *modules*,
         held by *names*, when it ran now (``TrackingState.module_state_outputs``),
