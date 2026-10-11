@@ -128,14 +128,16 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
             return True
         before = len(seen)
         seen.update(map(id, level))
-        again = len(level) - (len(seen) - before)
-        if again:
-            rewalked += again
+        added = len(seen) - before
+        if added < len(level):
+            # Each object once in a level: a class every instance's reduce
+            # names is one object, not one per instance.
+            level = list(dict(zip(map(id, level), level)).values())
+            rewalked += len(level) - added  # met at a level above
             if rewalked > _REWALKED_FREE:
                 # Much of it met again: a cycle, or objects shared all the
                 # way down. `flatten` walks each object once.
                 return False
-            level = list(dict(zip(map(id, level), level)).values())  # each once in a level
         alive.append(level)
         level = _next_level(level, reducers, leaf)
     return not level

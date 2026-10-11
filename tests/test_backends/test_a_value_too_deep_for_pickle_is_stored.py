@@ -170,6 +170,11 @@ class TestWhereThePicklerRunsOutOfStackFirst:
         rows = [(i, {"k": i, "tags": ["a", "b"]}) for i in range(2_000)]
         for keyed in (False, True):
             assert pickle.loads(kept_state.dumps(rows, keyed=keyed)) == rows
+        # Every instance's reduce names its class: one object, met once per
+        # instance, is not a value met again level after level.
+        nodes = [Node(i, None) for i in range(2_000)]
+        for keyed in (False, True):
+            assert [n.v for n in pickle.loads(kept_state.dumps(nodes, keyed=keyed))] == list(range(2_000))
 
     def test_a_chain_its_list_holds_every_node_of_is_deep(self):
         """The list is two levels deep from each node, but the pickler goes
