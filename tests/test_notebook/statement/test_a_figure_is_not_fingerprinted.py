@@ -105,3 +105,15 @@ def test_a_statement_keyed_by_an_axes_the_loop_visits_twice_runs_each_time(cash_
     for _ in range(2):
         run_cash_cell(cash_magics, cell)
         assert cash_magics.shell.user_ns["counts"] == [1, 2]
+
+
+def test_a_groupby_is_hashed_by_lineage():
+    """Its content hash pickled the frame it groups: ``t = df.groupby('user_id')``
+    took 2.5 s after a 0.006 s statement over a million rows."""
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame({"a": [1, 1, 2], "t": pd.to_datetime([1, 2, 3])})
+
+    assert restored_var.hashed_by_lineage(df.groupby("a"))
+    assert restored_var.hashed_by_lineage(df.groupby("a").t)
+    assert restored_var.hashed_by_lineage(df.a.rolling(2))
+    assert not restored_var.hashed_by_lineage(pd.Timestamp(1))

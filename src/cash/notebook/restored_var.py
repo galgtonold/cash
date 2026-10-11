@@ -54,7 +54,7 @@ def hashed_by_lineage(value: Any) -> bool:
     never equals a content hash.
     """
     t = type(value)
-    if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None:
+    if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None or _wraps_a_frame(t):
         return True
     artist = _artist_class()
     if artist is not None and isinstance(value, artist):
@@ -76,6 +76,14 @@ def hashed_by_lineage(value: Any) -> bool:
 #: or another, gets.
 _IDENTITY_PREFIX = f"identity:{uuid.uuid4().hex}:"
 _IDENTITY_COUNT = itertools.count()
+
+
+def _wraps_a_frame(t: type) -> bool:
+    """Is *t* one of pandas' own classes, such as a groupby, a rolling window
+    or a resampler: an object over a frame, whose content hash pickles the
+    frame whole. ``t = df.groupby('user_id')`` took 2.5 s after 0.006 s over
+    a million rows."""
+    return (getattr(t, "__module__", "") or "").startswith(("pandas.core.", "pandas.api.typing"))
 
 
 def identity_digest(value: Any) -> str | None:
