@@ -257,7 +257,10 @@ def test_a_nested_cached_calls_overhead_is_not_the_outer_functions_saving(tmp_pa
     that time was booked as the OUTER function's run -- its hits then claimed
     to save it, 4-9x what running it uncached costs."""
     c = Cash(cache_dir=str(tmp_path / "cache"))
-    rows = [(i, {"k": i}) for i in range(200_000)]  # a dict per row: the slow path
+    # A dict per row: the slow path. 50,000 rows key at the same cost per row
+    # as the 200,000 reported, and keep the test well inside its timeout on a
+    # loaded runner (200,000 took 10 s idle, and over 30 s on a busy machine).
+    rows = [(i, {"k": i}) for i in range(50_000)]
 
     @c.cache
     def inner(rows, n):
