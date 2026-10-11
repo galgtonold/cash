@@ -19,7 +19,7 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-__all__ = ["current_figure_names", "draws_through_pyplot", "pyplot_draw_names"]
+__all__ = ["current_figure_names", "draws_through_pyplot", "holds_artists", "pyplot_draw_names"]
 
 #: The pyplot functions that do not draw on the current axes or figure:
 #: getters, the ones that make a new figure, write or show one, and settings.
@@ -147,3 +147,19 @@ def pyplot_draw_names(tree: ast.AST | None, namespace: Mapping[str, Any]) -> fro
     if not draws_through_pyplot(tree, namespace):
         return frozenset()
     return frozenset(current_figure_names(namespace))
+
+
+def holds_artists(value: Any) -> bool:
+    """Whether *value* is a matplotlib artist (a figure, an axes) or a list,
+    tuple or object array of them (``plt.subplots(1, 3)``'s axes)."""
+    module = sys.modules.get("matplotlib.artist")
+    artist = getattr(module, "Artist", None)
+    if artist is None:
+        return False
+    if isinstance(value, artist):
+        return True
+    if getattr(getattr(value, "dtype", None), "kind", None) == "O" and getattr(value, "size", 0) <= 1024:
+        return any(isinstance(item, artist) for item in value.flat)
+    if isinstance(value, (list, tuple)) and len(value) <= 1024:
+        return any(isinstance(item, artist) for item in value)
+    return False

@@ -17,6 +17,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.control_markers import has_marker
 from cash.diagnostics import log_diagnostic, warn_diagnostic
+from cash.value_types import BUILTIN_NAMES
 from cash.exceptions import (
     CacheKeyComputationError,
     CashWarning,
@@ -111,7 +112,7 @@ from ..magic_effects import (
 from ..pyplot_state import CHANGED_PYPLOT_REASON, pyplot_state
 from ..recorded_reads import note_writes, snapshot
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
-from ..pyplot_draws import pyplot_draw_names
+from ..pyplot_draws import holds_artists, pyplot_draw_names
 from ..run_memo import forget_file_state_this_run
 from ..shared_objects import (
     VALUE_TYPES,
@@ -138,6 +139,21 @@ SHARE_CHECK_FLOOR_S = 1.0
 #: statement's outputs takes when the share check could not say
 #: (`referring_names`).
 SHARE_FALLBACK_FLOOR_S = 1.0
+
+
+def _changes_only_itself(run: StatementRun) -> bool:
+    """Whether *run* changes its outputs in place reading nothing but them
+    (``df['b'] = df['a'] * 2``, ``ax.set_title('t')``): it binds no name, and
+    no other variable's object can come to hold, or be held by, an output."""
+    if run.tree is None or not run.outputs or not run.outputs <= run.inputs:
+        return False
+    for node in ast.walk(run.tree):
+        if isinstance(node, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)):
+            return False
+        if isinstance(node, ast.Name):
+            if not isinstance(node.ctx, ast.Load) or (node.id not in run.outputs and node.id not in BUILTIN_NAMES):
+                return False
+    return True
 
 
 def share_check_budget(cost: float) -> float:
@@ -1472,6 +1488,11 @@ class StatementProcessor:
         complete = True
         if holders is not None:
             names = set(holders)
+        elif _changes_only_itself(run):
+            # ``df['b'] = df['a'] * 2``: what the outputs hold, and what holds
+            # them, is what it was, and the edges of that were recorded when
+            # it was made.
+            return
         else:
             names, complete = self._holders_of(run, outputs, captured_vars, echo, cost)
         if names:
@@ -1486,7 +1507,14 @@ class StatementProcessor:
         too, or held in one. Keeps no output value in a local: the check
         counts references."""
         value_types = VALUE_TYPES + library_value_types()
-        names = [name for name in outputs if not is_value(captured_vars.get(name), value_types)]
+        # A figure or axes is held by pyplot's registry, which the check
+        # gives up on; how a figure's axes reach it is a derivation edge of
+        # its own (`detect_derivation_edges`).
+        names = [
+            name
+            for name in outputs
+            if not is_value(captured_vars.get(name), value_types) and not holds_artists(captured_vars.get(name))
+        ]
         if not names:
             return set(), True
         user_ns = self.shell.user_ns
