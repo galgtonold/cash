@@ -16,7 +16,7 @@ from cash.analysis.mutation_effects import control_structure_mutations
 
 
 def _mutations(code: str) -> set[str]:
-    return control_structure_mutations(ast.parse(code).body[0], lambda n: n in {"range", "zip"}, lambda n: n == "np")
+    return control_structure_mutations(ast.parse(code).body[0], lambda n: n in {"range", "zip"}, lambda n: n in {"np", "os", "glob"})
 
 
 @pytest.mark.parametrize(
@@ -41,8 +41,12 @@ def test_changing_an_item_changes_the_iterable(loop, expected):
         "for line in lines:\n    line = line.strip()",
         "for x in xs:\n    total = x",
         "for i in range(3):\n    print(i)",
+        "for old in OUT.glob('*.txt'):\n    old.unlink()",
+        "for p in sorted(OUT.rglob('*.csv')):\n    p.unlink()",
+        "for f in os.listdir(d):\n    f.strip()",
+        "for f in glob.glob(pattern):\n    f.upper()",
     ],
-    ids=["rebinding the target", "reading the target", "a range"],
+    ids=["rebinding the target", "reading the target", "a range", "path glob", "sorted rglob", "listdir", "glob.glob"],
 )
 def test_rebinding_or_reading_an_item_changes_nothing(loop):
     assert _mutations(loop) == set()

@@ -447,9 +447,40 @@ def _through_loop_targets(node: ast.For, in_place: set[str], rebound: set[str], 
     return in_place - targets, rebound - targets, called - targets
 
 
+#: Calls whose items are made fresh for the loop -- paths or names read from
+#: the file system -- so no variable holds them: ``old.unlink()`` in
+#: ``for old in OUT.glob('*.txt')`` changes a file, not ``OUT``.
+_FRESH_ITEM_METHODS = frozenset({"glob", "rglob", "iterdir", "walk"})
+_FRESH_ITEM_FUNCTIONS = frozenset(
+    {"os.listdir", "os.scandir", "os.walk", "glob.glob", "glob.iglob", "listdir", "scandir", "glob", "iglob"}
+)
+
+
+def _dotted(node: ast.expr) -> str:
+    """``os.listdir`` for an ``os.listdir`` reference, ``""`` for anything
+    but a chain of names."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return ""
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
 def _iterable_roots(node: ast.expr) -> set[str]:
     """The names *node* reads that are not called: the containers a loop
-    takes its elements from, not the functions that walk them."""
+    takes its elements from, not the functions that walk them. None when
+    the items are fresh objects read from the file system
+    (``_FRESH_ITEM_METHODS``, ``_FRESH_ITEM_FUNCTIONS``)."""
+    while isinstance(node, ast.Call) and _dotted(node.func) in {"sorted", "list", "tuple", "reversed"} and node.args:
+        node = node.args[0]
+    if isinstance(node, ast.Call) and (
+        (isinstance(node.func, ast.Attribute) and node.func.attr in _FRESH_ITEM_METHODS)
+        or _dotted(node.func) in _FRESH_ITEM_FUNCTIONS
+    ):
+        return set()
     functions = {id(sub.func) for sub in ast.walk(node) if isinstance(sub, ast.Call)}
     return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and id(sub) not in functions}
 
