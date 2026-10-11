@@ -29,6 +29,7 @@ from ..tracking.file_dep_snapshot import (
     dep_path_for_this_process,
     snapshot_dependencies,
     snapshot_is_fresh,
+    walk_dataset_dir,
 )
 from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
@@ -184,9 +185,9 @@ def _track_directory(tracker: Any, path: str) -> None:
     """A declared directory: every file under it by content, and every
     directory in it by its listing, so an edit, a new file and a removed one
     all count. The directory's own timestamp does not move when a file in
-    it is edited, so it alone would not do."""
-    for root, dirs, files in os.walk(path):
-        dirs.sort()
+    it is edited, so it alone would not do. A linked sub-folder is walked
+    into, as a dataset reader does (`walk_dataset_dir`)."""
+    for root, _dirs, files in walk_dataset_dir(path):
         _track_one(tracker, root)
         for name in sorted(files):
             _track_one(tracker, os.path.join(root, name))

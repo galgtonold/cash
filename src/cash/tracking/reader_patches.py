@@ -515,8 +515,9 @@ def track_dataset(tracker: Any, target: Any) -> None:
             # Listed, not untracked: each directory's listing is recorded as a
             # read (`read_events._on_listing`), which is what makes a new file
             # in any of them a change.
-            for root, dirs, files in os.walk(text):
-                dirs[:] = sorted(d for d in dirs if _dataset_member(d))
+            from cash.tracking.file_dep_snapshot import walk_dataset_dir
+
+            for root, _dirs, files in walk_dataset_dir(text, _dataset_member):
                 for name in sorted(files):
                     if _dataset_member(name):
                         tracker.track_path(os.path.join(root, name))

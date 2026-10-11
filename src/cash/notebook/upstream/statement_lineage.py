@@ -38,6 +38,7 @@ from ...tracking.randomness import (
     hidden_write_lineage,
     rng_virtual_var,
 )
+from ...tracking.read_classification import stat_key
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
@@ -477,12 +478,12 @@ class StatementLineage:
         return file_deps
 
     @staticmethod
-    def _file_hash_component(file_deps_to_check: set[str], stmt_file_deps: dict[str, float]) -> str:
+    def _file_hash_component(file_deps_to_check: set[str], stmt_file_deps: dict[str, tuple[int, int, int]]) -> str:
         """The file component of a statement's lineage when the runtime's own
         record of what it read is not available: the files its outputs depend
         on, valued by the runtime's formula (``compute_file_hash_component``).
 
-        Also updates stmt_file_deps with current mtimes for tracked files.
+        Also updates stmt_file_deps with the current `stat_key` of tracked files.
         """
         if not file_deps_to_check:
             return ""
@@ -495,7 +496,7 @@ class StatementLineage:
             # relocation fallbacks would put a different path's state in a key.
             if stat is not None and resolved == file_path:
                 present.add(file_path)
-                stmt_file_deps[file_path] = stat.st_mtime
+                stmt_file_deps[file_path] = stat_key(stat)
         return compute_file_hash_component(present) if present else ""
 
     # -- Imports ---------------------------------------------------------------
@@ -643,7 +644,7 @@ class StatementLineage:
         lookup_time = 0.0
         files_stale = False
         carriers = None
-        stmt_file_deps: dict[str, float] = {}
+        stmt_file_deps: dict[str, tuple[int, int, int]] = {}
         files_to_check: set[str] = set()
         held: set[str] = set()
 

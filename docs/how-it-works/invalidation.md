@@ -112,7 +112,7 @@ cash records a file when your code reads it through one of these:
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too) |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`: the directory, so a new matching file counts |
-| datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside) and each directory, so an edited or a new file counts |
+| datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside), under linked sub-folders too, and each directory, so an edited or a new file counts |
 | file metadata | `Path.stat`, `os.stat`, `os.lstat`, `os.path.getsize`, `getmtime`, `getctime` and the `stat()` of an `os.scandir` entry, called from your code rather than from a library's: the file, by content |
 | existence checks | `os.path.exists`, `isfile`, `isdir`, `lexists`, `os.access`, and `Path.exists`, `is_file`, `is_dir`, and an `open`, `os.stat`, `os.lstat`, `getsize`, `getmtime`, `os.listdir` or `os.scandir` that fails because the path is not there: a path that was not there counts once it appears, whoever looked for it, and one your code found (a flag file, an output folder) counts once it is gone |
 
@@ -121,7 +121,12 @@ A reader counts however a script or a module of your code names it:
 such as `reader = pl.read_csv`. In a notebook cell, and wrapped in
 `functools.partial`, only the module spelling (`pq.read_table(...)`) is seen.
 
-A file opened for writing only (`'w'`, `'x'`) is not a dependency. For a file
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e -->
+A file opened for writing only (`'w'`, `'x'`) is not a dependency. A file
+the code creates (or one in a folder it makes) and then reads counts only if
+it is still there when the function or statement ends, with its content at
+that moment: a scratch file it removes is not a dependency, a file it
+downloaded and keeps is. For a file
 read another way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 

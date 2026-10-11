@@ -25,6 +25,8 @@ from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
+from cash.diagnostics import log_diagnostic, warn_diagnostic
+from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -57,12 +59,15 @@ def _snapshot_with_inherited(
     file_dependencies: set[str],
     accessed_remote: set[str],
     inherited_snapshots: dict[str, dict] | None,
+    known: dict[str, tuple[Any, ...]] | None = None,
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
-    inherited from its inputs' producers as they recorded them."""
+    inherited from its inputs' producers as they recorded them. *known* are
+    the digests taken as the statement read its files
+    (`FileAccessTracker.known_reads`), reused while a file's stat is unchanged."""
     inherited_snapshots = inherited_snapshots or {}
     own = set(file_dependencies) - inherited_snapshots.keys()
-    snapshot = snapshot_dependencies(own, accessed_remote)
+    snapshot = snapshot_dependencies(own, accessed_remote, known=known)
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
     return snapshot
@@ -136,6 +141,8 @@ class StatementStore:
         #: under the ``"__epoch__"`` of the hash scheme they were taken with.
         self._producer_snapshots: LruMemo[str, dict[str, dict]] = LruMemo(PRODUCER_SNAPSHOTS)
         self._producer_snapshots_epoch: Any = None
+        #: Statements already warned about a file changed while they ran.
+        self._warned_input_changed: set[str] = set()
 
     def set_written_later_in_cell(self, names: frozenset[str]) -> None:
         """Record the names a later top-level statement of the cell writes.
@@ -191,6 +198,8 @@ class StatementStore:
         """
         if getattr(execution.result, "skipped", False):
             return None
+        if self.inputs_moved(run, execution):
+            return None
 
         accessed_files = execution.accessed_files
         all_file_deps = set(accessed_files) if accessed_files else set()
@@ -225,6 +234,47 @@ class StatementStore:
             inherited_snapshots=inherited_snapshots,
             seed_epochs=seed_epochs,
         )
+
+    def inputs_moved(self, run: StatementRun, execution: StatementExecution) -> bool:
+        """Did a file the statement read change after it read it?
+
+        The entry's file fingerprints are taken when it is stored, after the
+        statement ran: a file another process replaced while it ran would be
+        recorded as the NEW file next to a value computed from the old one,
+        and every later run would find the entry fresh. The value is kept for
+        this run, not stored, and the statement warns once
+        (``STORE-INPUT-CHANGED``). Asked when the statement has run and again
+        before its entry is written.
+        """
+        tracker = execution.file_tracker
+        if tracker is None or not tracker.read_stats:
+            return False
+        try:
+            moved = tracker.inputs_changed_since_read()
+        except Exception:
+            logger.debug("[PROCESSOR] Could not check the files read for a change", exc_info=True)
+            return False
+        if not moved:
+            return False
+        if run.source_hash not in self._warned_input_changed:
+            self._warned_input_changed.add(run.source_hash)
+            first_line = (run.code.splitlines() or [""])[0].strip()
+            if len(first_line) > 60:
+                first_line = first_line[:57] + "..."
+            shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
+            what = (
+                f"`{first_line}`: {shown} changed while the statement was running, after it had "
+                "been read. Its value is kept for this run but not cached, because it cannot be "
+                "told which version of the file it was computed from."
+            )
+            fix = (
+                "nothing, if something else writes these files while this runs -- the next run "
+                "reads the settled file and caches normally. If the statement reads a file and "
+                "then writes to it, that is why: split the read and the write."
+            )
+            log_diagnostic(logger, "STORE-INPUT-CHANGED", what, fix)
+            warn_diagnostic(CashCacheStoreFailedWarning, "STORE-INPUT-CHANGED", what, fix)
+        return True
 
     def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
         """The file snapshots *var_name*'s producing statement stored, or {}."""
@@ -428,7 +478,10 @@ class StatementStore:
             code=run.code,
             key=run.cache_key,
             file_dependencies=_snapshot_with_inherited(
-                file_dependencies, execution.accessed_remote, inherited_snapshots
+                file_dependencies,
+                execution.accessed_remote,
+                inherited_snapshots,
+                execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
             ),
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),

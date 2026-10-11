@@ -960,7 +960,15 @@ class CallUnit:
             self._entries.refuse(call.key)
         # Not stored when it made, picked or drew on a pyplot figure, which a
         # hit would not: the next drawing would land on another figure.
-        elif pyplot_state() == figures_before and self._worth_storing(call, result, elapsed, result_held):
+        # Nor when a file it read changed before it returned: the snapshot,
+        # taken now, would describe the new file next to a result computed
+        # from the old one. The statement around it warns
+        # (``STORE-INPUT-CHANGED``): its tracker saw the same reads.
+        elif (
+            pyplot_state() == figures_before
+            and self._worth_storing(call, result, elapsed, result_held)
+            and not call_tracker.inputs_changed_since_read()
+        ):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
         if stored:
             self._cached(

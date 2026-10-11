@@ -451,6 +451,15 @@ class MismatchClassifier:
                     var_name,
                 )
                 result.broken_vars.add(var_name)
+            elif var_name in sim.vars_with_stale_files:
+                # A file behind it has other content under the same size and
+                # mtime (`cp -p`, `rsync -t`): the lineage folds those, so it
+                # matches, but the entry's content check says the file moved.
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Lineage matches for '%s' but a file behind it changed. Marking broken.",
+                    var_name,
+                )
+                result.broken_vars.add(var_name)
             return
 
         self._handle_lineage_mismatch(var_name, actual_lineage, final_virtual_hash, sim, check, result)
@@ -886,7 +895,9 @@ class MismatchClassifier:
         if inp not in self.tracking_state.variable_lineage or inp not in virtual_lineage:
             return False
         if self.tracking_state.variable_lineage[inp] == virtual_lineage[inp]:
-            if inp in self.shell.user_ns:
+            # Not when a file behind it has other content under the same size
+            # and mtime: the lineage cannot show that (`_classify_one_broken_var`).
+            if inp in self.shell.user_ns and inp not in sim.vars_with_stale_files:
                 logger.debug("[UPSTREAM] Input '%s' already valid in memory (lineage matches virtual). Skipping.", inp)
                 return True
             return False
