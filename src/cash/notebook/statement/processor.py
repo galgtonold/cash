@@ -1379,6 +1379,7 @@ class StatementProcessor:
         # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
         budget = share_check_budget(cost)
         found: dict[str, Any] | None = None
+        gave_up: list[bool] = []
         try:
             with walk_budget(budget):
                 reason = unrestorable_output_reason(
@@ -1388,6 +1389,7 @@ class StatementProcessor:
                     cash_held=[*self._calls.held_call_results(), echo, run.metrics],
                     shell=self.shell,
                     holders=holders,
+                    gave_up=gave_up,
                 )
                 if reason is None and echo:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
@@ -1402,6 +1404,9 @@ class StatementProcessor:
             )
         if reason is None and found is not None:
             return found
+        # Gave up on a holder that is not a variable: no variable to link,
+        # and asking again would cost the check twice.
+        run.share_gave_up = bool(gave_up)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -1493,6 +1498,8 @@ class StatementProcessor:
             return name in hidden or is_history_name(name)
 
         budget = share_check_budget(cost)
+        if run.share_gave_up:
+            return set(), True
         timed_out = run.share_unchecked
         if not timed_out:
             try:

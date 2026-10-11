@@ -62,6 +62,7 @@ def unrestorable_output_reason(
     cash_held: Iterable[Any] = (),
     shell: Any = None,
     holders: dict[str, Any] | None = None,
+    gave_up: list[bool] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. *cash_held* are containers cash itself
@@ -71,7 +72,8 @@ def unrestorable_output_reason(
     With *holders*, a variable of the notebook that holds an output's object
     too does not refuse the statement: it is added to *holders*, to be
     stored and restored with the outputs (`shared_output_reason`), and its
-    value must pass the same checks.
+    value must pass the same checks. *gave_up* gets True appended when the
+    check for those holders ran and found a holder that is not a variable.
 
     ``identity_coupled_reason`` refuses an object identity-coupled to a
     library global: the RAM tier's deep copy of a matplotlib Figure
@@ -80,7 +82,7 @@ def unrestorable_output_reason(
     """
     cash_held = list(cash_held)
     reason = _value_refusal(outputs, captured_vars, user_ns, cash_held) or shared_output_reason(
-        outputs, captured_vars, user_ns, cash_held, shell, holders
+        outputs, captured_vars, user_ns, cash_held, shell, holders, gave_up
     )
     if reason is None and holders:
         reason = _value_refusal(set(holders), holders, user_ns, cash_held)
@@ -114,6 +116,7 @@ def shared_output_reason(
     cash_held: Iterable[Any] = (),
     shell: Any = None,
     holders: dict[str, Any] | None = None,
+    gave_up: list[bool] | None = None,
 ) -> str | None:
     """Nor an output whose object, or one inside it, something else holds too
     (`shared_names`): a restore would bind a copy, and that holder would keep
@@ -150,6 +153,8 @@ def shared_output_reason(
         )
         holders.update(found)
         del found
+        if shared and gave_up is not None:
+            gave_up.append(True)
     return _shared_reason(shared)
 
 
