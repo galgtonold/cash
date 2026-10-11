@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @ef25865b -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f00be38f -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1421,7 +1421,7 @@ If it is not code, delete it or make it a markdown cell.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @36403056 -->
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @3abb284a -->
 **What happened.** A cell raised part way through, and a name it changed is
 not what a run of the cells from the top gives. The message names the cell
 and the variables. It comes in two cases.
