@@ -833,27 +833,13 @@ def _lambda_as_def(func: types.FunctionType, tree: ast.AST) -> ast.FunctionDef |
     """The ``lambda`` in *tree* (the statement *func*'s source is) that is
     *func*, as the ``def`` it stands for: its arguments, and ``return`` its
     body. Found by where its code's instructions sit; None when no lambda
-    in the statement holds them all."""
+    in the statement holds them all, or when more than one could be it."""
     code = func.__code__
     try:
         first = getsourcelines(func)[1]
     except SOURCE_RETRIEVAL_ERRORS:
         return None
-    offset = first - 1
-    spots = [
-        (line - offset, col)
-        for line, _, col, end_col in code.co_positions()
-        # Not the RESUME the code starts with, which sits at column 0.
-        if line is not None and col is not None and end_col is not None and end_col > col
-    ]
-    best = None
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Lambda) or node.end_lineno is None or node.end_col_offset is None:
-            continue
-        start, end = (node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset)
-        if spots and all(start <= spot <= end for spot in spots):
-            if best is None or (start >= (best.lineno, best.col_offset)):
-                best = node  # the innermost lambda that holds them
+    best = _lambda_node(code, tree, first - 1)
     if best is None:
         return None
     func_def = ast.FunctionDef(
@@ -866,6 +852,75 @@ def _lambda_as_def(func: types.FunctionType, tree: ast.AST) -> ast.FunctionDef |
         type_params=[],
     )
     return ast.fix_missing_locations(ast.copy_location(func_def, best))
+
+
+def _lambda_node(code: types.CodeType, tree: ast.AST, offset: int) -> ast.Lambda | None:
+    """The ``lambda`` node in *tree* whose code is *code*; *offset* is the
+    line *tree*'s first line has in the file.
+
+    Python 3.11+ records each instruction's column (``co_positions``): the
+    innermost lambda that holds them all is the one. Python 3.10 records
+    only lines, which cannot tell apart two lambdas on one line, nor a
+    lambda from one nested in it: there the lambdas whose lines hold the
+    code's are narrowed to those that compile to the same shape, and none
+    is chosen while two that are written differently remain.
+    """
+    lambdas = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Lambda) and node.end_lineno is not None and node.end_col_offset is not None
+    ]
+    if hasattr(code, "co_positions"):
+        spots = [
+            (line - offset, col)
+            for line, _, col, end_col in code.co_positions()
+            # Not the RESUME the code starts with, which sits at column 0.
+            if line is not None and col is not None and end_col is not None and end_col > col
+        ]
+        best = None
+        for node in lambdas:
+            start, end = (node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset)
+            if spots and all(start <= spot <= end for spot in spots):
+                if best is None or (start >= (best.lineno, best.col_offset)):
+                    best = node  # the innermost lambda that holds them
+        return best
+    lines = {line - offset for _, _, line in code.co_lines() if line is not None}
+    held = [node for node in lambdas if lines and all(node.lineno <= line <= node.end_lineno for line in lines)]
+    same = [node for node in held if _compiles_to_shape_of(node, code)]
+    # Twins written alike audit alike, so either one will do.
+    return same[0] if same and len({ast.dump(node) for node in same}) == 1 else None
+
+
+def _code_shape(code: types.CodeType) -> tuple:
+    """What a lambda's code is made of, apart from where its free names are
+    bound: compiled on its own, a closure's free names read as globals."""
+    nargs = code.co_argcount + code.co_kwonlyargcount
+    nargs += bool(code.co_flags & inspect.CO_VARARGS) + bool(code.co_flags & inspect.CO_VARKEYWORDS)
+    return (
+        code.co_argcount,
+        code.co_posonlyargcount,
+        code.co_kwonlyargcount,
+        code.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS),
+        code.co_varnames[:nargs],
+        frozenset(code.co_names) | frozenset(code.co_freevars),
+        tuple(_const_shape(c) for c in code.co_consts),
+    )
+
+
+def _const_shape(const: object) -> object:
+    if isinstance(const, types.CodeType):
+        return ("code", const.co_name, _code_shape(const))
+    return (type(const).__name__, repr(const))
+
+
+def _compiles_to_shape_of(node: ast.Lambda, code: types.CodeType) -> bool:
+    """Whether *node*, compiled on its own, has the shape of *code*."""
+    try:
+        compiled = compile(ast.fix_missing_locations(ast.Expression(body=node)), "<lambda>", "eval")
+    except (SyntaxError, ValueError, TypeError):
+        return False
+    own = [c for c in compiled.co_consts if isinstance(c, types.CodeType) and c.co_name == "<lambda>"]
+    return len(own) == 1 and _code_shape(own[0]) == _code_shape(code)
 
 
 def _find_first_function_def(tree: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
