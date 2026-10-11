@@ -1453,8 +1453,8 @@ class StatementProcessor:
         check (`share_group`) is asked here, within the same time budget.
         When it cannot say, its budget spent or a holder not a variable, the
         variables are looked for from the outputs up (`referring_names`);
-        when that is cut short too, some may be missing, and the
-        NOTEBOOK-SHARE-UNCHECKED warning says so. A loop or branch body is
+        when the budget ran out and that is cut short too, some may be
+        missing, and the NOTEBOOK-SHARE-UNCHECKED warning says so. A loop or branch body is
         left to its structure, which moves what it changed when it ends
         (``update_lineage_after_execution``).
         """
@@ -1492,14 +1492,15 @@ class StatementProcessor:
             return name in hidden or is_history_name(name)
 
         budget = share_check_budget(cost)
-        if not run.share_unchecked:
+        timed_out = run.share_unchecked
+        if not timed_out:
             try:
                 with walk_budget(budget):
                     found, shared = share_group(names, captured_vars, user_ns, cash_held, named, foreign=foreign)
                 if not shared:
                     return set(found), True
             except WalkBudgetExceeded:
-                pass
+                timed_out = True
         found_names, complete = referring_names(
             [captured_vars[name] for name in names],
             user_ns,
@@ -1507,7 +1508,11 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        return found_names, complete
+        # A holder that is not a variable (pyplot's figure registry, a
+        # library's cache) is what the climb runs into without end: only a
+        # search the budget cut short leaves variables unknown, as the check
+        # it stands in for would have found them.
+        return found_names, complete or not timed_out
 
     def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
         """Warn, once per statement, that the variables sharing an object
