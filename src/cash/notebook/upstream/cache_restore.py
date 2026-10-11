@@ -95,6 +95,9 @@ class CacheRestorer:
         #: Called with the names a restore is about to bind, before it binds
         #: them; raises to stop it (the checker's unsaved-run refusal).
         self.guard: Callable[[set[str]], None] | None = None
+        #: What the entry the last successful `try_virtual_restore` restored
+        #: showed when it ran: ``{"stdout", "stderr", "rich_outputs"}``.
+        self.last_outputs: dict[str, Any] = {}
 
     def try_virtual_restore(
         self,
@@ -175,12 +178,37 @@ class CacheRestorer:
                 if holders and restored_vars:
                     self.tracking_state.held_with[cache_key] = dict(holders) if metadata.get("holders_moved") else {}
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
+                self.last_outputs = {
+                    "stdout": cached_data.get("stdout", "") or "",
+                    "stderr": cached_data.get("stderr", "") or "",
+                    "rich_outputs": list(cached_data.get("rich_outputs") or []),
+                }
                 return restored_vars, _perf_counter() - start_time, saved_time
 
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("[UPSTREAM] Virtual restore error: %s", e)
 
         return set(), _perf_counter() - start_time, 0.0
+
+    def recorded_replay(self, entry: Any, virtual_modules: set[str]) -> dict | None:
+        """What the statement of trace *entry* showed when it last ran, as
+        its entry's metadata keeps it (``capture.replay_record``): None when
+        it has no entry or showed nothing."""
+        backend = self.probe.backend()
+        if backend is None:
+            return None
+        try:
+            cache_key, _, _, _, _ = compute_cache_key(
+                entry.stmt_code,
+                key_inputs(entry.inputs, entry.input_hashes),
+                ctx=self.statements.key_context(key_lineages(entry.input_hashes), virtual_modules),
+                outputs=entry.outputs,
+            )
+            metadata = backend.get_metadata(cache_key)
+        except (KeyError, TypeError, ValueError, OSError):
+            return None
+        replay = metadata.get("replay") if isinstance(metadata, dict) else None
+        return replay if isinstance(replay, dict) else None
 
     def _restore_vars_from_cache(
         self,

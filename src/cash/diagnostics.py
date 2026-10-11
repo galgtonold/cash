@@ -254,6 +254,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # ran the cell uncached
         "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
         # the statement ran uncached
+        "NOTEBOOK-FAILED-CELL",  # a cell raised part way, and a name it
+        # changed is kept as that run left it, or could not be put back
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,

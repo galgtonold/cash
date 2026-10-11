@@ -1357,6 +1357,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
@@ -1413,6 +1414,42 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-FAILED-CELL {#notebook-failed-cell}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_failed_run_left @961fa468, cash/notebook/ipython/cell_executor.py:_owed_by_skips @36403056 -->
+**What happened.** A cell raised part way through, and a name it changed is
+not what a run of the cells from the top gives. The message names the cell
+and the variables. It comes in two cases.
+
+A cell above raised part way, say in a loop filling `tot`, and the cell you
+ran reads `tot`, or something built from it since (`final = {... tot ...}`).
+No run of the cells gives those values: the lines before the error leave
+`tot` empty, and the whole cell raises. So cash keeps them as they are, as a
+plain kernel does: it does not run the lines before the error again, re-run
+the cells between or restore them from the cache. A name built from them that
+is not in memory (after a restart) stays undefined.
+
+Or the cell you ran raised. Running it, cash had skipped or restored some of
+its lines up front, by the values the whole cell ends with. When a line
+before the error sets a name that a line at or after it sets again, cash runs
+that earlier line once more after the error, with the lines it reads from, so
+the name holds what a plain run leaves. Here it could not: the line is a loop
+or branch, or it reads a value from before the cell that a later line of the
+cell replaced. Those names hold the values the end of the cell gives them
+until something rebuilds them; a cell below that reads them rebuilds them
+first.
+
+**Why it matters.** The cell you run sees values that a run from the top
+would not give it. They are the values the kernel holds, which is what you
+see without cash, but a result built from them is not the notebook's result.
+
+**What to do.** Fix the error and run the cell that raised again, then the
+cells below it.
+
+**When it is safe to ignore.** While you are still looking into the error.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 

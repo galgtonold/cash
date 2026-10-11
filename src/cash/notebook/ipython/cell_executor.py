@@ -42,13 +42,15 @@ import ast
 import contextlib
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Generator, Iterator
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from IPython.core.inputtransformer2 import leading_indent
 
 from ..._clock import perf_counter as _perf_counter
+from ...diagnostics import log_diagnostic, warn_diagnostic
+from ...exceptions import CashWarning
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
 from ...analysis.code_analyzer import CodeAnalyzer
@@ -90,12 +92,49 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+_NEW_SCOPES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)
+_DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _cell_scope_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """The nodes of *node* that run in the cell's own scope: not the body of a
+    comprehension, lambda, function or class (their names are their own),
+    but the first iterable of a comprehension, decorators, defaults and
+    bases, and a walrus anywhere, which binds in the cell."""
+    stack = [node]
+    while stack:
+        sub = stack.pop()
+        yield sub
+        if isinstance(sub, _NEW_SCOPES):
+            if isinstance(sub, ast.Lambda):
+                stack.extend(sub.args.defaults + [d for d in sub.args.kw_defaults if d is not None])
+            else:
+                stack.append(sub.generators[0].iter)
+            stack.extend(w for w in ast.walk(sub) if isinstance(w, ast.NamedExpr))
+        elif isinstance(sub, _DEFINITIONS):
+            stack.extend(_definition_header(sub))
+        else:
+            stack.extend(ast.iter_child_nodes(sub))
+
+
+def _definition_header(node: ast.AST) -> list[ast.AST]:
+    parts: list[ast.AST] = list(node.decorator_list)
+    if isinstance(node, ast.ClassDef):
+        parts += node.bases + [k.value for k in node.keywords]
+    else:
+        parts += node.args.defaults + [d for d in node.args.kw_defaults if d is not None]
+    return parts
+
+
 def _stored_names(node: ast.AST) -> set[str]:
-    """The names a statement binds or changes in place: its ``Name`` targets,
-    and the base of an attribute or item target (``df['a'] = ...``)."""
+    """The names a statement binds or changes in place in the cell's scope:
+    its ``Name`` targets, a ``def``'s or ``class``'s name, and the base of an
+    attribute or item target (``df['a'] = ...``)."""
     names: set[str] = set()
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
+    for sub in _cell_scope_nodes(node):
+        if isinstance(sub, _DEFINITIONS):
+            names.add(sub.name)
+        elif isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
             names.add(sub.id)
         elif isinstance(sub, (ast.Attribute, ast.Subscript)) and isinstance(sub.ctx, ast.Store):
             base = sub.value
@@ -107,7 +146,21 @@ def _stored_names(node: ast.AST) -> set[str]:
 
 
 def _read_names(node: ast.AST) -> set[str]:
-    return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)}
+    """The names a statement reads from the cell's scope: every load in it,
+    less the names only a comprehension or lambda inside binds."""
+
+    def loads(nodes: Iterable[ast.AST]) -> set[str]:
+        return {n.id for n in nodes if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+
+    in_cell_scope = loads(_cell_scope_nodes(node))
+    local: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Lambda):
+            local |= {a.arg for a in sub.args.posonlyargs + sub.args.args + sub.args.kwonlyargs}
+        elif isinstance(sub, _NEW_SCOPES):
+            for gen in sub.generators:
+                local |= {n.id for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+    return in_cell_scope | (loads(ast.walk(node)) - local)
 
 
 def _changed_by_a_failed_step(node: ast.stmt) -> set[str]:
@@ -123,31 +176,90 @@ def _changed_by_a_failed_step(node: ast.stmt) -> set[str]:
     return changed
 
 
-def _owed_by_skips(body: list[ast.stmt], skipped: set[int], failed: int) -> list[int]:
-    """The skipped statements before statement *failed* whose work a plain run
-    leaves in the namespace: the last writer of a name among the statements
-    before it, plus the skipped statements those read from. Not a name the
-    failed statement changed in place: running its writer again would wipe
-    what that statement had done before it raised."""
-    writers = [_stored_names(node) for node in body[:failed]]
+def _owed_by_skips(
+    body: list[ast.stmt],
+    skipped: set[int],
+    failed: int,
+    restored: frozenset[int] | set[int] = frozenset(),
+) -> tuple[list[int], set[str]]:
+    """What to run after statement *failed* raised, so the cell leaves each
+    name as a plain run does.
+
+    The plan of a cell run (``plan_cell_run``) skips or restores statements up
+    front, by the version the whole cell ends with. That is the version a
+    plain run leaves only when no statement at or after *failed* writes the
+    name: a name whose last writer before the failure was *skipped* (in
+    *skipped*: current, or overwritten by a later step) or *restored* (in
+    *restored*) while a writer at or after the failure stands for it is
+    owed -- the overwrite never completed. A name the failed statement may
+    have changed in place is never owed: running its writer again would wipe
+    what that statement had done before it raised.
+
+    Returns ``(steps, lost)``. *steps* are the statements to run, in cell
+    order: the last writer of each owed name, plus every statement whose
+    version one of them reads and the live namespace no longer holds (a
+    later line rebound it, ``x = load(); y = x * 2; x = heavy(x)``), plus,
+    for each name those statements write, its last writer before the failure,
+    so each name ends as the plain run left it. When that cannot be done --
+    a step is a loop or branch, or writes a name the failed statement
+    changed in place, or reads a value from before the cell that the plan
+    replaced -- *steps* is empty and *lost* names the owed names, which no
+    longer hold what a plain run leaves.
+    """
+    writers = [_stored_names(node) for node in body]
     in_place = _changed_by_a_failed_step(body[failed]) if failed < len(body) else set()
-    owed: set[int] = set()
-    pending: list[tuple[int, set[str]]] = []
-    for name in set().union(*writers) if writers else set():
+    planned = set(skipped) | set(restored)
+
+    def last_writer(name: str, before: int) -> int | None:
+        return next((k for k in range(before - 1, -1, -1) if name in writers[k]), None)
+
+    def later_writers(name: str) -> list[int]:
+        return [k for k in range(failed, len(body)) if name in writers[k]]
+
+    wrong: set[str] = set()
+    for name in set().union(*writers[:failed]) if failed else set():
         if name in in_place:
             continue
-        last = max(k for k, names in enumerate(writers) if name in names)
-        if last in skipped and last not in owed:
-            owed.add(last)
-            pending.append((last, _read_names(body[last])))
-    while pending:
-        at, reads = pending.pop()
-        for name in reads:
-            earlier = [k for k in range(at) if name in writers[k]]
-            if earlier and earlier[-1] in skipped and earlier[-1] not in owed:
-                owed.add(earlier[-1])
-                pending.append((earlier[-1], _read_names(body[earlier[-1]])))
-    return sorted(owed)
+        last = last_writer(name, failed)
+        later = later_writers(name)
+        if not later or last not in planned:
+            continue  # it ran in this run, or the plan's version is this one
+        if last in skipped or any(k in planned for k in later):
+            wrong.add(name)
+    if not wrong:
+        return [], set()
+
+    def held_at_failure(name: str) -> int | None | str:
+        """The statement whose version *name* holds when the cell raised:
+        an index, ``None`` for the value from before the cell, or ``"?"``."""
+        if name in wrong:
+            return "?"
+        last = last_writer(name, failed)
+        if last is not None:
+            return last
+        return "?" if any(k in restored for k in later_writers(name)) else None
+
+    needed = {last_writer(name, failed) for name in wrong}
+    while True:
+        size = len(needed)
+        for step in sorted(needed):
+            for name in writers[step]:
+                if name in in_place:
+                    return [], wrong
+                needed.add(last_writer(name, failed))
+            for name in _read_names(body[step]):
+                producer = last_writer(name, step)
+                if producer in needed:
+                    continue
+                if held_at_failure(name) != producer or any(k < step and name in writers[k] for k in needed):
+                    if producer is None:
+                        return [], wrong  # the value from before the cell is gone
+                    needed.add(producer)
+        if len(needed) == size:
+            break
+    if any(k is None or is_control_structure(body[k]) for k in needed):
+        return [], wrong
+    return sorted(needed), set()
 
 
 @dataclass
@@ -505,6 +617,7 @@ class CellExecutor:
             digest = exact_source_digest(raw_cell)
             state.executed_cell_source_hashes.add(digest)
             state.failed_cells.pop(digest, None)
+            state.failed_cell_names.pop(digest, None)
             changed, pre, post = self._statement_processor.cell_rng_observation()
             self.record_cell_rng(raw_cell, changed, pre, post, self._statement_processor.cell_rng_lineage())
         except (AttributeError, TypeError):  # pragma: no cover - defensive
@@ -855,8 +968,12 @@ class CellExecutor:
         jump_runs = self._jump_runs(tree.body, raw_cell)
         #: Statements a restore of a later version made unnecessary.
         planned: dict[int, ProcessResult] = {}
-        #: Statements the plan skipped without a restore, with what to run them again.
-        skipped: dict[int, tuple[str, str | None, str | None, int]] = {}
+        #: Statements the plan skipped without a restore.
+        skipped: set[int] = set()
+        #: Statements the plan restored.
+        restored: set[int] = set()
+        #: Each statement reached, with what to run it again.
+        texts_by_index: dict[int, tuple[str, str | None, str | None, int]] = {}
 
         for i, node in enumerate(tree.body):
             if i in jump_runs:
@@ -873,11 +990,16 @@ class CellExecutor:
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1
+            texts_by_index[i] = (stmt_code, stmt_display, stmt_exec_source, occ)
             if i in planned:
                 metric = planned.pop(i)
                 all_metrics.append(metric)
-                if metric.get("status") is CacheStatus.SKIPPED:
-                    skipped[i] = (stmt_code, stmt_display, stmt_exec_source, occ)
+                # What the statement showed when it ran, as a hit shows it.
+                replay_outputs(metric.pop("stdout", ""), metric.pop("stderr", ""))
+                buffered_result_outputs = self._flush_rich_outputs(
+                    metric.pop("rich_outputs", None) or [], i == len(tree.body) - 1, buffered_result_outputs
+                )
+                (skipped if metric.get("status") is CacheStatus.SKIPPED else restored).add(i)
                 continue
             annotation = get_statement_annotations(raw_cell, node)
             is_last = i == len(tree.body) - 1
@@ -920,21 +1042,30 @@ class CellExecutor:
                 )
             except BaseException:
                 # What follows never ran; the upstream check must not credit it.
-                self.tracking_state.failed_cells[exact_source_digest(raw_cell)] = i
+                digest = exact_source_digest(raw_cell)
+                self.tracking_state.failed_cells[digest] = i
                 # What the statement changed before it raised was recorded
                 # against no lineage, so each name it may have changed no longer
-                # matches the run that made it: a re-run must rebuild it.
-                for name in _changed_by_a_failed_step(node):
+                # matches the run that made it: a re-run must rebuild it, and
+                # a cell below keeps it as the failed run left it.
+                left = _changed_by_a_failed_step(node)
+                for name in left:
                     self.tracking_state.lineage.discard(name)
-                # A statement the plan skipped as overwritten later in the cell
-                # was overwritten by one that never completed: its names stay as
-                # a plain run leaves them.
-                for owed in _owed_by_skips(tree.body, set(skipped), i):
-                    code, display, exec_source, occurrence = skipped[owed]
+                self.tracking_state.failed_cell_names[digest] = frozenset(left)
+                # The plan skipped or restored statements by the version the
+                # whole cell ends with; a name a statement at or after this one
+                # writes holds a version a plain run never reached here.
+                owed, lost = _owed_by_skips(tree.body, skipped, i, restored)
+                if any(k not in texts_by_index for k in owed):
+                    owed, lost = [], lost | set().union(*(_stored_names(tree.body[k]) for k in owed))
+                if lost:
+                    self._drop_what_a_failed_run_left(lost, i)
+                for k in owed:
+                    code, display, exec_source, occurrence = texts_by_index[k]
                     yield from self._statement_steps(
                         cell,
                         code,
-                        annotation=get_statement_annotations(raw_cell, tree.body[owed]),
+                        annotation=get_statement_annotations(raw_cell, tree.body[k]),
                         display_code=display,
                         exec_source=exec_source,
                         occurrence_index=occurrence,
@@ -946,6 +1077,22 @@ class CellExecutor:
             badge_render_time += render_time
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
+
+    def _drop_what_a_failed_run_left(self, names: set[str], failed: int) -> None:
+        """Forget the lineage of *names*, which the cell left in a state no
+        run of it produces (``NOTEBOOK-FAILED-CELL``): the next cell that
+        reads one builds it again instead of taking it as current."""
+        for name in names:
+            self.tracking_state.lineage.discard(name)
+        listed = ", ".join(f"'{n}'" for n in sorted(names))
+        what = (
+            f"statement {failed + 1} of this cell raised, and cash could not put {listed} back the way "
+            "a plain run of the cell leaves them there: they hold the versions later statements "
+            "of the cell give them. A cell below that reads them rebuilds them first."
+        )
+        fix = "fix the error and re-run this cell."
+        log_diagnostic(logger, "NOTEBOOK-FAILED-CELL", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-FAILED-CELL", what, fix, location=("<cash>", failed + 1))
 
     def _jump_runs(self, body: list[ast.stmt], raw_cell: str) -> dict[int, int]:
         """The runs of the cell a restore may jump (see ``jumpable_runs``);

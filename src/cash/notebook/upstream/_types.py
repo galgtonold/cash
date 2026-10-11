@@ -110,6 +110,8 @@ class SimulationCacheEntry(NamedTuple):
     magic_generation: int | None = None
     """``TrackingState.magic_generation`` when a cell holding magics was
     simulated, whose lineages come from what they last left; None for others."""
+    vars_left_by_failed_runs: dict[str, int] | None = None
+    """Snapshot of ``SimulationResult.vars_left_by_failed_runs`` after this cell."""
 
 
 @dataclass
@@ -243,6 +245,12 @@ class SimulationResult:
     vars_derived_from_loops: set[str] = field(default_factory=set)
     """Names built, directly or not, from a trusted loop's output."""
 
+    vars_left_by_failed_runs: dict[str, int] = field(default_factory=dict)
+    """Names a cell that raised part way left changed (``TrackingState.
+    failed_cell_names``), and the names built from them since, each with the
+    index of that cell: no run of the cells makes what they hold, so they are
+    kept as they are, never rebuilt or restored."""
+
 
 @dataclass
 class ClassificationResult:
@@ -266,6 +274,10 @@ class ClassificationResult:
     """Names a magic last bound or changed that do not hold what it would
     leave now, or are gone: kept as they are, since cash does not re-run a
     magic, and warned about (``NOTEBOOK-MAGIC-STALE``)."""
+    failed_run_vars: set[str] = field(default_factory=set)
+    """Broken names a cell that raised part way left, or built from them
+    (``SimulationResult.vars_left_by_failed_runs``): kept as they are, and
+    warned about (``NOTEBOOK-FAILED-CELL``)."""
 
 
 class ReexecutionPlan(NamedTuple):
