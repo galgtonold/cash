@@ -1419,4 +1419,3 @@ def _receiver_root(node: ast.AST) -> str | None:
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return _receiver_root(node.func.value)
     return None
-

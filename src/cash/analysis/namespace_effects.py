@@ -1273,4 +1273,3 @@ def call_only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool
     unshadowed builtin or a library function known to (``len(xs)``,
     ``np.mean(a)``), on pandas, numpy or builtin values."""
     return _only_reads(call, arg_names, user_ns)
-
