@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.handed_callables import handed_callables
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...source_norm import exact_source_digest
 from ...tracking.randomness import (
@@ -383,8 +384,10 @@ class ControlStructureProcessor:
         * no environment read and no data of the user's modules read, in it
           or in a function it calls: a statement folds the value into its key
           and lineage, which a trusted record would skip;
-        * no global mutated in place by a function it calls, and no RNG
-          object or iterator read, by it or by a function it calls
+        * no global or object mutated in place by a function it calls or
+          hands to a call (``s.apply(tracker.record)``), every callable it
+          hands readable, and no RNG object or iterator read, by it or by a
+          function it calls
           (``next(ids)`` on a global ``itertools.count``): effects the entry
           lineages do not show.
 
@@ -408,10 +411,16 @@ class ControlStructureProcessor:
             if is_stream(value) or rng_carrier_kind(value) is not None:
                 return None  # drawn from by a callee: where it stands is not in the key
         resolve = self.statement_processor.resolve_live_function_source
-        for name in set(reads) | callee_names:
-            if not isinstance(user_ns.get(name), types.FunctionType):
-                continue
-            source = resolve(name)
+        tree = ast.parse(code)
+        # What the loop hands to a call (``s.apply(tracker.record)``,
+        # ``ops['dbl']``, ``helpers.record``) runs as much as what it calls.
+        handed = handed_callables(tree, user_ns)
+        if handed.unreadable or handed.receivers:
+            return None  # a callable it cannot read, or one that changes an object in place
+        sources = [
+            resolve(name) for name in set(reads) | callee_names if isinstance(user_ns.get(name), types.FunctionType)
+        ]
+        for source in [*sources, *handed.sources]:
             if (
                 source is None
                 or CodeAnalyzer.scan_function_bodies_for_forbidden_functions(source, user_ns)
@@ -426,7 +435,7 @@ class ControlStructureProcessor:
             or reached_user_code(code, user_ns).data
         ):
             return None
-        if callee_global_mutations(ast.parse(code), resolve):
+        if callee_global_mutations(tree, resolve, extra_sources=handed.sources):
             return None
         return {name: before.get(name, "ABSENT") for name in sorted(callee_names)}
 

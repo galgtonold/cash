@@ -226,10 +226,48 @@ def test_the_loops_own_variables_are_rebuilt_when_a_cell_reads_them(nb_runner, _
             "has a helper that mutates a global",
             "parts = []\nfor f in files:\n    d = parse(f)\n    note(f)\n    parts.append(d)",
         ),
+        (
+            "hands such a helper from a dict to a call",
+            "parts = []\nfor f in files:\n    d = parse(f)\n    d['v'].apply(OPS['note'])\n    parts.append(d)",
+        ),
+        (
+            "hands a method that changes its object to a call",
+            "parts = []\nfor f in files:\n    d = parse(f)\n    d['v'].apply(tracker.record)\n    parts.append(d)",
+        ),
     ],
 )
 def test_a_loop_that_did_more_than_build_its_outputs_is_not_recorded(nb_runner, _teed, why, loop):
-    setup = SETUP + "\nimport random\nSEEN = []\ndef note(f):\n    SEEN.append(f)"
+    setup = SETUP + (
+        "\nimport random\nSEEN = []\ndef note(f):\n    SEEN.append(f)\nOPS = {'note': note}\n"
+        "class Tracker:\n    def __init__(self):\n        self.seen = []\n"
+        "    def record(self, v):\n        self.seen.append(v)\n        return v\ntracker = Tracker()"
+    )
     _run_all(nb_runner, ["import cash\n%cash_on", setup, CLEAN, loop + "\nraw = pd.concat(parts)", SUMMARY])
 
     assert nb_runner.peek(_record_expr(loop)) == "None", f"a loop that {why} was recorded"
+
+
+#: A function of the user's own module that appends to the module's state.
+TALLY = "SEEN = []\n\n\ndef record(v):\n    SEEN.append(v)\n    return v\n"
+HANDS = (
+    "parts = []\nfor f in files:\n    d = parse(f)\n    d['v'].apply(tally.record)\n    parts.append(d)\n"
+    "raw = pd.concat(parts, ignore_index=True)"
+)
+
+
+def test_a_loop_handing_a_module_function_that_appends_to_module_state_runs_again(nb_runner, _teed):
+    """``d['v'].apply(tally.record)`` runs ``tally.record`` on every value, and
+    every call appends to ``tally.SEEN``. Trusted after a restart, the loop's
+    record restored ``raw`` and skipped the loop, so a cell reading both saw
+    ``raw`` whole and ``tally.SEEN`` empty."""
+    (Path(nb_runner.work_dir) / "tally.py").write_text(TALLY, encoding="utf-8")
+    reader = "print('R', len(raw), len(tally.SEEN))"
+    _run_all(nb_runner, ["import cash\n%cash_on", SETUP + "\nimport tally", CLEAN, HANDS, reader])
+    want = f"R {50 * N} {50 * N}"
+    assert want in nb_runner.get_output(5), nb_runner.get_output(5)
+    assert nb_runner.peek(_record_expr(HANDS)) == "None", "the loop's outcome was recorded"
+
+    _restart_and_run(nb_runner, 5)
+
+    out = nb_runner.get_output(5)
+    assert want in out, out
