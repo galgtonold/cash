@@ -20,6 +20,7 @@ import warnings
 import pytest
 
 from cash import Cash
+from cash.analysis.purity_analyzer import PurityAnalyzer
 
 
 @pytest.fixture()
@@ -265,16 +266,24 @@ def test_end_to_end_editing_reached_class_recomputes(tmp_path, work):
     assert hit is False
 
 
-def test_end_to_end_does_not_warn_about_the_reached_class(tmp_path, work):
+def test_end_to_end_does_not_warn_about_the_reached_class(tmp_path, work, monkeypatch):
     """Following B must not report its ``self.value = v`` as impurity.
 
-    A class is followed for the cache key, not audited. Reporting every
-    ordinary __init__ assignment as a scope mutation would bury the real
-    findings under noise.
+    A class is followed for the cache key, not audited: ``compute`` names A
+    and runs none of its code, so B, reached only through A's body, is
+    keyed and not audited. Reporting every ordinary __init__ assignment as
+    a scope mutation would bury the real findings under noise.
+
+    A call that RUNS ``A()`` runs its factory, which runs ``B.__init__``:
+    that is audited as ``B(10)`` written in ``compute`` is.
     """
+    monkeypatch.setattr(sys.modules[__name__], "MODULE", MODULE.replace("return A()", "return A.__name__"))
     cash_instance = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
     with warnings.catch_warnings(record=True) as log:
         warnings.simplefilter("always")
-        _run(work, cash_instance, "")
+        mod = _load_module(work, cash_instance, "")
+        mod.compute(1)
     impurity = [w for w in log if "scope_mutation" in str(w.message) or "side effects" in str(w.message)]
     assert not impurity, f"unexpected impurity warning: {[str(w.message) for w in impurity]}"
+    helpers = PurityAnalyzer().analyze(mod.compute.__wrapped__).helper_source_hashes
+    assert "usermod.B" in helpers, f"B was not followed: {sorted(helpers)}"

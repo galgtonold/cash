@@ -253,11 +253,11 @@ class HelperWalk:
         what it reaches."""
         func = entry.func
         try:
-            src = own_source(func)
+            raw_src = own_source(func)
         except SOURCE_RETRIEVAL_ERRORS:
             self._walk_without_source(entry, qualname)
             return
-        src = textwrap.dedent(src)
+        src = textwrap.dedent(raw_src)
 
         # Hash the NORMALIZED source for cache-key invalidation of helpers,
         # so a comment or reformat in a helper does not invalidate its
@@ -283,7 +283,7 @@ class HelperWalk:
             # audited as the function it is (`_lambda_as_def`), so
             # `STEPS = [lambda x: x + os.environ["MODE"]]` keys MODE as
             # the same read in a def does.
-            func_def = _lambda_as_def(func, tree)
+            func_def = _lambda_as_def(func, tree, _dedent_width(raw_src, src))
             if func_def is not None:
                 self._queue_bytecode_refs(entry)
         if func_def is None:
@@ -829,17 +829,26 @@ def _is_lambda(func: Any) -> bool:
     return isinstance(func, types.FunctionType) and func.__code__.co_name == "<lambda>"
 
 
-def _lambda_as_def(func: types.FunctionType, tree: ast.AST) -> ast.FunctionDef | None:
-    """The ``lambda`` in *tree* (the statement *func*'s source is) that is
-    *func*, as the ``def`` it stands for: its arguments, and ``return`` its
-    body. Found by where its code's instructions sit; None when no lambda
-    in the statement holds them all, or when more than one could be it."""
+def _dedent_width(raw: str, dedented: str) -> int:
+    """How many columns `textwrap.dedent` took off each line of *raw*."""
+    for before, after in zip(raw.splitlines(), dedented.splitlines()):
+        if after.strip():
+            return len(before) - len(after)
+    return 0
+
+
+def _lambda_as_def(func: types.FunctionType, tree: ast.AST, dedented_by: int = 0) -> ast.FunctionDef | None:
+    """The ``lambda`` in *tree* (the statement *func*'s source is, with
+    *dedented_by* columns taken off each line) that is *func*, as the
+    ``def`` it stands for: its arguments, and ``return`` its body. Found by
+    where its code's instructions sit; None when no lambda in the statement
+    holds them all, or when more than one could be it."""
     code = func.__code__
     try:
         first = getsourcelines(func)[1]
     except SOURCE_RETRIEVAL_ERRORS:
         return None
-    best = _lambda_node(code, tree, first - 1)
+    best = _lambda_node(code, tree, first - 1, dedented_by)
     if best is None:
         return None
     func_def = ast.FunctionDef(
@@ -854,9 +863,10 @@ def _lambda_as_def(func: types.FunctionType, tree: ast.AST) -> ast.FunctionDef |
     return ast.fix_missing_locations(ast.copy_location(func_def, best))
 
 
-def _lambda_node(code: types.CodeType, tree: ast.AST, offset: int) -> ast.Lambda | None:
+def _lambda_node(code: types.CodeType, tree: ast.AST, offset: int, dedented_by: int) -> ast.Lambda | None:
     """The ``lambda`` node in *tree* whose code is *code*; *offset* is the
-    line *tree*'s first line has in the file.
+    line *tree*'s first line has in the file, *dedented_by* the columns
+    taken off its lines (a lambda in a class or function body).
 
     Python 3.11+ records each instruction's column (``co_positions``): the
     innermost lambda that holds them all is the one. Python 3.10 records
@@ -872,7 +882,7 @@ def _lambda_node(code: types.CodeType, tree: ast.AST, offset: int) -> ast.Lambda
     ]
     if hasattr(code, "co_positions"):
         spots = [
-            (line - offset, col)
+            (line - offset, col - dedented_by)
             for line, _, col, end_col in code.co_positions()
             # Not the RESUME the code starts with, which sits at column 0.
             if line is not None and col is not None and end_col is not None and end_col > col
