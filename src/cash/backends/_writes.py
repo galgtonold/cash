@@ -129,6 +129,9 @@ _FIRST_WRITE_WAIT_S = 0.5
 #: A write at least this big times the per-byte cost, a smaller one the
 #: per-write cost.
 _TIMED_PER_BYTE_FROM = 1024 * 1024
+#: The least writing `PendingWrites.backlog_seconds` says is left while a
+#: write is unfinished, however long it has already run.
+_UNFINISHED_S = 0.001
 
 #: Audit events of this process starting another. The child may read the
 #: cache directory, so every write already queued lands first. (``os.exec``
@@ -518,7 +521,9 @@ class PendingWrites:
         total = sum(estimate(n) for _, n, _ in live)
         if running is not None:
             total -= min(elapsed, estimate(running[1]))
-        return max(total, 0.0)
+        # A write past its estimate is still not done: some writing is left
+        # while one is queued, so waiting down to none waits for them all.
+        return max(total, _UNFINISHED_S)
 
     def wait_for_backlog(self, max_seconds: float, deadline: float | None = None) -> bool:
         """Wait until at most *max_seconds* of writing is left

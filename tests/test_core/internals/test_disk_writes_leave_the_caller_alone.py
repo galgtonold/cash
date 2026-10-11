@@ -158,6 +158,22 @@ def test_wait_for_backlog_leaves_about_that_much_writing(monkeypatch):
     queue.shutdown(wait=True, timeout=5)
 
 
+def test_a_write_past_its_estimate_is_still_left():
+    """A write that ran longer than the last one took is not done: the
+    backlog said 0 s were left, so ``wait_for_backlog(0.0)`` returned with
+    it still running (macOS CI, where a 0.2 s sleep overran the one before)."""
+    queue = _writes.PendingWrites()
+    queue.submit_sized("quick", 100, True, lambda: None).result(5)  # timed: next to no time a write
+    gate = threading.Event()
+    queue.submit_sized("slow", 100, True, gate.wait, 10)
+    time.sleep(0.05)  # how long it runs does not matter: it is not done
+    assert queue.backlog_seconds() > 0, "an unfinished write was counted as no writing left"
+    threading.Timer(0.2, gate.set).start()
+    assert queue.wait_for_backlog(0.0)
+    assert queue.pending_count() == 0
+    queue.shutdown(wait=True, timeout=5)
+
+
 def test_a_private_write_counts_toward_the_backlog_not_the_memory_bound(monkeypatch):
     monkeypatch.setattr(_writes, "MAX_QUEUED_BYTES", 100)
     queue = _writes.PendingWrites()
