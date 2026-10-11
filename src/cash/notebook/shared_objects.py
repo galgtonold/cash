@@ -588,7 +588,8 @@ def referring_names(
 
 @dataclasses.dataclass
 class GaveUp:
-    """What `share_group` still found when it gave up.
+    """What `share_group` found: the links of a check that succeeded, or what
+    it still found when it gave up.
 
     *names* are the notebook variables found holding an object of the
     outputs, or held in one, beside the holder that is not a variable (a
@@ -641,7 +642,9 @@ def share_group(
     the outputs still shared and *holders* is empty. *gave_up*, when given,
     then gets the variables found holding the outputs' objects all the same
     (`GaveUp`): the search goes past such a holder instead of stopping at
-    it, without climbing through it.
+    it, without climbing through it. When the check succeeds, *gave_up*
+    gets each round's links all the same: which names were shared, and the
+    variables found holding them.
     """
     group = {name: values[name] for name in names if values.get(name) is not None}
     bindings = [values, user_ns]
@@ -657,6 +660,9 @@ def share_group(
     for _round in range(_MAX_ROUNDS):
         shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial)
         if not shared:
+            if gave_up is not None:
+                for owners, holders in links:
+                    gave_up.add(owners, holders)
             return {name: group[name] for name in joined}, set()
         if found:
             links.append((shared, found))

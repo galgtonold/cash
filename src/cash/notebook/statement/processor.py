@@ -1630,7 +1630,9 @@ class StatementProcessor:
                         names, captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=gave_up
                     )
                 if not shared:
-                    return [(outputs, set(found))], True
+                    # Each name with the holders found for it, not every
+                    # output with every holder: a block checks many names.
+                    return list(gave_up.links), True
                 # A holder that is not a variable (a library's cache, a
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
