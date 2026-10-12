@@ -38,3 +38,17 @@ def test_an_unchanged_global_keeps_the_lineage(cash_magics):
             run_cash_cell(cash_magics, cell, cells=cells)
         lineages.append(cash_magics.tracking_state.variable_lineage["res"])
     assert lineages[0] == lineages[1]
+
+
+def test_a_global_read_in_a_generator_expression_is_in_the_key(cash_magics):
+    """A generator expression, a lambda or (before Python 3.12) a
+    comprehension is code of its own inside the function; the globals it
+    reads were left out of the key, and ``y`` was served from before the
+    change."""
+    cash_magics.cash_persist("on")
+    run_cash_cell(cash_magics, "K = 2\ndef scaled(xs):\n    return sum(x * K for x in xs)")
+    run_cash_cell(cash_magics, "y = scaled([1, 2])")
+    assert cash_magics.shell.user_ns["y"] == 6
+    run_cash_cell(cash_magics, "K = 3")
+    run_cash_cell(cash_magics, "y = scaled([1, 2])")
+    assert cash_magics.shell.user_ns["y"] == 9
