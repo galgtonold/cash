@@ -662,7 +662,7 @@ Two observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place, or it called a
 `unittest.mock` object.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @f775971a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941 -->
 A call that **hands the function one of your functions that changes state**
 when it is called runs uncached, every time, as plain Python runs it: in
 `run(record, 3)` where `record` appends to a global list, a hit would skip the
