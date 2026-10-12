@@ -116,6 +116,39 @@ class StatementReplay:
                     continue
         return found
 
+    @staticmethod
+    def statement_exec_sources(notebook_cells: list[str] | None) -> dict[str, str]:
+        """``{statement code: the text to run}`` for each ``def``/``class``
+        whose body carries a ``# @cash:`` waiver, across the notebook.
+
+        A repair runs a statement from its unparsed code, which has no
+        comments. A helper defined that way lost the ``# @cash:assume-safe``
+        on its counter or log line, so after a restart every statement
+        calling it ran every time, as if it wrote files. A direct run
+        compiles the user's own text for such a function
+        (``exec_source_for_node``); the repair does the same.
+        """
+        from ..ipython.statement_source import exec_source_for_node
+
+        found: dict[str, str] = {}
+        for cell in notebook_cells or ():
+            if "@cash:" not in cell:
+                continue
+            tree = parse_cell_source(cell)
+            if tree is None:
+                continue
+            clean = clean_cell_source(cell)
+            for node in tree.body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                try:
+                    source = exec_source_for_node(clean, node, None)
+                    if source is not None:
+                        found.setdefault(statement_code(node, clean), source)
+                except (ValueError, TypeError, RecursionError):  # never breaks a repair
+                    continue
+        return found
+
     def sum_execution_times(self, executed_metrics: list) -> float:
         """Sum ``total_time`` from a list of metric dicts."""
         total = 0.0
@@ -134,11 +167,14 @@ class StatementReplay:
         control_structure_callback: Callable[..., Any] | None = None,
         annotations: dict[str, Any] | None = None,
         notebook_cells: list[str] | None = None,
+        exec_sources: dict[str, str] | None = None,
     ) -> list[ProcessResult]:
         """Re-execute a list of statements and return their metrics.
 
         *annotations* maps a statement's code to the ``# @cash:`` directives
-        written on it in its cell (see :meth:`statement_directives`).
+        written on it in its cell (see :meth:`statement_directives`), and
+        *exec_sources* a waived ``def``/``class`` to the text it runs as
+        (see :meth:`statement_exec_sources`).
         """
         executed_metrics = []
         total_upstream_steps = len(statements)
@@ -182,12 +218,14 @@ class StatementReplay:
                     # its fills) put that line into an unrelated cell's output.
                     # A failure still
                     # surfaces: the processor reports it in ``result['error']``.
+                    extra: dict[str, Any] = {}
                     stmt_annotation = (annotations or {}).get(stmt_code)
-                    result = (
-                        process_callback(stmt_code, global_ttl, silent=True, annotation=stmt_annotation)
-                        if stmt_annotation is not None
-                        else process_callback(stmt_code, global_ttl, silent=True)
-                    )
+                    if stmt_annotation is not None:
+                        extra["annotation"] = stmt_annotation
+                    exec_source = (exec_sources or {}).get(stmt_code)
+                    if exec_source is not None:
+                        extra["exec_source"] = exec_source
+                    result = process_callback(stmt_code, global_ttl, silent=True, **extra)
                     logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
                     if result:
                         result["is_upstream"] = True  # Mark as upstream so badge categorizes correctly

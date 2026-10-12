@@ -693,6 +693,7 @@ class UpstreamChecker:
                     restored_info=restored_info,
                     control_structure_callback=control_structure_callback,
                     annotations=self.replay.statement_directives(notebook_cells),
+                    exec_sources=self.replay.statement_exec_sources(notebook_cells),
                     notebook_cells=notebook_cells,
                 )
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
