@@ -54,8 +54,7 @@ from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on
 __all__ = [
     "statement_calls_user_writer",
     "statement_user_writer_call",
-    "statement_waives_through_user_code",
-    "user_callee_waiving",
+    "code_waived_lines",
     "user_callee_writing_files",
     "resolve_literal_path",
     "statement_written_paths",
@@ -151,45 +150,34 @@ def statement_user_writer_call(
     return None
 
 
-def statement_waives_through_user_code(
-    code: str,
-    namespace: "Mapping[str, Any] | None",
-    tree: "ast.Module | None" = None,
-) -> bool:
-    """Whether a call in *code* reaches a user function that waives some of
-    its lines (``# @cash:assume-safe`` on a line or its ``def``, ``with
-    cash.assume_safe():``). Followed as :func:`statement_user_writer_call`
-    follows a call.
-
-    What a statement was seen writing as it ran carries no line, so a
-    waiver anywhere in what it calls is taken for the write: the user said
-    a hit may skip it."""
-    if not namespace or "(" not in code:
-        return False
-    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
-    for node in calls:
-        values = [resolve_callee(node.func, namespace)]
-        if node.args or node.keywords:
-            values.extend(_function_called(v) for v in handed_callable_values(node, namespace))
-        if any(user_callee_waiving(value) for value in values):
-            return True
-    return False
+#: A user function's file and code object -> the lines of its body waived by
+#: ``# @cash:assume-safe`` or ``with cash.assume_safe():``, numbered as its
+#: frames number them, and whether the waiver is on its ``def`` line.
+_waived_lines_cache: LruMemo[tuple[str, types.CodeType], tuple[frozenset[int], bool]] = LruMemo(USER_CALLEES)
 
 
-def user_callee_waiving(func: Any) -> bool:
-    """Whether calling *func* reaches a user function that waives some of its
-    lines, or one the user promised ``@pure``: see
-    :func:`statement_waives_through_user_code`."""
-    plain = inspect.unwrap(func) if callable(func) else func
-    if isinstance(plain, types.FunctionType) and is_pure(plain):
-        return True
-    return _first_user_callee(func, _waives, "waives an effect") is not None
-
-
-def _waives(
-    func: types.FunctionType, replaces: bool, appends_itself: bool, waives: bool, callees: tuple[ast.expr, ...]
-) -> bool:
-    return waives
+def code_waived_lines(code_obj: types.CodeType) -> tuple[frozenset[int], bool]:
+    """``(waived lines, whole body)`` of the user function running *code_obj*:
+    the lines a waiver covers, in the file's numbering (``frame.f_lineno``),
+    and whether the waiver is on its ``def`` line. Empty for code cash does
+    not read (no source, not the user's)."""
+    memo_key = (code_obj.co_filename, code_obj)
+    known = _waived_lines_cache.get(memo_key)
+    if known is not None:
+        return known
+    verdict: tuple[frozenset[int], bool] = (frozenset(), False)
+    if is_user_code_file(code_obj.co_filename):
+        try:
+            source = textwrap.dedent(own_source(code_obj))
+            waived, whole = audited_lines(source) if "@cash:" in source else (frozenset(), False)
+            if "with" in source:
+                waived = waived | assume_safe_block_lines(ast.parse(source))
+            first = code_obj.co_firstlineno - 1
+            verdict = (frozenset(first + line for line in waived), whole)
+        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
+            pass
+    _waived_lines_cache[memo_key] = verdict
+    return verdict
 
 
 def statement_handed_callables(code: str, namespace: "Mapping[str, Any] | None") -> list[Any]:

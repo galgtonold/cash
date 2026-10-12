@@ -198,11 +198,16 @@ cash spots side effects from the statement's source, without running it. So:
 - A statement seen writing a file as it ran is not stored either, whichever
   library wrote it (`np.savetxt`, `np.savez`, `joblib.dump`,
   `gzip.open(p, "wt")`, `os.open`), and neither is a cached call inside it,
-  so it runs every time. A file it only appended to is left to the check of
-  the source above, and so is one it removed again before it finished (a
-  temporary file). A waiver anywhere in a function it calls
-  (`# @cash:assume-safe`, `with cash.assume_safe():`) or `@pure` keeps it
-  cacheable.
+  so it runs every time. That covers a folder moved into place
+  (`tmp.rename(dest)`) and an append your own code makes
+  (`open(p, mode)` in a helper); an append made inside a library (a log
+  handler) is left to the check of the source above, and so is a file
+  removed again before the statement finished (a temporary file). A waiver
+  on the write's way keeps it cacheable: `# @cash:assume-safe` on the line
+  that writes or on a line calling the writer (or on its `def`),
+  `with cash.assume_safe():` around either, or `@pure` on the function that
+  writes. A waiver on another line, or `@pure` on a function that only made
+  an argument, does not.
 
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `time.perf_counter_ns()`,

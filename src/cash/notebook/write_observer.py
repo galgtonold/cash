@@ -21,12 +21,15 @@ and is re-fired as before.
 from __future__ import annotations
 
 import contextvars
+import inspect
 import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
+from cash.purity import is_pure
 from cash.tracking import io_watch
 
 __all__ = ["WrittenPaths", "kept_writes", "observe_writes"]
@@ -36,12 +39,18 @@ _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
 class WrittenPaths(set):
     """The absolute paths a block wrote; :attr:`appended` holds those it
-    only ever opened to append to."""
+    only ever opened to append to, :attr:`waived` those it only wrote from
+    a line the user waived (``_write_waived``)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.appended: set[str] = set()
         self._replaced: set[str] = set()
+        self._unwaived: set[str] = set()
+
+    @property
+    def waived(self) -> frozenset[str]:
+        return frozenset(self - self._unwaived)
 
 
 #: The collectors of the blocks being observed, innermost last. A statement
@@ -53,8 +62,11 @@ def _record(sinks: tuple[WrittenPaths, ...], path: object, appends: bool = False
     if path is None or isinstance(path, int):
         return  # a descriptor names no file
     resolved = os.path.abspath(os.fsdecode(os.fspath(path)))
+    waived = _write_waived()
     for sink in sinks:
         sink.add(resolved)
+        if not waived:
+            sink._unwaived.add(resolved)
         if not appends:
             sink._replaced.add(resolved)
             sink.appended.discard(resolved)
@@ -89,6 +101,27 @@ def _appended_by_user_code() -> bool:
     while frame is not None and _passes_through(frame):
         frame = frame.f_back
     return frame is not None and is_user_code_file(frame.f_code.co_filename)
+
+
+def _write_waived() -> bool:
+    """Did the user waive the write being audited? Any function of theirs on
+    its way -- the one that opened the file, or one calling it from a line
+    -- waives it with ``# @cash:assume-safe`` on that line (or its ``def``),
+    a ``with cash.assume_safe():`` around it, or ``@cash.pure`` on itself.
+    A waiver elsewhere (a print helper's line, a ``@pure`` function that
+    only made an argument) is not the user's word on this write."""
+    frame = sys._getframe(1)  # cash's own frames are no user code: walked past
+    while frame is not None:
+        code = frame.f_code
+        if code.co_name != "<module>" and is_user_code_file(code.co_filename) and not _passes_through(frame):
+            func = frame.f_globals.get(code.co_name)
+            if func is not None and is_pure(func) and getattr(inspect.unwrap(func), "__code__", None) is code:
+                return True
+            lines, whole = code_waived_lines(code)
+            if whole or frame.f_lineno in lines:
+                return True
+        frame = frame.f_back
+    return False
 
 
 def _names_a_folder(path: object) -> bool:
@@ -142,7 +175,9 @@ def observe_writes() -> Iterator[WrittenPaths]:
         _active.reset(token)
 
 
-def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = None, appended=frozenset()) -> list[str]:
+def kept_writes(
+    written: "set[str] | frozenset[str]", storage_root: object = None, appended=frozenset(), waived=frozenset()
+) -> list[str]:
     """The paths of *written* still there, outside cash's own storage
     (*storage_root*) and not in *appended*, sorted. A file written and
     removed again within the block (a temporary file) left nothing a cache
@@ -151,7 +186,8 @@ def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = Non
     A file only appended to by a library is left to the static writer check,
     which reads ``to_csv(mode='a')`` in the user's code: an append seen in a
     library's code is a log handler's, as often as not. One the user's own
-    code opened (``open(p, mode)`` in a helper) is never in *appended*."""
+    code opened (``open(p, mode)`` in a helper) is never in *appended*.
+    Nor is a file the user said a hit may skip (*waived*, `WrittenPaths.waived`)."""
     if not written:
         return []
     root = None
@@ -161,6 +197,7 @@ def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = Non
         p
         for p in written
         if p not in appended
+        and p not in waived
         and not (root and os.path.normcase(p).startswith(root))
         # A folder is kept: one moved into place (``tmp.rename(dest)``) is
         # what the block published.

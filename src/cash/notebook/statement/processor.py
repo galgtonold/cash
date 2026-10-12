@@ -97,7 +97,7 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import statement_calls_user_writer, statement_waives_through_user_code
+from ...analysis.namespace_effects import statement_calls_user_writer
 from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
 from ...tracking.file_tracker import FileAccessTracker
@@ -1060,6 +1060,7 @@ class StatementProcessor:
                 execution.accessed_files = file_tracker.get_accessed_files() | run.header_files
                 execution.written_paths = frozenset(written_paths)
                 execution.appended_paths = frozenset(written_paths.appended)
+                execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
                 execution.probes = probe_answers(file_tracker)
@@ -1108,19 +1109,20 @@ class StatementProcessor:
         write: the folder cleared at the top stayed empty, and a staging file
         written twice was read with its later content. A file written and
         removed again within the statement is no effect a hit skips.
-        ``# @cash:assume-safe`` on the statement, or a waiver in a function
-        it calls, keeps it cacheable."""
+        ``# @cash:assume-safe`` on the statement, or a waiver on the write's
+        way in a function it calls (`WrittenPaths.waived`), keeps it
+        cacheable; a waiver on another line does not."""
         backend = self.cash_instance.backend if self.cash_instance else None
-        written = kept_writes(execution.written_paths, getattr(backend, "local_dir", None), execution.appended_paths)
+        written = kept_writes(
+            execution.written_paths,
+            getattr(backend, "local_dir", None),
+            execution.appended_paths,
+            execution.waived_paths,
+        )
         if not written:
             return None
         if getattr(run.annotation, "assume_safe", False):
             return None
-        try:
-            if statement_waives_through_user_code(run.code, self.shell.user_ns, run.tree):
-                return None
-        except Exception:
-            logger.debug("%s could not read the waivers of %r", _LOG_PROCESSOR, run.code[:80], exc_info=True)
         more = f" and {len(written) - 1} more" if len(written) > 1 else ""
         return (
             f"Wrote {written[0]}{more} as it ran: a cache hit would skip the write, "

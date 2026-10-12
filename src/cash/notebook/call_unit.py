@@ -42,7 +42,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.handed_callables import hands_a_state_changing_callable
-from cash.analysis.namespace_effects import user_callee_using_pyplot, user_callee_waiving
+from cash.analysis.namespace_effects import user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -993,15 +993,11 @@ class CallUnit:
         """Whether the call just run wrote a file of the user's that is still
         there, which a hit would skip: ``np.savetxt``, ``joblib.dump`` or
         ``os.open`` in a helper, none of which cash's static writer check
-        reads. A waiver in a function it reaches (``# @cash:assume-safe``,
-        ``with cash.assume_safe():``, ``@pure``) keeps it storable."""
+        reads. A write the user waived where it was made (``# @cash:assume-safe``
+        on a line on its way, ``with cash.assume_safe():``, ``@pure`` on a
+        function it ran in) keeps it storable; a waiver elsewhere does not."""
         root = getattr(getattr(self._cash, "backend", None), "local_dir", None)
-        if not kept_writes(written, root, written.appended):
-            return False
-        try:
-            return not user_callee_waiving(call.fn)
-        except Exception:  # noqa: BLE001 - unjudged: the write stands
-            return True
+        return bool(kept_writes(written, root, written.appended, written.waived))
 
     def _did_what_a_hit_cannot(
         self, call: _Call, rng_before, arg_hashes_before: tuple | None, ticket: tuple[int, int] = (0, 0)
