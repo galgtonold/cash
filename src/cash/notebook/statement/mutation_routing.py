@@ -347,8 +347,10 @@ class MutationRouting:
             self._records.persist_mutation_verdict(verdict_hash, self.tracking_state.mutation_verdicts[verdict_hash])
         elif run.rewatching:
             self._observe_rewatch(run)
-        if body and run.in_place and self._in_loop is not None:
-            self._in_loop.moved(run.in_place, run.cache_key)
+        if body and self._in_loop is not None:
+            self._in_loop.note_bindings(run.tree)
+            if run.in_place:
+                self._in_loop.moved(run.in_place, run.cache_key)
 
     def _observe_rewatch(self, run: StatementRun) -> None:
         """A statement whose verdict is known ran on new inputs, watched for
