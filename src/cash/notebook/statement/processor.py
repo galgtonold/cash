@@ -8,7 +8,7 @@ import logging
 import secrets
 import sys
 import types
-from collections.abc import Callable, Generator, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -108,6 +108,7 @@ from ...tracking.randomness import (
     drawn_rng_vars,
     hidden_lineage_writes,
     moved_carrier_names,
+    rng_carrier_kind,
     rng_virtual_var,
 )
 from ..callee_reach import import_state_writes, module_globals, module_state_writes, rebound_modules
@@ -480,6 +481,21 @@ class StatementProcessor:
         key = run.rng_advance_key or run.cache_key
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
+
+    def _reads_a_stream(self, run: StatementRun) -> bool:
+        """Whether *run* reads, itself or through the functions it calls, a
+        random generator or an iterator a variable holds: computing it
+        again draws the next values, so what it showed is not kept."""
+        user_ns = self.shell.user_ns
+        try:
+            names = carrier_candidates(run.inputs or (), user_ns)
+        except Exception:  # noqa: BLE001 - not told: assume it does
+            return True
+        for name in names:
+            value = user_ns.get(name) if isinstance(name, str) else None
+            if isinstance(value, Iterator) or rng_carrier_kind(value) is not None:
+                return True
+        return False
 
     def _memo_key(self, code: str) -> str | None:
         """*code*'s key as a statement of its own, now: what a value the
@@ -1225,6 +1241,8 @@ class StatementProcessor:
                     self.tracking_state.variable_lineage,
                     self.shell.user_ns,
                     self._memo_key,
+                    computed_under=run.cache_key,
+                    reads_a_stream=lambda: self._reads_a_stream(run),
                 )
         self._forget_ipython_bindings(run)
         if run.magic_reads is not None:
