@@ -19,6 +19,7 @@ import sys
 import types
 
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
+from .jit_functions import jit_identity, jit_python_function
 from .source_norm import bytecode_identity, module_text_identity, source_identity_digest
 from .source_reading import own_source, read_code_file, stat_has_settled
 from .tracking.tracker_context import untracked
@@ -43,8 +44,13 @@ def callable_identity(fn: object) -> str:
     failing that its `opaque_identity`. For a ``functools.wraps`` wrapper,
     its OWN code (`own_source`) together with the identity of what it wraps,
     so an edit to either half moves it and two functions wrapped by one
-    decorator never share it. Never raises.
+    decorator never share it. For a JIT-compiled function (numba's
+    ``@njit``), the identity of the Python function it compiles together
+    with its compile options (`cash.jit_functions`). Never raises.
     """
+    compiled = jit_python_function(fn)
+    if compiled is not None:
+        return jit_identity(_callable_identity(compiled, frozenset()), fn)
     return _callable_identity(fn, frozenset())
 
 
@@ -107,6 +113,9 @@ def compiled_identity(fn: object) -> str:
     """*fn*'s identity when its source cannot be read: its `bytecode_identity`
     (a wrapper's with what it wraps folded in), or for a callable with no
     code at all a digest of its `opaque_identity`."""
+    compiled = jit_python_function(fn)
+    if compiled is not None:
+        return jit_identity(_compiled_identity(compiled, frozenset()), fn)
     return _compiled_identity(fn, frozenset())
 
 

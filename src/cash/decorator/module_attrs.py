@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..analysis.helper_bindings import resolve_local_import
 from ..install_paths import is_user_module
+from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes
 from .key_values import iter_contained, plain_data_kind
@@ -336,6 +337,7 @@ class ModuleAttrFold:
         globals are those of the function it wraps, not of cash's wrapper.
         """
         value = cash_wrapped(value)
+        value = jit_python_function(value) or value
         helper_globals = getattr(value, "__globals__", None)
         if not isinstance(helper_globals, dict):
             return []

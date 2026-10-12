@@ -30,6 +30,7 @@ from ..canonical_form import (
 )
 from ..content_hashers import BUILTIN_CONTENT, builtin_family_of, builtin_hash, immutable_labels, is_native_panic
 from ..exceptions import CashCacheIneffectiveWarning
+from ..jit_functions import is_jit_type, jit_options, jit_python_function
 from ..lineage_tag import own_tag
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
 from .cash_key import cash_key_method, cash_key_method_of_type, type_name
@@ -187,11 +188,13 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
     )
 
 
-#: What `ArgHasher._nested_hasher` does with a value of a type: nothing, or
-#: key it by its class's ``__cash_key__``. Decided once per type: it is asked
-#: of every non-primitive value a key walk meets.
+#: What `ArgHasher._nested_hasher` does with a value of a type: nothing, key
+#: it by its class's ``__cash_key__``, or key it as a JIT-compiled function.
+#: Decided once per type: it is asked of every non-primitive value a key walk
+#: meets.
 _PASS = "pass"
 _KEYED = "keyed"
+_JIT = "jit"
 _HOOK_KINDS: dict[type, str] = {}
 
 
@@ -204,6 +207,8 @@ def _hook_kind(t: type) -> str:
         return _PASS
     if t in BUILTIN_CONTAINERS or issubclass(t, (type, types.ModuleType, *CODE_VALUE_TYPES)):
         kind = _PASS
+    elif is_jit_type(t):
+        kind = _JIT
     else:
         kind = _KEYED if cash_key_method_of_type(t) is not None else _PASS
     if len(_HOOK_KINDS) >= 4096:
@@ -1223,8 +1228,17 @@ class ArgHasher:
                 for type_, (hasher_fn, src_hash) in registry.items():
                     if isinstance(value, type_):
                         return ("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}")
-        if _hook_kind(type(value)) is _KEYED:
+        kind = _hook_kind(type(value))
+        if kind is _KEYED:
             return ("__cash_hashed__", self.cash_key_hash(value, cash_key_method(value)))
+        if kind is _JIT:
+            # numba's `@njit`: by the name of the function it compiles, as a
+            # function is, and its compile options. The code itself is the
+            # code-argument fold's (`CodeArgs`), and the compiler's state
+            # beside it (ctypes pointers, type contexts) is no input.
+            compiled = jit_python_function(value)
+            if compiled is not None:
+                return ("__cash_jit__", f"{compiled.__module__}.{compiled.__qualname__}", jit_options(value))
         return NOT_HOOKED
 
     def _memo_content_digest(self, value: Any) -> str | None:

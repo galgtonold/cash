@@ -18,6 +18,7 @@ from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
+from ..jit_functions import jit_identity, jit_python_function
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
 from .key_values import carried_payload, code_ref, held_partials, reduced_state, stabilize_for_global_hash
@@ -114,6 +115,10 @@ class GlobalValues:
         if isinstance(fn, type):
             # A class: its code, what it inherits and its metaclass.
             return self._helpers.identity(fn)
+        compiled = jit_python_function(fn)
+        if compiled is not None:
+            # numba's `@njit`: the function it compiles, and its options.
+            return jit_identity(self.data_callable_identity(compiled), fn)
         if not isinstance(fn, types.FunctionType):
             return hash_callable_source(fn)
         own = self._helpers.identity(fn)
@@ -286,7 +291,7 @@ class GlobalValues:
         keyed all along.
 
         None for what another channel keys or what carries no data: a
-        function, a class, a module, a mock, a cached function, a method of a
+        function, a JIT-compiled function, a class, a module, a mock, a cached function, a method of a
         class or module, a C object without a ``__dict__`` (``np.add``), and
         any callable that runs USER code, whose binding the helper walk notes
         and `carried_state_digest` keys.
@@ -298,6 +303,10 @@ class GlobalValues:
         did not write the mutation).
         """
         if isinstance(value, (type, types.ModuleType, types.FunctionType)) or is_mock(value):
+            return None
+        if jit_python_function(value) is not None:
+            # Code: the helper walk keys the function it compiles and its
+            # options. What it holds beside them is the compiler's state.
             return None
         # Whether it runs user code, and whether it could be hashed at all,
         # are decided once per object: the user-code test resolves file paths,

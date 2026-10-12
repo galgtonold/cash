@@ -148,6 +148,8 @@ dev = [
     "setuptools",
     # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
+    # test_a_jit_compiled_helper_is_keyed_as_code.py runs real @njit functions.
+    "numba",
     # test_comm_reply_during_execution.py pumps the kernel event loop from inside
     # a cell, which ipykernel 7 no longer supports on its own.
     "jupyter_ui_poll",

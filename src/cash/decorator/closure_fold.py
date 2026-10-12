@@ -22,6 +22,7 @@ from ..analysis.annotations import assume_safe_block_lines
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
+from ..jit_functions import jit_identity, jit_python_function
 from ..source_reading import getsource, getsourcelines
 from ..value_types import IMMUTABLE_VALUE_TYPES
 from .arg_hashing import CODE_VALUE_TYPES, is_opaque
@@ -666,7 +667,14 @@ class HelperIdentity:
         Not inside ``hash_callable_source``'s memo: that is keyed per CODE
         object, and two closures from one factory share a code object while
         holding different defaults.
+
+        A JIT-compiled helper (numba's ``@njit``) is the identity of the
+        function it compiles, defaults and captures included, with its
+        compile options.
         """
+        compiled = jit_python_function(fn)
+        if compiled is not None:
+            return jit_identity(self.identity(compiled), fn)
         source = hash_callable_source(fn)
         if isinstance(fn, type):
             # A class's own source says nothing about what it inherits, and
@@ -774,7 +782,7 @@ class HelperIdentity:
         `HelperIdentity.identity` adds its immutable captures and its own
         defaults.
         """
-        if inspect.isfunction(v):
+        if inspect.isfunction(v) or jit_python_function(v) is not None:
             return f"__cash_callable__:{self.identity(v)}"
         return fingerprint_default(v)
 

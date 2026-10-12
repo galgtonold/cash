@@ -23,6 +23,7 @@ from ..code_digest import callable_identity, compiled_identity, own_source_diges
 from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
+from ..jit_functions import jit_identity, jit_python_function
 from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk
 from ..source_norm import bytecode_identity, code_consts_without_docstring
 
@@ -184,7 +185,15 @@ def hash_callable_source(fn: Callable) -> str:
     3. ``opaque_identity(fn)`` (``module.qualname``) - last resort, for a
        builtin, a ufunc or a partial. Doesn't differentiate instances of
        the same class; stable across processes, but coarse.
+
+    A JIT-compiled function (numba's ``@njit``) is the function it compiles
+    plus its compile options (`cash.jit_functions`). Asked first: a numba
+    dispatcher carries its function's ``__code__``, so it would share that
+    function's memo entry.
     """
+    compiled = jit_python_function(fn)
+    if compiled is not None:
+        return jit_identity(hash_callable_source(compiled), fn)
     memo_owner: Any = getattr(fn, "__code__", None)
     if (memo_owner is None and isinstance(fn, type)) or (
         isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__")
