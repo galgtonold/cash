@@ -1387,6 +1387,10 @@ class StatementProcessor:
         if inputs_moved:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(INPUT_CHANGED_REASON)
+        if run.skip_cache:
+            # Uncached: its outputs' lineage leaves the callee globals out
+            # (``cache_key.compute_cache_key``).
+            self.tracking_state.reads.callees.pop(run.cache_key, None)
         captured_vars = self.lineage_builder.capture_and_track_variables(
             self.tracking_state,
             run.outputs,

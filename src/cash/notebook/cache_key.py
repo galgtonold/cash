@@ -811,11 +811,16 @@ def compute_cache_key(
     if ctx.reads is not None:
         if reads:
             ctx.reads.by_key[cache_key] = reads
-        if callee_component:
+        if callee_component and ctx.record_reads:
             # The globals the callees read are in the key, so they belong in
             # what the outputs carry below: ``CFG["round"] = 1`` re-keys
             # ``res = summarize(raw)``, and ``report = render(res)`` must
-            # miss too (``recorded_reads_lineage_component``).
+            # miss too (``recorded_reads_lineage_component``). Recorded by
+            # the runtime only, under the key it ran with: the simulation
+            # finds it when it reaches that key, as for a cached statement
+            # it must. A statement run uncached drops it again
+            # (``StatementProcessor._post_execute``): the simulation may key
+            # it otherwise (a global its callee changes, read after the run).
             ctx.reads.callees[cache_key] = hashlib.sha256(callee_component.encode("utf-8")).hexdigest()
 
     if logger.isEnabledFor(logging.DEBUG):
