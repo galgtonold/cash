@@ -31,8 +31,12 @@ from ..source_reading import own_source, wrapper_layers
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import called_names, resolve_callee
 from .callee_effects import (
+    all_param_names,
     argument_roots,
     iterated_sources,
+    positional_param_names,
+    resolve_function_def,
+    scope_locals,
     source_called_names,
     source_global_rebinds,
     statement_calls,
@@ -47,7 +51,7 @@ from .file_effects import (
     locally_opened_handles,
 )
 from .handed_callables import handed_callable_values
-from .mutations import RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
+from .mutations import MUTATING_METHODS, RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
 from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
 
 __all__ = [
@@ -1231,7 +1235,11 @@ def bare_call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str
     return _changeable(names, user_ns)
 
 
-def call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
+def call_arguments(
+    tree: ast.Module | None,
+    user_ns: dict,
+    resolve_source: Callable[[str], str | None] | None = None,
+) -> frozenset[str]:
     """Names a statement's calls could change in place, to watch around it.
 
     The arguments of a bare call (:func:`bare_call_arguments`), and the
@@ -1249,6 +1257,11 @@ def call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
     frame it reads twice. Not inside a loop's or a branch's body, which
     the control structure owns.
 
+    The globals a function of the user's it calls hands to such code
+    (:func:`callee_handed_globals`: ``def push(x): heapq.heappush(H, x)``)
+    are watched too; *resolve_source* reads a function's source (default:
+    the function the kernel holds under the name).
+
     One definition for the runtime (which observes them) and the simulation
     (which reproduces the runtime's verdict), so the two cannot disagree about
     which names are candidates. Modules, classes, functions and immutable
@@ -1258,12 +1271,280 @@ def call_arguments(tree: ast.Module | None, user_ns: dict) -> frozenset[str]:
         return frozenset()
     names: set[str] = set(bare_call_arguments(tree, user_ns))
     iterated = iterated_sources(tree)
+    named_users_calls: list[ast.Call] = []
     for call in statement_calls(tree, control_bodies=False):
-        if not (_users_callee(call.func, user_ns) or _asks_for_a_write(call, user_ns)):
+        if _users_callee(call.func, user_ns):
+            if isinstance(call.func, ast.Name):
+                named_users_calls.append(call)
+        elif not _asks_for_a_write(call, user_ns):
             continue
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             names |= argument_roots(arg, iterated)
+    if named_users_calls:
+        names |= _handed_globals(named_users_calls, user_ns, resolve_source or _live_user_function_source(user_ns))
     return _changeable(names | handed_through_items(tree, iterated), user_ns)
+
+
+def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], str | None]:
+    """``name -> source`` for a function of the user's the kernel holds
+    under *name* (`_users_code`), else None: no scan of other modules."""
+
+    def resolve(name: str) -> str | None:
+        fn = user_ns.get(name)
+        if not isinstance(fn, types.FunctionType):
+            return None
+        code = fn.__code__
+        if code in _USER_SOURCES:
+            return _USER_SOURCES[code]
+        source = None
+        if _users_code(fn):
+            try:
+                source = own_source(fn)
+            except SOURCE_RETRIEVAL_ERRORS:
+                source = None
+        if len(_USER_SOURCES) >= 512:
+            _USER_SOURCES.clear()
+        _USER_SOURCES[code] = source
+        return source
+
+    return resolve
+
+
+#: The source of a function of the user's, by its code object: one
+#: ``def`` run once has one text, and a statement calling it asks for it on
+#: every run.
+_USER_SOURCES: dict[types.CodeType, str | None] = {}
+
+
+#: Builtins that read what they are handed and change none of it, unshadowed.
+ARGUMENT_READING_BUILTINS = frozenset(
+    {
+        "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "format", "frozenset", "hash",
+        "int", "isinstance", "issubclass", "len", "list", "max", "min", "print", "range", "repr", "reversed",
+        "round", "set", "sorted", "str", "sum", "tuple", "type", "zip", "id", "callable", "chr", "ord",
+    }
+)  # fmt: skip
+
+
+def function_handoffs(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+    seen: frozenset[str] = frozenset(),
+) -> tuple[frozenset[str], frozenset[str]]:
+    """``(params, globals)``: the parameters and the free names the body of
+    *fdef* hands to code whose effect on them its text cannot decide.
+
+    ``def push(h, x): heapq.heappush(h, x)`` hands ``h``,
+    ``def mix(): random.Random(s).shuffle(DECK)`` hands ``DECK``: nothing
+    in the text tells a library function that changes what it is handed
+    from one that reads it, so a caller watches what it hands such a
+    function (a fingerprint before and after), as it watches what it hands
+    the library function itself. Handed means: to a library function or a
+    method no rule knows to only read (``call_only_reads``, the unshadowed
+    reading builtins), as the receiver of a method not known to be pure,
+    or to a further function of the user's that hands that parameter on
+    (*resolve_source*, followed once per name). What a ``def`` or a
+    ``lambda`` in the body would do runs later, if ever, and is left out;
+    a lambda handed to a call is followed (``map(lambda v: push(h, v), xs)``).
+    """
+    params, local, iterated, calls, reads, called = _function_shape(fdef)
+    # The answer depends on the text and on what the names it reads are
+    # bound to (which callee a call reaches, what a global holds), the
+    # source of the functions it calls by name included.
+    key = (
+        fdef,
+        seen,
+        tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),)),
+        tuple(_source_or_none(resolve_source, name) for name in called if name not in seen),
+    )
+    found = _HANDOFFS.get(key)
+    if found is not None:
+        return found
+    roots: set[str] = set()
+    free: set[str] = set()
+    for call in calls:
+        _call_handoffs(call, local, iterated, user_ns, resolve_source, seen, roots, free)
+    free |= {name for name in roots if name not in local}
+    found = (frozenset(roots & params), frozenset(free))
+    if len(_HANDOFFS) >= 1024:
+        _HANDOFFS.clear()
+    _HANDOFFS[key] = found
+    return found
+
+
+#: `function_handoffs` answers, by text and bindings.
+_HANDOFFS: dict[tuple, tuple[frozenset[str], frozenset[str]]] = {}
+_UNBOUND = object()
+
+
+def _source_or_none(resolve_source: Callable[[str], str | None] | None, name: str) -> str | None:
+    if resolve_source is None:
+        return None
+    try:
+        return resolve_source(name)
+    except Exception:  # noqa: BLE001 - an unreadable callee is not one that is read
+        return None
+
+
+@functools.lru_cache(maxsize=512)
+def _function_shape(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[
+    frozenset[str], frozenset[str], dict[str, frozenset[str]], tuple[ast.Call, ...], tuple[str, ...], tuple[str, ...]
+]:
+    """What :func:`function_handoffs` reads from the text of *fdef* alone:
+    its parameters, its locals, what its loops iterate, its calls, the
+    free names it reads and those it calls. Memoised per tree
+    (`resolve_function_def` hands out one per source), which is only read."""
+    local = scope_locals(fdef)
+    calls = tuple(calls_with_lambdas(fdef))
+    reads = sorted({n.id for n in ast.walk(fdef) if isinstance(n, ast.Name) and n.id not in local})
+    called = sorted({c.func.id for c in calls if isinstance(c.func, ast.Name) and c.func.id not in local})
+    return frozenset(all_param_names(fdef)), local, iterated_sources(fdef), calls, tuple(reads), tuple(called)
+
+
+def calls_with_lambdas(tree: ast.AST, *, control_bodies: bool = True) -> list[ast.Call]:
+    """The calls *tree* makes as it runs (`statement_calls`), and those in
+    the body of a ``lambda`` it hands to one of them (``map(lambda v:
+    push(h, v), xs)``)."""
+    calls = statement_calls(tree, control_bodies=control_bodies)
+    pending = list(calls)
+    while pending:
+        call = pending.pop()
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            if isinstance(arg, ast.Lambda):
+                inner = statement_calls(arg.body)
+                calls.extend(inner)
+                pending.extend(inner)
+    return calls
+
+
+def _call_handoffs(
+    call: ast.Call,
+    local: frozenset[str] | set[str],
+    iterated: dict[str, frozenset[str]],
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+    seen: frozenset[str],
+    roots: set[str],
+    free: set[str],
+) -> None:
+    """Add to *roots* the names the one *call* hands to code whose effect is
+    unknown, and to *free* the free names a function of the user's it calls
+    hands on (see :func:`function_handoffs`)."""
+    func = call.func
+    if isinstance(func, ast.Name) and func.id not in local:
+        if func.id in seen:
+            return
+        callee = _readable_function(func.id, resolve_source)
+        if callee is not None:
+            callee_params, callee_free = function_handoffs(callee, user_ns, resolve_source, seen | {func.id})
+            roots.update(handed_to_params(call, callee, callee_params, iterated))
+            free.update(callee_free)
+            return
+    args = [*call.args, *(kw.value for kw in call.keywords)]
+    if isinstance(func, ast.Attribute):
+        base = func.value
+        while isinstance(base, (ast.Attribute, ast.Subscript)):
+            base = base.value
+        while isinstance(base, ast.Call) and isinstance(base.func, ast.Attribute):
+            base = base.func.value
+            while isinstance(base, (ast.Attribute, ast.Subscript)):
+                base = base.value
+        if (
+            isinstance(base, ast.Name)
+            and not (base.id not in local and isinstance(user_ns.get(base.id), types.ModuleType))
+            and func.attr not in RECEIVER_READONLY_WRITE_METHODS
+            and not chain_is_pure(func.attr, frozenset())
+        ):
+            roots.update(iterated.get(base.id, frozenset({base.id})))
+        if func.attr in MUTATING_METHODS:
+            return  # it keeps what it is handed, and changes none of it
+    if (
+        isinstance(func, ast.Name)
+        and func.id in ARGUMENT_READING_BUILTINS
+        and func.id not in local
+        and user_ns.get(func.id, getattr(builtins, func.id)) is getattr(builtins, func.id)
+    ):
+        return
+    arg_names = [arg.id for arg in args if isinstance(arg, ast.Name)]
+    if _only_reads(call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)):
+        return
+    for arg in args:
+        roots.update(argument_roots(arg, iterated))
+
+
+def _readable_function(name: str, resolve_source: Callable[[str], str | None] | None):
+    """The ``def`` of the function of the user's *name* calls, or None."""
+    if resolve_source is None:
+        return None
+    try:
+        return resolve_function_def(name, resolve_source)
+    except Exception:  # noqa: BLE001 - an unreadable callee is not one that is read
+        return None
+
+
+def handed_to_params(
+    call: ast.Call,
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    params: frozenset[str],
+    iterated: dict[str, frozenset[str]],
+) -> set[str]:
+    """The caller's variables *call* hands to the parameters *params* of
+    *fdef*: by position, by keyword, and everything after a ``*args`` or
+    into a ``**kwargs`` (whose slot cannot be told)."""
+    if not params:
+        return set()
+    out: set[str] = set()
+    positional = positional_param_names(fdef)
+    vararg = fdef.args.vararg.arg if fdef.args.vararg else None
+    kwarg = fdef.args.kwarg.arg if fdef.args.kwarg else None
+    unknown_slots = False
+    for i, arg in enumerate(call.args):
+        if isinstance(arg, ast.Starred):
+            unknown_slots = True
+        if (
+            unknown_slots
+            or (i >= len(positional) and vararg in params)
+            or (i < len(positional) and positional[i] in params)
+        ):
+            out |= argument_roots(arg, iterated)
+    for kw in call.keywords:
+        if kw.arg is None or kw.arg in params or (kwarg in params and kw.arg not in all_param_names(fdef)):
+            out |= argument_roots(kw.value, iterated)
+    return out
+
+
+def callee_handed_globals(
+    tree: ast.Module | None,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+) -> frozenset[str]:
+    """The globals the functions of the user's that *tree* calls by name
+    (outside a loop's or a branch's body, which the structure owns) hand to
+    code whose effect on them is unknown (:func:`function_handoffs`), live
+    or not."""
+    if tree is None or resolve_source is None:
+        return frozenset()
+    return _handed_globals(statement_calls(tree, control_bodies=False), user_ns, resolve_source)
+
+
+def _handed_globals(
+    calls: list[ast.Call],
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+) -> frozenset[str]:
+    out: set[str] = set()
+    for call in calls:
+        func = call.func
+        if not isinstance(func, ast.Name):
+            continue
+        fdef = _readable_function(func.id, resolve_source)
+        if fdef is None:
+            continue
+        out |= function_handoffs(fdef, user_ns, resolve_source, frozenset({func.id}))[1]
+    return frozenset(out)
 
 
 def handed_through_items(tree: ast.Module | None, iterated: dict[str, frozenset[str]]) -> frozenset[str]:

@@ -45,7 +45,6 @@ from .callee_effects import (
     resolve_function_def,
     stateful_closure_vars,
     stateful_self_functions,
-    statement_calls,
 )
 from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
 from .handed_callables import handed_callables
@@ -63,7 +62,15 @@ from .mutations import (
     subscript_view_bindings,
     top_level_calls,
 )
-from .namespace_effects import call_only_reads, capturable_globals, fits_its_receiver
+from .namespace_effects import (
+    ARGUMENT_READING_BUILTINS,
+    call_only_reads,
+    calls_with_lambdas,
+    capturable_globals,
+    fits_its_receiver,
+    function_handoffs,
+    handed_to_params,
+)
 from .object_protocol import ObjectProtocolResets, object_protocol_mutations
 
 __all__ = [
@@ -712,9 +719,12 @@ def loop_watch_candidates(
     target counts as the names its loop iterates (``for xs in lists:
     random.shuffle(xs)`` hands over items of ``lists``).
 
+    A function of the user's that is read counts for what its body hands
+    to such code: the arguments for those parameters, and the globals
+    (``def push(h, x): heapq.heappush(h, x)``, `function_handoffs`).
+
     Not candidates: what :func:`control_structure_mutations` already decides
-    from the text (a bare method call's receiver, a function of the user's
-    that is read), what a call known only to read is handed (``print(df)``,
+    from the text (a bare method call's receiver), what a call known only to read is handed (``print(df)``,
     ``len(xs)``, ``sum(xs)``), modules, classes, functions and immutable
     values. The runtime fingerprints the candidates before and after the
     loop runs and records which changed, per loop source; the simulation and
@@ -788,13 +798,7 @@ def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str],
 
 
 #: Builtins that read what they are handed and change none of it.
-_READING_BUILTINS = frozenset(
-    {
-        "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "format", "frozenset", "hash",
-        "int", "isinstance", "issubclass", "len", "list", "max", "min", "print", "range", "repr", "reversed",
-        "round", "set", "sorted", "str", "sum", "tuple", "type", "zip", "id", "callable", "chr", "ord",
-    }
-)  # fmt: skip
+_READING_BUILTINS = ARGUMENT_READING_BUILTINS
 
 
 def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) -> set[str]:
@@ -803,7 +807,7 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
     namespace = names.namespace or {}
     stmt = tree.body[0] if tree.body else None
     outer = stmt.value if bare and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) else None
-    calls = statement_calls(tree, control_bodies=False)
+    calls = calls_with_lambdas(tree, control_bodies=False)
     # A call a chain goes on from (``df.groupby('a')`` in
     # ``df.groupby('a').sum()``) is judged with the chain's last method.
     chained = {id(inner) for call in calls for inner in _chain_calls(call.func)}
@@ -811,7 +815,11 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
     for call in calls:
         func = call.func
         if isinstance(func, ast.Name) and names.user_source(func.id):
-            continue  # its source says what it changes
+            # Its source says what it changes itself; what it hands to code
+            # whose effect is unknown (``def push(h, x): heapq.heappush(h,
+            # x)``) is watched as if handed here.
+            out |= _user_function_handoffs(call, func.id, names)
+            continue
         if isinstance(func, ast.Attribute) and call is not outer and id(call) not in chained:
             base = _receiver_root(func.value)
             inner = frozenset(c.func.attr for c in _chain_calls(func) if isinstance(c.func, ast.Attribute))
@@ -828,6 +836,17 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
         for arg in args:
             out |= argument_roots(arg, {})
     return out
+
+
+def _user_function_handoffs(call: ast.Call, name: str, names: _LoopNames) -> set[str]:
+    """What *call*, to the function of the user's *name*, hands to code
+    whose effect on it is unknown: its arguments for the parameters the
+    function hands on, and the globals it hands on (`function_handoffs`)."""
+    fdef = resolve_function_def(name, names.user_source)
+    if fdef is None:
+        return set()
+    params, free = function_handoffs(fdef, names.namespace or {}, names.user_source, frozenset({name}))
+    return handed_to_params(call, fdef, params, {}) | set(free)
 
 
 def _stores_what_it_is_handed(func: ast.Attribute, namespace: Mapping[str, Any]) -> bool:

@@ -29,7 +29,7 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import call_argument_names, call_arguments
+from ...analysis.namespace_effects import call_argument_names, call_arguments, callee_handed_globals
 from ...control_markers import strip_markers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
@@ -263,9 +263,15 @@ class StatementLineage:
         # Likewise the receivers of a method call whose result is bound
         # (`history = net.fit(X)`), which the runtime fingerprints too.
         arguments = (
-            call_arguments(tree, user_ns)
+            call_arguments(tree, user_ns, self._function_source)
             | watched_call_receivers(tree, user_ns)
-            | {n for n in call_argument_names(tree) | captured_call_receiver_names(tree) if n not in user_ns}
+            | {
+                n
+                for n in call_argument_names(tree)
+                | captured_call_receiver_names(tree)
+                | callee_handed_globals(tree, user_ns, self._function_source)
+                if n not in user_ns
+            }
         )
         classes = classify_receivers(
             tree, user_ns, load_verdict, arguments=arguments, virtual_modules=virtual_modules or ()
