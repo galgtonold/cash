@@ -91,7 +91,7 @@ SALES = (
     "    return np.repeat(level, h)\n"
     "def run_backtest(series, n):\n"
     "    time.sleep(0.6)             # the expensive step of the notebook\n"
-    "    open('calls.log', 'a').write('backtest\\n')\n"
+    "    open('calls.log', 'a').write('backtest\\n')  # @cash:assume-safe (a test counter)\n"
     "    rows = []\n"
     "    for sku, y in series.iterrows():\n"
     "        vals = y.values\n"
@@ -100,7 +100,7 @@ SALES = (
     "    return pd.DataFrame(rows, columns=['sku', 'k', 'err'])\n"
     "def run_forecast(series, h):\n"
     "    time.sleep(0.4)\n"
-    "    open('calls.log', 'a').write('forecast\\n')\n"
+    "    open('calls.log', 'a').write('forecast\\n')  # @cash:assume-safe (a test counter)\n"
     "    rows = [(sku, i, v) for sku, y in series.iterrows()\n"
     "            for i, v in enumerate(smooth_forecast(y.values, h))]\n"
     "    return pd.DataFrame(rows, columns=['sku', 'step', 'forecast'])\n",
@@ -212,7 +212,7 @@ CHURN = (
     # 5 -- features and label
     "def build_counts(ev):\n"
     "    time.sleep(0.5)             # the expensive step of the notebook\n"
-    "    open('calls.log', 'a').write('build_counts\\n')\n"
+    "    open('calls.log', 'a').write('build_counts\\n')  # @cash:assume-safe (a test counter)\n"
     "    return ev.pivot_table(index='customer_id', columns='kind', values='count', aggfunc='sum').fillna(0)\n"
     "counts = build_counts(events)\n"
     "data = cust.merge(counts, left_on='customer_id', right_index=True)\n"

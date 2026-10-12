@@ -175,7 +175,7 @@ DECK = (
     (
         "forecast",
         "def forecast_cc(series, h=3):\n"
-        "    open('calls.log', 'a').write('forecast\\n')\n"
+        "    open('calls.log', 'a').write('forecast\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.15)             # the slow step of the deck\n"
         "    level = series.iloc[0]\n"
         "    for v in series.iloc[1:]:\n"
@@ -345,7 +345,7 @@ FORECAST = (
     (
         "models",
         "def fit_region(frame, alpha):\n"
-        "    open('calls.log', 'a').write('fit\\n')\n"
+        "    open('calls.log', 'a').write('fit\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.15)\n"
         "    return Ridge(alpha=alpha).fit(frame[FEATURES], frame['units'])\n"
         "models = {}\n"
@@ -357,7 +357,7 @@ FORECAST = (
         "GRID = (0.1, 10.0)\n"
         "CUTOFFS = list(pd.to_datetime(sorted(panel.date.unique()))[-21::7])\n"
         "def backtest_one(frame, cutoff, alpha):\n"
-        "    open('calls.log', 'a').write('backtest\\n')\n"
+        "    open('calls.log', 'a').write('backtest\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.15)             # the slow loop of the notebook\n"
         "    train = frame[frame.date < cutoff]\n"
         "    test = frame[(frame.date >= cutoff) & (frame.date < cutoff + pd.Timedelta(days=7))]\n"
@@ -585,7 +585,7 @@ READOUT = (
         "bootstrap",
         "METRICS = ['converted', 'revenue', 'net_revenue']\n"
         "def bootstrap_diff(df, metrics, n_boot=200, seed=7):\n"
-        "    open('calls.log', 'a').write('bootstrap\\n')\n"
+        "    open('calls.log', 'a').write('bootstrap\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.12)             # thousands of resamples in the real notebook\n"
         "    rng = np.random.default_rng(seed)\n"
         "    a = df.loc[df['variant'] == 'A', metrics].to_numpy()\n"
@@ -794,7 +794,7 @@ TICKETS = (
         "OUT = Path('out')\n"
         "OUT.mkdir(exist_ok=True)\n"
         "def mark(name):\n"
-        "    open('calls.log', 'a').write(name + '\\n')\n",
+        "    open('calls.log', 'a').write(name + '\\n')  # @cash:assume-safe (a test counter)\n",
     ),
     (
         "load",
@@ -1024,7 +1024,7 @@ ALERTS = (
     (
         "detector",
         "def fit_detector(h, w):\n"
-        "    open('calls.log', 'a').write('fit\\n')\n"
+        "    open('calls.log', 'a').write('fit\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.12)\n"
         "    r = h['vibration'].interpolate(limit_direction='both').rolling(w, min_periods=1).mean()\n"
         "    med = r.median()\n"
@@ -1132,7 +1132,7 @@ PACK = (
     (
         "vs_plan",
         "def vs_plan(df):\n"
-        "    open('calls.log', 'a').write('vs_plan\\n')\n"
+        "    open('calls.log', 'a').write('vs_plan\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.12)\n"
         "    out = df.copy()\n"
         "    out['gap'] = (out['sales'] - out['plan']).round(2)\n"
@@ -1210,7 +1210,7 @@ EXPORT = (
     (
         "count",
         "def count_tokens(text):\n"
-        "    open('calls.log', 'a').write('count\\n')\n"
+        "    open('calls.log', 'a').write('count\\n')  # @cash:assume-safe (a test counter)\n"
         "    time.sleep(0.12)\n"
         "    return Counter(text.split())\n"
         "counts = {name: count_tokens(t) for name, t in texts.items()}\n",
