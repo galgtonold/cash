@@ -110,3 +110,33 @@ def test_after_a_restart_the_results_are_right(nb_runner):
     nb_runner.set_cell_source(3, RAW)
     nb_runner.run_all()
     assert "TOTAL 44999850000" in nb_runner.get_output(5)
+
+
+@pytest.mark.parametrize(
+    ("edited", "reader", "expected"),
+    [
+        ("raw = pd.DataFrame({'a': range(12), 'b': 1})", "total = slow_total(test)\nprint('TOTAL', total)", 45),
+        (
+            "raw = pd.DataFrame({'a': [100] + list(range(1, 10)), 'b': 1})",
+            "total = slow_total(train)\nprint('TOTAL', total)",
+            121,
+        ),
+    ],
+    ids=["train_unchanged", "test_unchanged"],
+)
+def test_a_split_whose_one_half_came_out_the_same_still_rebuilds_the_other(nb_runner, edited, reader, expected):
+    """``train, test = ...`` share one lineage: the half that came out the
+    same must not lend the old lineage to the half that changed, in the
+    session nor after a restart."""
+    split = "train, test = raw[raw.index < 7], raw[raw.index >= 7]"
+    nb_runner.create_notebook([ON, SETUP, "raw = pd.DataFrame({'a': range(10), 'b': 1})", split, reader])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    nb_runner.set_cell_source(3, edited)
+    nb_runner.run_all()
+    assert f"TOTAL {expected}" in nb_runner.get_output(5)
+
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert f"TOTAL {expected}" in nb_runner.get_output(5)

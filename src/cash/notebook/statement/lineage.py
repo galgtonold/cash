@@ -198,6 +198,12 @@ class StatementLineageBuilder:
             tracking_state, lineage_inputs, user_ns, code
         )
 
+        # All outputs of one statement share its formula lineage (``train,
+        # test = ...``, or ``M = enc.fit_transform(X)`` writing ``enc`` too):
+        # it names no single value, so none of them may be cut off to an
+        # earlier value's lineage, nor lend it to a later value.
+        cut_off = not no_cache and sum(1 for name in outputs if name in user_ns) == 1
+
         for var_name in outputs:
             if var_name not in user_ns:
                 continue
@@ -219,7 +225,7 @@ class StatementLineageBuilder:
             )
             # A new object only: ``t = raw`` binds the input itself, which
             # keeps the lineage the formula gives it.
-            if not no_cache and not any(user_ns.get(name) is value for name in inputs):
+            if cut_off and not any(user_ns.get(name) is value for name in inputs):
                 output_lineage_hash = self._cutoff.lineage_for(
                     value, output_lineage_hash, self.compute_hash or compute_hash
                 )

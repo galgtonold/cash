@@ -52,7 +52,8 @@ class LineageAliasStore(VersionedJsonStore[str]):
     """``lineage -> the earlier lineage its value equals``, in the cache dir."""
 
     FILENAME = "lineage_aliases.json"
-    VERSION = 1
+    #: 2: aliases of a statement with several outputs are no longer made.
+    VERSION = 2
     FIELD = "aliases"
     LOG_TAG = "LINEAGE_ALIASES"
 
