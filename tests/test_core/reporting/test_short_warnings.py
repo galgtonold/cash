@@ -15,7 +15,7 @@ import warnings
 import pytest
 
 from cash import Cash
-from cash.diagnostics import format_diagnostic, warn_diagnostic
+from cash.diagnostics import format_diagnostic, short_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from tests._scripts import run_python
 
@@ -54,7 +54,12 @@ def _emitted(**config):
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-THRASH", "the cache is full. It evicts.", "raise it.")
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "CACHE-THRASH",
+                "the cache is full at its 500 MB cap. It evicts.",
+                "raise it.",
+            )
     finally:
         _active.ACTIVE_CONFIG.reset(token)
     [w] = caught
@@ -62,13 +67,20 @@ def _emitted(**config):
 
 
 def test_a_warning_is_one_line_by_default():
-    assert _emitted() == f"[CACHE-THRASH] the cache is full. ({URL})"
+    assert _emitted() == f"[CACHE-THRASH] the cache is full at its 500 MB cap. ({URL})"
+
+
+def test_a_first_sentence_that_says_only_what_takes_the_next_one():
+    # "result not cached." alone would leave out why.
+    assert short_diagnostic("CACHE-THRASH", "@cash.cache on f: result not cached. A Figure is live.") == (
+        f"[CACHE-THRASH] @cash.cache on f: result not cached. A Figure is live. ({URL})"
+    )
 
 
 def test_full_detail_prints_the_full_text_unchanged():
-    expected = format_diagnostic("CACHE-THRASH", "the cache is full. It evicts.", "raise it.")
+    expected = format_diagnostic("CACHE-THRASH", "the cache is full at its 500 MB cap. It evicts.", "raise it.")
     assert _emitted(warning_detail="full") == expected
-    assert expected == f"[CACHE-THRASH] the cache is full. It evicts.\n  Fix: raise it.\n  {URL}"
+    assert expected == f"[CACHE-THRASH] the cache is full at its 500 MB cap. It evicts.\n  Fix: raise it.\n  {URL}"
 
 
 def test_an_unknown_detail_is_refused():
@@ -150,7 +162,7 @@ def _run(tmp_path, *args, env=None, check=True):
     """Run SCRIPT on a cache of its own: a hit would not warn."""
     run = tmp_path / f"run{len(list(tmp_path.iterdir()))}"
     run.mkdir()
-    (run / "main.py").write_text(textwrap.dedent(SCRIPT))
+    (run / "main.py").write_text(textwrap.dedent(SCRIPT), encoding="utf-8")
     return run_python(*args, "main.py", cwd=run, env=env, check=check)
 
 

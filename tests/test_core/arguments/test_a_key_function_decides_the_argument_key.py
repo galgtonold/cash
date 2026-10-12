@@ -478,9 +478,7 @@ print("RESULT", sig(P()))
 """
 
 
-@pytest.mark.parametrize(
-    "decorator_args", ["key=lambda p: (p.fast,)", ""], ids=["key function", "no key function"]
-)
+@pytest.mark.parametrize("decorator_args", ["key=lambda p: (p.fast,)", ""], ids=["key function", "no key function"])
 def test_an_edit_to_code_an_argument_carries_rekeys_under_a_key_function(tmp_path, decorator_args):
     """``key=`` replaces only the arguments' value part of the key. The body
     still runs the methods of the parameter object it is given, so an edit to

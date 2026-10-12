@@ -14,7 +14,7 @@ Every cash warning starts with a code in square brackets, such as
 
 ## How much a warning says {#warning-detail}
 
-<!-- claim: cash/diagnostics.py:short_diagnostic @f176b8e4, cash/decorator/reporting.py:Notices._displayed @2d9252a1 -->
+<!-- claim: cash/diagnostics.py:short_diagnostic @cd898b12, cash/decorator/reporting.py:Notices._displayed @2d9252a1 -->
 By default a warning is one line: the code, what happened, and where to read
 more. A list of findings or effects is cut to how many there are and the
 first one. What to do about it is in the code's section below, which the
@@ -202,7 +202,7 @@ result. For freeing space only, the entries go at the next clear.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/_location.py:announce_new_cache_dir @5750057e, cash/_location.py:_existing_cache_near @e592579d, cash/backends/factory.py:build_backend_from_config @ef844e4c -->
+<!-- claim: cash/_location.py:announce_new_cache_dir @5260de8d, cash/_location.py:_existing_cache_near @e592579d, cash/backends/factory.py:build_backend_from_config @ef844e4c -->
 **What happened.** cash created its cache folder for the first time, in the
 default place: the project root above the running script, or beside the
 script when no project is found above it. The message names the folder. When

@@ -315,11 +315,7 @@ def callee_to_pass_in(old: dict[str, str], new: dict[str, str]) -> str | None:
     the "read by" chain to the global the body itself reads
     (``load_ticks``). ``""`` when that chain cannot be followed.
     """
-    changed = [
-        k
-        for k, v in new.items()
-        if k.startswith(("helper ", "cached function ")) and k in old and old[k] != v
-    ]
+    changed = [k for k, v in new.items() if k.startswith(("helper ", "cached function ")) and k in old and old[k] != v]
     if not changed:
         return None
     name = changed[0].split(" ", 2)[-1].rsplit(".", 1)[-1]

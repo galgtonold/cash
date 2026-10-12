@@ -506,8 +506,11 @@ def announce_new_cache_dir(cache_dir: str) -> None:
     )
     reason = " (no project found above the script)" if beside_script else ""
     nearby = _existing_cache_near(cache_dir)
+    # The cache found nearby goes in the first sentence: the one-line form
+    # keeps only that, and it is the line's point.
+    seen = f"; {nearby} exists" if nearby else ""
     fix = (
-        f"{nearby} exists -- set CASH_CACHE_DIR or [tool.cash] cache_dir to use it."
+        "set CASH_CACHE_DIR or [tool.cash] cache_dir to use it."
         if nearby
         else "set CASH_CACHE_DIR or [tool.cash] cache_dir to cache elsewhere."
     )
@@ -515,6 +518,6 @@ def announce_new_cache_dir(cache_dir: str) -> None:
     from .exceptions import CashWarning
 
     try:
-        warn_diagnostic(CashWarning, "CACHE-DIR-NEW", f"new cache at {shown}{reason}.", fix)
+        warn_diagnostic(CashWarning, "CACHE-DIR-NEW", f"new cache at {shown}{reason}{seen}.", fix)
     except Exception:  # a notice must not become the failure
         logger.debug("Could not announce %s", cache_dir, exc_info=True)

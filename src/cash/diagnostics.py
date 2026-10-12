@@ -411,7 +411,12 @@ def short_diagnostic(code: str, what: str, *, more: str | None = None) -> str:
     text of this one is kept (``f.cache_info()['warnings']``).
     """
     head, _, rest = what.partition("\n")
-    sentence = _SENTENCE_END.split(head.strip(), maxsplit=1)[0]
+    sentences = _SENTENCE_END.split(head.strip(), maxsplit=2)
+    sentence = sentences[0]
+    # "@cash.cache on f: result not cached." says what, not why: a first
+    # sentence of a few words after its subject takes the next one along.
+    if len(sentences) > 1 and len(sentence.rpartition(": ")[2].split()) < 6:
+        sentence = f"{sentence} {sentences[1]}"
     # A heading line ("in helper (mod.py):") groups items; it is not one.
     items = [line.strip() for line in rest.splitlines() if line.strip() and not line.rstrip().endswith(":")]
     if items:

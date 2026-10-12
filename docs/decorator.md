@@ -898,7 +898,7 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @7eed0d14 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @eadc3715 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 

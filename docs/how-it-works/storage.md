@@ -34,7 +34,7 @@ what is running:
     The kernel's working directory, which Jupyter and VS Code set to the
     notebook's folder. Every notebook in a folder shares one `.cash`.
 
-<!-- claim: cash/_location.py:announce_new_cache_dir @5750057e -->
+<!-- claim: cash/_location.py:announce_new_cache_dir @5260de8d -->
 When a script creates the default folder, cash says where, once
 ([`CACHE-DIR-NEW`](../warnings.md#cache-dir-new)), and names an existing cache
 nearby if there is one.

@@ -68,6 +68,7 @@ _COUNT = """
         ("by_eval", 'eval("x + 1")'),
     ],
 )
+@pytest.mark.usefixtures("full_warning_text")
 def test_untrackable_pattern_runs_uncached_with_a_warning(tmp_path, name, line):
     # A name of its own: the warning is shown once per function and process.
     mod = _load(
