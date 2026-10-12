@@ -208,6 +208,13 @@ cash spots side effects from the statement's source, without running it. So:
   `with cash.assume_safe():` around either, or `@pure` on the function that
   writes. A waiver on another line, or `@pure` on a function that only made
   an argument, does not.
+- A statement that starts worker processes or threads, itself or in a
+  function of yours it calls (`ProcessPoolExecutor`, `multiprocessing.Pool`,
+  `joblib.Parallel`, `ThreadPool`, `threading.Thread`), is not stored either:
+  what the work sent there writes is not seen, so it runs every time.
+  `ThreadPoolExecutor` runs its tasks where they are seen, and
+  `# @cash:assume-safe` on the statement, or on the line that starts the
+  workers, caches it anyway.
 
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `time.perf_counter_ns()`,

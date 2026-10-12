@@ -97,7 +97,7 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import statement_calls_user_writer
+from ...analysis.namespace_effects import statement_calls_user_writer, statement_starting_workers
 from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
 from ...tracking.file_tracker import FileAccessTracker
@@ -1080,6 +1080,11 @@ class StatementProcessor:
             if wrote:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(wrote)
+        if not run.skip_cache and execution.result.success and not getattr(run.annotation, "assume_safe", False):
+            workers = self._workers_reason(run)
+            if workers:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(workers)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if held:
@@ -1097,6 +1102,29 @@ class StatementProcessor:
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+
+    def _workers_reason(self, run: StatementRun) -> str | None:
+        """Why *run* may not be stored when it starts worker processes or
+        threads, itself or in a function of the user's it calls, or None.
+
+        The write observer sees the statement's own process and context: a
+        file a worker wrote (``ProcessPoolExecutor``, ``multiprocessing.Pool``,
+        ``joblib.Parallel``, ``ThreadPool``, ``threading.Thread``) was not
+        seen, the statement was stored, and the next Run All skipped every
+        write. Whether the work writes cannot be told, so the statement runs
+        every time (``# @cash:assume-safe`` caches it anyway)."""
+        try:
+            started = statement_starting_workers(run.code, self.shell.user_ns, run.tree)
+        except Exception:
+            logger.debug("%s could not read whether %r starts workers", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            return None
+        if not started:
+            return None
+        return (
+            f"Starts worker processes or threads ({started}): a file they write is not seen, "
+            "and a cache hit would skip it, so the statement runs every time "
+            "(# @cash:assume-safe caches it anyway)"
+        )
 
     def _kept_writes_reason(self, run: StatementRun, execution: StatementExecution) -> str | None:
         """Why *run* may not be stored when it was seen writing a file of the

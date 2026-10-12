@@ -55,6 +55,8 @@ __all__ = [
     "statement_calls_user_writer",
     "statement_user_writer_call",
     "code_waived_lines",
+    "statement_starting_workers",
+    "user_callee_starting_workers",
     "user_callee_writing_files",
     "resolve_literal_path",
     "statement_written_paths",
@@ -433,6 +435,64 @@ def statement_user_pyplot_call(
                 found = user_callee_using_pyplot(_function_called(value))
                 if found:
                     return getattr(value, "__name__", None) or ast.unparse(node.func), found
+    return None
+
+
+#: Calls that start worker processes, or threads that do not run in the
+#: caller's context (``ThreadPoolExecutor`` does: cash copies it). What the
+#: work sent there writes, the write observer of the statement does not see.
+_WORKER_STARTERS: frozenset[str] = frozenset(
+    {"ProcessPoolExecutor", "Pool", "Process", "Parallel", "ThreadPool", "Thread", "get_reusable_executor"}
+)
+
+
+def _worker_starter(expr: ast.expr) -> str | None:
+    """The name *expr* calls when it starts workers (`_WORKER_STARTERS`)."""
+    name = expr.attr if isinstance(expr, ast.Attribute) else expr.id if isinstance(expr, ast.Name) else None
+    return name if name in _WORKER_STARTERS else None
+
+
+def _starts_workers(
+    func: types.FunctionType, replaces: bool, appends_itself: bool, waives: bool, callees: tuple[ast.expr, ...]
+) -> bool:
+    return any(_worker_starter(expr) for expr in callees)
+
+
+def user_callee_starting_workers(func: Any) -> str | None:
+    """The first user function calling *func* reaches that starts worker
+    processes or threads (``ProcessPoolExecutor``, ``multiprocessing.Pool``,
+    ``joblib.Parallel``, ``ThreadPool``, ``threading.Thread``), or None. A
+    line waived with ``# @cash:assume-safe`` does not count."""
+    return _first_user_callee(func, _starts_workers, "starts worker processes")
+
+
+def statement_starting_workers(
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
+) -> str | None:
+    """What in *code* starts worker processes or threads, itself or in a
+    function of the user's it calls (:func:`user_callee_starting_workers`),
+    or None. Whatever the work run there writes is invisible to the
+    statement's write observer, so a hit could skip it."""
+    if "(" not in code:
+        return None
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    for node in calls:
+        started = _worker_starter(node.func)
+        if started:
+            return started
+    if not namespace:
+        return None
+    for node in calls:
+        found = user_callee_starting_workers(resolve_callee(node.func, namespace))
+        if found:
+            return found
+        if node.args or node.keywords:
+            for value in handed_callable_values(node, namespace):
+                found = user_callee_starting_workers(_function_called(value))
+                if found:
+                    return found
     return None
 
 

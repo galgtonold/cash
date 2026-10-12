@@ -42,7 +42,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.handed_callables import hands_a_state_changing_callable
-from cash.analysis.namespace_effects import user_callee_using_pyplot
+from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -997,7 +997,13 @@ class CallUnit:
         on a line on its way, ``with cash.assume_safe():``, ``@pure`` on a
         function it ran in) keeps it storable; a waiver elsewhere does not."""
         root = getattr(getattr(self._cash, "backend", None), "local_dir", None)
-        return bool(kept_writes(written, root, written.appended, written.waived))
+        if kept_writes(written, root, written.appended, written.waived):
+            return True
+        try:
+            # What workers it starts write is not seen here (`_workers_reason`).
+            return user_callee_starting_workers(call.fn) is not None
+        except Exception:  # noqa: BLE001 - unjudged: as before, storable
+            return False
 
     def _did_what_a_hit_cannot(
         self, call: _Call, rng_before, arg_hashes_before: tuple | None, ticket: tuple[int, int] = (0, 0)
