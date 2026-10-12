@@ -57,3 +57,11 @@ def test_an_array_holding_the_current_axes_is_named(figure):
 def test_with_no_figure_open_nothing_is_named():
     plt.close("all")
     assert pyplot_draw_names(ast.parse("plt.plot([1])"), {"plt": plt}) == frozenset()
+
+
+def test_a_dict_or_list_holding_the_current_figure_is_named(figure):
+    """``figs = {'main': plt.figure()}``: the drawing below draws on what
+    ``figs`` holds, and a cell reading it must be rebuilt with the drawing."""
+    fig, ax = figure
+    ns = {"plt": plt, "figs": {"main": fig}, "kept": [fig], "axd": {"a": ax}, "other": {"x": [1]}}
+    assert pyplot_draw_names(ast.parse("plt.plot([1])"), ns) == {"figs", "kept", "axd"}

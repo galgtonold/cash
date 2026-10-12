@@ -107,7 +107,7 @@ def draws_through_pyplot(tree: ast.AST | None, namespace: Mapping[str, Any]) -> 
 
 def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
     """The names of *namespace* bound to pyplot's current figure, to its
-    current axes, or to a list, tuple or array of Axes holding those axes.
+    current axes, or to a list, tuple, dict or array holding either.
     Empty when pyplot is not imported or holds no figure (asking it then
     would make one)."""
     plt = sys.modules.get("matplotlib.pyplot")
@@ -126,19 +126,26 @@ def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
             continue
         if value is fig or (current is not None and value is current):
             names.add(name)
-        elif current is not None and _holds_axes(value, current):
+        elif _holds_current(value, fig, current):
             names.add(name)
     return names
 
 
-def _holds_axes(value: Any, axes: Any) -> bool:
-    """Whether *value* is a list, tuple or numpy array of objects holding *axes*."""
-    if type(value) in (list, tuple):
-        return any(item is axes for item in value)
-    np = sys.modules.get("numpy")
-    if np is not None and isinstance(value, np.ndarray) and value.dtype == object:
-        return any(item is axes for item in value.flat)
-    return False
+def _holds_current(value: Any, fig: Any, axes: Any) -> bool:
+    """Whether *value* is a list, tuple, dict (its values) or numpy array
+    holding the current figure *fig* or the current *axes*
+    (``figs = {'main': plt.figure()}``, ``axs = plt.subplots(1, 2)[1]``)."""
+    vtype = type(value)
+    if vtype in (list, tuple):
+        items = value
+    elif vtype is dict:
+        items = value.values()
+    else:
+        np = sys.modules.get("numpy")
+        if axes is None or np is None or not isinstance(value, np.ndarray) or value.dtype != object:
+            return False
+        items = value.flat
+    return any(item is fig or (axes is not None and item is axes) for item in items)
 
 
 def pyplot_draw_names(tree: ast.AST | None, namespace: Mapping[str, Any]) -> frozenset[str]:
