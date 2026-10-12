@@ -6,10 +6,13 @@ shell -- because the working directory alone made the cache a property of
 where you were standing rather than of what you were running. `config` asks
 `project_anchor` for the default cache location and the ``pyproject.toml`` to
 read, and `installed_entry_point_cache_dir` for a tool run outside any project.
+The file backend calls `announce_new_cache_dir` when it creates that default
+folder.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
@@ -17,8 +20,11 @@ from pathlib import Path
 
 from .install_paths import is_installed_path
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "PROJECT_MARKERS",
+    "announce_new_cache_dir",
     "default_project_config_path",
     "default_user_config_path",
     "installed_entry_point_cache_dir",
@@ -441,3 +447,74 @@ def default_user_config_path() -> Path:
     if xdg:
         return Path(xdg) / "cash" / "config.toml"
     return Path.home() / ".config" / "cash" / "config.toml"
+
+
+#: The cache folders this process announced (CACHE-DIR-NEW): once each.
+_ANNOUNCED: set[str] = set()
+
+
+def _existing_cache_near(cache_dir: str) -> str | None:
+    """A cache cash made (``.cash/CACHE_VERSION``) in the cwd or a folder above
+    it, or above *cache_dir*: the one this run probably meant to use.
+
+    A few ``stat`` calls: ancestors only, up to the home directory, and never
+    the filesystem root.
+    """
+    from .backends.cache_dir import VERSION_FILENAME
+
+    own = Path(cache_dir).resolve()
+    home = _home()
+    starts = [own.parent]
+    try:
+        starts.append(Path.cwd().resolve())
+    except OSError:
+        pass
+    for start in starts:
+        for d in [start, *start.parents]:
+            if d.parent == d or (home is not None and d != home and home.is_relative_to(d)):
+                break
+            candidate = d / ".cash"
+            if candidate != own and (candidate / VERSION_FILENAME).is_file():
+                return str(candidate)
+    return None
+
+
+def announce_new_cache_dir(cache_dir: str) -> None:
+    """Say, once per folder and process, that cash just created its default
+    cache folder, and where (CACHE-DIR-NEW).
+
+    A run that lands somewhere new starts cold, which looks exactly like a
+    cache that does not work. Naming the folder, and an existing cache nearby,
+    makes that visible. Not in an interactive shell: a notebook's cache is the
+    folder it runs in, which is what its user expects.
+    """
+    key = os.path.normcase(os.path.abspath(cache_dir))
+    if key in _ANNOUNCED or interactive_shell_is_running():
+        return
+    _ANNOUNCED.add(key)
+    try:
+        shown = os.path.relpath(cache_dir)
+        if shown.startswith(os.pardir):
+            shown = os.path.abspath(cache_dir)
+    except ValueError:  # another drive
+        shown = os.path.abspath(cache_dir)
+    script_dir = _running_script_dir()
+    beside_script = (
+        script_dir is not None
+        and Path(cache_dir).resolve().parent == script_dir
+        and _project_root_above(script_dir) is None
+    )
+    reason = " (no project found above the script)" if beside_script else ""
+    nearby = _existing_cache_near(cache_dir)
+    fix = (
+        f"{nearby} exists -- set CASH_CACHE_DIR or [tool.cash] cache_dir to use it."
+        if nearby
+        else "set CASH_CACHE_DIR or [tool.cash] cache_dir to cache elsewhere."
+    )
+    from .diagnostics import warn_diagnostic
+    from .exceptions import CashWarning
+
+    try:
+        warn_diagnostic(CashWarning, "CACHE-DIR-NEW", f"new cache at {shown}{reason}.", fix)
+    except Exception:  # a notice must not become the failure
+        logger.debug("Could not announce %s", cache_dir, exc_info=True)

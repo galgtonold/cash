@@ -217,7 +217,7 @@ export CASH_TIER_2_TYPE=s3
 export CASH_TIER_2_BUCKET=my-team-cache
 ```
 
-<!-- claim: cash/backends/factory.py:build_backend_from_config @2784fa8a, cash/backends/factory.py:tier_specs @428b03c6 -->
+<!-- claim: cash/backends/factory.py:build_backend_from_config @ef844e4c, cash/backends/factory.py:tier_specs @428b03c6 -->
 A tier list replaces the stack `CASH_BACKEND` names, and a setting a tier leaves
 out comes from the top-level field of the same meaning. See
 [Configuration](../../getting-started/configuration.md).

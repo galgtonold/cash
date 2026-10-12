@@ -189,6 +189,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CACHE-THRASH",  # at the cap, evicting within writes of storing
         "CACHE-CLEAR-INCOMPLETE",  # cache_clear() could not remove some entries,
         # which are still served
+        "CACHE-DIR-NEW",  # cash created its default cache folder, and says where
+        # (and names an existing cache nearby)
         "CACHE-DIR-UNWRITABLE",  # the cache directory cannot be written at all,
         # so nothing reaches disk this run
         "CACHE-NOT-WORTH-BYTES",  # more disk per second saved than cash will spend

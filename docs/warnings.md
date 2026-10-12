@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @90b90062 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @af1d4405 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -117,6 +117,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 |---|---|---|
 | [CACHE-ASYNC-GENERATOR](#cache-async-generator) | decorator | async generators are not cached |
 | [CACHE-CLEAR-INCOMPLETE](#cache-clear-incomplete) | decorator | `cache_clear()` could not remove some entries; they are still served |
+| [CACHE-DIR-NEW](#cache-dir-new) | decorator | cash created its default cache folder, and says where |
 | [CACHE-DIR-UNWRITABLE](#cache-dir-unwritable) | both | the cache directory cannot be written |
 | [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | the size cap had evicted a costly result, so it was computed again |
 | [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | checking tracked files costs much of what a hit saves |
@@ -168,6 +169,33 @@ first. Close whatever holds the cache folder and clear again, or run
 
 **When it is safe to ignore.** Never when you cleared to get rid of a wrong
 result. For freeing space only, the entries go at the next clear.
+
+### CACHE-DIR-NEW {#cache-dir-new}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/_location.py:announce_new_cache_dir @5750057e, cash/_location.py:_existing_cache_near @e592579d, cash/backends/factory.py:build_backend_from_config @ef844e4c -->
+**What happened.** cash created its cache folder for the first time, in the
+default place: the project root above the running script, or beside the
+script when no project is found above it. The message names the folder. When
+a cache cash made already exists in the current directory or a folder above
+it, or above the new folder, the message names that one too. It is shown
+once per folder and process, not in IPython, and not when you
+chose the folder with `CASH_CACHE_DIR`, `[tool.cash] cache_dir` or
+`Cash(cache_dir=...)`.
+
+**Why it matters.** A new folder is an empty cache, so this run computes
+everything. That is expected the first time. If the code already has a cache
+somewhere else, this run is not using it.
+
+**What to do.** Nothing, if the folder named is where you want the cache. To
+use another one, set `CASH_CACHE_DIR` for the run, or `cache_dir` under
+`[tool.cash]` in the project's `pyproject.toml`. A script in a folder with no
+project marker uses a `.cash` in a folder above it, so moving the script into
+the folder that holds the cache works too. See
+[Where the cache folder is](how-it-works/storage.md#where-the-cache-folder-is).
+
+**When it is safe to ignore.** When the folder named is the one you meant.
 
 ### CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 
