@@ -836,6 +836,10 @@ class FileWriterScheduler:
         # an inline append, a replay would write its rows twice.
         if statement_calls_user_writer(stmt_code, self._user_ns(), appends=False) is not None:
             return True
+        # Seen replacing a file as it last ran, through a call the static
+        # check does not read (``gzip.open(p, 'wt')`` in a helper).
+        if stmt_code in self.tracking_state.observed_writer_codes:
+            return True
         defs = self._trace_defs(simulation_trace)
         seen: set[str] = set()
         pending = self._unbound_helpers(self._called_names(stmt_code), defs)

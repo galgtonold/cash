@@ -101,9 +101,9 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import statement_calls_user_writer, statement_waives_through_user_code
+from ...analysis.namespace_effects import statement_calls_user_writer, statement_starting_workers
 from ...analytics import AnalyticsManager
-from ...tracking.file_dep_snapshot import file_state_epoch
+from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -1105,8 +1105,10 @@ class StatementProcessor:
                 execution.accessed_files = file_tracker.get_accessed_files() | run.header_files
                 execution.written_paths = frozenset(written_paths)
                 execution.appended_paths = frozenset(written_paths.appended)
+                execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
+                execution.probes = probe_answers(file_tracker)
                 # The keyed form (`run.code`), not what ran: a call routed
                 # through the call cache rewrites the text, and the key and
                 # the simulation look the observation up by the statement's
@@ -1123,6 +1125,11 @@ class StatementProcessor:
             if wrote:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(wrote)
+        if not run.skip_cache and execution.result.success and not getattr(run.annotation, "assume_safe", False):
+            workers = self._workers_reason(run)
+            if workers:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(workers)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if held:
@@ -1141,6 +1148,29 @@ class StatementProcessor:
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
 
+    def _workers_reason(self, run: StatementRun) -> str | None:
+        """Why *run* may not be stored when it starts worker processes or
+        threads, itself or in a function of the user's it calls, or None.
+
+        The write observer sees the statement's own process and context: a
+        file a worker wrote (``ProcessPoolExecutor``, ``multiprocessing.Pool``,
+        ``joblib.Parallel``, ``ThreadPool``, ``threading.Thread``) was not
+        seen, the statement was stored, and the next Run All skipped every
+        write. Whether the work writes cannot be told, so the statement runs
+        every time (``# @cash:assume-safe`` caches it anyway)."""
+        try:
+            started = statement_starting_workers(run.code, self.shell.user_ns, run.tree)
+        except Exception:
+            logger.debug("%s could not read whether %r starts workers", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            return None
+        if not started:
+            return None
+        return (
+            f"Starts worker processes or threads ({started}): a file they write is not seen, "
+            "and a cache hit would skip it, so the statement runs every time "
+            "(# @cash:assume-safe caches it anyway)"
+        )
+
     def _kept_writes_reason(self, run: StatementRun, execution: StatementExecution) -> str | None:
         """Why *run* may not be stored when it was seen writing a file of the
         user's that is still there, or None.
@@ -1152,19 +1182,20 @@ class StatementProcessor:
         write: the folder cleared at the top stayed empty, and a staging file
         written twice was read with its later content. A file written and
         removed again within the statement is no effect a hit skips.
-        ``# @cash:assume-safe`` on the statement, or a waiver in a function
-        it calls, keeps it cacheable."""
+        ``# @cash:assume-safe`` on the statement, or a waiver on the write's
+        way in a function it calls (`WrittenPaths.waived`), keeps it
+        cacheable; a waiver on another line does not."""
         backend = self.cash_instance.backend if self.cash_instance else None
-        written = kept_writes(execution.written_paths, getattr(backend, "local_dir", None), execution.appended_paths)
+        written = kept_writes(
+            execution.written_paths,
+            getattr(backend, "local_dir", None),
+            execution.appended_paths,
+            execution.waived_paths,
+        )
         if not written:
             return None
         if getattr(run.annotation, "assume_safe", False):
             return None
-        try:
-            if statement_waives_through_user_code(run.code, self.shell.user_ns, run.tree):
-                return None
-        except Exception:
-            logger.debug("%s could not read the waivers of %r", _LOG_PROCESSOR, run.code[:80], exc_info=True)
         more = f" and {len(written) - 1} more" if len(written) > 1 else ""
         return (
             f"Wrote {written[0]}{more} as it ran: a cache hit would skip the write, "
@@ -1535,6 +1566,7 @@ class StatementProcessor:
                 accessed_files=execution.accessed_files,
                 tree=run.tree,
                 accessed_remote=execution.accessed_remote,
+                probes=execution.probes,
                 no_cache=(run.annotation is not None and run.annotation.no_cache)
                 or run.value_varies
                 or inputs_moved
@@ -1970,6 +2002,10 @@ class StatementProcessor:
             ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 self.tracking_state.executed_write_input_lineages[code] = run.entry_lineages
+                if written and kept_writes(written, None, execution.appended_paths):
+                    self.tracking_state.observed_writer_codes.add(code)
+                else:
+                    self.tracking_state.observed_writer_codes.discard(code)
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it): ``executed_write_stmt_codes`` is empty after

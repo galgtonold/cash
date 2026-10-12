@@ -240,10 +240,15 @@ class StatementExecution:
     tax: float = 0.0
     accessed_files: set[str] = field(default_factory=set)
     accessed_remote: set[str] = field(default_factory=set)
+    #: The paths it checked for without reading them, with their answers
+    #: (``probe_answers``): ``absent``, or what the found path was asked to be.
+    probes: dict[str, str] = field(default_factory=dict)
     #: Files the statement was seen writing (``write_observer``).
     written_paths: frozenset[str] = frozenset()
     #: Those of ``written_paths`` it only appended to.
     appended_paths: frozenset[str] = frozenset()
+    #: Those of ``written_paths`` written only from a line the user waived.
+    waived_paths: frozenset[str] = frozenset()
     #: The `FileAccessTracker` of the run, for the store: which files moved
     #: since the statement read them, and their digests as it read them.
     file_tracker: Any = None

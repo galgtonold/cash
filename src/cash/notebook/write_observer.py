@@ -21,10 +21,16 @@ and is re-fired as before.
 from __future__ import annotations
 
 import contextvars
+import inspect
 import os
+import sys
+import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from cash.analysis.namespace_effects import code_waived_lines
+from cash.install_paths import is_user_code_file
+from cash.purity import is_pure
 from cash.tracking import io_watch
 
 __all__ = ["WrittenPaths", "kept_writes", "observe_writes"]
@@ -34,12 +40,18 @@ _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
 class WrittenPaths(set):
     """The absolute paths a block wrote; :attr:`appended` holds those it
-    only ever opened to append to."""
+    only ever opened to append to, :attr:`waived` those it only wrote from
+    a line the user waived (``_write_waived``)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.appended: set[str] = set()
         self._replaced: set[str] = set()
+        self._unwaived: set[str] = set()
+
+    @property
+    def waived(self) -> frozenset[str]:
+        return frozenset(self - self._unwaived)
 
 
 #: The collectors of the blocks being observed, innermost last. A statement
@@ -51,13 +63,103 @@ def _record(sinks: tuple[WrittenPaths, ...], path: object, appends: bool = False
     if path is None or isinstance(path, int):
         return  # a descriptor names no file
     resolved = os.path.abspath(os.fsdecode(os.fspath(path)))
+    waived = _write_waived()
     for sink in sinks:
         sink.add(resolved)
+        if not waived:
+            sink._unwaived.add(resolved)
         if not appends:
             sink._replaced.add(resolved)
             sink.appended.discard(resolved)
         elif resolved not in sink._replaced:
             sink.appended.add(resolved)
+
+
+#: Modules that open a file for the code that calls them (``gzip.open``,
+#: ``codecs.open``, the ``open`` IPython puts in a kernel's builtins): whose
+#: append it is, is their caller's. Cash's own frames too. Not ``pathlib``:
+#: ``LOG.open('a')`` in a helper stays left to the static check (an open
+#: question: counted, it would cost every such logging helper its cache).
+_PASS_THROUGH_OPENERS = frozenset({"io", "_pyio", "codecs", "gzip", "bz2", "lzma", "IPython.core.interactiveshell"})
+
+
+def _passes_through(frame) -> bool:
+    name = frame.f_globals.get("__name__") or ""
+    return name in _PASS_THROUGH_OPENERS or name == "cash" or name.startswith("cash.")
+
+
+def _appended_by_user_code() -> bool:
+    """Was the append being audited opened by the user's own code (a helper's
+    ``open(path, mode)``), not by a library's (a log handler's)?
+
+    Such an append is a write a hit would skip, like a replacing one, and the
+    static check cannot see it when the mode is computed (``open(p, mode)``)."""
+    try:
+        frame = sys._getframe(io_watch.CALLER_DEPTH + 1)
+    except ValueError:
+        return False
+    while frame is not None and _passes_through(frame):
+        frame = frame.f_back
+    return frame is not None and is_user_code_file(frame.f_code.co_filename)
+
+
+#: A code object -> ``None`` when it is not a function of the user's, else
+#: ``(waived lines, whole body)`` (`code_waived_lines`). Asked for every frame
+#: of every write; the code objects of a run are few.
+_frame_verdicts: dict[types.CodeType, tuple[frozenset[int], bool] | None] = {}
+
+
+def _frame_verdict(code: types.CodeType) -> tuple[frozenset[int], bool] | None:
+    verdict = _frame_verdicts.get(code, _UNSEEN)
+    if verdict is _UNSEEN:
+        user = is_user_code_file(code.co_filename)
+        if user and code.co_name == "<module>":
+            verdict = _TOP  # the cell (or script) itself: nothing of the user's above
+        else:
+            verdict = code_waived_lines(code) if user else None
+        if len(_frame_verdicts) > 4096:
+            _frame_verdicts.clear()
+        _frame_verdicts[code] = verdict
+    return verdict  # type: ignore[return-value]
+
+
+_UNSEEN = object()
+_TOP: tuple[frozenset[int], bool] = (frozenset(), False)
+
+
+def _write_waived() -> bool:
+    """Did the user waive the write being audited? Any function of theirs on
+    its way -- the one that opened the file, or one calling it from a line
+    -- waives it with ``# @cash:assume-safe`` on that line (or its ``def``),
+    a ``with cash.assume_safe():`` around it, or ``@cash.pure`` on itself.
+    A waiver elsewhere (a print helper's line, a ``@pure`` function that
+    only made an argument) is not the user's word on this write."""
+    frame = sys._getframe(1)  # cash's own frames are no user code: walked past
+    while frame is not None:
+        code = frame.f_code
+        verdict = _frame_verdict(code)
+        if verdict is _TOP:
+            return False
+        if verdict is not None and not _passes_through(frame):
+            lines, whole = verdict
+            if whole or frame.f_lineno in lines:
+                return True
+            func = frame.f_globals.get(code.co_name)
+            if func is not None and is_pure(func) and getattr(inspect.unwrap(func), "__code__", None) is code:
+                return True
+        frame = frame.f_back
+    return False
+
+
+def _names_a_folder(path: object) -> bool:
+    """Is the *path* being opened to write a folder already? Then it is an
+    ``O_TMPFILE`` open (``tempfile.TemporaryFile``): a file with no name,
+    which nothing after the block can find. A folder that only appears later
+    (moved into place) is kept."""
+    try:
+        return isinstance(path, (str, bytes, os.PathLike)) and os.path.isdir(path)
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def _on_open(args: tuple) -> None:
@@ -67,11 +169,12 @@ def _on_open(args: tuple) -> None:
     path, mode, flags = args
     if isinstance(mode, str):
         written = any(c in mode for c in "wax+")
-        appends = "a" in mode
+        # An append the user's own ``open()`` made is a write a hit skips.
+        appends = "a" in mode and not _appended_by_user_code()
     else:  # os.open
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
         appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC
-    if written:
+    if written and not _names_a_folder(path):
         _record(sinks, path, appends)
 
 
@@ -99,15 +202,19 @@ def observe_writes() -> Iterator[WrittenPaths]:
         _active.reset(token)
 
 
-def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = None, appended=frozenset()) -> list[str]:
+def kept_writes(
+    written: "set[str] | frozenset[str]", storage_root: object = None, appended=frozenset(), waived=frozenset()
+) -> list[str]:
     """The paths of *written* still there, outside cash's own storage
     (*storage_root*) and not in *appended*, sorted. A file written and
     removed again within the block (a temporary file) left nothing a cache
     hit would skip.
 
-    A file only appended to is left to the static writer check, which reads
-    ``open(p, 'a')`` and ``to_csv(mode='a')`` in the user's code: an append
-    seen in a library's code is a log handler's, as often as not."""
+    A file only appended to by a library is left to the static writer check,
+    which reads ``to_csv(mode='a')`` in the user's code: an append seen in a
+    library's code is a log handler's, as often as not. One the user's own
+    code opened (``open(p, mode)`` in a helper) is never in *appended*.
+    Nor is a file the user said a hit may skip (*waived*, `WrittenPaths.waived`)."""
     if not written:
         return []
     root = None
@@ -117,8 +224,9 @@ def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = Non
         p
         for p in written
         if p not in appended
+        and p not in waived
         and not (root and os.path.normcase(p).startswith(root))
+        # A folder is kept: one moved into place (``tmp.rename(dest)``) is
+        # what the block published.
         and os.path.lexists(p)
-        # A folder opened to write is ``O_TMPFILE``: a file with no name.
-        and not os.path.isdir(p)
     )

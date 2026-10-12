@@ -171,15 +171,17 @@ into a module; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @b05c975d -->
+<!-- claim: cash/effects.py:METHOD_VERBS @343aee1e, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @91df07f5 -->
 cash spots side effects from the statement's source, without running it. So:
 
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
-  only known at run time.
+  only known at run time (a write it makes is seen as it runs, below).
 - Write methods are matched by name on any object: `obj.save(x)` counts even
   on an object cash knows nothing about, while `obj.write_thing(x)` does not.
   `rename` and `replace` are left off the list, because `str.replace` would
-  match them.
+  match them. Writers that write from native code are on it too, as no
+  `open()` shows them: polars `write_parquet` / `write_csv` / `sink_*`,
+  pyarrow `write_table`, `np.savetxt`, `to_netcdf`, `save_model`.
 - Reads are not side effects: `requests.get(url)`, `open(p)` for reading and a
   literal `SELECT` query cache normally. Writing to the console
   (`sys.stdout.write`) counts as a `print`, not a file.
@@ -195,7 +197,7 @@ cash spots side effects from the statement's source, without running it. So:
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @61f032cd, cash/notebook/write_observer.py:kept_writes @8a47bb69 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @c7ddc27c, cash/notebook/write_observer.py:kept_writes @9f097aed -->
 - In your function, deleting, moving or creating a file or folder by name
   counts too (`p.touch()`, `p.unlink()`, `os.remove(p)`, `shutil.move(a, b)`,
   `os.makedirs(d)`). A write on a handle passed in (`f.write(...)`) does not,
@@ -203,11 +205,23 @@ cash spots side effects from the statement's source, without running it. So:
 - A statement seen writing a file as it ran is not stored either, whichever
   library wrote it (`np.savetxt`, `np.savez`, `joblib.dump`,
   `gzip.open(p, "wt")`, `os.open`), and neither is a cached call inside it,
-  so it runs every time. A file it only appended to is left to the check of
-  the source above, and so is one it removed again before it finished (a
-  temporary file). A waiver anywhere in a function it calls
-  (`# @cash:assume-safe`, `with cash.assume_safe():`) or `@pure` keeps it
-  cacheable.
+  so it runs every time. That covers a folder moved into place
+  (`tmp.rename(dest)`) and an append your own code makes
+  (`open(p, mode)` in a helper); an append made inside a library (a log
+  handler) is left to the check of the source above, and so is a file
+  removed again before the statement finished (a temporary file). A waiver
+  on the write's way keeps it cacheable: `# @cash:assume-safe` on the line
+  that writes or on a line calling the writer (or on its `def`),
+  `with cash.assume_safe():` around either, or `@pure` on the function that
+  writes. A waiver on another line, or `@pure` on a function that only made
+  an argument, does not.
+- A statement that starts worker processes or threads, itself or in a
+  function of yours it calls (`ProcessPoolExecutor`, `multiprocessing.Pool`,
+  `joblib.Parallel`, `ThreadPool`, `threading.Thread`), is not stored either:
+  what the work sent there writes is not seen, so it runs every time.
+  `ThreadPoolExecutor` runs its tasks where they are seen, and
+  `# @cash:assume-safe` on the statement, or on the line that starts the
+  workers, caches it anyway.
 
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @57270636, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `time.perf_counter_ns()`,

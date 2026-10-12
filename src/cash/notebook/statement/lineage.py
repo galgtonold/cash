@@ -69,20 +69,27 @@ def _record_file_reads(
     cache_key: str,
     accessed_files: set[str] | None,
     accessed_remote: set[str] | None,
+    probes: dict[str, str] | None = None,
 ) -> str:
-    """Record the files and remote objects a statement read under its
-    *cache_key*; returns their lineage component (empty when it read none)."""
+    """Record the files and remote objects a statement read, and the paths it
+    only checked for (*probes*), under its *cache_key*; returns their lineage
+    component (empty when it read none)."""
     file_hash_component = ""
-    if accessed_files or accessed_remote:
+    if accessed_files or accessed_remote or probes:
         file_hash_component = compute_file_hash_component(
             accessed_files or set(),
             accessed_remote,
+            probes,
         )
     if cache_key:
         tracking_state.statement_file_reads[cache_key] = (
             frozenset(accessed_files or ()),
             frozenset(accessed_remote or ()),
         )
+        if probes:
+            tracking_state.statement_probes[cache_key] = dict(probes)
+        else:
+            tracking_state.statement_probes.pop(cache_key, None)
     return file_hash_component
 
 
@@ -151,6 +158,7 @@ class StatementLineageBuilder:
         no_cache: bool = False,
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
+        probes: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Capture output variables, compute their lineage, and update tracking state.
 
@@ -170,12 +178,14 @@ class StatementLineageBuilder:
         join the same lineage component as local files, contributing the store's
         validator instead of a stat — see
         :func:`~cash.notebook.statement.file_deps.compute_file_hash_component`.
+        *probes* are the paths it only checked for, with their answers
+        (:func:`~cash.tracking.file_dep_snapshot.probe_answers`).
 
         Returns ``{var_name: value}`` for the captured outputs.
         """
         captured_vars: dict[str, Any] = {}
         user_ns = self.shell.user_ns
-        file_hash_component = _record_file_reads(tracking_state, cache_key, accessed_files, accessed_remote)
+        file_hash_component = _record_file_reads(tracking_state, cache_key, accessed_files, accessed_remote, probes)
 
         # A draw READS its module's hidden RNG variable: fold that
         # variable's lineage into every output's lineage so a re-seed upstream

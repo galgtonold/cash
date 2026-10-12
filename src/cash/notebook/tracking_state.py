@@ -52,6 +52,11 @@ class TrackingState:
     # writer from one that already ran.
     # W: StatementProcessor, ControlStructureProcessor. R: ReexecutionPlanner.
     executed_write_stmt_codes: set[str] = field(default_factory=set)
+    # The statements of those seen REPLACING a file of the user's as they ran
+    # (``write_observer``), whatever their code spells: a helper's
+    # ``gzip.open(p, 'wt')``. The upstream writer scheduler counts them as
+    # writers; an append-only one is not re-fired (its rows would double).
+    observed_writer_codes: set[str] = field(default_factory=set)
 
     # Code of a statement that wrote a file this session -> the lineages its
     # inputs had when it last ran. The simulation compares them with the
@@ -175,6 +180,12 @@ class TrackingState:
     # also holds what a variable inherited from its inputs.
     # W: StatementLineageBuilder. R: VirtualLineage, ControlStructureProcessor.
     statement_file_reads: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
+
+    # Cache key -> {path: answer} of the existence checks that statement made
+    # on its last run without reading the path (``probe_answers``): they join
+    # its file component as whether each path is there now.
+    # W: StatementLineageBuilder. R: StatementLineage.
+    statement_probes: dict[str, dict[str, str]] = field(default_factory=dict)
 
     # Cache key -> {output: digest of the value} a ``no-cache`` statement bound
     # on its last run. It goes into those outputs' lineage, so a reader below

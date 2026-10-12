@@ -118,9 +118,10 @@ variable the read produced, and it is checked again before each reuse; see
 [what counts as a change](invalidation.md#what-counts-as-a-change).
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @c72ffaba -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @438d8cb1 -->
     A statement that reads a file folds the file's modification time, size
-    and inode change time into its lineage. Copy the `.cash` folder to another machine, or point two
+    and inode change time into its lineage, and one that only checks whether
+    a path exists folds whether it is there. Copy the `.cash` folder to another machine, or point two
     machines at one shared backend, and those statements miss there, because
     the two machines compute different keys. The decorator checks files by
     content instead, so its entries can survive a move while the file paths

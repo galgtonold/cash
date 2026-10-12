@@ -1065,7 +1065,9 @@ class StatementLineage:
             # ones its outputs inherited -- with compute_file_hash_component.
             # Same files, same function: an unchanged file gives the
             # runtime's lineage, a changed one a different lineage.
-            file_hash_component = compute_file_hash_component(*own_reads)
+            file_hash_component = compute_file_hash_component(
+                *own_reads, self.tracking_state.statement_probes.get(cache_key)
+            )
 
         source_hash = statement_source_hash(stmt_code)
         lineage_by_out = self.output_lineages(

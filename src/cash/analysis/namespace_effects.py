@@ -60,8 +60,9 @@ from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on
 __all__ = [
     "statement_calls_user_writer",
     "statement_user_writer_call",
-    "statement_waives_through_user_code",
-    "user_callee_waiving",
+    "code_waived_lines",
+    "statement_starting_workers",
+    "user_callee_starting_workers",
     "user_callee_writing_files",
     "resolve_literal_path",
     "statement_written_paths",
@@ -157,45 +158,34 @@ def statement_user_writer_call(
     return None
 
 
-def statement_waives_through_user_code(
-    code: str,
-    namespace: "Mapping[str, Any] | None",
-    tree: "ast.Module | None" = None,
-) -> bool:
-    """Whether a call in *code* reaches a user function that waives some of
-    its lines (``# @cash:assume-safe`` on a line or its ``def``, ``with
-    cash.assume_safe():``). Followed as :func:`statement_user_writer_call`
-    follows a call.
-
-    What a statement was seen writing as it ran carries no line, so a
-    waiver anywhere in what it calls is taken for the write: the user said
-    a hit may skip it."""
-    if not namespace or "(" not in code:
-        return False
-    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
-    for node in calls:
-        values = [resolve_callee(node.func, namespace)]
-        if node.args or node.keywords:
-            values.extend(function for _value, function in _handed_functions(node, namespace, None))
-        if any(user_callee_waiving(value) for value in values):
-            return True
-    return False
+#: A user function's file and code object -> the lines of its body waived by
+#: ``# @cash:assume-safe`` or ``with cash.assume_safe():``, numbered as its
+#: frames number them, and whether the waiver is on its ``def`` line.
+_waived_lines_cache: LruMemo[tuple[str, types.CodeType], tuple[frozenset[int], bool]] = LruMemo(USER_CALLEES)
 
 
-def user_callee_waiving(func: Any) -> bool:
-    """Whether calling *func* reaches a user function that waives some of its
-    lines, or one the user promised ``@pure``: see
-    :func:`statement_waives_through_user_code`."""
-    plain = inspect.unwrap(func) if callable(func) else func
-    if isinstance(plain, types.FunctionType) and is_pure(plain):
-        return True
-    return _first_user_callee(func, _waives, "waives an effect") is not None
-
-
-def _waives(
-    func: types.FunctionType, replaces: bool, appends_itself: bool, waives: bool, callees: tuple[ast.expr, ...]
-) -> bool:
-    return waives
+def code_waived_lines(code_obj: types.CodeType) -> tuple[frozenset[int], bool]:
+    """``(waived lines, whole body)`` of the user function running *code_obj*:
+    the lines a waiver covers, in the file's numbering (``frame.f_lineno``),
+    and whether the waiver is on its ``def`` line. Empty for code cash does
+    not read (no source, not the user's)."""
+    memo_key = (code_obj.co_filename, code_obj)
+    known = _waived_lines_cache.get(memo_key)
+    if known is not None:
+        return known
+    verdict: tuple[frozenset[int], bool] = (frozenset(), False)
+    if is_user_code_file(code_obj.co_filename):
+        try:
+            source = textwrap.dedent(own_source(code_obj))
+            waived, whole = audited_lines(source) if "@cash:" in source else (frozenset(), False)
+            if "with" in source:
+                waived = waived | assume_safe_block_lines(ast.parse(source))
+            first = code_obj.co_firstlineno - 1
+            verdict = (frozenset(first + line for line in waived), whole)
+        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
+            pass
+    _waived_lines_cache[memo_key] = verdict
+    return verdict
 
 
 def statement_handed_callables(code: str, namespace: "Mapping[str, Any] | None") -> list[Any]:
@@ -501,6 +491,64 @@ def _hands_pyplot(call: ast.Call, namespace: "Mapping[str, Any]") -> bool:
         if isinstance(arg, (ast.Name, ast.Attribute)) and _is_pyplot_object(resolve_callee(arg, namespace)):
             return True
     return False
+
+
+#: Calls that start worker processes, or threads that do not run in the
+#: caller's context (``ThreadPoolExecutor`` does: cash copies it). What the
+#: work sent there writes, the write observer of the statement does not see.
+_WORKER_STARTERS: frozenset[str] = frozenset(
+    {"ProcessPoolExecutor", "Pool", "Process", "Parallel", "ThreadPool", "Thread", "get_reusable_executor"}
+)
+
+
+def _worker_starter(expr: ast.expr) -> str | None:
+    """The name *expr* calls when it starts workers (`_WORKER_STARTERS`)."""
+    name = expr.attr if isinstance(expr, ast.Attribute) else expr.id if isinstance(expr, ast.Name) else None
+    return name if name in _WORKER_STARTERS else None
+
+
+def _starts_workers(
+    func: types.FunctionType, replaces: bool, appends_itself: bool, waives: bool, callees: tuple[ast.expr, ...]
+) -> bool:
+    return any(_worker_starter(expr) for expr in callees)
+
+
+def user_callee_starting_workers(func: Any) -> str | None:
+    """The first user function calling *func* reaches that starts worker
+    processes or threads (``ProcessPoolExecutor``, ``multiprocessing.Pool``,
+    ``joblib.Parallel``, ``ThreadPool``, ``threading.Thread``), or None. A
+    line waived with ``# @cash:assume-safe`` does not count."""
+    return _first_user_callee(func, _starts_workers, "starts worker processes")
+
+
+def statement_starting_workers(
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
+) -> str | None:
+    """What in *code* starts worker processes or threads, itself or in a
+    function of the user's it calls (:func:`user_callee_starting_workers`),
+    or None. Whatever the work run there writes is invisible to the
+    statement's write observer, so a hit could skip it."""
+    if "(" not in code:
+        return None
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    for node in calls:
+        started = _worker_starter(node.func)
+        if started:
+            return started
+    if not namespace:
+        return None
+    for node in calls:
+        found = user_callee_starting_workers(resolve_callee(node.func, namespace))
+        if found:
+            return found
+        if node.args or node.keywords:
+            for value in handed_callable_values(node, namespace):
+                found = user_callee_starting_workers(_function_called(value))
+                if found:
+                    return found
+    return None
 
 
 def _first_user_callee(
@@ -963,17 +1011,18 @@ def _listing_folder(node: ast.AST, namespace: dict[str, Any] | None) -> str | No
         if not folder:
             return "/" if pattern.startswith("/") else os.curdir
         return folder
-    if method in ("glob", "rglob", "iterdir"):
+    if method in ("glob", "rglob", "iterdir", "walk"):
         return resolve_literal_path(node.func.value, namespace)
     return None
 
 
 #: Methods that list a folder: ``os.listdir`` / ``os.scandir``,
-#: ``glob.glob`` / ``glob.iglob``, ``Path.glob`` / ``rglob`` / ``iterdir``.
-_LISTING_METHODS: frozenset[str] = frozenset({"listdir", "scandir", "glob", "iglob", "rglob", "iterdir"})
+#: ``glob.glob`` / ``glob.iglob``, ``Path.glob`` / ``rglob`` / ``iterdir``,
+#: and ``os.walk`` / ``Path.walk`` (the folder and everything below it).
+_LISTING_METHODS: frozenset[str] = frozenset({"listdir", "scandir", "glob", "iglob", "rglob", "iterdir", "walk"})
 
 #: Text a statement that lists a folder contains (see ``_LISTING_METHODS``).
-LISTING_TEXT_MARKERS: tuple[str, ...] = ("listdir", "scandir", "glob", "iterdir")
+LISTING_TEXT_MARKERS: tuple[str, ...] = ("listdir", "scandir", "glob", "iterdir", "walk")
 
 
 def _listing_read_folder(call: ast.Call, namespace: dict[str, Any] | None) -> str | None:
@@ -983,7 +1032,7 @@ def _listing_read_folder(call: ast.Call, namespace: dict[str, Any] | None) -> st
     if isinstance(func, ast.Attribute) and get_base_name(func.value) == "os":
         if not call.args and not call.keywords:
             return os.curdir
-        return _call_path_argument(call, 0, namespace, frozenset({"path"}))
+        return _call_path_argument(call, 0, namespace, frozenset({"path", "top"}))
     return _listing_folder(call, namespace)
 
 
@@ -1079,7 +1128,11 @@ def _read_call_path(
         # A folder's listing reads the folder: what is written into it
         # changes what the next listing finds.
         if method in _LISTING_METHODS:
-            return _listing_read_folder(call, namespace), True
+            folder = _listing_read_folder(call, namespace)
+            if folder is None and method == "walk" and get_base_name(func.value) != "os":
+                # `ast.walk(tree)`, `nx.walk(...)`: a walk of no folder.
+                return None, False
+            return folder, True
         # Path(PATH).read_text(...) / Path(PATH).read_bytes(...)
         if method in ("read_text", "read_bytes"):
             recv = func.value

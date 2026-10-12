@@ -42,7 +42,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.handed_callables import hands_a_state_changing_callable
-from cash.analysis.namespace_effects import user_callee_using_pyplot, user_callee_waiving
+from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -72,6 +72,7 @@ from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
+from cash.tracking.file_dep_snapshot import probe_answers
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import (
@@ -992,15 +993,17 @@ class CallUnit:
         """Whether the call just run wrote a file of the user's that is still
         there, which a hit would skip: ``np.savetxt``, ``joblib.dump`` or
         ``os.open`` in a helper, none of which cash's static writer check
-        reads. A waiver in a function it reaches (``# @cash:assume-safe``,
-        ``with cash.assume_safe():``, ``@pure``) keeps it storable."""
+        reads. A write the user waived where it was made (``# @cash:assume-safe``
+        on a line on its way, ``with cash.assume_safe():``, ``@pure`` on a
+        function it ran in) keeps it storable; a waiver elsewhere does not."""
         root = getattr(getattr(self._cash, "backend", None), "local_dir", None)
-        if not kept_writes(written, root, written.appended):
-            return False
-        try:
-            return not user_callee_waiving(call.fn)
-        except Exception:  # noqa: BLE001 - unjudged: the write stands
+        if kept_writes(written, root, written.appended, written.waived):
             return True
+        try:
+            # What workers it starts write is not seen here (`_workers_reason`).
+            return user_callee_starting_workers(call.fn) is not None
+        except Exception:  # noqa: BLE001 - unjudged: as before, storable
+            return False
 
     def _did_what_a_hit_cannot(
         self, call: _Call, rng_before, arg_hashes_before: tuple | None, ticket: tuple[int, int] = (0, 0)
@@ -1068,6 +1071,7 @@ class CallUnit:
             elapsed,
             file_deps=frozenset(call_tracker.get_accessed_files()),
             remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
+            probes=probe_answers(call_tracker),
             stdout=stdout_text,
             stderr=stderr_text,
             callee_globals=captured,

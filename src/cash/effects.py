@@ -49,6 +49,7 @@ __all__ = [
     "ENVIRON_KEYED_METHODS",
     "ENVIRON_NAMES",
     "METHOD_VERBS",
+    "NATIVE_WRITE_METHODS",
     "MODULE_CALLS",
     "MUTATOR_METHODS",
     "STDIN_NAMES",
@@ -174,6 +175,7 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "shutil.rmtree": _W,
     "json.dump": _W,
     "pickle.dump": _W,
+    "joblib.dump": _W,
     "csv.writer": _W,
     # -- other programs --
     "os.system": _SP,
@@ -300,6 +302,46 @@ MODULE_CALLS: dict[str, EffectKind] = {
     "quit": _IN,
 }
 
+#: File writers that write from native code (polars, pyarrow, numpy, xarray,
+#: model libraries) rather than through Python's ``open()``, so the runtime
+#: write observer never sees them: only their name shows the write, also on a
+#: frame the function built itself. ``df.write_csv()`` without a path returns
+#: the text instead; counted all the same, it costs a statement its cache.
+_NATIVE_WRITERS: tuple[str, ...] = (
+    "write_csv",
+    "write_parquet",
+    "write_ipc",
+    "write_ipc_stream",
+    "write_json",
+    "write_ndjson",
+    "write_avro",
+    "write_excel",
+    "write_delta",
+    "sink_parquet",
+    "sink_csv",
+    "sink_ipc",
+    "sink_ndjson",
+    "write_table",
+    "write_dataset",
+    "write_feather",
+    "write_deltalake",
+    "write_html",
+    "write_image",
+    "savetxt",
+    "savez",
+    "savez_compressed",
+    "tofile",
+    "to_netcdf",
+    "to_zarr",
+    "to_file",
+    "to_orc",
+    "to_xml",
+    "save_model",
+    "save_weights",
+    "save_pretrained",
+)
+NATIVE_WRITE_METHODS: frozenset[str] = frozenset(_NATIVE_WRITERS)
+
 #: Method names that mean the same effect on essentially every receiver that
 #: has them, matched whatever the receiver is.
 #:
@@ -339,6 +381,11 @@ METHOD_VERBS: dict[str, EffectKind] = {
     "unlink": _W,
     "symlink_to": _W,
     "hardlink_to": _W,
+    # Writers that write from native code (polars, pyarrow, numpy, model
+    # libraries), which no `open()` the runtime observer sees goes through:
+    # a name is all that shows them (`NATIVE_WRITE_METHODS`).
+    **{name: _W for name in _NATIVE_WRITERS},
+    "write_database": _DW,
     # -- the network, through a client object (a requests Session, httpx, an
     #    SDK wrapper, a socket) --
     "post": _NW,

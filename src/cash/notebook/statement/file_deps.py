@@ -24,11 +24,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..._paths import normalize_path
 from ...remote_source import RemoteFileDataSource
-from ...tracking.file_dep_snapshot import realpath_of_read_this_run
+from ...tracking.file_dep_snapshot import probe_state_parts, realpath_of_read_this_run
 from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
 
@@ -45,8 +46,14 @@ logger = logging.getLogger(__name__)
 def compute_file_hash_component(
     accessed_files: set[str],
     accessed_remote: set[str] | None = None,
+    probes: Mapping[str, str] | None = None,
 ) -> str:
     """Compute a hash component from accessed file paths and their stats.
+
+    *probes* are the existence checks the statement made without reading
+    (``{path: answer}``, :func:`probe_answers`): each adds whether the path is
+    there now, so a value computed while a file was missing gets a new lineage
+    once it appears, and the cells built on it miss too.
 
     *accessed_remote* carries URLs the statement read from object storage. They
     contribute the validator their store maintains — an ETag, a version id, a
@@ -117,6 +124,9 @@ def compute_file_hash_component(
         # this one is identical on every machine -- a statement reading object
         # storage keys the same for a teammate.
         file_components.append(f"{url}:{RemoteFileDataSource(url).state_token()}")
+
+    if probes:
+        file_components.extend(probe_state_parts(probes))
 
     if file_components:
         component = ":" + hashlib.sha256(",".join(file_components).encode("utf-8")).hexdigest()

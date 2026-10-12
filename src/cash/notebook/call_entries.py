@@ -428,6 +428,7 @@ class CallEntries:
         *,
         file_deps: frozenset[str] = frozenset(),
         remote_deps: frozenset[str] = frozenset(),
+        probes: dict[str, str] | None = None,
         stdout: str = "",
         stderr: str = "",
         callee_globals: Mapping[str, Any] | None = None,
@@ -482,11 +483,17 @@ class CallEntries:
         # belongs in it (see the `callee_globals` note below).
         if self._persist_provider():
             metadata["force_persist"] = True
-        if file_deps or remote_deps:
+        if file_deps or remote_deps or probes:
+            # The paths it only checked for (``probe_answers``) are checked as
+            # the decorator checks them: still missing, or still there.
+            absent = [path for path, asked in (probes or {}).items() if asked == "absent"]
+            present = {path: asked for path, asked in (probes or {}).items() if asked != "absent"}
             try:
                 # A file beside the callee's own code is checked in each
                 # install's own copy, as the decorator records it.
-                snap = attach_code_relative(snapshot_dependencies(file_deps, remote_deps), code_module)
+                snap = attach_code_relative(
+                    snapshot_dependencies(file_deps, remote_deps, absent, present=present), code_module
+                )
             except Exception:  # noqa: BLE001 - never let dep snapshotting break the store
                 snap = None
             if snap:

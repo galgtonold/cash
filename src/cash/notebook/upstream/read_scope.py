@@ -216,7 +216,7 @@ class ReadScope:
             # store a plain set/list of paths -- accept either shape.
             paths.update(dep.keys() if hasattr(dep, "keys") else dep)
 
-        def _collect(src: str, outputs=(), namespace=None) -> None:
+        def _collect(src: str, outputs=(), namespace=None, own: bool = False) -> None:
             nonlocal fully_known
             try:
                 clean = CodeAnalyzer.strip_magics(src.replace("\r\n", "\n"))
@@ -248,6 +248,11 @@ class ReadScope:
                 fully_known = False
             else:
                 paths.update(r)
+                if own:
+                    # What the cell read when it last ran, too: a reader the
+                    # code does not show (``np.loadtxt(p)``, a helper's read)
+                    # read the file the writer above re-makes.
+                    paths.update(self._persisted_reads(src) or ())
 
         relevant = self._statements_the_cell_depends_on(required_inputs, simulation_trace)
         covered_defs = self._defs_whose_callers_recorded_reads(simulation_trace, relevant, efd)
@@ -277,7 +282,7 @@ class ReadScope:
             # it from the code.
             bound: dict = {}
             for stmt in _statement_codes(notebook_cells[current_cell_idx]):
-                _collect(stmt, namespace=collections.ChainMap(bound, user_ns or {}))
+                _collect(stmt, namespace=collections.ChainMap(bound, user_ns or {}), own=True)
                 _bind_literal_paths(stmt, bound, collections.ChainMap(bound, user_ns or {}))
 
         return paths, fully_known
