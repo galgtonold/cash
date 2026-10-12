@@ -545,19 +545,28 @@ class KeyBuilder:
             if spec.seed_params:
                 self._rng.warn_if_seed_is_none(func, func_name, args, kwargs)
             # What the argument part of the key is made of: every argument,
-            # or what ``key=`` / the ignored parameters leave of them. Both
-            # channels read it, the code one and the value one.
+            # or what ``key=`` / the ignored parameters leave of them.
             keyed = normalized_args
             if spec.arg_key is not None:
                 keyed = self.key_arguments(spec, args, kwargs, normalized_args)
-            state_hash = self._code_args.fold_code_args(
-                *keyed,
-                state_hash,
-                func_name=func_name,
-                owner_code=getattr(func, "__code__", None),
-                func=func,
-                report=self._registry.report_for(func, func_name),
-            )
+            # The code channel. ``key=`` replaces only the arguments' VALUE
+            # part: the body still runs the code the real arguments carry (a
+            # parameter object's methods, a passed function), so that code is
+            # folded from them, and from what the key function returned on top
+            # of it. Parameters left out with ``ignore=`` are declared not to
+            # matter to the call, code and all.
+            carriers = [keyed]
+            if spec.arg_key is not None and spec.arg_key.key_fn is not None:
+                carriers.insert(0, normalized_args)
+            for carrier_args in carriers:
+                state_hash = self._code_args.fold_code_args(
+                    *carrier_args,
+                    state_hash,
+                    func_name=func_name,
+                    owner_code=getattr(func, "__code__", None),
+                    func=func,
+                    report=self._registry.report_for(func, func_name),
+                )
             chain.append(state_hash)
             dynamic_sources: list = []
             try:

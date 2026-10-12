@@ -509,10 +509,14 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489 -->
-Only the arguments' part of the key changes. The function's code, its
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3 -->
+Only the arguments' value part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
-the rest stay in the key as before. The key function's own code is in the key
+the rest stay in the key as before, and so does the code the arguments carry:
+with `key=lambda p: (p.fast,)`, an edit to a method of `p`'s class re-keys the
+call, and two functions passed in run as two calls whatever the key function
+returns for them. A parameter left out with `ignore=` is left out with its
+code. The key function's own code is in the key
 too, with the helpers it calls and what it holds: the values a key function
 made by a factory captured (`key=by("id")`), or the state of a callable
 object (`key=Pick("id")`). Editing any of them re-keys every call.

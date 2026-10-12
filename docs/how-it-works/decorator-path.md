@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0bee994c, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0bee994c, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -130,13 +130,15 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
 arguments, and its return value is hashed by the rules above as the one
-argument. The code those arguments carry (a class or function passed in) is
-keyed from what is left, too. A call that does not bind to the signature
+argument. The code the arguments carry (a class or function passed in, the
+methods of a parameter object) goes into `state` from the real arguments
+under `key=`, and from what the key function returned on top; under
+`ignore=`, from the parameters that are left. A call that does not bind to the signature
 keeps every argument.
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._fold_key_function @125f0613 -->

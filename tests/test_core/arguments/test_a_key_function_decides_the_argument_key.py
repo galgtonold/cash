@@ -457,3 +457,64 @@ def test_explain_leaves_an_iterator_argument_unread(cash_instance):
     answer = total.explain(rows)
     assert answer.details.get("error") == "KEY-ITERATOR-CONSUMED", answer
     assert list(rows) == [1, 2, 3], "explain() emptied the caller's generator"
+
+
+_PARAMS_SCRIPT = """
+import cash
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class P:
+    fast: int = 10
+
+    def window(self):
+        return self.fast * {factor}
+
+@cash.cache({decorator_args})
+def sig(p):
+    return p.window()
+
+print("RESULT", sig(P()))
+"""
+
+
+@pytest.mark.parametrize(
+    "decorator_args", ["key=lambda p: (p.fast,)", ""], ids=["key function", "no key function"]
+)
+def test_an_edit_to_code_an_argument_carries_rekeys_under_a_key_function(tmp_path, decorator_args):
+    """``key=`` replaces only the arguments' value part of the key. The body
+    still runs the methods of the parameter object it is given, so an edit to
+    one re-keys the call as it does without ``key=``. Keyed by the key
+    function's output alone (a tuple of ints, no code), the edited method's
+    result was served stale from the entry the old one wrote."""
+
+    def write(factor: int) -> None:
+        (tmp_path / "job.py").write_text(
+            _PARAMS_SCRIPT.format(factor=factor, decorator_args=decorator_args), encoding="utf-8"
+        )
+
+    write(2)
+    assert "RESULT 20" in run_python("job.py", cwd=tmp_path).stdout
+    assert "RESULT 20" in run_python("job.py", cwd=tmp_path).stdout
+    write(3)
+    edited = run_python("job.py", cwd=tmp_path)
+    assert "RESULT 30" in edited.stdout, edited.stdout + edited.stderr
+
+
+def test_a_function_passed_as_an_argument_stays_in_the_key_under_a_key_function(cash_instance):
+    """Calls the key function maps together still differ by the code they
+    pass: ``apply(double, 3)`` and ``apply(triple, 3)`` share ``key=`` output
+    ``3`` but run different functions."""
+
+    def double(x):
+        return x * 2
+
+    def triple(x):
+        return x * 3
+
+    @cash_instance.cache(key=lambda fn, x: (x,))
+    def apply(fn, x):
+        return fn(x)
+
+    assert apply(double, 3) == 6
+    assert apply(triple, 3) == 9, "the entry double wrote was served for triple"
