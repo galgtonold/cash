@@ -45,6 +45,7 @@ from cash.notebook.statement.control_body import is_control_body
 from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
 from cash.notebook.statement.evictions import EvictedRecomputes
+from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.hit import CacheHitServer
@@ -225,6 +226,8 @@ class StatementProcessor:
         # TrackingState); the processor never aliases its fields.
         self.tracking_state: TrackingState = tracking_state or TrackingState()
         self._randomness = StatementRandomness(shell, self.tracking_state)
+        # What a cell's last line showed, for the next edit that computes it again.
+        self._memo = ExpressionMemo()
         self._rebuild_cost = RebuildCostLedger(shell, self.tracking_state, cash_instance)
         # A statement's argument digests, handed between its in-place-change
         # check and the calls inside it, so each hashes a big argument once.
@@ -936,6 +939,14 @@ class StatementProcessor:
         handed = run.loop_iterable is not NO_LOOP_ITERABLE
         if handed:
             source, tree = over_the_handed_iterable(source)
+        memo = None
+        if run.tree is not None and not handed:
+            # Matched on the statement as written; it then runs as written,
+            # with the kept value in place, not through the call cache.
+            memo = self._memo.substitute(run.tree, self.tracking_state.variable_lineage, self.shell.user_ns)
+            if memo is not None:
+                tree = memo[0]
+                source = ast.unparse(tree)
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
@@ -981,11 +992,19 @@ class StatementProcessor:
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
                     if handed:
                         user_ns[LOOP_ITERABLE_NAME] = run.loop_iterable
+                    if memo is not None:
+                        user_ns.update(memo[1])
                     start_time = _perf_counter()
                     try:
                         yield runner
                     finally:
                         wall_time = _perf_counter() - start_time
+                        if memo is not None:
+                            # Bound only while it ran; what the value cost
+                            # to compute is what the statement is worth.
+                            for name in memo[1]:
+                                user_ns.pop(name, None)
+                            wall_time += memo[2]
                         if handed:
                             # Gone before the outputs are captured, and the
                             # value no longer held once the loop is done.
@@ -1110,6 +1129,15 @@ class StatementProcessor:
                 metrics["miss_reason"] = reason
 
         self._post_execute(run, execution)
+        if execution.echo and run.cache_key and not run.skip_cache and not run.outputs:
+            if not execution.accessed_files and not execution.accessed_remote and not self._randomness.observed_draw:
+                self._memo.keep(
+                    run.tree,
+                    execution.echo[0],
+                    execution.wall_time,
+                    self.tracking_state.variable_lineage,
+                    self.shell.user_ns,
+                )
         self._forget_ipython_bindings(run)
         if run.magic_reads is not None:
             self.note_magic_changes(run.code, run.magic_snapshots)
