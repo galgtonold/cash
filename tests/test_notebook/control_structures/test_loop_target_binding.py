@@ -108,3 +108,19 @@ class TestNestedTupleUnpacking:
 
         names = extract_target_names(target)
         assert set(names) == {"a", "b", "c"}
+
+
+def test_an_item_or_an_attribute_target_is_stored_into():
+    """``for d['k'] in ...`` / ``for ns.i in ...`` store into the item or the
+    attribute, as Python does; they were skipped, and ``d`` stayed ``{}``."""
+    import types
+
+    from cash.notebook.control_structures import bind_target_values
+
+    ns = {"d": {}, "holder": types.SimpleNamespace(), "acc": [0, 0]}
+    for code, value in [("for d['k'] in data: pass", 2), ("for holder.i in data: pass", 3)]:
+        bind_target_values(ast.parse(code).body[0].target, value, ns)
+    bind_target_values(ast.parse("for acc[0], last in data: pass").body[0].target, (5, 6), ns)
+    assert ns["d"] == {"k": 2}
+    assert ns["holder"].i == 3
+    assert ns["acc"] == [5, 0] and ns["last"] == 6

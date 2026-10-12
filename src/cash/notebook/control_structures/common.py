@@ -139,8 +139,12 @@ def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[
     if isinstance(target, ast.Name):
         user_ns[target.id] = value
         bindings[target.id] = value
+    elif isinstance(target, (ast.Subscript, ast.Attribute)):
+        # ``for d['k'] in ...`` / ``for ns.i in ...``: Python stores into the
+        # item or attribute, as an assignment does.
+        return _bind_by_assignment(target, value, user_ns)
     elif isinstance(target, (ast.Tuple, ast.List)):
-        if any(isinstance(elt, ast.Starred) for elt in target.elts):
+        if any(isinstance(elt, (ast.Starred, ast.Subscript, ast.Attribute)) for elt in target.elts):
             return _bind_by_assignment(target, value, user_ns)
         vals = list(value)
         if len(vals) != len(target.elts):
