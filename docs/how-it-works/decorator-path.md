@@ -151,7 +151,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4d2ab472 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @a39468e5 -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
