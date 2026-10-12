@@ -110,6 +110,8 @@ def test_a_draw_reads_its_data_but_not_a_buffer():
         ns = _namespace()
         ns.update(fig=fig, ax=ax, names=["a", "b"], totals=[1, 2])
         assert _exempt("ax.bar(names, totals)", ns) == {"names", "totals"}
+        ns["emb"] = {"a": [1, 2]}
+        assert _exempt("for col in ['a']:\n    ax.plot(emb[col])", ns) == {"emb"}
         assert _exempt("fig.savefig(buf)", ns) == set()
     finally:
         plt.close(fig)

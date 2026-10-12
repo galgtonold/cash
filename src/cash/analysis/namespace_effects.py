@@ -1567,6 +1567,9 @@ def rewatch_exempt(
                 root = root.value
             if isinstance(root, ast.Name) and receiver_is_identity_coupled(user_ns.get(root.id)):
                 for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
+                    # `ax.plot(emb[col])`, `ax.bar(df.x, df.y)`: a read of the data.
+                    while isinstance(arg, (ast.Subscript, ast.Attribute)) and isinstance(arg.ctx, ast.Load):
+                        arg = arg.value
                     if isinstance(arg, ast.Name) and _plain_data(user_ns.get(arg.id, _UNBOUND)):
                         safe_nodes.add(id(arg))
             continue
