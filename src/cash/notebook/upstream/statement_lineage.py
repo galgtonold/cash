@@ -26,6 +26,7 @@ from ...analysis.mutation_effects import (
     captured_call_receiver_names,
     cell_definitions,
     classify_receivers,
+    comprehension_watch_candidates,
     is_module_name,
     live_function_source,
     statement_effects,
@@ -45,7 +46,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import watched_call_receivers
+from ..consumables import is_stream, watched_call_receivers
 from ..lineage_formula import (
     callable_source_component,
     changed_module_environment,
@@ -275,6 +276,7 @@ class StatementLineage:
         stmt_code: str,
         tree: ast.Module,
         virtual_modules: set[str] | None = None,
+        inputs_changed: Callable[[], bool] | None = None,
     ) -> set[str]:
         """Names *tree*'s calls change in place, decided as the runtime decides
         them (``classify_receivers``).
@@ -298,6 +300,16 @@ class StatementLineage:
         arguments = (
             call_arguments(tree, user_ns, self._function_source)
             | watched_call_receivers(tree, user_ns)
+            | frozenset(
+                name
+                for name in comprehension_watch_candidates(
+                    tree,
+                    user_ns,
+                    lambda name: is_module_name(name, user_ns, virtual_modules or ()),
+                    self._function_source,
+                )
+                if not is_stream(user_ns.get(name))
+            )
             | {
                 n
                 for n in call_argument_names(tree)
@@ -311,13 +323,25 @@ class StatementLineage:
         )
         # The simulation cannot watch the statement run: an undecided
         # receiver is assumed to change, an undecided argument not to.
-        return set(classes.mutated | classes.unknown_receivers)
+        mutated = set(classes.mutated | classes.unknown_receivers)
+        if inputs_changed is not None and load_verdict() is not None:
+            # The verdict holds what earlier runs changed; on new inputs the
+            # runtime watches again what it does not hold
+            # (`MutationClassifier.start_rewatch`), and may see it change.
+            fresh = classify_receivers(
+                tree, user_ns, lambda: None, arguments=arguments, virtual_modules=virtual_modules or ()
+            )
+            unseen = (fresh.unknown_receivers | fresh.unknown_args) - mutated
+            if unseen and inputs_changed():
+                mutated |= unseen
+        return mutated
 
     def reads_writes(
         self,
         stmt_code: str,
         tree: ast.Module | None,
         virtual_modules: set[str],
+        virtual_lineage: Mapping[str, str] | None = None,
     ) -> tuple[StatementEffects, set[str], set[str]]:
         """*stmt_code*'s effects, and what it reads and writes, as its key sees them.
 
@@ -339,7 +363,12 @@ class StatementLineage:
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
         if tree is not None:
-            outputs |= self._mutation_receivers(stmt_code, tree, virtual_modules)
+            outputs |= self._mutation_receivers(
+                stmt_code,
+                tree,
+                virtual_modules,
+                None if virtual_lineage is None else lambda: self._inputs_moved(inputs, virtual_lineage),
+            )
             outputs |= effects.arg_mutations
         if not is_control_body(stmt_code):
             # A statement that sets state on a local module changes the
@@ -351,6 +380,14 @@ class StatementLineage:
             outputs |= drawn
             inputs |= drawn
         return effects, inputs, outputs
+
+    def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str]) -> bool:
+        """Whether the simulation gives one of *inputs* another lineage than
+        the one the kernel holds it with: the statement then runs on inputs
+        it did not run on to make what the kernel holds. A name the kernel
+        holds no lineage for (after a restart) says nothing either way."""
+        held = self.tracking_state.variable_lineage
+        return any(name in virtual_lineage and name in held and virtual_lineage[name] != held[name] for name in inputs)
 
     def pyplot_draw_outputs(self, stmt_code: str, tree: ast.AST | None) -> frozenset[str]:
         """The names *stmt_code* changed by drawing through pyplot when the
@@ -800,7 +837,7 @@ class StatementLineage:
                 virtual_modules = set()
 
             tree = parse_cached(stmt_code)
-            effects, inputs, outputs = self.reads_writes(stmt_code, tree, virtual_modules)
+            effects, inputs, outputs = self.reads_writes(stmt_code, tree, virtual_modules, virtual_lineage)
             _apply_deletes(tree, virtual_lineage, virtual_modules)
 
             is_import = stmt_code.strip().startswith(("import ", "from "))

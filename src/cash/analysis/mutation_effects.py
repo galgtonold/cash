@@ -39,6 +39,7 @@ from .callee_effects import (
     argument_roots,
     callee_global_mutations,
     function_arg_mutations,
+    iterated_sources,
     mutating_partials,
     partial_arg_mutations,
     reduce_free_mutations,
@@ -82,6 +83,7 @@ __all__ = [
     "captured_call_receiver_names",
     "captured_call_receivers",
     "classify_receivers",
+    "comprehension_watch_candidates",
     "condition_mutations",
     "control_structure_mutations",
     "drawn_on_arguments",
@@ -802,6 +804,52 @@ def statement_watch_candidates(
     names = _LoopNames(is_module, namespace, resolve_source)
     found = _handed_to_unknown_code(tree, names, bare=True)
     return frozenset(name for name in found if _watchable(name, namespace, is_module))
+
+
+def comprehension_watch_candidates(
+    tree: ast.Module | None,
+    namespace: Mapping[str, Any],
+    is_module: Callable[[str], bool],
+    resolve_source: SourceResolver | None = None,
+) -> frozenset[str]:
+    """What the comprehensions and lambdas of the statement *tree* hand to
+    code whose effect on it its text cannot decide, item by item:
+    ``[heapq.heappush(h, x) for x in xs]``, ``any(rng.shuffle(r) for r in
+    rows)``, ``map(lambda x: heapq.heappush(h, x), xs)``. A comprehension
+    is a loop written as an expression, so what its element hands over is
+    watched as a loop body's statement is (:func:`loop_watch_candidates`); a
+    comprehension target counts as what it iterates. Not the statement's
+    other calls: a library call whose result is kept returns its answer
+    (``call_arguments`` decides those)."""
+    if tree is None:
+        return frozenset()
+    names = _LoopNames(is_module, namespace, resolve_source)
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+            parts = [node.elt]
+        elif isinstance(node, ast.DictComp):
+            parts = [node.key, node.value]
+        elif isinstance(node, ast.Lambda):
+            parts = [node.body]
+        else:
+            continue
+        for gen in getattr(node, "generators", ()):
+            parts.extend(gen.ifs)
+        for part in parts:
+            found |= _handed_to_unknown_code(_as_statement(part), names, bare=False)
+    if not found:
+        return frozenset()
+    iterated = iterated_sources(tree)
+    roots: set[str] = set()
+    for name in found:
+        roots |= iterated.get(name, frozenset({name}))
+    # A random generator's draws are followed as a carrier's are.
+    return frozenset(
+        name
+        for name in roots
+        if _watchable(name, namespace, is_module) and rng_carrier_kind(namespace.get(name)) is None
+    )
 
 
 def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str], targets: dict[str, set[str]]) -> None:
