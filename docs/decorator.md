@@ -641,7 +641,10 @@ would skip or get wrong:
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
 
-Logging calls are not side effects for this purpose.
+Logging calls are not side effects for this purpose. A special method or a
+property of an object of your class that the body reads by a global name
+(`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
+as one the body changes.
 
 <!-- claim: cash/effect_observer.py:EffectObserver @a3930913 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
@@ -659,12 +662,15 @@ Two observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place, or it called a
 `unittest.mock` object.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @f775971a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941 -->
 A call that **hands the function one of your functions that changes state**
 when it is called runs uncached, every time, as plain Python runs it: in
 `run(record, 3)` where `record` appends to a global list, a hit would skip the
 append. The same goes for a bound method that changes a global, one inside a
-`functools.partial`, and one in a list or object that the body calls into. cash warns once
+`functools.partial`, one in a list or object that the body calls into, and an
+object of your class whose special methods or properties change a global (a
+timer's `__exit__` the body enters with `with cm:`, a `__getitem__`, a
+property). cash warns once
 ([`IMPURE-HANDED-CALLABLE`](warnings.md#impure-handed-callable)). A function
 that changes nothing is keyed by its code and cached as usual, and
 `assume_safe=True` caches such calls again.

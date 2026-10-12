@@ -209,7 +209,7 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @03789884, cash/analysis/handed_callables.py:hands_a_state_changing_callable @26530533 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @6e29af01, cash/analysis/handed_callables.py:hands_a_state_changing_callable @7531228b -->
 A function handed to a call counts as called, however it is handed: by name
 (`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
 as a method that changes its object (`s.apply(tracker.record)`), as an object
@@ -223,7 +223,16 @@ function the statement calls without naming it: picked from a list or dict it
 loops over (`[f() for f in fns]`, `{k: f(x) for k, f in table.items()}`), held
 by an object of yours as a callback (`bus.emit()`, also from a helper that
 reads `bus` as a global), inside a `functools.partial`, as a lambda default,
-passed in `**kwargs`, or attached to a logger as a handler of your class. The
+passed in `**kwargs`, or attached to a logger as a handler of your class. So
+does code of yours that Python runs for the statement without a call by a bare
+name: a method called on an object or a class (`store.process(r)`, a static or
+class method, a hook reached through `super()`), a context manager's
+`__enter__` and `__exit__` (`with timer("fit"):`), a property, the special
+methods of an object of your class the statement names (`bag["k"]`,
+`len(bag)`, `bag + 1`, `f"{bag}"`, iterating it), the function a wrapper made
+without `functools.wraps` or a `compose(f, g)` closure calls, a
+`functools.partial`, `np.vectorize` or `operator.methodcaller` called by its
+own name, and a `functools.singledispatch` implementation. The
 statement runs every time, and the call of yours that is handed it is not
 served from the cache; nor is a `@cash.cache` function handed one
 ([`IMPURE-HANDED-CALLABLE`](warnings.md#impure-handed-callable)). A method counts as changing its object when its code changes it, or
