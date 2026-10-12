@@ -106,10 +106,13 @@ def watch_candidates(
 class LoopWatch:
     """One loop's candidates, fingerprinted before it ran.
 
-    *verdict* is what an earlier run of this loop source recorded; when it is
-    known nothing is fingerprinted. *before* holds each candidate's
-    fingerprint otherwise (None: it cannot be observed, so it counts as
-    changed).
+    *verdict* is what earlier runs of this loop source were seen changing.
+    It only grows: a run that changed nothing (no items yet, a branch not
+    taken) says nothing about a run on other inputs. So a run on inputs
+    not observed before (*rewatch*) fingerprints the candidates the verdict
+    does not hold yet, and a change seen joins the verdict. *before* holds
+    each fingerprinted candidate's fingerprint (None: it cannot be
+    observed, so it counts as changed).
     """
 
     key: str
@@ -121,12 +124,19 @@ class LoopWatch:
 
     @classmethod
     def start(
-        cls, code: str, candidates: frozenset[str], verdict: set[str] | None, namespace: Mapping[str, Any]
+        cls,
+        code: str,
+        candidates: frozenset[str],
+        verdict: set[str] | None,
+        namespace: Mapping[str, Any],
+        rewatch: bool = False,
     ) -> LoopWatch:
         known = frozenset(verdict) if verdict is not None else None
         watch = cls(loop_watch_hash(code), candidates, known)
         if known is None:
             watch.before = {name: _fingerprint(namespace.get(name)) for name in candidates}
+        elif rewatch:
+            watch.before = {name: _fingerprint(namespace.get(name)) for name in candidates - known}
         return watch
 
     @property
@@ -135,15 +145,17 @@ class LoopWatch:
         run, not be restored, or what it changes is never seen."""
         return self.verdict is None and bool(self.candidates)
 
+    @property
+    def watching(self) -> bool:
+        """Whether this run fingerprinted something to compare after it."""
+        return bool(self.before)
+
     def finish(self, namespace: Mapping[str, Any]) -> frozenset[str]:
-        """The candidates the loop changed: seen now when it was being
-        learned, else the recorded verdict."""
+        """The candidates the loop changed: the recorded verdict, with what
+        the fingerprints taken before it ran show it changed now."""
         if self.seen is not None:
             return self.seen
-        if self.verdict is not None:
-            self.seen = self.verdict
-            return self.seen
-        changed = set()
+        changed = set(self.verdict or ())
         for name, before in self.before.items():
             if before is None or name not in namespace or _fingerprint(namespace[name]) != before:
                 changed.add(name)

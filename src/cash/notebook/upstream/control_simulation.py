@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import builtins
 import logging
+from collections.abc import Callable
 
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
@@ -48,6 +49,7 @@ class ControlSimulation:
         loop_target_vars: set[str],
         vars_mutated_by_loops: set[str],
         virtual_modules: set[str],
+        inputs_changed: Callable[[], bool] | None = None,
     ) -> set[str]:
         """Collect control-body mutation info and return the mutated vars for this node.
 
@@ -75,7 +77,7 @@ class ControlSimulation:
         # What the runtime saw the loop change through a library call
         # (``heapq.heappush(h, x)``), as it recorded it; before it has run
         # this loop, every name such a call is handed.
-        mutated_vars |= self.statements.loop_watch_changes(node, virtual_modules)
+        mutated_vars |= self.statements.loop_watch_changes(node, virtual_modules, inputs_changed)
         vars_mutated_by_loops.update(mutated_vars)
         # A local module the structure sets state on moves on too, as the
         # runtime's ``update_lineage_after_execution`` moves it; but it is
@@ -213,7 +215,11 @@ class ControlSimulation:
         outputs, lookup_time, files_stale, _ = self.statements.apply(stmt_code, virtual_lineage, sim.virtual_modules)
 
         mutated_vars = self.collect_mutations(
-            node, sim.loop_target_vars, sim.vars_mutated_by_loops, sim.virtual_modules
+            node,
+            sim.loop_target_vars,
+            sim.vars_mutated_by_loops,
+            sim.virtual_modules,
+            lambda: not self._recorded_outcome_holds(node, sim),
         )
 
         # CRITICAL FIX: Update virtual lineage for variables mutated inside loops.

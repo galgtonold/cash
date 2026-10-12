@@ -60,14 +60,31 @@ class InLoopChanges:
         self._overlays: list[IterationOverlay] = []
         #: Verdict keys no earlier kernel recorded.
         self._unrecorded: set[str] = set()
+        #: Per loop verdict, the states it was seen running on this session
+        #: (:meth:`open_watch`).
+        self._observed: dict[str, set[str]] = {}
 
     # -- Loop watches -----------------------------------------------------
 
-    def open_watch(self, node: ast.AST, code: str, resolve_source: Callable[[str], str | None]) -> LoopWatch | None:
+    def open_watch(
+        self,
+        node: ast.AST,
+        code: str,
+        resolve_source: Callable[[str], str | None],
+        cache_key: str | None = None,
+    ) -> LoopWatch | None:
         """Start watching the loop *node* (*code*) before it runs; the watch
         already open for it when there is one (the rest of a loop run as one
         unit is the same loop). None for a loop that hands nothing to code
-        whose effect is unknown."""
+        whose effect is unknown.
+
+        Once a verdict is recorded, the candidates it does not hold are
+        fingerprinted again whenever the loop runs on a state not observed
+        before in this session (*cache_key*, the unit's key when it runs as
+        one, and the lineage of every variable): a loop that first ran on no
+        items changed nothing, and that is no verdict on its next items. On
+        a state observed before, the same code on the same inputs does what
+        it did then."""
         if not isinstance(node, WATCHED_STRUCTURES):
             return None
         open_ = self._watches.get(code)
@@ -81,10 +98,27 @@ class InLoopChanges:
             return None
         if not candidates:
             return None
-        verdict = self._verdict(loop_watch_hash(code))
-        watch = LoopWatch.start(code, candidates, verdict, user_ns)
+        key = loop_watch_hash(code)
+        verdict = self._verdict(key)
+        rewatch = False
+        if verdict is None or candidates - verdict:
+            state = self._observed_state(cache_key)
+            observed = self._observed.setdefault(key, set())
+            rewatch = state not in observed
+            if len(observed) >= 16:
+                observed.clear()
+            observed.add(state)
+        watch = LoopWatch.start(code, candidates, verdict, user_ns, rewatch=rewatch)
         self._watches[code] = watch
         return watch
+
+    def _observed_state(self, cache_key: str | None) -> str:
+        """A digest of what a loop runs on: its key, when it has one, and
+        the lineage of every variable."""
+        digest = hashlib.sha256((cache_key or "").encode())
+        for name, lineage in sorted(self.tracking_state.variable_lineage.items()):
+            digest.update(f"{name}={lineage};".encode())
+        return digest.hexdigest()
 
     def watch(self, code: str) -> LoopWatch | None:
         """The watch open for the loop *code*, if any."""
@@ -99,7 +133,7 @@ class InLoopChanges:
             return frozenset()
         learning = watch.learning and watch.seen is None
         seen = watch.finish(self.shell.user_ns)
-        if learning:
+        if learning or (watch.verdict is not None and seen - watch.verdict):
             self.tracking_state.mutation_verdicts[watch.key] = set(seen)
             self._records.persist_mutation_verdict(watch.key, set(seen))
         return seen

@@ -231,13 +231,16 @@ class MutationRouting:
             _skip(run, "Could not tell what the loop changes in place (statement re-executes)")
             return
         if self._in_loop is not None:
-            watch = self._in_loop.open_watch(node, run.code, resolve)
+            watch = self._in_loop.open_watch(node, run.code, resolve, run.cache_key)
             if watch is not None:
                 if watch.verdict is not None:
                     changed |= watch.verdict
                 elif watch.learning:
-                    run.loop_watch = run.code
                     run.must_run = True
+                if watch.watching:
+                    # Seen running on new inputs: what it changes now is
+                    # compared once it ran (`_observe_unit`).
+                    run.loop_watch = run.code
         run.in_place = set(changed) - run.outputs
         if run.in_place:
             _skip(

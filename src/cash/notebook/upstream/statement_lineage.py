@@ -215,26 +215,40 @@ class StatementLineage:
         """Source of function *name*, as the simulation reads it (`_function_source`)."""
         return self._function_source(name)
 
-    def loop_watch_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
+    def loop_watch_changes(
+        self,
+        node: ast.AST,
+        virtual_modules: set[str],
+        inputs_changed: Callable[[], bool] | None = None,
+    ) -> set[str]:
         """What the loop *node* changed through code its text cannot decide
         (``loop_watch``): what the runtime recorded when it ran this loop
         source, this session or an earlier one; before it has, every name
         the loop hands to such code. A ``with`` block is watched the same
         way; an ``if`` or ``try`` is moved by what its statements were seen
-        changing (:meth:`branch_verdict_changes`)."""
+        changing (:meth:`branch_verdict_changes`).
+
+        The record only says what earlier runs changed: on other inputs
+        (*inputs_changed*) the loop may change a name it never changed
+        before (it first ran on no items), which the runtime then sees as
+        it runs it. So such a run counts every name the loop hands to such
+        code; at worst a reader below is planned again and hits."""
         if isinstance(node, (ast.If, ast.Try)):
             return self.branch_verdict_changes(node, virtual_modules)
         if not isinstance(node, WATCHED_STRUCTURES):
             return set()
         verdict = self._mutation_verdict(loop_watch_hash(ast.unparse(node)))
-        if verdict is not None:
-            return set(verdict)
         user_ns = self.shell.user_ns
-        return set(
+        candidates = set(
             watch_candidates(
                 node, user_ns, lambda name: is_module_name(name, user_ns, virtual_modules), self._function_source
             )
         )
+        if verdict is None:
+            return candidates
+        if candidates - set(verdict) and inputs_changed is not None and inputs_changed():
+            return candidates | set(verdict)
+        return set(verdict)
 
     def branch_verdict_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
         """What the statements, loops and ``with`` blocks in the branches of
