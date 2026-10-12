@@ -96,6 +96,19 @@ def test_what_reaches_library_code_is_watched_again(stmt):
     assert "h" not in _exempt(stmt)
 
 
+def test_a_frame_read_through_a_view_keeps_its_verdict():
+    import pandas as pd
+
+    ns = _namespace()
+    ns.update(pd=pd, obs=pd.DataFrame({"g": [1, 2]}), arr=np.zeros(3), r="g", d={"h": []})
+    assert _exempt("for r in ['g']:\n    codes = pd.Categorical(obs[r]).codes", ns) == {"obs"}
+    assert _exempt("obs.loc['g'].plot()", ns) == {"obs"}
+    # The object itself, or a container that is not data, is watched again.
+    assert "obs" not in _exempt("np.copyto(arr, obs)", ns)
+    assert "arr" not in _exempt("np.copyto(arr, obs.values)", ns)
+    assert "d" not in _exempt("heapq.heappush(d['h'], 1)", ns)
+
+
 def test_a_name_also_handed_elsewhere_is_watched_again():
     assert _exempt("out = score(data, n); data.sort()") == {"n"}
 

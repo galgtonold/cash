@@ -1580,6 +1580,14 @@ def rewatch_exempt(
         for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
             if isinstance(arg, ast.Name):
                 safe_nodes.add(id(arg))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and _array_like(user_ns.get(node.id, _UNBOUND))
+            and _read_through_a_view(node, parents)
+        ):
+            safe_nodes.add(id(node))
     if not safe_nodes:
         return frozenset()
     safe: set[str] = set()
@@ -1588,6 +1596,41 @@ def rewatch_exempt(
         if isinstance(node, ast.Name):
             (safe if id(node) in safe_nodes else other).add(node.id)
     return frozenset(safe - other)
+
+
+def _array_like(value: Any) -> bool:
+    module = getattr(type(value), "__module__", "") or ""
+    return module.split(".", 1)[0] in ("numpy", "pandas")
+
+
+def _read_through_a_view(node: ast.Name, parents: dict[int, ast.AST]) -> bool:
+    """*node* (a frame or an array) is read through an index or an
+    attribute that is handed to a call (``pd.Categorical(obs[r])``,
+    ``ax.scatter(emb[:, 0], emb[:, 1])``) or plotted
+    (``df.loc[cc].plot(ax=ax)``), or whose method is known not to change
+    it. Not a plain ``f(df)``, which hands the object itself."""
+    top: ast.AST = node
+    attrs: list[str] = []
+    while True:
+        parent = parents.get(id(top))
+        if isinstance(parent, (ast.Subscript, ast.Attribute)) and parent.value is top:
+            if not isinstance(parent.ctx, ast.Load):
+                return False
+            if isinstance(parent, ast.Attribute):
+                attrs.append(parent.attr)
+            top = parent
+            continue
+        break
+    if top is node:
+        return False
+    if isinstance(parent, ast.keyword):
+        return parent.arg is not None
+    if isinstance(parent, ast.Call):
+        if parent.func is not top:
+            return top in parent.args
+        method = attrs[-1] if attrs else ""
+        return "plot" in attrs or chain_is_pure(method, frozenset())
+    return False
 
 
 #: Values a draw only reads: the builtin data types, and numpy's and pandas'.

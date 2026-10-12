@@ -507,7 +507,7 @@ out = [fetch(e) for e in entities]
 
 ### The first run of a loop hashes what it hands to a library
 
-<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @2ef54597 -->
+<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @73357899 -->
 cash cannot tell from the text whether a library function changes what it is
 handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not), nor whether a
 function of yours that hands its argument or a global to one changes it
@@ -521,8 +521,10 @@ record for what the code hands straight to a library: whenever the code runs
 again on inputs not seen before in the session, those objects, if the record
 does not list them yet, are hashed again, so a loop or statement whose inputs
 keep changing pays this on each such run. What only a function of yours is
-handed (`bt = run_backtest(series, 3)`), or what a chart is drawn from
-(`ax.bar(names, totals)`), keeps the record of its first run: a helper whose
+handed (`bt = run_backtest(series, 3)`), what a chart is drawn from
+(`ax.bar(names, totals)`), and a frame or an array a library call reads
+through an index or an attribute (`pd.Categorical(obs[r])`, `df.loc[k].plot()`)
+keep the record of their first run: a helper whose
 change to its argument depends on the data (`def push_all(h, xs): for x in xs:
 heapq.heappush(h, x)`, first run with no `xs`) is not seen changing it later.
 Re-run the cell that reads the object, or call the library directly in the
