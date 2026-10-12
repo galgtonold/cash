@@ -263,7 +263,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1, cash/backends/serialization.py:PickleSerializer.serialize @5b9d05cd -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1, cash/backends/serialization.py:PickleSerializer.serialize @2d72bc8d -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -271,6 +271,16 @@ write and read. Parquet files are smaller for columns with few distinct values
 (small integers, repeated strings, mostly missing values); if disk space
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
+
+<!-- claim: cash/backends/serialization.py:_reduce_polars @f7539f57, cash/backends/serialization.py:_polars_from_arrow @654cf355 -->
+A polars `DataFrame` or `Series` is stored as its Arrow data, so its
+buffers are written to disk and read back as they are, as a pandas frame's
+are: it comes back with its dtypes (an `Enum` stays an `Enum`, a time zone
+stays), its column names and sorted flags. Without `pyarrow`, or for a dtype
+the installed `pyarrow` lacks, it is stored with polars' own pickle, which
+is several times slower for a large frame. polars does not pickle an
+`Object` column, so a frame with one stays in memory and is computed again
+in a new process.
 
 <span id="compression"></span>
 
