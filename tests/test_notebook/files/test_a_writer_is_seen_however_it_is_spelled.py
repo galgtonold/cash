@@ -108,10 +108,10 @@ def test_an_unknown_name_is_not_a_writer(ns):
 
 def test_a_write_one_module_further_down_is_seen(ns):
     """``tl.build_report`` hands the write to another project module as
-    ``_writer_io.write_table(...)``: the helper's own call is spelled through a
+    ``_writer_io.store_rows(...)``: the helper's own call is spelled through a
     module too, and is followed like a bare-name call."""
-    assert user_callee_writing_files(_writer_lib.build_report) == "write_table"
-    assert statement_calls_user_writer("tl.build_report(rows, 'out.txt')", ns) == "write_table"
+    assert user_callee_writing_files(_writer_lib.build_report) == "store_rows"
+    assert statement_calls_user_writer("tl.build_report(rows, 'out.txt')", ns) == "store_rows"
 
 
 def _verdict(code: str, ns: dict, annotation=None) -> tuple[bool, list[str]]:
@@ -135,7 +135,7 @@ def _verdict(code: str, ns: dict, annotation=None) -> tuple[bool, list[str]]:
     [
         ("tl.export_summary(d, 'out.json')", "export_summary"),
         ("p = _writer_lib.save_chart(fig, 'chart.png')", "save_chart"),
-        ("tl.build_report(rows, 'out.txt')", "write_table"),
+        ("tl.build_report(rows, 'out.txt')", "store_rows"),
         ("export_summary(d, 'out.json')", "export_summary"),  # ``from tl import export_summary``
     ],
 )
@@ -176,7 +176,7 @@ def test_assume_safe_waives_a_project_module_writer(ns):
     [
         ("ps = list(map(export_summary, rows))", "export_summary"),
         ("ps = s.apply(tl.save_chart)", "save_chart"),
-        ("ps = sorted(rows, key=tl.build_report)", "write_table"),
+        ("ps = sorted(rows, key=tl.build_report)", "store_rows"),
         ("ps = s.apply(OPS['save'])", "save_chart"),
         ("ps = s.apply(OPS.get('save'))", "save_chart"),
     ],

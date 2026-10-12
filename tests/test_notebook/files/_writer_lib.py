@@ -37,5 +37,5 @@ def note(msg):
 
 def build_report(rows, path):
     """The write sits in another project module, reached through it."""
-    _writer_io.write_table(sorted(rows), path)
+    _writer_io.store_rows(sorted(rows), path)
     return path
