@@ -89,6 +89,7 @@ __all__ = [
     "live_function_source",
     "loop_target_roots",
     "loop_watch_candidates",
+    "WATCHED_STRUCTURES",
     "statement_watch_candidates",
     "statement_effects",
 ]
@@ -704,13 +705,19 @@ def _bare_call_receivers(stmt: ast.stmt, is_module: Callable[[str], bool], *, pu
 # ---------------------------------------------------------------------------
 
 
+#: The structures watched as a unit for what they hand to code whose effect
+#: is unknown: a loop, and a ``with`` block (run as one unit). An ``if`` or a
+#: ``try`` runs statement by statement, each watched on its own.
+WATCHED_STRUCTURES = (ast.For, ast.While, ast.With)
+
+
 def loop_watch_candidates(
     node: ast.AST,
     namespace: Mapping[str, Any],
     is_module: Callable[[str], bool],
     resolve_source: SourceResolver | None = None,
 ) -> frozenset[str]:
-    """The names a loop hands to code whose effect on them its text cannot
+    """The names a loop (or a ``with`` block, `WATCHED_STRUCTURES`) hands to code whose effect on them its text cannot
     decide, to watch around the loop: what a library function is handed
     (``heapq.heappush(h, x)``, ``np.copyto(a, b)``, ``rng.shuffle(xs)``,
     ``if heapq.heappop(h) > t:``), what a method is handed, the receiver of
@@ -730,12 +737,16 @@ def loop_watch_candidates(
     loop runs and records which changed, per loop source; the simulation and
     a restored loop apply that record.
     """
-    if not isinstance(node, (ast.For, ast.While)):
+    if not isinstance(node, WATCHED_STRUCTURES):
         return frozenset()
     names = _LoopNames(is_module, namespace, resolve_source)
     found: set[str] = set()
     targets: dict[str, set[str]] = {}
     _watch_statements([node], names, found, targets)
+    # What a ``with`` binds (``as f``) is the object its context manager
+    # hands back, made as the block starts: a name left from an earlier run
+    # holds another object.
+    found -= _with_bound_names(node)
     resolved: set[str] = set()
     pending = list(found)
     seen: set[str] = set()
@@ -749,6 +760,19 @@ def loop_watch_candidates(
         else:
             resolved.add(name)
     return frozenset(name for name in resolved if _watchable(name, namespace, is_module))
+
+
+def _with_bound_names(node: ast.AST) -> set[str]:
+    """The names the ``with`` statements in *node* bind with ``as``."""
+    return {
+        target.id
+        for stmt in ast.walk(node)
+        if isinstance(stmt, (ast.With, ast.AsyncWith))
+        for item in stmt.items
+        if item.optional_vars is not None
+        for target in ast.walk(item.optional_vars)
+        if isinstance(target, ast.Name)
+    }
 
 
 def loop_target_roots(
@@ -792,6 +816,9 @@ def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str],
                     targets.setdefault(target, set()).update(roots)
             if isinstance(stmt, (ast.If, ast.While)):
                 found |= _handed_to_unknown_code(_as_statement(stmt.test), names, bare=False)
+            if isinstance(stmt, ast.With):
+                for item in stmt.items:
+                    found |= _handed_to_unknown_code(_as_statement(item.context_expr), names, bare=False)
             _watch_statements(_branches(stmt), names, found, targets)
             continue
         found |= _handed_to_unknown_code(ast.Module(body=[stmt], type_ignores=[]), names, bare=True)

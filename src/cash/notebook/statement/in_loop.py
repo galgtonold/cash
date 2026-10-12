@@ -24,8 +24,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ...analysis.mutation_effects import is_module_name
-from ..loop_watch import LoopWatch, loop_watch_hash, watch_candidates
+from ...analysis.mutation_effects import WATCHED_STRUCTURES, is_module_name
+from ..loop_watch import LoopWatch, branch_changes, loop_watch_hash, watch_candidates
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
@@ -58,6 +58,8 @@ class InLoopChanges:
         self._watches: dict[str, LoopWatch] = {}
         #: The overlay of each decomposed loop running now, innermost last.
         self._overlays: list[IterationOverlay] = []
+        #: Verdict keys no earlier kernel recorded.
+        self._unrecorded: set[str] = set()
 
     # -- Loop watches -----------------------------------------------------
 
@@ -66,7 +68,7 @@ class InLoopChanges:
         already open for it when there is one (the rest of a loop run as one
         unit is the same loop). None for a loop that hands nothing to code
         whose effect is unknown."""
-        if not isinstance(node, (ast.For, ast.While)):
+        if not isinstance(node, WATCHED_STRUCTURES):
             return None
         open_ = self._watches.get(code)
         if open_ is not None:
@@ -120,12 +122,26 @@ class InLoopChanges:
         """Forget every open watch: a structure that failed leaves none."""
         self._watches.clear()
 
+    def branch_verdict_changes(self, node: ast.AST, resolve_source: Callable[[str], str | None]) -> set[str]:
+        """What the statements, loops and ``with`` blocks in the branches of
+        the ``if`` or ``try`` *node* change through calls the text cannot
+        decide, as recorded (``branch_changes``); the simulation reads the
+        same records."""
+        if not isinstance(node, (ast.If, ast.Try)):
+            return set()
+        user_ns = self.shell.user_ns
+        return branch_changes(node, self._verdict, user_ns, lambda name: is_module_name(name, user_ns), resolve_source)
+
     def _verdict(self, key: str) -> frozenset[str] | None:
         verdict = self.tracking_state.mutation_verdicts.get(key)
-        if verdict is None:
+        if verdict is None and key not in self._unrecorded:
             verdict = self._records.recorded_mutation_verdict(key)
             if verdict is not None:
                 self.tracking_state.mutation_verdicts[key] = set(verdict)
+            else:
+                # Asked once per session: a verdict learned later lands in
+                # ``mutation_verdicts`` first.
+                self._unrecorded.add(key)
         return frozenset(verdict) if verdict is not None else None
 
     # -- Iteration overlays -------------------------------------------------

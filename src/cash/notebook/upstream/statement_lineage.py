@@ -21,6 +21,7 @@ from ..._clock import perf_counter as _perf_counter
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import (
+    WATCHED_STRUCTURES,
     StatementEffects,
     captured_call_receiver_names,
     cell_definitions,
@@ -58,7 +59,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     statement_environment_component,
 )
-from ..loop_watch import loop_watch_hash, watch_candidates
+from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
@@ -218,8 +219,12 @@ class StatementLineage:
         """What the loop *node* changed through code its text cannot decide
         (``loop_watch``): what the runtime recorded when it ran this loop
         source, this session or an earlier one; before it has, every name
-        the loop hands to such code."""
-        if not isinstance(node, (ast.For, ast.While)):
+        the loop hands to such code. A ``with`` block is watched the same
+        way; an ``if`` or ``try`` is moved by what its statements were seen
+        changing (:meth:`branch_verdict_changes`)."""
+        if isinstance(node, (ast.If, ast.Try)):
+            return self.branch_verdict_changes(node, virtual_modules)
+        if not isinstance(node, WATCHED_STRUCTURES):
             return set()
         verdict = self._mutation_verdict(loop_watch_hash(ast.unparse(node)))
         if verdict is not None:
@@ -229,6 +234,20 @@ class StatementLineage:
             watch_candidates(
                 node, user_ns, lambda name: is_module_name(name, user_ns, virtual_modules), self._function_source
             )
+        )
+
+    def branch_verdict_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
+        """What the statements, loops and ``with`` blocks in the branches of
+        the ``if`` or ``try`` *node* change through calls the text cannot
+        decide, as the runtime recorded them (``branch_changes``), as its
+        lineage update for the structure reads them."""
+        user_ns = self.shell.user_ns
+        return branch_changes(
+            node,
+            self._mutation_verdict,
+            user_ns,
+            lambda name: is_module_name(name, user_ns, virtual_modules),
+            self._function_source,
         )
 
     def recorded_mutations(self, stmt_code: str) -> set[str] | None:
