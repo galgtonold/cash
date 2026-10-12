@@ -240,6 +240,9 @@ class StatementExecution:
     #: The value the statement echoed as its cell's result, in a one-item
     #: tuple; empty when it echoed nothing.
     echo: tuple[Any, ...] = ()
+    #: Whether it printed, warned or displayed anything before its value
+    #: was shown: a value reused elsewhere would lose that.
+    printed: bool = False
 
 
 def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:
@@ -365,6 +368,10 @@ class CodeRunner:
         # done, from this value (``CashMagics._record_output_history``); a hit
         # needs it as much as the display, so a None is recorded too.
         self.execution.echo = (value,)
+        captured = self.execution.captured
+        self.execution.printed = bool(
+            getattr(captured, "stdout", "") or getattr(captured, "stderr", "") or getattr(captured, "outputs", None)
+        )
         if value is not None:
             from IPython.display import display
 

@@ -480,6 +480,15 @@ class StatementProcessor:
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
 
+    def _memo_key(self, code: str) -> str | None:
+        """*code*'s key as a statement of its own, now: what a value the
+        expression memo kept must still have to be handed out."""
+        try:
+            return self.key_as_one_statement(code, self.tracking_state.variable_lineage)
+        except Exception:  # no key, no reuse
+            logger.debug("%s no key for the kept expression %r", _LOG_PROCESSOR, code[:80], exc_info=True)
+            return None
+
     def key_as_one_statement(self, code: str, lineages: dict[str, str]) -> str:
         """The key the upstream simulation gives *code* as one statement, with
         the variables at *lineages* (``StatementLineage._key``)."""
@@ -966,7 +975,9 @@ class StatementProcessor:
         if run.tree is not None and not handed:
             # Matched on the statement as written; it then runs as written,
             # with the kept value in place, not through the call cache.
-            memo = self._memo.substitute(run.tree, self.tracking_state.variable_lineage, self.shell.user_ns)
+            memo = self._memo.substitute(
+                run.tree, self.tracking_state.variable_lineage, self.shell.user_ns, self._memo_key
+            )
             if memo is not None:
                 tree = memo[0]
                 source = ast.unparse(tree)
@@ -1160,13 +1171,20 @@ class StatementProcessor:
 
         self._post_execute(run, execution)
         if execution.echo and run.cache_key and not run.skip_cache and not run.outputs:
-            if not execution.accessed_files and not execution.accessed_remote and not self._randomness.observed_draw:
+            if (
+                not execution.accessed_files
+                and not execution.accessed_remote
+                and not self._randomness.observed_draw
+                # What it printed or warned would be lost where it is reused.
+                and not execution.printed
+            ):
                 self._memo.keep(
                     run.tree,
                     execution.echo[0],
                     execution.wall_time,
                     self.tracking_state.variable_lineage,
                     self.shell.user_ns,
+                    self._memo_key,
                 )
         self._forget_ipython_bindings(run)
         if run.magic_reads is not None:

@@ -87,3 +87,18 @@ def test_changing_what_was_handed_over_leaves_the_shown_value_alone(nb_runner):
     nb_runner.set_cell_source(6, "print('AGAIN', df['a'].apply(tick).tolist())")
     nb_runner.run_cell(6)
     assert "AGAIN [2, 4, 6, 8, 10]" in nb_runner.get_output(6)
+
+
+def test_a_global_the_function_reads_changed_computes_it_again(nb_runner):
+    """``f`` reads ``K``: after ``K`` changed, ``y = f(df)`` is not handed
+    what ``f(df)`` showed before, nor is that value stored for the new
+    ``K`` and served after a restart."""
+    f = "K = 2\ndef f(d):\n    time.sleep(0.6)\n    return d * K"
+    nb_runner.create_notebook([ON, SETUP, DATA, f, "f(df)", "K = 3", "y = f(df)\nprint('Y', y['a'].tolist())"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "Y [3, 6, 9, 12, 15]" in nb_runner.get_output(7)
+
+    nb_runner.restart()
+    nb_runner.run_cells([1, 2, 3, 4, 6, 7])
+    assert "Y [3, 6, 9, 12, 15]" in nb_runner.get_output(7)

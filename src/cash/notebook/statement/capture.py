@@ -89,14 +89,25 @@ def tee_output() -> Generator[Any, None, None]:
     """
 
     class TeedOutput:
-        def __init__(self):
-            self.stdout = ""
-            self.stderr = ""
+        """What was written so far, read at any time (``CodeRunner`` asks
+        before it shows the cell's value)."""
+
+        def __init__(self, stdout_chunks: list[str], stderr_chunks: list[str]):
+            self._stdout_chunks = stdout_chunks
+            self._stderr_chunks = stderr_chunks
             self.outputs = []  # rich outputs not supported in tee mode
 
-    teed = TeedOutput()
+        @property
+        def stdout(self) -> str:
+            return "".join(self._stdout_chunks)
+
+        @property
+        def stderr(self) -> str:
+            return "".join(self._stderr_chunks)
+
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
+    teed = TeedOutput(stdout_chunks, stderr_chunks)
     old_stdout, old_stderr = sys.stdout, sys.stderr
 
     sys.stdout = TeeWriter(old_stdout, stdout_chunks)
@@ -106,8 +117,6 @@ def tee_output() -> Generator[Any, None, None]:
     finally:
         sys.stdout.flush()
         sys.stderr.flush()
-        teed.stdout = "".join(stdout_chunks)
-        teed.stderr = "".join(stderr_chunks)
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
