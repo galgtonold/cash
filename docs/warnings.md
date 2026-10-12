@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f00be38f -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @42db5115 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -54,7 +54,7 @@ its warning class.
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
 | [Caching](#cache-codes) | `CACHE-` | 16 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
-| [Side effects](#impure-codes) | `IMPURE-` | 3 | The function does something a cache hit will not repeat. |
+| [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 22 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 6 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
@@ -585,9 +585,42 @@ The function does something a cache hit will not repeat. Every code here starts 
 
 | Code | Applies to | Meaning |
 |---|---|---|
+| [IMPURE-HANDED-CALLABLE](#impure-handed-callable) | decorator | an argument is a function of yours that changes state |
 | [IMPURE-OBSERVED-EFFECTS](#impure-observed-effects) | decorator | the first call wrote, sent or changed something |
 | [IMPURE-SCOPE-MUTATION](#impure-scope-mutation) | decorator | the function rewrites a global it reads |
 | [IMPURE-SIDE-EFFECTS](#impure-side-effects) | decorator | the source has likely side effects |
+
+### IMPURE-HANDED-CALLABLE {#impure-handed-callable}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @f775971a, cash/analysis/handed_callables.py:hands_a_state_changing_callable @26530533 -->
+**What happened.** The call handed the cached function a function of yours
+that changes a global or a variable it closes over when it is called. It may
+be passed directly (`run(record, 3)`), as a bound method, inside a
+`functools.partial`, or in a list or object that the body calls into. A
+function whose source cannot be read counts too, because cash cannot tell what
+it changes. (A change to an object you passed in is seen after the call
+instead, and reported as an argument mutation under
+[IMPURE-OBSERVED-EFFECTS](#impure-observed-effects).)
+
+**Why it matters.** A hit returns the stored value without running the body,
+so the function you passed would not run and its change would be skipped.
+That is why such a call runs uncached, every time, as plain Python runs it.
+The warning is given once per cached function. Under `strict=True` the call
+raises `CashImpureFunctionError` instead.
+
+**What to do.** Have the function you pass return its result instead of
+changing state, or call it outside the cached function and pass in what it
+returns.
+
+**When it is safe to ignore.** When the change is bookkeeping that nobody
+reads back. The call is still correct; it is just not cached.
+
+**Silencing it.** A `# @cash:assume-safe` line or a `with cash.assume_safe():`
+block in the body does not reach it, because the caller hands the function in.
+Whole function: `@cash.cache(assume_safe=True)` caches such calls again and
+skips the change on a hit. See [Silencing one code](#silencing-one-code).
 
 ### IMPURE-OBSERVED-EFFECTS {#impure-observed-effects}
 
@@ -835,7 +868,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @463dcc1f -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1224,7 +1257,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @463dcc1f -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long

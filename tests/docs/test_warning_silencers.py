@@ -37,6 +37,20 @@ CASES: dict[str, tuple[str, str]] = {
         """,
         "f([1, 2, 3])",
     ),
+    "IMPURE-HANDED-CALLABLE": (
+        """
+        LOG = []
+
+        def record(v):
+            LOG.append(v)
+            return v * 2
+
+        @c.cache{DEC}
+        def f(g, v):
+            return g(v){W}
+        """,
+        "f(record, 1); f(record, 1)",
+    ),
     "IMPURE-OBSERVED-EFFECTS": (
         """
         import zipfile

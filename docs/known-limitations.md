@@ -203,7 +203,7 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @a7f8b0a4, cash/analysis/handed_callables.py:hands_a_state_changing_callable @a623ddfa -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @03789884, cash/analysis/handed_callables.py:hands_a_state_changing_callable @26530533 -->
 A function handed to a call counts as called, however it is handed: by name
 (`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
 as a method that changes its object (`s.apply(tracker.record)`), as an object
@@ -212,16 +212,24 @@ it closes over, picked by an expression (`ops.get("dbl")`, `ops[key]`,
 `f if flag else g`, `getattr(tracker, "record")`), called from a lambda
 (`s.map(lambda v: tally.record(v))`), or in a list, dict, deque or object of
 your class that a function of yours calls into (`run_steps(steps, data)` with
-`steps = [f]`, `run(pipe, data)` calling `pipe.steps`). The statement runs
-every time, and the call of yours that is handed it is not served from the
-cache. A method counts as changing its object when its code changes it, or
+`steps = [f]`, `run(pipe, data)` calling `pipe.steps`). The same holds for a
+function the statement calls without naming it: picked from a list or dict it
+loops over (`[f() for f in fns]`, `{k: f(x) for k, f in table.items()}`), held
+by an object of yours as a callback (`bus.emit()`, also from a helper that
+reads `bus` as a global), inside a `functools.partial`, as a lambda default,
+passed in `**kwargs`, or attached to a logger as a handler of your class. The
+statement runs every time, and the call of yours that is handed it is not
+served from the cache; nor is a `@cash.cache` function handed one
+([`IMPURE-HANDED-CALLABLE`](warnings.md#impure-handed-callable)). A method counts as changing its object when its code changes it, or
 calls a method on something the object holds that cash does not know to leave
 it unchanged (`self.model.fit(x)`). A function of yours handed over whose
 source cannot be read, or one that only running code can tell
 (`s.apply(make_scorer(2))`, the result of a call of yours), makes the
 statement run uncached, with the reason on its badge. A list or dict of
 functions handed to a library function is looked into only for `agg`,
-`aggregate` and `transform`.
+`aggregate` and `transform`, or when the statement hands that library function
+a function that calls what it is given (`map(lambda f: f(3), fns)`,
+`functools.reduce`).
 
 <!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 The same for a statement that sets state on one of your modules

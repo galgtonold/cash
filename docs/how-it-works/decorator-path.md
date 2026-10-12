@@ -151,7 +151,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @463dcc1f -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -167,6 +167,10 @@ It never caches under a partial key. The usual causes:
   ([`KEY-ITERATOR-CONSUMED`](../warnings.md#key-iterator-consumed));
 - any other failure while building the key
   ([`KEY-BUILD-FAILED`](../warnings.md#key-build-failed)).
+
+A call that hands the function one of your functions that changes state when
+called also runs uncached, before any key is built: a hit would skip that
+change ([`IMPURE-HANDED-CALLABLE`](../warnings.md#impure-handed-callable)).
 
 ## Files
 

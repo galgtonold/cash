@@ -38,6 +38,7 @@ from __future__ import annotations
 import ast
 import builtins
 import collections
+import dataclasses
 import functools
 import inspect
 import operator
@@ -882,8 +883,13 @@ def _instance_dict(owner: Any) -> dict:
 class _Found:
     """What the values handed over lead to, collected over one statement."""
 
-    def __init__(self, namespace: Mapping[str, Any]) -> None:
+    def __init__(self, namespace: Mapping[str, Any], *, objects: bool = True) -> None:
         self.namespace = namespace
+        #: Whether a change a method makes to its own object counts. The
+        #: decorator passes False: it hashes the arguments again after a miss,
+        #: and an object reached through them that changed stops the result
+        #: from being stored.
+        self.objects = objects
         self.sources: dict[str, None] = {}
         self.receivers: set[str] = set()
         self.unreadable: list[str] = []
@@ -1095,7 +1101,8 @@ class _Found:
                 source = self._source(fn, label)
                 if source is not None and not isinstance(owner, types.ModuleType):
                     if _changes_its_first_argument(fn, cls, source):
-                        self._changed(owner, root)
+                        if self.objects or isinstance(owner, type):
+                            self._changed(owner, root)
                         if not isinstance(owner, type) and _reaches_its_class(source):
                             self._changed(cls, None)
                     if not isinstance(owner, type):
@@ -1110,6 +1117,15 @@ class _Found:
             return
         if isinstance(value, type):
             init = _class_member(value, "__init__")
+            if _generated_dataclass_init(value, init):
+                # ``extract(doc, InvoiceFields)``: the ``__init__`` that
+                # ``@dataclass`` writes has no source, and only sets the
+                # fields of the new object. What it runs of the user's is the
+                # field factories and ``__post_init__``.
+                for spec in dataclasses.fields(value):
+                    if spec.default_factory is not dataclasses.MISSING:
+                        self.add(spec.default_factory, root, False)
+                init = _class_member(value, "__post_init__")
             if isinstance(init, types.FunctionType) and self._users(init):
                 self._source(init, label)
             return
@@ -1119,12 +1135,24 @@ class _Found:
         if isinstance(call, types.FunctionType) and self._users(call):
             source = self._source(call, label)
             if source is not None and _changes_its_first_argument(call, type(value), source):
-                self._changed(value, root)
+                if self.objects:
+                    self._changed(value, root)
                 if _reaches_its_class(source):
                     self._changed(type(value), None)
 
     def _users(self, fn: types.FunctionType) -> bool:
         return fn.__globals__ is self.namespace or _is_users(fn)
+
+
+def _generated_dataclass_init(cls: type, init: Any) -> bool:
+    """Whether *init* is the ``__init__`` that ``@dataclass`` wrote for
+    *cls*: compiled from a string, so it has no source to read."""
+    return (
+        isinstance(init, types.FunctionType)
+        and dataclasses.is_dataclass(cls)
+        and init.__code__.co_filename.startswith("<")
+        and _source_of(init) is None
+    )
 
 
 def _is_users(fn: types.FunctionType) -> bool:
@@ -1163,7 +1191,9 @@ def _source_of(fn: types.FunctionType) -> str | None:
 _ATOMS = frozenset({int, float, complex, str, bytes, bool, type(None)})
 
 
-def hands_a_state_changing_callable(fn: Any, args: tuple, kwargs: Mapping[str, Any]) -> bool:
+def hands_a_state_changing_callable(
+    fn: Any, args: tuple, kwargs: Mapping[str, Any], *, through_globals: bool = True, objects: bool = True
+) -> bool:
     """Whether calling *fn* with *args* and *kwargs* hands it a user callable
     that changes state when called: a function that changes a global or what
     it closes over, a method or a callable object that changes its object,
@@ -1172,7 +1202,16 @@ def hands_a_state_changing_callable(fn: Any, args: tuple, kwargs: Mapping[str, A
     what it is handed there.
 
     ``run_steps(steps, data)`` with ``steps = [f]`` runs ``f``; served from
-    the cache, ``f``'s writes would not happen."""
+    the cache, ``f``'s writes would not happen.
+
+    *through_globals*: also count what *fn* reaches through the objects it
+    reads by a free name (``bus.emit()`` running what ``bus`` holds). The
+    decorator passes False: what a cached function reaches through its own
+    globals is its own purity analysis's to report (IMPURE-SCOPE-MUTATION,
+    IMPURE-SIDE-EFFECTS), and only the arguments are new on each call.
+
+    *objects*: count a method changing its own object (`_Found.objects`). The
+    decorator passes False, as it watches the arguments for that itself."""
     found: _Found | None = None
     opened: _Opened | None = None
     for position, keyword, value in chain(
@@ -1192,15 +1231,15 @@ def hands_a_state_changing_callable(fn: Any, args: tuple, kwargs: Mapping[str, A
         elif not callable(value):
             continue
         if found is None:
-            found = _Found({})
+            found = _Found({}, objects=objects)
         if methods:
             found.with_methods(value, None, opened.attributes, methods == 2)  # type: ignore[union-attr]
         found.add(value, None, opens)
-    own, _offset = _user_function_of(fn)
+    own = _user_function_of(fn)[0] if through_globals else None
     if own is not None and _reaches_through_globals(own):
         # ``fire(3)`` running ``bus.emit``, which runs what ``bus`` holds.
         if found is None:
-            found = _Found({})
+            found = _Found({}, objects=objects)
         found.through_globals(own)
     if found is None:
         return False
@@ -1243,7 +1282,20 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
 
 def _global_source(namespace: Mapping[str, Any], name: str) -> str | None:
     value = namespace.get(name)
-    return _source_of(value) if isinstance(value, types.FunctionType) else None
+    if not isinstance(value, types.FunctionType):
+        return None
+    if _is_cashs(value):
+        # A ``@cash.cache`` function: its body, not cash's wrapper around it,
+        # whose bookkeeping is no state of the user's.
+        wrapped = getattr(value, "__wrapped__", None)
+        return _source_of(wrapped) if isinstance(wrapped, types.FunctionType) else None
+    return _source_of(value)
+
+
+def _is_cashs(fn: types.FunctionType) -> bool:
+    """Whether *fn* is cash's own code (a wrapper ``@cash.cache`` made)."""
+    name = fn.__globals__.get("__name__")
+    return isinstance(name, str) and (name == "cash" or name.startswith("cash."))
 
 
 class _Opened(NamedTuple):

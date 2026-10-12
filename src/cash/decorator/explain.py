@@ -141,6 +141,7 @@ class MissKind(str, Enum):
     KEY_FAILED = "key could not be built"
     MOCKED = "a helper is a mock"
     UNWALKABLE = "helpers could not all be keyed"
+    HANDED = "handed a function that changes state"
     RAISED = "raised"
 
     __str__ = str.__str__

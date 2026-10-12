@@ -657,6 +657,16 @@ Two observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place, or it called a
 `unittest.mock` object.
 
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @f775971a -->
+A call that **hands the function one of your functions that changes state**
+when it is called runs uncached, every time, as plain Python runs it: in
+`run(record, 3)` where `record` appends to a global list, a hit would skip the
+append. The same goes for a bound method that changes a global, one inside a
+`functools.partial`, and one in a list or object that the body calls into. cash warns once
+([`IMPURE-HANDED-CALLABLE`](warnings.md#impure-handed-callable)). A function
+that changes nothing is keyed by its code and cached as usual, and
+`assume_safe=True` caches such calls again.
+
 **Accepting an effect.** Once you have checked that skipping the effect on a hit
 is fine, put a comment on the line the warning names:
 
