@@ -152,16 +152,45 @@ def _marks_project(directory: Path, marker: str) -> bool:
         return False
 
 
-def _project_root_above(start: Path) -> Path | None:
+def _home() -> Path | None:
+    try:
+        return Path.home().resolve()
+    except (OSError, RuntimeError):  # no home directory to speak of
+        return None
+
+
+def _holds_existing_cache(directory: Path, home: Path | None) -> bool:
+    """Does *directory* hold a cache cash made (``.cash/CACHE_VERSION``)?
+
+    A notebook folder, or a project whose only ``pyproject.toml`` configures a
+    linter, has no other marker, and a script in a subfolder of it started a
+    second, cold cache beside itself. Never the filesystem root, the home
+    directory or a directory above it: a stray ``~/.cash`` must not claim
+    every script under the home directory.
+    """
+    from .backends.cache_dir import VERSION_FILENAME
+
+    if directory.parent == directory:
+        return False
+    if home is not None and home.is_relative_to(directory):
+        return False
+    return (directory / ".cash" / VERSION_FILENAME).is_file()
+
+
+def _project_root_above(start: Path, *, existing_cache: bool = False) -> Path | None:
     """The first directory at or above *start* holding a project marker.
 
     A ``pyproject.toml`` counts when it describes a project -- ``[project]``,
     ``[build-system]``, ``[tool.poetry]`` -- or configures cash; one that only
-    configures a linter does not.
+    configures a linter does not. With *existing_cache*, so does a cache cash
+    already made there (`_holds_existing_cache`).
     """
+    home = _home() if existing_cache else None
     for d in [start, *start.parents]:
         try:
             if any(_marks_project(d, marker) for marker in PROJECT_MARKERS):
+                return d
+            if existing_cache and _holds_existing_cache(d, home):
                 return d
         except OSError:
             continue
@@ -252,6 +281,9 @@ def project_anchor() -> Path:
 
     The anchor walks up from the RUNNING SCRIPT to its project root, so
     ``python /srv/etl/run.py`` uses the same cache from anywhere on the machine.
+    A directory holding a cache cash made (``.cash/CACHE_VERSION``) counts as
+    a project root on that walk, below the home directory, so a script in
+    ``proj/scratch`` uses ``proj/.cash`` when ``proj`` has no other marker.
     Without a script (a notebook, a REPL) or without a project marker above it,
     the answer is the cwd or the script's own directory respectively -- both
     stable for the case they describe.
@@ -274,7 +306,7 @@ def project_anchor() -> Path:
             if root is not None:
                 return root
         return Path.cwd()
-    return _project_root_above(start) or start
+    return _project_root_above(start, existing_cache=True) or start
 
 
 def _running_console_script() -> str | None:

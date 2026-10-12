@@ -33,7 +33,7 @@ max_cache_size = "5GB"
 `cash info` prints every setting in effect and the layer it came from
 ([CLI](../cli.md#cash-info)).
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
+<!-- claim: cash/_location.py:project_anchor @db681147, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
 ### What paths are relative to
 
 A relative `cache_dir` is resolved against whoever wrote it:
@@ -42,7 +42,7 @@ A relative `cache_dir` is resolved against whoever wrote it:
 |---|---|
 | `Cash(cache_dir=...)`, `cash.configure(...)` or `CASH_CACHE_DIR` | the current working directory when it is read |
 | a config file | that file's directory |
-| nowhere (the `.cash` default) | the project root: the first directory above the running script that holds a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`; without one, the script's own directory. In a notebook or REPL, the current directory. |
+| nowhere (the `.cash` default) | the project root: the first directory above the running script that holds a `pyproject.toml`, `setup.py`, `setup.cfg`, `.git` or a `.cash` cache folder cash made (below your home folder); without one, the script's own directory. In a notebook or REPL, the current directory. |
 
 A tier's own `cache_dir` or `db_path` follows the same rule.
 

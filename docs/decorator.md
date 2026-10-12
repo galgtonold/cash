@@ -86,15 +86,16 @@ cannot be pickled
 
 ### Cache folder
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
+<!-- claim: cash/_location.py:project_anchor @db681147, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
 The cache folder (the cache directory) is `.cash` at your project root. So
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
 started it, from any directory. cash finds the folder from the running script:
 
 - **Your project root** is the first directory above the script that holds a
-  `setup.py`, a `setup.cfg`, a `.git`, or a `pyproject.toml` that declares a
+  `setup.py`, a `setup.cfg`, a `.git`, a `pyproject.toml` that declares a
   project (a `[project]`, `[build-system]`, `[tool.poetry]` or `[tool.cash]`
-  table).
+  table), or a `.cash` cache folder cash already made (below your home
+  folder).
 - **A script with no project above it** caches next to itself.
 - **An installed tool run from outside any project** caches per user, in the
   platform's cache folder.
