@@ -58,6 +58,7 @@ def test_a_cached_function_defined_in_a_cell_honours_the_block(nb_runner):
     )
     nb_runner.start_kernel()
     nb_runner.run_all()
-    # The warning ends with the link to its section; the output filter keeps that line.
-    assert "#impure-side-effects" not in nb_runner.get_output(2), nb_runner.get_output(2)
-    assert "#impure-side-effects" in nb_runner.get_output(3), "control: the same code without the block warns"
+    # The warning ends with the link to its section. Raw output: the filter
+    # drops a cash warning's line, and by default the link is on that line.
+    assert "#impure-side-effects" not in nb_runner.get_raw_output(2), nb_runner.get_raw_output(2)
+    assert "#impure-side-effects" in nb_runner.get_raw_output(3), "control: the same code without the block warns"

@@ -67,7 +67,20 @@ def _emitted(**config):
 
 
 def test_a_warning_is_one_line_by_default():
-    assert _emitted() == f"[CACHE-THRASH] the cache is full at its 500 MB cap. ({URL})"
+    assert _emitted() == f"[CACHE-THRASH] the cache is full at its 500 MB cap. Fix: raise it. ({URL})"
+
+
+def test_the_one_line_keeps_the_whole_fix():
+    # The way out (an annotation, "re-run cell 3") is what a reader acts on.
+    text = short_diagnostic(
+        "CACHE-THRASH",
+        "the cache is full.",
+        "split it. If that is not\n  possible, put `# @cash:no-cache` above it.",
+    )
+    assert (
+        text
+        == f"[CACHE-THRASH] the cache is full. Fix: split it. If that is not possible, put `# @cash:no-cache` above it. ({URL})"
+    )
 
 
 def test_a_first_sentence_that_says_only_what_takes_the_next_one():
@@ -115,7 +128,8 @@ def test_the_function_log_keeps_the_full_text(tmp_path):
     assert "\n" not in shown
     assert "file write: .../" in shown, shown
     assert "plain.cache_info()['warnings']" in shown
-    assert "Fix:" not in shown
+    assert "Fix: split the function" in shown
+    assert "`# @cash:assume-safe`" in shown, "the one line keeps the way out"
     [logged] = [w["message"] for w in archive.cache_info()["warnings"] if w["code"] == "IMPURE-OBSERVED-EFFECTS"]
     assert "\n  Fix: split the function" in logged
     assert str(tmp_path) in logged, "the log lists the full path"

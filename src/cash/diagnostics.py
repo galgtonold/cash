@@ -400,15 +400,17 @@ def list_gist(items: list[str], noun: str = "finding") -> str:
     return f"{len(items)} {noun}s, e.g. {first}"
 
 
-def short_diagnostic(code: str, what: str, *, more: str | None = None) -> str:
+def short_diagnostic(code: str, what: str, fix: str | None = None, *, more: str | None = None) -> str:
     """The one-line form a warning shows by default::
 
-        [CACHE-THRASH] the cache is full at its 500 MB cap. (https://...#cache-thrash)
+        [CACHE-THRASH] the cache is full at its 500 MB cap. Fix: raise max_cache_size. (https://...#cache-thrash)
 
     The first sentence of *what*; an indented list below it (effects,
-    findings) collapses to a count and its first item. The fix and the rest
-    are in the doc section the link points at; *more* names where the full
-    text of this one is kept (``f.cache_info()['warnings']``).
+    findings) collapses to a count and its first item. All of *fix*
+    follows, on the same line: the way out (``# @cash:allow-random``,
+    "re-run cell 3") is what a reader acts on, and it is often the last
+    clause. The rest is in the doc section the link points at; *more* names where the full text of this one is kept
+    (``f.cache_info()['warnings']``).
     """
     head, _, rest = what.partition("\n")
     sentences = _SENTENCE_END.split(head.strip(), maxsplit=2)
@@ -421,6 +423,8 @@ def short_diagnostic(code: str, what: str, *, more: str | None = None) -> str:
     items = [line.strip() for line in rest.splitlines() if line.strip() and not line.rstrip().endswith(":")]
     if items:
         sentence = f"{sentence.rstrip(' .:')}: {list_gist(items)}"
+    if fix and fix.strip():
+        sentence = f"{sentence} Fix: {' '.join(fix.split())}"
     where = doc_url(code) if more is None else f"{more}; {doc_url(code)}"
     return f"[{code}] {sentence} ({where})"
 
@@ -454,7 +458,7 @@ def render_diagnostic(code: str, what: str, fix: str, *, more: str | None = None
     ``warning_detail = "full"``, else :func:`short_diagnostic`."""
     if full_warnings():
         return format_diagnostic(code, what, fix)
-    return short_diagnostic(code, what, more=more)
+    return short_diagnostic(code, what, fix, more=more)
 
 
 def log_diagnostic(log: logging.Logger, code: str, what: str, fix: str) -> None:

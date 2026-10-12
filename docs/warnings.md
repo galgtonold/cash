@@ -14,18 +14,18 @@ Every cash warning starts with a code in square brackets, such as
 
 ## How much a warning says {#warning-detail}
 
-<!-- claim: cash/diagnostics.py:short_diagnostic @cd898b12, cash/decorator/reporting.py:Notices._displayed @2d9252a1 -->
-By default a warning is one line: the code, what happened, and where to read
-more. A list of findings or effects is cut to how many there are and the
-first one. What to do about it is in the code's section below, which the
-link opens:
+<!-- claim: cash/diagnostics.py:short_diagnostic @e965c47a, cash/decorator/reporting.py:Notices._displayed @edbc85c6 -->
+By default a warning is one line: the code, what happened, the fix,
+and where to read more. A list of findings or effects
+is cut to how many there are and the first one. The rest is in the code's
+section below, which the link opens:
 
 ```text title="Output"
-model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model.backtest: the first call had effects static analysis did not see, which a cache hit will not repeat: 3 effects, e.g. file write: .../__pycache__/helpers.kern-2.py313.nbi.tmp.cc1b, at model.py:5 (backtest.cache_info()['warnings']; https://cash-lib.readthedocs.io/en/latest/warnings/#impure-observed-effects)
+model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model.backtest: the first call had effects static analysis did not see, which a cache hit will not repeat: 3 effects, e.g. file write: .../__pycache__/helpers.kern-2.py313.nbi.tmp.cc1b, at model.py:5 Fix: split the function if an effect is part of the result -- an 'argument mutation' line means an object the CALLER still holds stops being changed. If it is incidental, put `# @cash:assume-safe` on the line named (any line of yours on the way to it counts) or run it inside `with cash.assume_safe():`; @cash.cache(assume_safe=True) waives the whole function instead, including effects added later. (backtest.cache_info()['warnings']; https://cash-lib.readthedocs.io/en/latest/warnings/#impure-observed-effects)
 ```
 
 For a decorated function, `f.cache_info()["warnings"]` keeps the full text
-(every finding, and the fix), which the line names. When a second function
+(every finding), which the line names. When a second function
 gets a code the first already showed, its line only says so:
 `[IMPURE-OBSERVED-EFFECTS] also on backtest2 (backtest2.cache_info()['warnings'])`.
 
@@ -812,7 +812,7 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @c4985958 -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @213ba8ef -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,

@@ -177,7 +177,7 @@ class Notices:
         shown = warn_diagnostic_message(
             category,
             code,
-            self._displayed(func_name, code, message, rendered, short),
+            self._displayed(func_name, code, message, fix, rendered, short),
             fallback=self._definition_site(func_name),
         )
         if shown:
@@ -190,7 +190,7 @@ class Notices:
         if digest and shown:
             self._stored_keys.note_warning_shown(func_name, digest)
 
-    def _displayed(self, func_name: str, code: str, message: str, rendered: str, short: str | None) -> str:
+    def _displayed(self, func_name: str, code: str, message: str, fix: str, rendered: str, short: str | None) -> str:
         """What stderr shows for a warning whose full text is *rendered*."""
         if full_warnings(self._config):
             return rendered
@@ -200,7 +200,7 @@ class Notices:
             first = self._shown_codes.get(code)
         if first is not None and first != func_name:
             return f"[{code}] also on {name} ({more})"
-        return short_diagnostic(code, short or message, more=more)
+        return short_diagnostic(code, short or message, fix, more=more)
 
     def _display_name(self, func_name: str) -> str:
         """The name the user calls *func_name* by: ``backtest``, not
