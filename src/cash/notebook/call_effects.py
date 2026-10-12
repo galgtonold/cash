@@ -108,12 +108,41 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
     old_stdout, old_stderr = sys.stdout, sys.stderr
     tee_out = TeeWriter(old_stdout)
     tee_err = TeeWriter(old_stderr)
+    callers = _statement_globals(sys._getframe(1))
+    if callers is not None and getattr(fn, "__globals__", None) is callers:
+        callers = None  # a function of the cell's: nothing to name
     sys.stdout, sys.stderr = tee_out, tee_err
     try:
-        result = fn(*args, **kwargs)
+        if callers is None:
+            result = fn(*args, **kwargs)
+        else:
+            # Called from a frame with the statement's globals: a library
+            # function that names its caller's module
+            # (``collections.namedtuple``) names the cell's, not cash's.
+            result = eval(  # a fixed expression, compiled once
+                _CALL_FROM_STATEMENT,
+                callers,
+                {"__cash_fn__": fn, "__cash_args__": args, "__cash_kwargs__": kwargs, "__tracebackhide__": True},
+            )
     finally:
         sys.stdout, sys.stderr = old_stdout, old_stderr
     return result, tee_out.getvalue(), tee_err.getvalue()
+
+
+#: The call `call_capturing_output` makes from a frame of the statement's
+#: globals.
+_CALL_FROM_STATEMENT = compile("__cash_fn__(*__cash_args__, **__cash_kwargs__)", "<cash call>", "eval")
+
+
+def _statement_globals(frame) -> dict | None:
+    """The globals of the first frame from *frame* outwards that is not
+    cash's: the statement that made the call."""
+    while frame is not None:
+        name = frame.f_globals.get("__name__")
+        if not (isinstance(name, str) and (name == "cash" or name.startswith(("cash.", "contextlib")))):
+            return frame.f_globals
+        frame = frame.f_back
+    return None
 
 
 def replay_deps(metadata: Mapping[str, Any]) -> frozenset[str]:
