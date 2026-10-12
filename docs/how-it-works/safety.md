@@ -103,7 +103,7 @@ again. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @745e10a2, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @5fc1efae -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @745e10a2, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @808a92d9 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
@@ -131,7 +131,12 @@ A method call has no assignment target, so cash classifies its object:
   the call is: `summary = add_features(df)`, `r = work(s.d)` (the whole of `s`),
   `rs = [work(d) for d in ds]` (all of `ds`), and so are the items a
   comprehension or `map` calls a method on (`[r.update(tax=1) for r in
-  records]`, `map(lambda r: r.update(tax=1), records)`: all of `records`). There one that cannot be
+  records]`, `map(lambda r: r.update(tax=1), records)`: all of `records`), what
+  a comprehension or a lambda hands to a library function
+  (`[heapq.heappush(h, x) for x in xs]`: `h`), and a global that a function of
+  your own hands to one (`def push(x): heapq.heappush(H, x)`: `H`). A
+  statement whose record says it changed nothing is fingerprinted again when it
+  runs on inputs not seen before in the session. There one that cannot be
   fingerprinted, such as a database connection, does not count as changed. A
   library function whose result is kept (`m = np.mean(arr)`) is not watched,
   unless the call asks it to write into what it is handed: an `out=`,

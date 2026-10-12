@@ -91,18 +91,25 @@ chain: each iteration depends only on its own item. See
 [call-level caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls)
 and [reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
-<!-- claim: cash/notebook/statement/in_loop.py:InLoopChanges.moved @928c2115, cash/notebook/loop_watch.py:LoopWatch.finish @47cec88f -->
+<!-- claim: cash/notebook/statement/in_loop.py:InLoopChanges.moved @88c23fb0, cash/notebook/loop_watch.py:LoopWatch.finish @4d64d181 -->
 A body statement that changes an object in place (`history.append(loss * lr)`,
 `tr.step(lr)`, `add_tax(r)` with a function of yours) moves that object on for
 the passes after it, so `loss = score(history, epoch)` in a later pass is keyed
 on what the earlier passes appended, and an edit of `lr` above reaches every
-pass. Such a statement runs every time, as the same line does in a cell: a
+pass. A change through another name moves the whole with it: the outer loop's
+list when an inner loop appends to its item, `rows` after `r = rows[i];
+r.append(x)`, `model` after `w = model['w']; w.append(x)`. Such a statement runs every time, as the same line does in a cell: a
 restore would bring back only what it binds. A loop that hands an object to a
 library function cash cannot judge (`heapq.heappush(h, x)`, `np.copyto(a, b)`,
-`x = dq.popleft()`) is watched the first time each version of the loop runs:
+`x = dq.popleft()`, or a function of yours that hands its argument or a
+global to one) is watched the first time each version of the loop runs:
 the objects are hashed before and after, and the ones that changed are
 recorded for that loop's text, so later runs, a restart and the upstream check
-move the same names.
+move the same names. A run on inputs not seen before watches again what the
+record does not list yet, so a loop first run on no items still learns what it
+changes. A `with` block is watched the same way; an `if` or `try` moves what
+the statements in its branches were seen changing, and, for a branch that has
+not run yet, everything it hands to such code.
 
 <!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b99280d5 -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
