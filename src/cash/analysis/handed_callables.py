@@ -61,6 +61,7 @@ from .callee_effects import (
     iterated_sources,
     params_mutated_in_function,
     parse_function_source,
+    source_called_names,
     source_global_mutations,
 )
 from .mutations import MUTATING_METHODS, chain_is_pure
@@ -1037,6 +1038,48 @@ def is_users_instance(value: Any) -> bool:
     return _is_users_object(value)
 
 
+#: ``class -> (what its classes hold, `_reaching_special_functions`)``: read
+#: again only when a class of its MRO holds something else.
+_SPECIAL_MEMO: dict[type, tuple[tuple, list[Any]]] = {}
+
+
+def _reaching_special_functions(cls: type) -> list[Any]:
+    """`special_functions` of *cls* whose text changes a global, calls a
+    function by name or calls a method of a global object: the others
+    change nothing outside their objects, whatever their globals hold."""
+    try:
+        snapshot = tuple(tuple(vars(k).values()) for k in cls.__mro__ if k is not object)
+    except TypeError:
+        snapshot = None
+    kept = _SPECIAL_MEMO.get(cls)
+    if kept is not None and snapshot is not None:
+        try:
+            same = len(kept[0]) == len(snapshot) and all(
+                len(a) == len(b) and all(map(operator.is_, a, b)) for a, b in zip(kept[0], snapshot)
+            )
+        except Exception:  # noqa: BLE001 - a class attribute's comparison
+            same = False
+        if same:
+            return kept[1]
+    out = []
+    for fn in special_functions(cls):
+        facts = _call_facts(fn)
+        source = _source_of(fn)
+        if (
+            source is None
+            or facts is None
+            or facts.global_methods
+            or source_global_mutations(source)
+            or source_called_names(source)
+        ):
+            out.append(fn)
+    if snapshot is not None:
+        if len(_SPECIAL_MEMO) > 512:
+            _SPECIAL_MEMO.clear()
+        _SPECIAL_MEMO[cls] = (snapshot, out)
+    return out
+
+
 def special_functions(cls: type) -> list[Any]:
     """The functions Python runs implicitly on an object of the user's class
     *cls*: its special methods (``__getitem__``, ``__exit__``, ``__add__``,
@@ -1359,7 +1402,7 @@ class _Found:
         if cls in self._special_seen:
             return
         self._special_seen.add(cls)
-        for fn in special_functions(cls):
+        for fn in _reaching_special_functions(cls):
             self.method_called(fn)
 
     def method_called(self, value: Any) -> None:
