@@ -74,7 +74,7 @@ For other types, register a hasher; see
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @de919252 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @fb94146f -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
