@@ -411,10 +411,13 @@ class FileWriterScheduler:
             code = simulation_trace[i].stmt_code
             removed = statement_removed_paths(code, None, namespace) or set()
             written = self._writer_paths(code, simulation_trace) or set() if self._is_file_writer(code) else set()
-            places = {w for p in removed | written if (w := where(p)) is not None}
-            if places:
-                folders = [p + os.sep for p in places if os.path.isdir(p)]
-                undoing.append((i, places, folders))
+            # A folder it makes (``OUT.mkdir()``) undoes nothing in it; one it
+            # clears or removes undoes everything.
+            gone = {w for p in removed if (w := where(p)) is not None}
+            overwritten = {w for p in written if (w := where(p)) is not None and not os.path.isdir(w)}
+            if gone or overwritten:
+                folders = [p + os.sep for p in gone if os.path.isdir(p)]
+                undoing.append((i, gone | overwritten, folders))
 
         for i in sorted(scheduled | chosen):
             note(i)

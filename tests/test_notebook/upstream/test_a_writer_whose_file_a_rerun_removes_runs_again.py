@@ -65,3 +65,24 @@ def test_a_writer_into_another_folder_is_left_alone(cash_magics, tmp_path, monke
     run_cash_cell(cash_magics, cells[3], cells=cells)
     assert cash_magics.shell.user_ns["manifest"] == ["east.csv", "north.csv"]
     assert os.stat(summary).st_mtime_ns == 0, "the summary was written again"
+
+
+def test_a_folder_made_again_undoes_nothing_in_it(cash_magics, tmp_path, monkeypatch):
+    """Control: ``os.makedirs(OUT, exist_ok=True)`` re-run with its edited
+    cell leaves the files in ``OUT``, so their writer is not run again."""
+    monkeypatch.chdir(tmp_path)
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    cells = [
+        "import os\nimport pandas as pd\nOUT = 'out'\nos.makedirs(OUT, exist_ok=True)\nN = 1",
+        "pd.DataFrame({'a': [1]}).to_csv(os.path.join(OUT, 't.csv'))",
+        "seen = (sorted(os.listdir(OUT)), N)",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    table = tmp_path / "out" / "t.csv"
+    os.utime(table, ns=(0, 0))
+    cells[0] = cells[0].replace("N = 1", "N = 2")
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert cash_magics.shell.user_ns["seen"] == (["t.csv"], 2)
+    assert os.stat(table).st_mtime_ns == 0, "the table was written again"

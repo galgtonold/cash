@@ -185,7 +185,7 @@ folder re-runs it when its code or what it draws from has changed. Such a
 re-run clears the folder before drawing, as running the cell does: charts
 the cell no longer draws, and files put there from outside, are removed.
 
-<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writers_undone_by_reruns @96079964 -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writers_undone_by_reruns @9a43e7c1 -->
 A file another cell of the notebook writes into that folder (a summary next
 to the per-region exports) is written again after such a re-run, as running
 the cells from the top writes it, and so is one a re-run statement above
