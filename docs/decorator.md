@@ -311,7 +311,145 @@ tracked readers record each file with the entry, and every lookup checks that
 its content still matches. A touch that leaves the bytes alone still hits.
 
 To see why a particular call missed, use `explain()`. For how the key is built,
-see [The decorator path](how-it-works/decorator-path.md).
+see [The decorator path](how-it-works/decorator-path.md). To keep an edit to a
+loader or a shared settings class from rerunning everything, see
+[Shaping code so an edit reruns less](#shaping-code-so-an-edit-reruns-less).
+
+## Shaping code so an edit reruns less
+
+A cached function is keyed by the **code** of everything it calls, and by the
+**content** of what it is given. The two recipes below move what a function
+only needs as data out of the first group and into the second.
+
+### Pass data in, don't load inside { #pass-data-in }
+
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+Here `signals` loads its own input:
+
+<!-- test:skip reason="the layout the next fence replaces; it defines the same names" -->
+```python
+import cash
+
+from ticks import load_ticks   # load_ticks calls _parse on each line
+
+@cash.cache
+def signals(window):
+    ticks = load_ticks(1000)
+    return [p for _, p in ticks[::window]]
+
+@cash.cache
+def backtest(window, fee):
+    sig = signals(window)
+    return round(sum(sig) - fee * len(sig), 2)
+
+for w in (5, 10, 20):
+    print(backtest(w, fee=0.1))
+```
+
+`load_ticks` and `_parse` are helpers `signals` calls, so their code is in its
+key, and `signals` is in `backtest`'s. A harmless fix in `_parse` (a
+`line.strip()`), or a new optional parameter on `load_ticks`, reruns every
+`signals` and every `backtest` call, although the ticks come out the same.
+Cash cannot know that without running the new code. Caching `load_ticks` too
+does not help while `signals` still calls it: then `signals` is keyed by the
+code of the cached function it calls, and that changed.
+
+Hand the data over instead:
+
+```python
+import cash
+
+def _parse(line):
+    ts, price = line.split(",")
+    return int(ts), float(price)
+
+def load_ticks(n):
+    return [_parse(f"{i},{100 + i % 7}") for i in range(n)]
+
+@cash.cache
+def signals(ticks, window):
+    return [p for _, p in ticks[::window]]
+
+@cash.cache
+def backtest(sig, fee):
+    return round(sum(sig) - fee * len(sig), 2)
+
+ticks = load_ticks(1000)
+print(backtest(signals(ticks, 5), fee=0.1))
+print(backtest(signals(ticks, 10), fee=0.1))
+print(backtest(signals(ticks, 20), fee=0.1))
+```
+
+Now `load_ticks` runs on every run, outside the cache, and `signals` is keyed
+by the ticks it gets. After an edit to `_parse` or `load_ticks`, the ticks
+hash as before and every cached call hits; a change that does alter the ticks
+reruns what depends on them, as it should. With `load_ticks` taking 0.5 s,
+each `signals` call 3 s and each `backtest` 1 s:
+
+| Step | `signals` loads the ticks | ticks passed in |
+|---|---|---|
+| First run | 14.4 s | 16.4 s |
+| Rerun, nothing edited | 0.0 s | 0.6 s |
+| `_parse` gets `line.strip()` | 14.1 s, everything reruns | 0.6 s |
+| `load_ticks` gets an unused `tz=None` | 14.3 s, everything reruns | 0.5 s |
+| A price in the data changes | | 13.4 s, new results |
+
+The rerun pays for `load_ticks` itself. Decorate it with `@cash.cache` as well
+to skip that too: a rerun with nothing edited then takes 0.0 s, and after the
+`_parse` fix 0.8 s, since `load_ticks` runs once, returns the same ticks and
+everything after it hits. The ticks are hashed on every call they are passed
+to; for a large frame see [`frozen=` and large arguments](#frozen-and-large-arguments).
+
+After an edit like this, `f.explain(...)` names the helper that changed and
+the call whose result `f` could be passed instead
+([Methods on a cached function](#methods-on-a-cached-function)).
+
+### Split parameter objects { #split-parameter-objects }
+
+<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @96467b11, cash/decorator/runtime.py:KeyBuilder.build @3514afa3 -->
+An object passed in is keyed by all of its content and by the code of its
+class. With one `Params` holding both the signal settings and the trading
+costs, a new fee value, or a new cost field, reruns every signal search,
+although `signals` never reads a cost. Give each function only the fields it
+uses:
+
+```python
+from dataclasses import dataclass
+
+import cash
+
+@dataclass(frozen=True)
+class SignalParams:
+    window: int = 10
+
+@dataclass(frozen=True)
+class CostParams:
+    fee: float = 0.1
+    slippage: float = 0.0
+
+@cash.cache
+def search_signals(prices, sp: SignalParams):
+    return prices[::sp.window]
+
+@cash.cache
+def run_backtest(sig, cp: CostParams):
+    return round(sum(sig) - (cp.fee + cp.slippage) * len(sig), 2)
+
+prices = [100 + i % 7 for i in range(1000)]
+sp = SignalParams(window=10)
+sig = search_signals(prices, sp)        # first call: runs the body
+run_backtest(sig, CostParams(fee=0.1))  # first call: runs the body
+
+sig = search_signals(prices, sp)        # cache hit
+run_backtest(sig, CostParams(fee=0.2))  # a new fee: runs the body
+```
+
+A cost change now reruns only `run_backtest`, and so does an edit to
+`CostParams`, a new field included. Leaving the cost fields out with `key=`
+instead (`key=lambda prices, p: (prices, p.window)`) keeps a new fee value
+from rerunning the search, but not a new field: the code of the class an
+argument carries stays in the key whatever the key function returns
+([Leaving arguments out of the key](#leaving-arguments-out-of-the-key)).
 
 ## Parameters
 
@@ -782,7 +920,8 @@ print(double.explain(5))
 `key_uncomputable` or `disabled`. For `file_changed`, `details["changed_files"]`
 names each changed file. After an edit, `details["changed"]` names what
 changed, in a new process too, and when that is code the function calls,
-`details["hint"]` says which call to move out:
+`details["hint"]` says which call to move out
+([Pass data in](#pass-data-in)):
 
 ```text title="Output"
 [MISS] run_dev.signals - no_entry
