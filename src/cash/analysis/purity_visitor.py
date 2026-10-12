@@ -32,6 +32,7 @@ from ..effects import (
     ENVIRON_NAMES,
     MODULE_CALLS,
     MUTATOR_METHODS,
+    NATIVE_WRITE_METHODS,
     STDIN_NAMES,
     Action,
     EffectKind,
@@ -737,7 +738,11 @@ class PurityVisitor(ast.NodeVisitor):
         if (
             not isinstance(func, ast.Attribute)
             or not reported
-            or self._receiver_is_fresh(func.value)
+            # A file written natively (``df = pl.DataFrame(...);
+            # df.write_csv(p)``) is written whoever owns the frame, and
+            # the runtime observer, which sees only ``open()``, cannot
+            # report it instead.
+            or (self._receiver_is_fresh(func.value) and func.attr not in NATIVE_WRITE_METHODS)
             or self._is_module_function_named_like_a_mutator(func)
         ):
             return False
