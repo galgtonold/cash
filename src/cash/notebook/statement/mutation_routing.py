@@ -184,6 +184,7 @@ class MutationRouting:
             tree,
             run.source_hash,
             run.outputs,
+            rewatch=True,
         )
         run.est_fit = self._classifier.estimator_fit_receivers(tree, run.outputs) if run.cache_fit else set()
         self._route_unit(run)
@@ -231,13 +232,16 @@ class MutationRouting:
             _skip(run, "Could not tell what the loop changes in place (statement re-executes)")
             return
         if self._in_loop is not None:
-            watch = self._in_loop.open_watch(node, run.code, resolve)
+            watch = self._in_loop.open_watch(node, run.code, resolve, run.cache_key)
             if watch is not None:
                 if watch.verdict is not None:
                     changed |= watch.verdict
                 elif watch.learning:
-                    run.loop_watch = run.code
                     run.must_run = True
+                if watch.watching:
+                    # Seen running on new inputs: what it changes now is
+                    # compared once it ran (`_observe_unit`).
+                    run.loop_watch = run.code
         run.in_place = set(changed) - run.outputs
         if run.in_place:
             _skip(
@@ -341,8 +345,31 @@ class MutationRouting:
             verdict_hash = run.verdict_hash or run.source_hash
             self.tracking_state.mutation_verdicts[verdict_hash] = set(run.mut_assumed) | newly_mutated
             self._records.persist_mutation_verdict(verdict_hash, self.tracking_state.mutation_verdicts[verdict_hash])
-        if body and run.in_place and self._in_loop is not None:
-            self._in_loop.moved(run.in_place, run.cache_key)
+        elif run.rewatching:
+            self._observe_rewatch(run)
+        if body and self._in_loop is not None:
+            self._in_loop.note_bindings(run.tree)
+            if run.in_place:
+                self._in_loop.moved(run.in_place, run.cache_key)
+
+    def _observe_rewatch(self, run: StatementRun) -> None:
+        """A statement whose verdict is known ran on new inputs, watched for
+        what the verdict does not hold (`MutationClassifier.start_rewatch`):
+        what it changed now joins the verdict, the outputs and the reasons
+        it re-executes, as on the run that learned the verdict."""
+        changed = self._classifier.rewatched_changes(run.source_hash) - run.outputs
+        if not changed:
+            return
+        verdicts = self.tracking_state.mutation_verdicts
+        verdicts[run.source_hash] = set(verdicts.get(run.source_hash, ())) | changed
+        self._records.persist_mutation_verdict(run.source_hash, verdicts[run.source_hash])
+        run.outputs = run.outputs | changed
+        produced = run.metrics.setdefault("evaluated_vars", [])
+        produced.extend(n for n in sorted(changed) if n not in produced)
+        run.skip_cache = True
+        run.metrics.setdefault("uncacheable_reasons", []).append(
+            f"In-place mutation on: {', '.join(sorted(changed))} (observed; receiver lineage bumped; statement re-executes)"
+        )
 
     def _observe_receivers(self, run: StatementRun, body: bool) -> set[str]:
         metrics = run.metrics

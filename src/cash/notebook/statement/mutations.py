@@ -17,13 +17,25 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from cash.analysis.cacheability_decision import receiver_is_identity_coupled
-from cash.analysis.mutation_effects import classify_receivers, drawn_on_arguments
+from cash.analysis.mutation_effects import (
+    classify_receivers,
+    comprehension_watch_candidates,
+    drawn_on_arguments,
+    is_module_name,
+    live_function_source,
+)
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
-from cash.analysis.namespace_effects import bare_call_arguments, call_arguments, fits_its_receiver, is_estimator
+from cash.analysis.namespace_effects import (
+    bare_call_arguments,
+    call_arguments,
+    fits_its_receiver,
+    is_estimator,
+    rewatch_exempt,
+)
 from cash.mutation_fingerprint import mutation_fingerprint
 from cash.notebook.cache_key import statement_source_hash
 from cash.notebook.call_effects import DigestHandoff
-from cash.notebook.consumables import watched_call_receivers
+from cash.notebook.consumables import is_stream, watched_call_receivers
 from cash.notebook.magic_effects import magic_call_arguments
 from cash.notebook.restored_var import hashed_by_lineage
 
@@ -58,6 +70,12 @@ class MutationClassifier:
         # Pre-execution fingerprints of a bare call's arguments, by statement
         # source hash -- see :meth:`classify`.
         self._arg_snapshots: dict[str, dict[str, str]] = {}
+        # What a statement whose verdict is known could still change, by
+        # source hash, and the keys it was seen running under -- see
+        # :meth:`start_rewatch`.
+        self._rewatch_candidates: dict[str, frozenset[str]] = {}
+        self._rewatched_keys: dict[str, set[str]] = {}
+        self._rewatch_snapshots: dict[str, dict[str, str | None]] = {}
 
     def observed_mutations(self, observe: set[str], source_hash: str) -> set[str]:
         """The receivers and bare-call arguments this statement changed.
@@ -136,6 +154,7 @@ class MutationClassifier:
         source_hash: str,
         outputs: set[str],
         extra_arguments: frozenset[str] = frozenset(),
+        rewatch: bool = False,
     ) -> tuple[set[str], set[str], set[str], bool]:
         """Classify a statement's standalone method-call receivers.
 
@@ -153,7 +172,8 @@ class MutationClassifier:
 
         *extra_arguments* are watched as the arguments of a bare call are:
         what a statement of a loop body hands to code whose effect on it is
-        unknown (``statement_watch_candidates``).
+        unknown (``statement_watch_candidates``). With *rewatch*, what a
+        known verdict does not hold is kept for :meth:`start_rewatch`.
         """
         verdict = self.tracking_state.mutation_verdicts.get(source_hash)
         arguments, kept_only = self._call_arguments(tree, outputs)
@@ -213,7 +233,51 @@ class MutationClassifier:
         if snapshots:
             self._arg_snapshots[source_hash] = snapshots
         record_verdict = verdict is None and bool(observe or assumed or snapshots)
+        self._rewatch_candidates.pop(source_hash, None)
+        if verdict is not None and rewatch:
+            # Learned from the runs so far: one that changed nothing (an
+            # empty comprehension, a copy of equal values) is no verdict on
+            # other inputs (`start_rewatch`).
+            fresh = classify_receivers(tree, self.shell.user_ns, lambda: None, arguments=arguments)
+            unseen = (fresh.unknown_receivers | fresh.unknown_args) - set(verdict) - outputs - pre_route
+            if unseen:
+                user_ns = self.shell.user_ns
+                unseen -= rewatch_exempt(tree, user_ns, lambda name: live_function_source(name, user_ns))
+            if unseen:
+                self._rewatch_candidates[source_hash] = frozenset(unseen)
         return pre_route - outputs, observe, assumed, record_verdict
+
+    def start_rewatch(self, source_hash: str, cache_key: str) -> bool:
+        """Before a statement whose verdict is known executes: fingerprint
+        what it could change that the verdict does not hold, when it runs
+        under a key not seen this session (new inputs). Its verdict was
+        learned from earlier runs, and a run that changed nothing says
+        nothing about this one. False when nothing is watched."""
+        names = self._rewatch_candidates.pop(source_hash, None)
+        if not names or not cache_key:
+            return False
+        seen = self._rewatched_keys.setdefault(source_hash, set())
+        if cache_key in seen:
+            return False
+        if len(seen) >= 16:
+            seen.clear()
+        seen.add(cache_key)
+        user_ns = self.shell.user_ns
+        self._rewatch_snapshots[source_hash] = {
+            name: mutation_fingerprint(user_ns.get(name), self.digests.digest) for name in names
+        }
+        return True
+
+    def rewatched_changes(self, source_hash: str) -> set[str]:
+        """After the statement ran: what :meth:`start_rewatch` fingerprinted
+        that changed (one that cannot be observed counts as changed)."""
+        user_ns = self.shell.user_ns
+        after = self.digests.digest_after
+        return {
+            name
+            for name, before in self._rewatch_snapshots.pop(source_hash, {}).items()
+            if before is None or name not in user_ns or mutation_fingerprint(user_ns[name], after) != before
+        }
 
     def _call_arguments(self, tree: ast.Module | None, outputs: set[str]) -> tuple[set[str], set[str]]:
         """``(names, kept_only)``: the names to fingerprint around the
@@ -224,7 +288,11 @@ class MutationClassifier:
         is handed (``r = work(st)``)."""
         user_ns = self.shell.user_ns
         watched = watched_call_receivers(tree, user_ns)
-        names = set(call_arguments(tree, user_ns) | watched) - outputs
+        handed = comprehension_watch_candidates(
+            tree, user_ns, lambda name: is_module_name(name, user_ns), lambda name: live_function_source(name, user_ns)
+        )
+        handed = frozenset(name for name in handed if not is_stream(user_ns.get(name)))
+        names = set(call_arguments(tree, user_ns) | watched | handed) - outputs
         return names, names - bare_call_arguments(tree, user_ns) - watched
 
     def magic_snapshots(self, node: ast.stmt, code: str) -> dict[str, str | None] | None:

@@ -39,13 +39,13 @@ from .callee_effects import (
     argument_roots,
     callee_global_mutations,
     function_arg_mutations,
+    iterated_sources,
     mutating_partials,
     partial_arg_mutations,
     reduce_free_mutations,
     resolve_function_def,
     stateful_closure_vars,
     stateful_self_functions,
-    statement_calls,
 )
 from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
 from .handed_callables import handed_callables
@@ -63,7 +63,16 @@ from .mutations import (
     subscript_view_bindings,
     top_level_calls,
 )
-from .namespace_effects import call_only_reads, capturable_globals, fits_its_receiver
+from .namespace_effects import (
+    ARGUMENT_READING_BUILTINS,
+    call_only_reads,
+    calls_with_lambdas,
+    capturable_globals,
+    fits_its_receiver,
+    function_handoffs,
+    handed_to_params,
+    users_callee,
+)
 from .object_protocol import ObjectProtocolResets, object_protocol_mutations
 
 __all__ = [
@@ -75,6 +84,7 @@ __all__ = [
     "captured_call_receiver_names",
     "captured_call_receivers",
     "classify_receivers",
+    "comprehension_watch_candidates",
     "condition_mutations",
     "control_structure_mutations",
     "drawn_on_arguments",
@@ -82,6 +92,7 @@ __all__ = [
     "live_function_source",
     "loop_target_roots",
     "loop_watch_candidates",
+    "WATCHED_STRUCTURES",
     "statement_watch_candidates",
     "statement_effects",
 ]
@@ -607,9 +618,32 @@ def _iterable_roots(node: ast.expr, names: _LoopNames | None = None) -> set[str]
         for sub in ast.walk(node):
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
                 source = names.user_source(sub.func.id)
-                if source:
+                if source and resolve_function_def(sub.func.id, lambda _name, s=source: s) is not None:
                     roots |= _function_global_reads(source)
+                elif (
+                    names.namespace is not None
+                    and isinstance(names.namespace.get(sub.func.id), (types.FunctionType, type(None)))
+                    and users_callee(sub.func, names.namespace)
+                ):
+                    # A function of the user's whose body cannot be read (a
+                    # lambda, one made by ``exec``) may hand out the items
+                    # of any global it reaches.
+                    roots |= _mutable_globals(names)
     return roots
+
+
+#: Names IPython binds in the user namespace, not the user's data.
+_IPYTHON_NAMES = frozenset({"In", "Out", "exit", "quit", "get_ipython"})
+
+
+def _mutable_globals(names: _LoopNames) -> set[str]:
+    """Every variable of the notebook a call could change in place."""
+    namespace = names.namespace or {}
+    return {
+        name
+        for name in namespace
+        if not name.startswith("_") and name not in _IPYTHON_NAMES and _watchable(name, namespace, names.is_module)
+    }
 
 
 @functools.lru_cache(maxsize=1024)
@@ -697,13 +731,19 @@ def _bare_call_receivers(stmt: ast.stmt, is_module: Callable[[str], bool], *, pu
 # ---------------------------------------------------------------------------
 
 
+#: The structures watched as a unit for what they hand to code whose effect
+#: is unknown: a loop, and a ``with`` block (run as one unit). An ``if`` or a
+#: ``try`` runs statement by statement, each watched on its own.
+WATCHED_STRUCTURES = (ast.For, ast.While, ast.With)
+
+
 def loop_watch_candidates(
     node: ast.AST,
     namespace: Mapping[str, Any],
     is_module: Callable[[str], bool],
     resolve_source: SourceResolver | None = None,
 ) -> frozenset[str]:
-    """The names a loop hands to code whose effect on them its text cannot
+    """The names a loop (or a ``with`` block, `WATCHED_STRUCTURES`) hands to code whose effect on them its text cannot
     decide, to watch around the loop: what a library function is handed
     (``heapq.heappush(h, x)``, ``np.copyto(a, b)``, ``rng.shuffle(xs)``,
     ``if heapq.heappop(h) > t:``), what a method is handed, the receiver of
@@ -712,20 +752,27 @@ def loop_watch_candidates(
     target counts as the names its loop iterates (``for xs in lists:
     random.shuffle(xs)`` hands over items of ``lists``).
 
+    A function of the user's that is read counts for what its body hands
+    to such code: the arguments for those parameters, and the globals
+    (``def push(h, x): heapq.heappush(h, x)``, `function_handoffs`).
+
     Not candidates: what :func:`control_structure_mutations` already decides
-    from the text (a bare method call's receiver, a function of the user's
-    that is read), what a call known only to read is handed (``print(df)``,
+    from the text (a bare method call's receiver), what a call known only to read is handed (``print(df)``,
     ``len(xs)``, ``sum(xs)``), modules, classes, functions and immutable
     values. The runtime fingerprints the candidates before and after the
     loop runs and records which changed, per loop source; the simulation and
     a restored loop apply that record.
     """
-    if not isinstance(node, (ast.For, ast.While)):
+    if not isinstance(node, WATCHED_STRUCTURES):
         return frozenset()
     names = _LoopNames(is_module, namespace, resolve_source)
     found: set[str] = set()
     targets: dict[str, set[str]] = {}
     _watch_statements([node], names, found, targets)
+    # What a ``with`` binds (``as f``) is the object its context manager
+    # hands back, made as the block starts: a name left from an earlier run
+    # holds another object.
+    found -= _with_bound_names(node)
     resolved: set[str] = set()
     pending = list(found)
     seen: set[str] = set()
@@ -739,6 +786,19 @@ def loop_watch_candidates(
         else:
             resolved.add(name)
     return frozenset(name for name in resolved if _watchable(name, namespace, is_module))
+
+
+def _with_bound_names(node: ast.AST) -> set[str]:
+    """The names the ``with`` statements in *node* bind with ``as``."""
+    return {
+        target.id
+        for stmt in ast.walk(node)
+        if isinstance(stmt, (ast.With, ast.AsyncWith))
+        for item in stmt.items
+        if item.optional_vars is not None
+        for target in ast.walk(item.optional_vars)
+        if isinstance(target, ast.Name)
+    }
 
 
 def loop_target_roots(
@@ -770,6 +830,52 @@ def statement_watch_candidates(
     return frozenset(name for name in found if _watchable(name, namespace, is_module))
 
 
+def comprehension_watch_candidates(
+    tree: ast.Module | None,
+    namespace: Mapping[str, Any],
+    is_module: Callable[[str], bool],
+    resolve_source: SourceResolver | None = None,
+) -> frozenset[str]:
+    """What the comprehensions and lambdas of the statement *tree* hand to
+    code whose effect on it its text cannot decide, item by item:
+    ``[heapq.heappush(h, x) for x in xs]``, ``any(rng.shuffle(r) for r in
+    rows)``, ``map(lambda x: heapq.heappush(h, x), xs)``. A comprehension
+    is a loop written as an expression, so what its element hands over is
+    watched as a loop body's statement is (:func:`loop_watch_candidates`); a
+    comprehension target counts as what it iterates. Not the statement's
+    other calls: a library call whose result is kept returns its answer
+    (``call_arguments`` decides those)."""
+    if tree is None:
+        return frozenset()
+    names = _LoopNames(is_module, namespace, resolve_source)
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+            parts = [node.elt]
+        elif isinstance(node, ast.DictComp):
+            parts = [node.key, node.value]
+        elif isinstance(node, ast.Lambda):
+            parts = [node.body]
+        else:
+            continue
+        for gen in getattr(node, "generators", ()):
+            parts.extend(gen.ifs)
+        for part in parts:
+            found |= _handed_to_unknown_code(_as_statement(part), names, bare=False)
+    if not found:
+        return frozenset()
+    iterated = iterated_sources(tree)
+    roots: set[str] = set()
+    for name in found:
+        roots |= iterated.get(name, frozenset({name}))
+    # A random generator's draws are followed as a carrier's are.
+    return frozenset(
+        name
+        for name in roots
+        if _watchable(name, namespace, is_module) and rng_carrier_kind(namespace.get(name)) is None
+    )
+
+
 def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str], targets: dict[str, set[str]]) -> None:
     """Gather into *found* what each of *stmts* hands to unknown code, and
     into *targets* the names each loop among them iterates, per target. A
@@ -782,19 +888,16 @@ def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str],
                     targets.setdefault(target, set()).update(roots)
             if isinstance(stmt, (ast.If, ast.While)):
                 found |= _handed_to_unknown_code(_as_statement(stmt.test), names, bare=False)
+            if isinstance(stmt, ast.With):
+                for item in stmt.items:
+                    found |= _handed_to_unknown_code(_as_statement(item.context_expr), names, bare=False)
             _watch_statements(_branches(stmt), names, found, targets)
             continue
         found |= _handed_to_unknown_code(ast.Module(body=[stmt], type_ignores=[]), names, bare=True)
 
 
 #: Builtins that read what they are handed and change none of it.
-_READING_BUILTINS = frozenset(
-    {
-        "abs", "all", "any", "bool", "dict", "divmod", "enumerate", "float", "format", "frozenset", "hash",
-        "int", "isinstance", "issubclass", "len", "list", "max", "min", "print", "range", "repr", "reversed",
-        "round", "set", "sorted", "str", "sum", "tuple", "type", "zip", "id", "callable", "chr", "ord",
-    }
-)  # fmt: skip
+_READING_BUILTINS = ARGUMENT_READING_BUILTINS
 
 
 def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) -> set[str]:
@@ -803,7 +906,7 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
     namespace = names.namespace or {}
     stmt = tree.body[0] if tree.body else None
     outer = stmt.value if bare and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) else None
-    calls = statement_calls(tree, control_bodies=False)
+    calls = calls_with_lambdas(tree, control_bodies=False)
     # A call a chain goes on from (``df.groupby('a')`` in
     # ``df.groupby('a').sum()``) is judged with the chain's last method.
     chained = {id(inner) for call in calls for inner in _chain_calls(call.func)}
@@ -811,7 +914,11 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
     for call in calls:
         func = call.func
         if isinstance(func, ast.Name) and names.user_source(func.id):
-            continue  # its source says what it changes
+            # Its source says what it changes itself; what it hands to code
+            # whose effect is unknown (``def push(h, x): heapq.heappush(h,
+            # x)``) is watched as if handed here.
+            out |= _user_function_handoffs(call, func.id, names)
+            continue
         if isinstance(func, ast.Attribute) and call is not outer and id(call) not in chained:
             base = _receiver_root(func.value)
             inner = frozenset(c.func.attr for c in _chain_calls(func) if isinstance(c.func, ast.Attribute))
@@ -830,6 +937,17 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
         for arg in args:
             out |= argument_roots(arg, {})
     return out
+
+
+def _user_function_handoffs(call: ast.Call, name: str, names: _LoopNames) -> set[str]:
+    """What *call*, to the function of the user's *name*, hands to code
+    whose effect on it is unknown: its arguments for the parameters the
+    function hands on, and the globals it hands on (`function_handoffs`)."""
+    fdef = resolve_function_def(name, names.user_source)
+    if fdef is None:
+        return set()
+    params, free = function_handoffs(fdef, names.namespace or {}, names.user_source, frozenset({name}))
+    return handed_to_params(call, fdef, params, {}) | set(free)
 
 
 def _stores_what_it_is_handed(func: ast.Attribute, namespace: Mapping[str, Any]) -> bool:

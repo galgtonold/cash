@@ -413,6 +413,7 @@ class VirtualLineage:
         )
         sim.vars_left_by_failed_runs = dict(cached_entry.vars_left_by_failed_runs or {})
         sim.share_edges = copy_edges(cached_entry.share_edges)
+        sim.vars_maybe_changed_by_loops = set(cached_entry.vars_maybe_changed_by_loops or ())
         trace, looped, stale = sim.trace, sim.vars_mutated_by_loops, sim.vars_with_stale_files
         for entry in self.cache.entries[:first_changed_cell]:
             trace.extend(entry.trace_segment)
@@ -869,6 +870,7 @@ class VirtualLineage:
                 share_edges=copy_edges(sim.share_edges),
                 share_edge_generation=len(self.tracking_state.share_edge_changes),
                 statement_hashes=frozenset(statement_source_hash(entry.stmt_code) for entry in cell_trace_segment),
+                vars_maybe_changed_by_loops=set(sim.vars_maybe_changed_by_loops),
             )
         )
 

@@ -269,14 +269,25 @@ class FileWriterScheduler:
             stale_exports=stale_exports,
         )
         writer_indices = self._writers_undone_by_reruns(simulation_trace, scheduled, writer_indices)
-        if not writer_indices:
+        # A writer already in the plan, as the producer of a name it also
+        # changes (`with open(p, 'wb') as f: pickle.dump(payload, f)` when its
+        # watch counts `payload`), writes as much as one scheduled here: what
+        # reads its file after it must be read again after it. Only one whose
+        # paths resolve, so it never widens the promotion to every reader.
+        planned_writers = [
+            i
+            for i in self.writer_positions(simulation_trace)
+            if i in scheduled and self._writer_paths(simulation_trace[i].stmt_code, simulation_trace)
+        ]
+        if not writer_indices and not planned_writers:
             return stmts_to_run_indices, restored_statements_info
 
-        writer_indices = self._whole_cell_writers(simulation_trace, writer_indices, scheduled)
-        # The deletions a cell's writers bring along undo writers too.
-        writer_indices = self._writers_undone_by_reruns(simulation_trace, scheduled, writer_indices)
-        scheduled.update(writer_indices)
-        first_writer = min(writer_indices)
+        if writer_indices:
+            writer_indices = self._whole_cell_writers(simulation_trace, writer_indices, scheduled)
+            # The deletions a cell's writers bring along undo writers too.
+            writer_indices = self._writers_undone_by_reruns(simulation_trace, scheduled, writer_indices)
+            scheduled.update(writer_indices)
+        first_writer = min(list(writer_indices) + planned_writers)
 
         def _rebound_after(name: str, w: int) -> int | None:
             for j in range(len(simulation_trace) - 1, w, -1):
@@ -328,13 +339,13 @@ class FileWriterScheduler:
         # the data re-ran the backtest and the forecast behind it for a cell that
         # read only the copy.
         # A writer whose path does not resolve keeps the broad rule.
-        written_forms = self._written_path_forms(simulation_trace, writer_indices)
+        written_forms = self._written_path_forms(simulation_trace, writer_indices + planned_writers)
         # A folder a writer makes, removes or deletes files in: a file read
         # inside it was written too.
         written_places = (
             [
                 os.path.normcase(os.path.abspath(resolve_file_dep_path(p) or p)) + os.sep
-                for w in writer_indices
+                for w in writer_indices + planned_writers
                 for p in self._writer_paths(simulation_trace[w].stmt_code, simulation_trace) or ()
             ]
             if written_forms is not None

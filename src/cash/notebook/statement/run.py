@@ -143,6 +143,9 @@ class StatementRun:
     mut_observe: set[str] = field(default_factory=set)
     mut_assumed: set[str] = field(default_factory=set)
     mut_record: bool = False
+    #: A statement whose verdict is known, watched as it runs on new inputs
+    #: for what the verdict does not hold (``MutationClassifier.start_rewatch``).
+    rewatching: bool = False
     #: What the mutation verdict of the statement is recorded under:
     #: ``source_hash``, but the text without its iteration marker for a
     #: statement of a loop or branch body, so each pass shares it.

@@ -307,6 +307,12 @@ def update_lineage_after_execution(
 
     user_ns = shell.user_ns
     mutated_vars = (structure_mutations(shell, statement_processor, node) - set(unchanged)) | set(also)
+    # An ``if`` or ``try`` ran statement by statement: what its statements
+    # (and the loops in it) were seen changing through a call the text
+    # cannot decide (``if use_heap: heapq.heappush(h, k)``).
+    mutated_vars |= statement_processor.in_loop.branch_verdict_changes(
+        node, statement_processor.resolve_live_function_source
+    )
     # A local module the structure sets state on changes like any receiver:
     # one its text says, or one its body was seen setting state on. Recorded
     # for the simulation, which cannot run it (``module_state_outputs``).

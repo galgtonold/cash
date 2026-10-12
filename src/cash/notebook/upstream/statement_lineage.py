@@ -21,15 +21,22 @@ from ..._clock import perf_counter as _perf_counter
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...analysis.mutation_effects import (
+    WATCHED_STRUCTURES,
     StatementEffects,
     captured_call_receiver_names,
     cell_definitions,
     classify_receivers,
+    comprehension_watch_candidates,
     is_module_name,
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import call_argument_names, call_arguments
+from ...analysis.namespace_effects import (
+    call_argument_names,
+    call_arguments,
+    callee_handed_globals,
+    rewatch_exempt,
+)
 from ...control_markers import strip_markers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
@@ -44,7 +51,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import watched_call_receivers
+from ..consumables import is_stream, watched_call_receivers
 from ..lineage_formula import (
     callable_source_component,
     changed_module_environment,
@@ -58,7 +65,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     statement_environment_component,
 )
-from ..loop_watch import loop_watch_hash, watch_candidates
+from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
@@ -254,21 +261,60 @@ class StatementLineage:
         """Source of function *name*, as the simulation reads it (`_function_source`)."""
         return self._function_source(name)
 
-    def loop_watch_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
+    def loop_watch_changes(
+        self,
+        node: ast.AST,
+        virtual_modules: set[str],
+        inputs_changed: Callable[[], bool] | None = None,
+        unseen_out: set[str] | None = None,
+    ) -> set[str]:
         """What the loop *node* changed through code its text cannot decide
         (``loop_watch``): what the runtime recorded when it ran this loop
         source, this session or an earlier one; before it has, every name
-        the loop hands to such code."""
-        if not isinstance(node, (ast.For, ast.While)):
+        the loop hands to such code. A ``with`` block is watched the same
+        way; an ``if`` or ``try`` is moved by what its statements were seen
+        changing (:meth:`branch_verdict_changes`).
+
+        The record only says what earlier runs changed: on other inputs
+        (*inputs_changed*) the loop may change a name it never changed
+        before (it first ran on no items), which the runtime then sees as
+        it runs it. So such a run counts every name the loop hands straight
+        to such code; at worst a reader below is planned again and hits.
+        Those names, beyond the record, are added to *unseen_out*."""
+        if isinstance(node, (ast.If, ast.Try)):
+            return self.branch_verdict_changes(node, virtual_modules)
+        if not isinstance(node, WATCHED_STRUCTURES):
             return set()
         verdict = self._mutation_verdict(loop_watch_hash(ast.unparse(node)))
-        if verdict is not None:
-            return set(verdict)
         user_ns = self.shell.user_ns
-        return set(
+        candidates = set(
             watch_candidates(
                 node, user_ns, lambda name: is_module_name(name, user_ns, virtual_modules), self._function_source
             )
+        )
+        if verdict is None:
+            return candidates
+        unseen = candidates - set(verdict)
+        if unseen:
+            unseen -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, self._function_source)
+        if unseen and inputs_changed is not None and inputs_changed():
+            if unseen_out is not None:
+                unseen_out |= unseen
+            return unseen | set(verdict)
+        return set(verdict)
+
+    def branch_verdict_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
+        """What the statements, loops and ``with`` blocks in the branches of
+        the ``if`` or ``try`` *node* change through calls the text cannot
+        decide, as the runtime recorded them (``branch_changes``), as its
+        lineage update for the structure reads them."""
+        user_ns = self.shell.user_ns
+        return branch_changes(
+            node,
+            self._mutation_verdict,
+            user_ns,
+            lambda name: is_module_name(name, user_ns, virtual_modules),
+            self._function_source,
         )
 
     def recorded_mutations(self, stmt_code: str) -> set[str] | None:
@@ -282,6 +328,7 @@ class StatementLineage:
         stmt_code: str,
         tree: ast.Module,
         virtual_modules: set[str] | None = None,
+        inputs_changed: Callable[[], bool] | None = None,
     ) -> set[str]:
         """Names *tree*'s calls change in place, decided as the runtime decides
         them (``classify_receivers``).
@@ -303,22 +350,52 @@ class StatementLineage:
         # Likewise the receivers of a method call whose result is bound
         # (`history = net.fit(X)`), which the runtime fingerprints too.
         arguments = (
-            call_arguments(tree, user_ns)
+            call_arguments(tree, user_ns, self._function_source)
             | watched_call_receivers(tree, user_ns)
-            | {n for n in call_argument_names(tree) | captured_call_receiver_names(tree) if n not in user_ns}
+            | frozenset(
+                name
+                for name in comprehension_watch_candidates(
+                    tree,
+                    user_ns,
+                    lambda name: is_module_name(name, user_ns, virtual_modules or ()),
+                    self._function_source,
+                )
+                if not is_stream(user_ns.get(name))
+            )
+            | {
+                n
+                for n in call_argument_names(tree)
+                | captured_call_receiver_names(tree)
+                | callee_handed_globals(tree, user_ns, self._function_source)
+                if n not in user_ns
+            }
         )
         classes = classify_receivers(
             tree, user_ns, load_verdict, arguments=arguments, virtual_modules=virtual_modules or ()
         )
         # The simulation cannot watch the statement run: an undecided
         # receiver is assumed to change, an undecided argument not to.
-        return set(classes.mutated | classes.unknown_receivers)
+        mutated = set(classes.mutated | classes.unknown_receivers)
+        if inputs_changed is not None and load_verdict() is not None:
+            # The verdict holds what earlier runs changed; on new inputs the
+            # runtime watches again what it does not hold
+            # (`MutationClassifier.start_rewatch`), and may see it change.
+            fresh = classify_receivers(
+                tree, user_ns, lambda: None, arguments=arguments, virtual_modules=virtual_modules or ()
+            )
+            unseen = (fresh.unknown_receivers | fresh.unknown_args) - mutated
+            if unseen:
+                unseen -= rewatch_exempt(tree, user_ns, self._function_source)
+            if unseen and inputs_changed():
+                mutated |= unseen
+        return mutated
 
     def reads_writes(
         self,
         stmt_code: str,
         tree: ast.Module | None,
         virtual_modules: set[str],
+        virtual_lineage: Mapping[str, str] | None = None,
     ) -> tuple[StatementEffects, set[str], set[str]]:
         """*stmt_code*'s effects, and what it reads and writes, as its key sees them.
 
@@ -340,7 +417,12 @@ class StatementLineage:
         )
         inputs, outputs = set(effects.inputs), set(effects.outputs)
         if tree is not None:
-            outputs |= self._mutation_receivers(stmt_code, tree, virtual_modules)
+            outputs |= self._mutation_receivers(
+                stmt_code,
+                tree,
+                virtual_modules,
+                None if virtual_lineage is None else lambda: self._inputs_moved(inputs, virtual_lineage),
+            )
             outputs |= effects.arg_mutations
         if not is_control_body(stmt_code):
             # A statement that sets state on a local module changes the
@@ -352,6 +434,14 @@ class StatementLineage:
             outputs |= drawn
             inputs |= drawn
         return effects, inputs, outputs
+
+    def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str]) -> bool:
+        """Whether the simulation gives one of *inputs* another lineage than
+        the one the kernel holds it with: the statement then runs on inputs
+        it did not run on to make what the kernel holds. A name the kernel
+        holds no lineage for (after a restart) says nothing either way."""
+        held = self.tracking_state.variable_lineage
+        return any(name in virtual_lineage and name in held and virtual_lineage[name] != held[name] for name in inputs)
 
     def pyplot_draw_outputs(self, stmt_code: str, tree: ast.AST | None) -> frozenset[str]:
         """The names *stmt_code* changed by drawing through pyplot when the
@@ -809,7 +899,7 @@ class StatementLineage:
                 virtual_modules = set()
 
             tree = parse_cached(stmt_code)
-            effects, inputs, outputs = self.reads_writes(stmt_code, tree, virtual_modules)
+            effects, inputs, outputs = self.reads_writes(stmt_code, tree, virtual_modules, virtual_lineage)
             _apply_deletes(tree, virtual_lineage, virtual_modules)
 
             is_import = stmt_code.strip().startswith(("import ", "from "))

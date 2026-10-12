@@ -121,6 +121,8 @@ class SimulationCacheEntry(NamedTuple):
     simulate it again."""
     statement_hashes: frozenset[str] = frozenset()
     """The source hashes of the cell's simulated statements."""
+    vars_maybe_changed_by_loops: set[str] | None = None
+    """Snapshot of ``SimulationResult.vars_maybe_changed_by_loops`` after this cell."""
 
 
 @dataclass
@@ -240,6 +242,13 @@ class SimulationResult:
 
     vars_with_stale_files: set[str] = field(default_factory=set)
     """Names built from a file that changed since it was read."""
+
+    vars_maybe_changed_by_loops: set[str] = field(default_factory=set)
+    """Names a control structure running on new inputs may change through
+    code whose effect is unknown, which the runtime watches as it runs it
+    (``StatementLineage.loop_watch_changes``). Their lineages move, but
+    memory is never trusted for them as for a loop's accumulator: nothing
+    says the loop changed them."""
 
     loop_target_vars: set[str] = field(default_factory=set)
     """Loop iteration variables (``item`` in ``for item in data``)."""

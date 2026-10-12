@@ -16,22 +16,77 @@ from __future__ import annotations
 
 import ast
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..analysis.mutation_effects import loop_watch_candidates
+from ..analysis.mutation_effects import loop_watch_candidates, statement_watch_candidates
 from ..mutation_fingerprint import mutation_fingerprint
 from .cache_key import statement_source_hash
 from .consumables import is_stream
 
-__all__ = ["LoopWatch", "loop_watch_hash", "watch_candidates"]
+__all__ = ["LoopWatch", "branch_changes", "loop_watch_hash", "watch_candidates"]
 
 
 def loop_watch_hash(code: str) -> str:
     """The name the verdict of the loop *code* is recorded under: apart from
     the verdict a statement of the same text records for its own calls."""
     return hashlib.sha256(f"loop-watch:{statement_source_hash(code)}".encode()).hexdigest()
+
+
+def branch_changes(
+    node: ast.AST,
+    verdict: Callable[[str], Iterable[str] | None],
+    namespace: Mapping[str, Any],
+    is_module: Callable[[str], bool],
+    resolve_source: Callable[[str], str | None] | None,
+) -> set[str]:
+    """What an ``if`` or ``try`` *node* changes through calls its text cannot
+    decide: per statement in its branches, which runs one at a time and
+    learns what it changes when it really runs, its recorded *verdict*; per
+    loop or ``with`` in them, watched as a unit, that one's. One that has
+    not run yet (a branch never taken) counts every name it hands to such
+    code, as a loop not yet watched does.
+
+    ``if use_heap: heapq.heappush(h, k)`` changes ``h``. The runtime's
+    lineage update for the ``if`` and the simulation of it call this with
+    their own records and namespace, so they move the same names. Empty for
+    any other node.
+    """
+    if not isinstance(node, (ast.If, ast.Try)):
+        return set()
+    changed: set[str] = set()
+
+    def walk(stmts: list[ast.stmt]) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(stmt, (ast.If, ast.Try)):
+                walk(_branches_of(stmt))
+                continue
+            if isinstance(stmt, (ast.For, ast.While, ast.With)):
+                seen = verdict(loop_watch_hash(ast.unparse(stmt)))
+                if seen is None:
+                    seen = watch_candidates(stmt, namespace, is_module, resolve_source)
+                changed.update(seen)
+                walk(_branches_of(stmt))
+                continue
+            seen = verdict(statement_source_hash(ast.unparse(stmt)))
+            if seen is None:
+                tree = ast.Module(body=[stmt], type_ignores=[])
+                seen = statement_watch_candidates(tree, namespace, is_module, resolve_source)
+            changed.update(seen)
+
+    walk(_branches_of(node))
+    return changed
+
+
+def _branches_of(node: ast.AST) -> list[ast.stmt]:
+    body: list[ast.stmt] = [*getattr(node, "body", ()), *getattr(node, "orelse", ())]
+    for handler in getattr(node, "handlers", ()):
+        body.extend(handler.body)
+    body.extend(getattr(node, "finalbody", ()))
+    return body
 
 
 def watch_candidates(
@@ -51,10 +106,13 @@ def watch_candidates(
 class LoopWatch:
     """One loop's candidates, fingerprinted before it ran.
 
-    *verdict* is what an earlier run of this loop source recorded; when it is
-    known nothing is fingerprinted. *before* holds each candidate's
-    fingerprint otherwise (None: it cannot be observed, so it counts as
-    changed).
+    *verdict* is what earlier runs of this loop source were seen changing.
+    It only grows: a run that changed nothing (no items yet, a branch not
+    taken) says nothing about a run on other inputs. So a run on inputs
+    not observed before (*rewatch*) fingerprints the candidates the verdict
+    does not hold yet, and a change seen joins the verdict. *before* holds
+    each fingerprinted candidate's fingerprint (None: it cannot be
+    observed, so it counts as changed).
     """
 
     key: str
@@ -66,12 +124,19 @@ class LoopWatch:
 
     @classmethod
     def start(
-        cls, code: str, candidates: frozenset[str], verdict: set[str] | None, namespace: Mapping[str, Any]
+        cls,
+        code: str,
+        candidates: frozenset[str],
+        verdict: set[str] | None,
+        namespace: Mapping[str, Any],
+        rewatch: bool = False,
     ) -> LoopWatch:
         known = frozenset(verdict) if verdict is not None else None
         watch = cls(loop_watch_hash(code), candidates, known)
         if known is None:
             watch.before = {name: _fingerprint(namespace.get(name)) for name in candidates}
+        elif rewatch:
+            watch.before = {name: _fingerprint(namespace.get(name)) for name in candidates - known}
         return watch
 
     @property
@@ -80,15 +145,17 @@ class LoopWatch:
         run, not be restored, or what it changes is never seen."""
         return self.verdict is None and bool(self.candidates)
 
+    @property
+    def watching(self) -> bool:
+        """Whether this run fingerprinted something to compare after it."""
+        return bool(self.before)
+
     def finish(self, namespace: Mapping[str, Any]) -> frozenset[str]:
-        """The candidates the loop changed: seen now when it was being
-        learned, else the recorded verdict."""
+        """The candidates the loop changed: the recorded verdict, with what
+        the fingerprints taken before it ran show it changed now."""
         if self.seen is not None:
             return self.seen
-        if self.verdict is not None:
-            self.seen = self.verdict
-            return self.seen
-        changed = set()
+        changed = set(self.verdict or ())
         for name, before in self.before.items():
             if before is None or name not in namespace or _fingerprint(namespace[name]) != before:
                 changed.add(name)

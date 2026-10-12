@@ -18,6 +18,7 @@ from .mutations import MutationVisitor, iter_store_targets
 
 __all__ = [
     "all_param_names",
+    "positional_param_names",
     "resolve_function_def",
     "params_mutated_in_function",
     "CallArgTargets",
@@ -43,7 +44,7 @@ __all__ = [
 ]
 
 
-def _positional_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+def positional_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     """Ordered positional parameter names (posonly + normal), excluding *args."""
     return [a.arg for a in (*func.args.posonlyargs, *func.args.args)]
 
@@ -90,7 +91,7 @@ def _params_mutated_via_nested_calls(
         callee_muts = params_mutated_in_function(callee, resolve_source, seen | {callee_name})
         if not callee_muts:
             continue
-        pos_params = _positional_param_names(callee)
+        pos_params = positional_param_names(callee)
         for i, arg in enumerate(node.args):
             if isinstance(arg, ast.Name) and arg.id in params and i < len(pos_params) and pos_params[i] in callee_muts:
                 out.add(arg.id)
@@ -338,7 +339,7 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
         mutated_params = params_mutated_in_function(fdef, resolve_source, frozenset({func_name}))
         if not mutated_params:
             continue
-        pos_params = _positional_param_names(fdef)
+        pos_params = positional_param_names(fdef)
         for i, arg_vars in enumerate(positional):
             if i < len(pos_params) and pos_params[i] in mutated_params:
                 out.update(arg_vars)
@@ -776,7 +777,7 @@ def partial_arg_mutations(tree: ast.Module | None, resolve_partial, resolve_sour
         if fdef is None:
             continue
         mutated_params = params_mutated_in_function(fdef)
-        pos_params = _positional_param_names(fdef)
+        pos_params = positional_param_names(fdef)
         for i, arg in enumerate(bound_args):
             if arg and i < len(pos_params) and pos_params[i] in mutated_params:
                 out.add(arg)
@@ -805,7 +806,7 @@ def mutating_partials(tree: ast.Module | None, resolve_partial, resolve_source) 
         if fdef is None:
             continue
         mutated_params = params_mutated_in_function(fdef)
-        pos_params = _positional_param_names(fdef)
+        pos_params = positional_param_names(fdef)
         for i, arg in enumerate(bound_args):
             if arg and i < len(pos_params) and pos_params[i] in mutated_params:
                 out.add(name)

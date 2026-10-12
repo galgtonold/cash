@@ -521,16 +521,32 @@ out = [fetch(e) for e in entities]
 
 ### The first run of a loop hashes what it hands to a library
 
-<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @d18ee8ce -->
+<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @73357899 -->
 cash cannot tell from the text whether a library function changes what it is
-handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not). The first time a
-version of a loop runs, cash hashes each such object before and after it, about
-1 s per GB, and records which ones changed for that loop's text; later runs,
-hits and restarts use the record. Editing the loop, or splitting a long one into
-a head and a rest, pays it again once. Builtins that only read (`len`, `sum`,
-`print`), methods known to only read, and functions of yours that do not change
-their arguments are not hashed. While a version is being learned, the loop runs
-rather than being served from the cache.
+handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not), nor whether a
+function of yours that hands its argument or a global to one changes it
+(`def push(h, x): heapq.heappush(h, x)`). The first time a version of a loop,
+a `with` block or a statement runs, cash hashes each such object before and
+after it, about 1 s per GB, and records which ones changed for that text;
+later runs, hits and restarts use the record. Editing the code, or splitting a
+long loop into a head and a rest, pays it again once. A run that changed
+nothing (a loop over no items yet, a copy of equal values) does not settle the
+record for what the code hands straight to a library: whenever the code runs
+again on inputs not seen before in the session, those objects, if the record
+does not list them yet, are hashed again, so a loop or statement whose inputs
+keep changing pays this on each such run. What only a function of yours is
+handed (`bt = run_backtest(series, 3)`), what a chart is drawn from
+(`ax.bar(names, totals)`), and a frame or an array a library call reads
+through an index or an attribute (`pd.Categorical(obs[r])`, `df.loc[k].plot()`)
+keep the record of their first run: a helper whose
+change to its argument depends on the data (`def push_all(h, xs): for x in xs:
+heapq.heappush(h, x)`, first run with no `xs`) is not seen changing it later.
+Re-run the cell that reads the object, or call the library directly in the
+cell. Builtins that
+only read (`len`, `sum`, `print`), methods known to only read, and functions of
+yours that do not change their arguments or hand them on are not hashed. While
+a version is being learned, the loop runs rather than being served from the
+cache.
 
 ### Reordering a loop's items re-runs the tail
 
