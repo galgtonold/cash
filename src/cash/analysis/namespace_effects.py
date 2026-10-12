@@ -42,6 +42,7 @@ from .file_effects import (
     REPEATABILITY_ACCUMULATING,
     REPEATABILITY_REPLACING,
     WRITE_TEXT_MARKERS,
+    call_changes_files,
     call_repeatability,
     get_base_name,
     locally_opened_handles,
@@ -53,6 +54,8 @@ from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on
 __all__ = [
     "statement_calls_user_writer",
     "statement_user_writer_call",
+    "statement_waives_through_user_code",
+    "user_callee_waiving",
     "user_callee_writing_files",
     "resolve_literal_path",
     "statement_written_paths",
@@ -145,6 +148,47 @@ def statement_user_writer_call(
     return None
 
 
+def statement_waives_through_user_code(
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
+) -> bool:
+    """Whether a call in *code* reaches a user function that waives some of
+    its lines (``# @cash:assume-safe`` on a line or its ``def``, ``with
+    cash.assume_safe():``). Followed as :func:`statement_user_writer_call`
+    follows a call.
+
+    What a statement was seen writing as it ran carries no line, so a
+    waiver anywhere in what it calls is taken for the write: the user said
+    a hit may skip it."""
+    if not namespace or "(" not in code:
+        return False
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    for node in calls:
+        values = [resolve_callee(node.func, namespace)]
+        if node.args or node.keywords:
+            values.extend(_function_called(v) for v in handed_callable_values(node, namespace))
+        if any(user_callee_waiving(value) for value in values):
+            return True
+    return False
+
+
+def user_callee_waiving(func: Any) -> bool:
+    """Whether calling *func* reaches a user function that waives some of its
+    lines, or one the user promised ``@pure``: see
+    :func:`statement_waives_through_user_code`."""
+    plain = inspect.unwrap(func) if callable(func) else func
+    if isinstance(plain, types.FunctionType) and is_pure(plain):
+        return True
+    return _first_user_callee(func, _waives, "waives an effect") is not None
+
+
+def _waives(
+    func: types.FunctionType, replaces: bool, appends_itself: bool, waives: bool, callees: tuple[ast.expr, ...]
+) -> bool:
+    return waives
+
+
 def _function_called(value: Any) -> Any:
     """The function calling *value* runs first: a method's function, a
     class's ``__init__``, a callable object's ``__call__``; *value* itself
@@ -184,8 +228,11 @@ _CALLEE_LIMIT = 5_000
 #: What a statement's writer is called when cash could not follow all of it.
 _TOO_MANY_CALLEES = f"<more than {_CALLEE_LIMIT} functions to follow>"
 
-#: A function's file and code object -> whether its body itself replaces a
-#: file, whether it appends to one, and the callee expressions of its calls; None when cash does not look
+#: A function's file and code object -> whether its body itself changes a
+#: file other than by appending (replaces, deletes, moves, creates one),
+#: whether it appends to one, whether it waives any of its lines
+#: (``# @cash:assume-safe``, ``with cash.assume_safe():``) and the callee
+#: expressions of its calls; None when cash does not look
 #: into it (an installed package's code, no source, a body that does not
 #: parse). Keyed by the code that RUNS, so a redefined function is read again,
 #: and by its file, because code objects compare equal across files: the same
@@ -194,14 +241,14 @@ _TOO_MANY_CALLEES = f"<more than {_CALLEE_LIMIT} functions to follow>"
 #: body says: the callees are resolved again on every question, because a
 #: name the body calls can be rebound, and a verdict memoised with the
 #: callee it had then answered for one that was no longer there.
-_body_cache: LruMemo[tuple[str, types.CodeType], "tuple[bool, bool, tuple[ast.expr, ...]] | None"] = LruMemo(
+_body_cache: LruMemo[tuple[str, types.CodeType], "tuple[bool, bool, bool, tuple[ast.expr, ...]] | None"] = LruMemo(
     USER_CALLEES
 )
 #: A miss in `_body_cache`, whose entries may be None.
 _NOT_SEEN = object()
 
 
-def _read_body(func: types.FunctionType) -> "tuple[bool, bool, tuple[ast.expr, ...]] | None":
+def _read_body(func: types.FunctionType) -> "tuple[bool, bool, bool, tuple[ast.expr, ...]] | None":
     """What *func*'s own source says: see :data:`_body_cache`."""
     code_obj = func.__code__
     if not is_user_code_file(code_obj.co_filename):
@@ -229,8 +276,14 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, bool, tuple[ast.expr, .
         # A waived call to another helper waives what that helper writes.
         calls = [node for node in calls if node.lineno not in waived]
     verdicts = {call_repeatability(node, handles) for node in calls}
-    replaces = REPEATABILITY_REPLACING in verdicts
     appends = REPEATABILITY_ACCUMULATING in verdicts
+    # Not only a write that provably replaces its file: ``p.touch()``,
+    # ``p.unlink()``, ``os.remove(p)``, ``shutil.move(a, b)`` change the
+    # folder as much, and a hit that skipped them left a marker file missing
+    # or a stale one in place. Only a provable append stays apart.
+    replaces = REPEATABILITY_REPLACING in verdicts or any(
+        call_changes_files(node) and call_repeatability(node, handles) != REPEATABILITY_ACCUMULATING for node in calls
+    )
     # One of each spelling, and only the ones a name lookup can resolve
     # (``helper``, ``module.helper``): ``df.assign(...)`` ten times over is
     # one lookup, and ``make()(...)`` resolves to nothing at all.
@@ -243,12 +296,13 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, bool, tuple[ast.expr, .
             expr = expr.value
         if isinstance(expr, ast.Name):
             callees.setdefault((expr.id, *reversed(parts)), node.func)
-    return replaces, appends, tuple(callees.values())
+    return replaces, appends, bool(waived) or whole_body, tuple(callees.values())
 
 
-def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, tuple[ast.expr, ...]] | None":
-    """``(function, replaces a file itself, appends to one itself, callee
-    expressions)`` for a user function cash can read, or None for anything
+def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, bool, tuple[ast.expr, ...]] | None":
+    """``(function, changes a file itself, appends to one itself, waives
+    some of its lines, callee expressions)`` for a user function cash can
+    read, or None for anything
     else: not a Python function, ``@pure``, from an installed package, or
     without source."""
     if not isinstance(func, types.FunctionType):
@@ -265,7 +319,7 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, tuple[as
         _body_cache[memo_key] = known
     if known is None:
         return None
-    return func, known[0], known[1], known[2]
+    return func, *known
 
 
 def user_callee_writing_files(func: Any, *, appends: bool = True) -> str | None:
@@ -298,7 +352,7 @@ def user_callee_writing_files(func: Any, *, appends: bool = True) -> str | None:
     """
     return _first_user_callee(
         func,
-        lambda current, replaces, appends_itself, callees: replaces or (appends and appends_itself),
+        lambda current, replaces, appends_itself, waives, callees: replaces or (appends and appends_itself),
         "writes files",
     )
 
@@ -325,7 +379,7 @@ def user_callee_using_pyplot(func: Any) -> str | None:
 
 
 def _calls_pyplot(
-    func: types.FunctionType, replaces: bool, appends_itself: bool, callees: tuple[ast.expr, ...]
+    func: types.FunctionType, replaces: bool, appends_itself: bool, waives: bool, callees: tuple[ast.expr, ...]
 ) -> bool:
     """Whether *func*'s body calls a function of the pyplot module: through
     the module (``plt.gca``) or a name bound to one of its functions."""
@@ -361,7 +415,7 @@ def statement_user_pyplot_call(
 
 def _first_user_callee(
     func: Any,
-    test: "Callable[[types.FunctionType, bool, bool, tuple[ast.expr, ...]], bool]",
+    test: "Callable[[types.FunctionType, bool, bool, bool, tuple[ast.expr, ...]], bool]",
     does: str,
 ) -> str | None:
     """The name of the first user function *func* reaches, itself included,
@@ -378,8 +432,8 @@ def _first_user_callee(
     held = [body[0] for body in roots]  # keeps every examined function alive, so no id is reused
     stack = list(reversed(roots))
     while stack:
-        current, replaces, appends_itself, callees = stack.pop()
-        if test(current, replaces, appends_itself, callees):
+        current, replaces, appends_itself, waives, callees = stack.pop()
+        if test(current, replaces, appends_itself, waives, callees):
             return current.__name__
         found = []
         for expr in callees:

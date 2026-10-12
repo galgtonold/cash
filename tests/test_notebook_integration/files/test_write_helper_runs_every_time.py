@@ -207,3 +207,57 @@ def test_a_writer_handed_to_map_or_apply_writes_again(nb_runner):
     nb_runner.enable_persist()
     nb_runner.run_all()
     assert sorted(p.name for p in (work / "handed").iterdir()) == HANDED_FILES
+
+
+UNNAMED_WRITERS = [
+    "import cash\n%cash_on",
+    "import gzip, os, pathlib, shutil, time\nimport numpy as np\n"
+    "def export_txt(arr):\n    time.sleep(0.3)\n    np.savetxt('out/arr.txt', arr)\n    return arr.sum()\n"
+    "def export_npz(arr):\n    time.sleep(0.3)\n    np.savez('out/arr.npz', a=arr)\n    return arr.sum()\n"
+    "def export_gz(arr):\n    time.sleep(0.3)\n    with gzip.open('out/arr.txt.gz', 'wt') as f:\n"
+    "        f.write(' '.join(map(str, arr)))\n    return arr.sum()\n"
+    "def mark_done():\n    time.sleep(0.3)\n    pathlib.Path('out/DONE').touch()\n    return True",
+    "shutil.rmtree('out', ignore_errors=True)\nos.makedirs('out')",
+    "x = np.arange(5)",
+    "s1 = export_txt(x)",
+    "s2 = export_npz(x)",
+    "s3 = export_gz(x)",
+    "ok = mark_done()",
+    "print(sorted(os.listdir('out')))",
+]
+
+
+def test_a_helper_writing_through_a_library_writes_again_on_run_all(nb_runner):
+    """``np.savetxt``, ``np.savez``, ``gzip.open(p, 'wt')`` and
+    ``Path.touch`` in a helper are calls cash's static writer check does not
+    name. The statements calling them were served from the cache on the next
+    Run All, and the folder cleared at the top stayed empty."""
+    nb_runner.create_notebook(UNNAMED_WRITERS)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    every = "['DONE', 'arr.npz', 'arr.txt', 'arr.txt.gz']"
+    assert nb_runner.get_output(len(UNNAMED_WRITERS)).strip() == every
+    nb_runner.run_all()
+    assert nb_runner.get_output(len(UNNAMED_WRITERS)).strip() == every
+
+
+STAGING = [
+    "import cash\n%cash_on",
+    "import time\nimport numpy as np\n"
+    "def export(arr):\n    time.sleep(0.3)\n    np.savetxt('stage.txt', arr)\n    return len(arr)",
+    "n1 = export(np.array([1.0]))",
+    "a = np.loadtxt('stage.txt').sum()\nprint('a', a)",
+    "n2 = export(np.array([2.0]))",
+    "b = np.loadtxt('stage.txt').sum()\nprint('b', b)",
+]
+
+
+def test_a_staging_file_written_twice_is_read_between_the_writes(nb_runner):
+    """The same helper writes one staging file twice; the cell between reads
+    the first content on every Run All, as in a plain kernel."""
+    nb_runner.create_notebook(STAGING)
+    nb_runner.start_kernel()
+    for _ in range(2):
+        nb_runner.run_all()
+        assert nb_runner.peek("float(a)") == "1.0"
+        assert nb_runner.peek("float(b)") == "2.0"

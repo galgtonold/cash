@@ -23,6 +23,7 @@ __all__ = [
     "REPEATABILITY_ACCUMULATING",
     "locally_opened_handles",
     "call_repeatability",
+    "call_changes_files",
     "statement_write_repeatability",
     "statement_only_deletes_files",
     "READ_TEXT_MARKERS",
@@ -271,6 +272,39 @@ def call_repeatability(call: ast.Call, local_handles: frozenset[str] = frozenset
     if isinstance(func, ast.Name):
         return None
     return None
+
+
+#: Methods whose target is a handle opened somewhere else: what they write
+#: to is decided by that ``open()``, and the receiver is as often an
+#: in-memory buffer (``io.StringIO``) as a file.
+_HANDLE_WRITE_METHODS: frozenset[str] = frozenset({"write", "writelines"})
+
+
+def call_changes_files(call: ast.Call) -> bool:
+    """Whether *call* writes, deletes, moves or creates a file or folder it
+    names itself, whatever its repeatability: ``p.touch()``, ``p.unlink()``,
+    ``OUT.mkdir()``, ``os.remove(p)``, ``shutil.move(a, b)``, as well as the
+    replacing and appending writes :func:`call_repeatability` tells apart.
+
+    A write on a handle (``f.write``, ``pickle.dump(obj, f)``) is not one:
+    the ``open()`` that made the handle is, and a handle passed in from
+    elsewhere may be a buffer in memory. Neither is ``open()`` with a mode
+    computed at run time, which reads as often as it writes.
+    """
+    func = call.func
+    if isinstance(func, ast.Name):
+        if func.id != "open":
+            return False
+        mode = _open_mode_node(call)
+        return isinstance(mode, ast.Constant) and isinstance(mode.value, str) and is_open_write_mode(call)
+    if not isinstance(func, ast.Attribute) or writes_to_console(call):
+        return False
+    effect = classify_call(call)
+    if effect is None or effect.kind is not EffectKind.FILE_WRITE:
+        return False
+    if effect.method:
+        return func.attr not in _HANDLE_WRITE_METHODS
+    return effect.name not in _HANDLE_WRITE_FUNCTIONS
 
 
 def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -> str:
