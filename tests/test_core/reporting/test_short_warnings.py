@@ -132,9 +132,21 @@ def _run(tmp_path, *args, env=None, check=True):
     return run_python(*args, "main.py", cwd=run, env=env, check=check)
 
 
+def test_a_script_shows_one_line_and_no_echoed_source(tmp_path):
+    err = _run(tmp_path).stderr
+    lines = [line for line in err.splitlines() if line.strip()]
+    ours = [line for line in lines if "IMPURE-OBSERVED-EFFECTS" in line]
+    assert len(ours) == 1, err
+    assert "main.py:11: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS]" in ours[0]
+    assert "# the echoed line" not in err, err
+    assert "# their echoed line" in err, "another warning keeps Python's own format"
+    assert len(lines) == 3, err
+
+
 def test_the_variable_asks_for_the_full_text(tmp_path):
     err = _run(tmp_path, env={"CASH_WARNING_DETAIL": "full"}).stderr
     assert "\n  Fix: split the function" in err
+    assert "# the echoed line" not in err
 
 
 def test_filters_still_act_on_the_category(tmp_path):

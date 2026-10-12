@@ -121,6 +121,40 @@ def _user_frame_level() -> int | None:
     return None
 
 
+def _shows_without_source_line(show: Any) -> Any:
+    """*show*, a ``warnings._showwarnmsg``, made to leave out the source line
+    under a cash warning.
+
+    Python prints the blamed line after the message. Under a cash warning
+    that is the user's call -- ``print(backtest(10))`` -- and says nothing
+    the ``file:line`` before it does not, at the cost of a line per warning.
+    A blank ``line`` is what tells the formatter there is none to print; any
+    other warning goes through untouched.
+    """
+
+    def _showwarnmsg(msg: Any) -> None:
+        if msg.line is None and _is_cash_category(msg.category):
+            msg.line = ""
+        show(msg)
+
+    _showwarnmsg.cash_hook = True  # type: ignore[attr-defined]
+    return _showwarnmsg
+
+
+def _is_cash_category(category: Any) -> bool:
+    from .exceptions import CashWarning
+
+    return isinstance(category, type) and issubclass(category, CashWarning)
+
+
+def _hide_source_lines() -> None:
+    """Install `_shows_without_source_line` over the ``warnings`` module's
+    display hook, once -- and again over whatever replaced it since."""
+    show = getattr(warnings, "_showwarnmsg", None)
+    if show is not None and not getattr(show, "cash_hook", False):
+        warnings._showwarnmsg = _shows_without_source_line(show)  # type: ignore[attr-defined]
+
+
 def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | None) -> bool:
     """Warn *instance* at *level* frames out -- counted from the caller of this
     function's caller -- or at *fallback* when there is no user frame.
@@ -128,6 +162,7 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
     Returns whether the active warning filters let it through: False for an
     ``"ignore"`` filter. An ``"error"`` filter raises it instead of returning.
     """
+    _hide_source_lines()
     if level is None and fallback is not None:
         filename, lineno = fallback
         module = filename[:-3] if filename.lower().endswith(".py") else filename
@@ -456,6 +491,7 @@ def warn_diagnostic(
     instance = category(message)
     instance.code = code
     if location is not None:
+        _hide_source_lines()
         warnings.warn_explicit(instance, category, filename=location[0], lineno=location[1], registry=None)
         return
     _warn_at(instance, _user_frame_level(), None)
