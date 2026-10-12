@@ -841,6 +841,13 @@ def compute_cache_key(
             # ``res = summarize(raw)``, and ``report = render(res)`` must
             # miss too (``recorded_reads_lineage_component``).
             ctx.reads.callees[cache_key] = tuple(callee_deps)
+        if ctx.record_reads and namespace == "stmt":
+            # What the runtime keyed this statement's callee globals with,
+            # for the simulation: it keys them with the lineages the
+            # kernel holds NOW, which later cells moved on (a log a
+            # function below appends to), so its key, and the lineage
+            # built from it, would differ from what the run recorded.
+            ctx.reads.callees_by_code[code] = tuple(callee_deps)
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(

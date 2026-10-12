@@ -468,6 +468,8 @@ def recorded_reads_lineage_component(
     code: str,
     user_ns: Mapping[str, Any] | None,
     outputs: Iterable[str] = (),
+    *,
+    as_last_run: bool = False,
 ) -> str:
     """The environment and the module data the statement keyed *cache_key*
     read, and the globals its called functions reached for, for its
@@ -475,7 +477,9 @@ def recorded_reads_lineage_component(
     reader below misses when a value changed. A key nothing recorded reads
     the environment now. ONE
     lookup for the runtime (``statement/lineage.py``) and the simulation
-    (``upstream/statement_lineage.py``).
+    (``upstream/statement_lineage.py``). The simulation passes
+    *as_last_run*: the callee globals are then the ones the statement's last
+    run was keyed with, when it ran in this kernel.
     """
     reads = getattr(tracking_state, "reads", None)
     by_key = getattr(reads, "by_key", None)
@@ -484,13 +488,19 @@ def recorded_reads_lineage_component(
     else:
         environment = statement_environment_component(code, user_ns)
     callees = getattr(reads, "callees", None)
-    if callees and cache_key and cache_key in callees:
+    by_code = getattr(reads, "callees_by_code", None)
+    deps = None
+    if as_last_run and by_code and code in by_code:
+        deps = by_code[code]
+    elif callees and cache_key and cache_key in callees:
+        deps = callees[cache_key]
+    if deps:
         # Less the globals the statement itself changes (``p = load()`` with
         # ``load`` appending to ``CALLS``): they are its outputs, and the
         # simulation reads them where the run left them, so its key differs
         # from the runtime's there.
         written = set(outputs)
-        kept = [dep for dep in callees[cache_key] if dep.split(":", 1)[0] not in written]
+        kept = [dep for dep in deps if dep.split(":", 1)[0] not in written]
         if kept:
             environment += ":callees:" + hashlib.sha256(":".join(kept).encode("utf-8")).hexdigest()
     return environment
