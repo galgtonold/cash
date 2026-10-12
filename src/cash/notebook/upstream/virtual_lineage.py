@@ -348,6 +348,14 @@ class VirtualLineage:
                 # alone so file staleness stays decoupled from code modification.
                 #
                 break
+            if cached.vars_with_stale_files:
+                # Which names a changed file left stale is a fact of the time
+                # the cell was simulated, not of its code: a repair has
+                # likely re-read the file since. Kept, it marked a value
+                # computed from the new file broken on every later check
+                # (``forecast`` re-ran in each cell below a corrected
+                # file), so re-simulate from here and ask the entries again.
+                break
             first_changed_cell = idx + 1
         return first_changed_cell, cache_had_hash_mismatch
 
