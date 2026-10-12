@@ -264,8 +264,10 @@ changed. The second list is what cash does not see, and what to do about it.
       pipeline), and what that code reads, its environment reads included:
       a handler in a dispatch table, a step in a list (a `lambda` too), a
       property or dunder method of a settings object. Also code your project
-      installs on an argument's library class: a pandas accessor, a polars
-      namespace, a function patched onto `pd.DataFrame`. A table of plain
+      installs on a pandas or polars class: an accessor, a namespace, a
+      function patched onto `pd.DataFrame`, whether the frame is an
+      argument, sits inside one or is made in the body; on another
+      library's class, when the value is an argument of that class. A table of plain
       functions is keyed once per version of it: a hit on a table of 1000
       handlers costs about 3 ms, not a re-analysis of each handler.
     - A **file** read by a
