@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..backends import adaptive_caps, budget_notices
-from ..diagnostics import format_diagnostic, warn_diagnostic, warn_diagnostic_message
+from ..diagnostics import format_diagnostic, full_warnings, short_diagnostic, warn_diagnostic, warn_diagnostic_message
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
@@ -83,8 +83,12 @@ class Notices:
         functions: dict[str, Callable[..., Any]],
         stored_keys: StoredKeyRecord,
         backend_slot: BackendSlot,
+        config: CashConfig,
     ) -> None:
         self._cached = cached
+        #: Whose ``warning_detail`` decides how a warning prints: this
+        #: instance's, also for a warning given outside one of its calls.
+        self._config = config
         self._functions = functions
         self._stored_keys = stored_keys
         self._backend_slot = backend_slot
@@ -103,6 +107,7 @@ class Notices:
         code: str,
         fix: str,
         once_per_version: bool = False,
+        short: str | None = None,
     ) -> None:
         """Emit a coded diagnostic at most once per
         ``(category, func_name, arg_type_name, code)`` for this Cash instance.
@@ -119,9 +124,11 @@ class Notices:
         ``cash.diagnostics`` that names the section of ``docs/warnings.md``
         expanding both. The three are rendered together by
         :func:`~cash.diagnostics.format_diagnostic`, and the rendered text is
-        what reaches BOTH stderr and ``cache_info()['warnings']`` -- the log
-        and the terminal must not drift apart, since the log is where people
-        look once the stderr line has scrolled away.
+        what ``cache_info()['warnings']`` keeps. Under ``warning_detail =
+        "full"`` stderr shows the same text; by default it shows the one line
+        of :func:`~cash.diagnostics.short_diagnostic`, which points at that
+        log -- *short*, when given, is the what it summarizes instead of the
+        first sentence of ``message``.
 
         ``arg_type_name`` is the empty string for warnings that do not
         attach to a specific arg type (e.g. store-failed). The seen-set
@@ -163,13 +170,32 @@ class Notices:
         if digest == "":
             entry["shown_by_an_earlier_run"] = True
             return
-        shown = warn_diagnostic_message(category, code, rendered, fallback=self._definition_site(func_name))
+        shown = warn_diagnostic_message(
+            category,
+            code,
+            self._displayed(func_name, code, message, rendered, short),
+            fallback=self._definition_site(func_name),
+        )
         # Recorded only once it was shown: a filter that ignores it, or turns
         # it into an error (which raises past this line), must not hide it
         # from every later run -- a CI job that fails on it would pass on the
         # rerun.
         if digest and shown:
             self._stored_keys.note_warning_shown(func_name, digest)
+
+    def _displayed(self, func_name: str, code: str, message: str, rendered: str, short: str | None) -> str:
+        """What stderr shows for a warning whose full text is *rendered*."""
+        if full_warnings(self._config):
+            return rendered
+        name = self._display_name(func_name)
+        more = f"{name}.cache_info()['warnings']"
+        return short_diagnostic(code, short or message, more=more)
+
+    def _display_name(self, func_name: str) -> str:
+        """The name the user calls *func_name* by: ``backtest``, not
+        ``__main__.backtest``."""
+        fn = self._functions.get(func_name)
+        return getattr(fn, "__name__", None) or func_name.rpartition(".")[2]
 
     def has_warned(self, key: tuple[type[Warning], str, str, str]) -> bool:
         """Has `warn_once` already shown the warning *key* names?"""

@@ -314,6 +314,22 @@ def disk_cash(tmp_path):
 
 
 @pytest.fixture
+def full_warning_text(monkeypatch):
+    """``CASH_WARNING_DETAIL=full`` for this test: a warning prints its fix
+    and every finding, not the one-line default. For a test that pins what
+    the fix or a listed finding says; a ``Cash`` built in the test reads it.
+    Use it as ``pytestmark = pytest.mark.usefixtures("full_warning_text")``
+    or by name. The default instance, when an earlier test built it, is
+    switched too: a warning outside any call follows it."""
+    monkeypatch.setenv("CASH_WARNING_DETAIL", "full")
+    from cash import _active
+
+    default = _active.default_cash()
+    if default is not None:
+        monkeypatch.setattr(default.config, "warning_detail", "full")
+
+
+@pytest.fixture
 def cash_with_file_backend(file_backend):
     """Provide a Cash instance with FileBackend."""
     cash = Cash(backend=file_backend, register_magic=False)

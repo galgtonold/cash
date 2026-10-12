@@ -119,7 +119,7 @@ def test_valid_values_of_every_kind_still_pass(tmp_path):
     assert c.config.min_cache_savings_pct == 0.0
 
 
-def test_a_tier_left_out_of_the_stack_is_named(monkeypatch):
+def test_a_tier_left_out_of_the_stack_is_named(full_warning_text, monkeypatch):
     """A tier the environment describes only in part -- no file declares
     tier 1, so it has no type -- was dropped with a debug line, changing the
     stack without a word."""

@@ -12,6 +12,32 @@ search:
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
+## How much a warning says {#warning-detail}
+
+<!-- claim: cash/diagnostics.py:short_diagnostic @f176b8e4, cash/decorator/reporting.py:Notices._displayed @2d9252a1 -->
+By default a warning is one line: the code, what happened, and where to read
+more. A list of findings or effects is cut to how many there are and the
+first one. What to do about it is in the code's section below, which the
+link opens:
+
+```text title="Output"
+model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model.backtest: the first call had effects static analysis did not see, which a cache hit will not repeat: 3 effects, e.g. file write: .../__pycache__/helpers.kern-2.py313.nbi.tmp.cc1b, at model.py:5 (backtest.cache_info()['warnings']; https://cash-lib.readthedocs.io/en/latest/warnings/#impure-observed-effects)
+```
+
+For a decorated function, `f.cache_info()["warnings"]` keeps the full text
+(every finding, and the fix), which the line names.
+
+Set [`warning_detail`](getting-started/configuration.md#output-and-switches)
+to `"full"` (`CASH_WARNING_DETAIL=full`) to print the full text instead:
+
+```text title="Output"
+[CACHE-THRASH] the cache is full at its 500 MB cap.
+  Fix: raise max_cache_size, or cache fewer values.
+  https://cash-lib.readthedocs.io/en/latest/warnings/#cache-thrash
+```
+
+Logging (when your program configures it) always gets the full text.
+
 ## Silencing one code {#silencing-one-code}
 
 Filter on the code. The message always starts with it, so this silences one
@@ -23,7 +49,7 @@ import warnings
 warnings.filterwarnings("ignore", message=r"\[CACHE-THRASH\]")
 ```
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic @af27ed90 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic @c9245473 -->
 Every warning also carries its code on `.code`, so a handler can test
 `w.message.code == "CACHE-THRASH"` instead of matching the wording. Filtering
 by class catches many codes at once (each code's section names its class);
@@ -633,7 +659,7 @@ skips the change on a hit. See [Silencing one code](#silencing-one-code).
 outside its return value: a `file write`, a `subprocess`, or an `argument
 mutation` (an object you passed in changed). A connection to a server is a read
 the key cannot see, reported as [KEY-NETWORK-READ](#key-network-read).
-Each line names the path or address and the line of your code that led to it.
+Each effect names the path or address and the line of your code that led to it; the one-line form shows how many there are and the first, and `f.cache_info()["warnings"]` lists them all.
 
 **Why it matters.** A hit runs none of the body, so these effects happened
 once and will not happen again. If the next step relies on them, later runs
@@ -660,7 +686,7 @@ mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @2d8839cd -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
 reads back. Only the path this call took was watched, so an empty report does
 not prove the function is pure.
@@ -750,7 +776,7 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @3fb9edb1 -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @c4985958 -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,

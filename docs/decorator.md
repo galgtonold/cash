@@ -646,7 +646,7 @@ property of an object of your class that the body reads by a global name
 (`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
 as one the body changes.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @a3930913 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @a3930913 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @2d8839cd -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 

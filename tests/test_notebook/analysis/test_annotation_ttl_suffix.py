@@ -46,7 +46,7 @@ def test_a_ttl_that_is_not_whole_seconds_is_ignored_and_warns(line, shown):
     )
 
 
-def test_the_warning_shows_the_value_and_the_correct_form():
+def test_the_warning_shows_the_value_and_the_correct_form(full_warning_text):
     """A warning that does not name the offending text leaves the reader
     hunting, and one that does not show the fix leaves them guessing."""
     with pytest.warns(CashCacheIneffectiveWarning) as record:

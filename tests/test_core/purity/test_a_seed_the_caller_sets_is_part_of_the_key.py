@@ -103,7 +103,7 @@ def test_an_unseeded_draw_is_still_frozen(inst):
     assert draw(3) == first
 
 
-def test_the_warning_says_a_callers_seed_is_keyed(inst):
+def test_the_warning_says_a_callers_seed_is_keyed(full_warning_text, inst):
     import warnings
 
     with warnings.catch_warnings(record=True) as caught:

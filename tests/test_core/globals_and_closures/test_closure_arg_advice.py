@@ -49,7 +49,7 @@ def _messages(rec, code):
     ],
     ids=["closure", "lambda", "partial-of-closure"],
 )
-def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(disk_cash, arg):
+def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(full_warning_text, disk_cash, arg):
     """THE BUG: the fix line said `register_hasher(function, ...)`."""
 
     @disk_cash.cache
@@ -66,7 +66,7 @@ def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(disk_cash, a
     assert "plain arguments" in found[0]
 
 
-def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(disk_cash):
+def test_an_ordinary_unhashable_type_still_gets_the_hasher_advice(full_warning_text, disk_cash):
     """The control: for a live object the type-wide hasher IS the right fix."""
 
     @disk_cash.cache

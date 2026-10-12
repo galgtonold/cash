@@ -691,7 +691,7 @@ def _warning_text(backend):
     return msgs[0] if msgs else ""
 
 
-def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
+def test_dominant_size_is_byte_weighted_not_the_mean(full_warning_text, tmp_path):
     """The mean misses exactly the shape this advice is for.
 
     3000 crumbs beside one 64MB entry: the mean is ~24KB and reports thousands
@@ -723,7 +723,7 @@ def test_dominant_size_is_none_with_nothing_ranked(tmp_path):
     b.shutdown()
 
 
-def test_a_handful_of_large_entries_gets_the_advice(tmp_path):
+def test_a_handful_of_large_entries_gets_the_advice(full_warning_text, tmp_path):
     b = FileBackend(str(tmp_path / "c"), max_size_bytes=12 * 1024 * 1024)
     b.evictor.queue = deque([(f"/e{i}", 3 * 1024 * 1024, 0.0) for i in range(4)])
 

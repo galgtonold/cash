@@ -67,7 +67,7 @@ class TestWarningEmitted:
         assert "Unseeded randomness detected" in msg
         assert "numpy.random.rand" in msg
 
-    def test_warning_names_the_suppression_directive(self, cash_magics):
+    def test_warning_names_the_suppression_directive(self, full_warning_text, cash_magics):
         """The message must tell the user the escape hatch — it is the only
         place the directive is discoverable from the notebook itself."""
         caught = _run_capturing_warnings(
@@ -384,7 +384,7 @@ class TestStaleRandomnessAnnouncedOnRestore:
             per_run.append([str(w.message) for w in caught if issubclass(w.category, CashRandomnessWarning)])
         return per_run
 
-    def test_restore_announces_the_replay(self, cash_magics, mock_shell):
+    def test_restore_announces_the_replay(self, full_warning_text, cash_magics, mock_shell):
         import numpy as np
 
         mock_shell.user_ns["np"] = np

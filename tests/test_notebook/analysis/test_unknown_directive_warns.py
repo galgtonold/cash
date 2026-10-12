@@ -60,7 +60,7 @@ def test_a_removed_spelling_warns_and_suggests_the_hyphenated_one(written, meant
     assert "IGNORED" in message
 
 
-def test_an_unknown_directive_with_no_near_match_lists_the_real_ones():
+def test_an_unknown_directive_with_no_near_match_lists_the_real_ones(full_warning_text):
     caught = _unknown_directive_warnings("# @cash:cache-calls")
 
     assert len(caught) == 1

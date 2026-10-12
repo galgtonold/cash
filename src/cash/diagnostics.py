@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import warnings
+from typing import Any
 
 # /en/latest/, not /en/stable/: the stable build is only rebuilt at a release,
 # so a warning code documented since then would link to a missing anchor.
@@ -326,8 +328,89 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
     *what* is one sentence of what happened; *fix* is one imperative sentence.
     Everything else belongs in the doc section the link points at, so the
     message stays short.
+
+    This is the full form: what ``cache_info()['warnings']`` and logging keep,
+    and what a warning shows under ``warning_detail = "full"``. By default a
+    warning shows :func:`short_diagnostic` instead.
     """
     return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
+
+
+#: A sentence ends at ``.``/``!``/``?`` followed by space and what starts the
+#: next one -- a capital, a backtick, a quote, ``(``. ``@cash.cache`` and
+#: ``e.g. a`` do not end one.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`'\"(])")
+
+#: An absolute path in a listed item, shortened to its last two parts.
+_LONG_PATH = re.compile(r"(?:[A-Za-z]:)?[\\/](?:[^\s\\/,:]+[\\/]){2,}([^\s\\/,:]+[\\/][^\s\\/,]+)")
+
+
+def short_path(text: str) -> str:
+    """*text* with each absolute path cut to ``.../<dir>/<file>``."""
+    return _LONG_PATH.sub(lambda m: ".../" + m.group(1).replace("\\", "/"), text)
+
+
+def list_gist(items: list[str], noun: str = "finding") -> str:
+    """``"3 findings, e.g. <first>"`` -- or the one item -- for a listed detail
+    collapsed into one line, with its paths shortened."""
+    if not items:
+        return ""
+    first = short_path(items[0].strip())
+    if len(items) == 1:
+        return first
+    return f"{len(items)} {noun}s, e.g. {first}"
+
+
+def short_diagnostic(code: str, what: str, *, more: str | None = None) -> str:
+    """The one-line form a warning shows by default::
+
+        [CACHE-THRASH] the cache is full at its 500 MB cap. (https://...#cache-thrash)
+
+    The first sentence of *what*; an indented list below it (effects,
+    findings) collapses to a count and its first item. The fix and the rest
+    are in the doc section the link points at; *more* names where the full
+    text of this one is kept (``f.cache_info()['warnings']``).
+    """
+    head, _, rest = what.partition("\n")
+    sentence = _SENTENCE_END.split(head.strip(), maxsplit=1)[0]
+    # A heading line ("in helper (mod.py):") groups items; it is not one.
+    items = [line.strip() for line in rest.splitlines() if line.strip() and not line.rstrip().endswith(":")]
+    if items:
+        sentence = f"{sentence.rstrip(' .:')}: {list_gist(items)}"
+    where = doc_url(code) if more is None else f"{more}; {doc_url(code)}"
+    return f"[{code}] {sentence} ({where})"
+
+
+def full_warnings(config: Any = None) -> bool:
+    """Does ``warning_detail = "full"`` govern the code running now?
+
+    *config* when given; else the running call's instance, else the default
+    instance -- both read ``CASH_WARNING_DETAIL`` and the config files --
+    else the variable itself: resolving the config files here could warn,
+    and so call back in.
+    """
+    if config is not None:
+        return getattr(config, "warning_detail", "short") == "full"
+    try:
+        from . import _active  # cash._active imports the config, which imports this module
+
+        config = _active.ACTIVE_CONFIG.get()
+        if config is None:
+            default = _active.default_cash()
+            config = default.config if default is not None else None
+    except (ImportError, AttributeError):  # warned while cash._active is still importing
+        config = None
+    if config is not None:
+        return getattr(config, "warning_detail", "short") == "full"
+    return os.environ.get("CASH_WARNING_DETAIL", "").strip().lower() == "full"
+
+
+def render_diagnostic(code: str, what: str, fix: str, *, more: str | None = None) -> str:
+    """What a warning shows: :func:`format_diagnostic` under
+    ``warning_detail = "full"``, else :func:`short_diagnostic`."""
+    if full_warnings():
+        return format_diagnostic(code, what, fix)
+    return short_diagnostic(code, what, more=more)
 
 
 def log_diagnostic(log: logging.Logger, code: str, what: str, fix: str) -> None:
@@ -369,7 +452,7 @@ def warn_diagnostic(
 
     Raises ``KeyError`` before emitting anything if *code* is unregistered.
     """
-    message = format_diagnostic(code, what, fix)  # raises on an unknown code
+    message = render_diagnostic(code, what, fix)  # raises on an unknown code
     instance = category(message)
     instance.code = code
     if location is not None:

@@ -175,7 +175,7 @@ class Unpicklable(Counter):
         self.lock = threading.Lock()
 
 
-def test_an_unpicklable_source_keeps_the_entry_in_ram_with_a_warning(disk_cash):
+def test_an_unpicklable_source_keeps_the_entry_in_ram_with_a_warning(full_warning_text, disk_cash):
     runs: list = []
     source = Unpicklable()
     report = _caller(disk_cash, source, runs)
@@ -194,7 +194,7 @@ def test_an_unpicklable_source_keeps_the_entry_in_ram_with_a_warning(disk_cash):
     assert not any(name.endswith(".report") for name in on_disk), on_disk
 
 
-def test_an_unpicklable_source_is_not_stored_without_a_ram_tier(cash_with_file_backend):
+def test_an_unpicklable_source_is_not_stored_without_a_ram_tier(full_warning_text, cash_with_file_backend):
     runs: list = []
     report = _caller(cash_with_file_backend, Unpicklable(), runs)
     with warnings.catch_warnings(record=True) as rec:

@@ -146,7 +146,7 @@ def test_a_registered_hasher_wins(c):
 
 
 @pytest.mark.parametrize("value", [Looping(), Raising()], ids=["returns-itself", "raises"])
-def test_a_broken_key_runs_uncached_and_names_the_method(c, value):
+def test_a_broken_key_runs_uncached_and_names_the_method(full_warning_text, c, value):
     runs = []
 
     @c.cache
@@ -163,7 +163,7 @@ def test_a_broken_key_runs_uncached_and_names_the_method(c, value):
     assert messages and "__cash_key__()" in messages[0]
 
 
-def test_an_unhashable_own_class_is_pointed_at_cash_key(c):
+def test_an_unhashable_own_class_is_pointed_at_cash_key(full_warning_text, c):
     class Session:
         def __reduce__(self):
             raise TypeError("a live session cannot be pickled")

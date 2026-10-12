@@ -39,7 +39,7 @@ def _clean_env(**extra):
     return env
 
 
-def test_a_misspelled_key_is_named_with_the_setting_it_meant(tmp_path):
+def test_a_misspelled_key_is_named_with_the_setting_it_meant(full_warning_text, tmp_path):
     project = tmp_path / "pyproject.toml"
     project.write_text(
         '[tool.cash]\nmax_cache_siz = "2GB"\n[[tool.cash.tiers]]\ntype = "memory"\nmax_entrys = 3\n', encoding="utf-8"

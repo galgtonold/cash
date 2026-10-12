@@ -22,7 +22,7 @@ from cash.effectiveness import EffectivenessLedger
 pytestmark = pytest.mark.core
 
 
-def test_changing_an_argument_in_place_says_what_a_hit_does(disk_cash):
+def test_changing_an_argument_in_place_says_what_a_hit_does(full_warning_text, disk_cash):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
 
@@ -61,7 +61,7 @@ class Model:
         self.weights = [float(i) for i in range(n)]
 
 
-def test_net_loss_names_the_argument_and_suggests_frozen_on_its_producer(disk_cash):
+def test_net_loss_names_the_argument_and_suggests_frozen_on_its_producer(full_warning_text, disk_cash):
     disk_cash._calls.effectiveness = EffectivenessLedger(waste_threshold_seconds=0.0)
 
     @disk_cash.cache
@@ -98,7 +98,7 @@ def test_net_loss_without_a_producer_keeps_the_hasher_advice():
     assert "frozen" not in fix
 
 
-def test_net_loss_says_an_argument_key_replaces_is_hashed_for_the_change_check(disk_cash):
+def test_net_loss_says_an_argument_key_replaces_is_hashed_for_the_change_check(full_warning_text, disk_cash):
     """Under ``key=`` every argument is still hashed in full on every miss,
     for the in-place-change check. CACHE-NET-LOSS blamed "a large argument
     hashed on every call" without saying it was one the key leaves out."""

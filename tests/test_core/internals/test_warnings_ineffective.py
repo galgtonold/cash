@@ -75,7 +75,7 @@ class _Unpicklable:
         self._lock = threading.Lock()
 
 
-def test_unpicklable_arg_emits_ineffective_warning(tmp_path):
+def test_unpicklable_arg_emits_ineffective_warning(full_warning_text, tmp_path):
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
@@ -141,7 +141,7 @@ def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
     )
 
 
-def test_resolve_key_exception_emits_ineffective_warning(tmp_path):
+def test_resolve_key_exception_emits_ineffective_warning(full_warning_text, tmp_path):
     """The `except` branch in KeyBuilder.resolve (where key gen raises e.g.
     ValueError) also emits CashCacheIneffectiveWarning. We trigger it by
     registering a custom hasher that raises ValueError — TypeError would be
