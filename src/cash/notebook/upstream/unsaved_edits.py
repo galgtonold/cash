@@ -174,7 +174,7 @@ class UnsavedEdits:
             # by that key, as the simulation does.
             keys = {self.tracking_state.variable_sources.get(out) for out in outputs} - {None}
             recorded = [
-                recorded_reads_lineage_component(self.tracking_state, key, code, self.statements.shell.user_ns)
+                recorded_reads_lineage_component(self.tracking_state, key, code, self.statements.shell.user_ns, outputs)
                 for key in sorted(keys)
             ] or [None]
             projected = {}

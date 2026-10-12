@@ -430,7 +430,11 @@ def statement_module_data(code: str, user_ns: Mapping[str, Any] | None) -> str:
 
 
 def recorded_reads_lineage_component(
-    tracking_state: Any, cache_key: str | None, code: str, user_ns: Mapping[str, Any] | None
+    tracking_state: Any,
+    cache_key: str | None,
+    code: str,
+    user_ns: Mapping[str, Any] | None,
+    outputs: Iterable[str] = (),
 ) -> str:
     """The environment and the module data the statement keyed *cache_key*
     read, and the globals its called functions reached for, for its
@@ -448,7 +452,14 @@ def recorded_reads_lineage_component(
         environment = statement_environment_component(code, user_ns)
     callees = getattr(reads, "callees", None)
     if callees and cache_key and cache_key in callees:
-        environment += ":callees:" + callees[cache_key]
+        # Less the globals the statement itself changes (``p = load()`` with
+        # ``load`` appending to ``CALLS``): they are its outputs, and the
+        # simulation reads them where the run left them, so its key differs
+        # from the runtime's there.
+        written = set(outputs)
+        kept = [dep for dep in callees[cache_key] if dep.split(":", 1)[0] not in written]
+        if kept:
+            environment += ":callees:" + hashlib.sha256(":".join(kept).encode("utf-8")).hexdigest()
     return environment
 
 

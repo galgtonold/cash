@@ -932,7 +932,7 @@ class StatementLineage:
             virtual_lineage,
             no_cache_values=self.tracking_state.no_cache_values.get(cache_key),
             recorded_reads=recorded_reads_lineage_component(
-                self.tracking_state, cache_key, stmt_code, self.shell.user_ns
+                self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs
             ),
             virtual_modules=virtual_modules,
         )

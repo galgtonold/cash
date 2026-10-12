@@ -142,7 +142,7 @@ the chain. You declare no dependencies.
 | Files | `path:mtime:size` per file read. |
 | Called functions | Their source hashes, sorted. |
 | Local modules | Their source hashes, sorted. |
-| Callee globals | A digest of the key's callee globals part, when a function the statement calls reads globals and the statement is cached. |
+| Callee globals | A digest of the key's callee globals part, less the globals the statement itself changes, when a function the statement calls reads globals. |
 | Value | A digest of `x`'s content, only when its statement is `no-cache`, or runs every time because what it binds changes from run to run: the clock, a fresh id, a `@stateful` function, pyplot's current figure read through a function of yours. |
 
 Files, called functions, local modules, callee globals and the value are left

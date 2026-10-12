@@ -669,7 +669,7 @@ def _joined(hashes: list[str]) -> str:
     return ":" + ":".join(sorted(hashes)) if hashes else ""
 
 
-def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
+def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext) -> list[str]:
     """The key component for the globals the called functions reach for.
 
     Those are read at CALL time, including any bound BELOW this statement,
@@ -688,10 +688,9 @@ def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
         if ctx.virtual_callables
         else None
     )
-    callee_deps = called_function_dependencies(
+    return called_function_dependencies(
         sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual, simulated=ctx.virtual_lineage
     )
-    return f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
 
 def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -> str:
@@ -795,7 +794,8 @@ def compute_cache_key(
     # Include occurrence index so duplicate statements within a cell get
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
-    callee_component = _callee_component(sorted_inputs, ctx)
+    callee_deps = _callee_deps(sorted_inputs, ctx)
+    callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
@@ -811,17 +811,12 @@ def compute_cache_key(
     if ctx.reads is not None:
         if reads:
             ctx.reads.by_key[cache_key] = reads
-        if callee_component and ctx.record_reads:
+        if callee_deps:
             # The globals the callees read are in the key, so they belong in
             # what the outputs carry below: ``CFG["round"] = 1`` re-keys
             # ``res = summarize(raw)``, and ``report = render(res)`` must
-            # miss too (``recorded_reads_lineage_component``). Recorded by
-            # the runtime only, under the key it ran with: the simulation
-            # finds it when it reaches that key, as for a cached statement
-            # it must. A statement run uncached drops it again
-            # (``StatementProcessor._post_execute``): the simulation may key
-            # it otherwise (a global its callee changes, read after the run).
-            ctx.reads.callees[cache_key] = hashlib.sha256(callee_component.encode("utf-8")).hexdigest()
+            # miss too (``recorded_reads_lineage_component``).
+            ctx.reads.callees[cache_key] = tuple(callee_deps)
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(

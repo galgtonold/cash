@@ -180,7 +180,7 @@ class StatementLineageBuilder:
         # The environment and the data of the user's modules it read, as its
         # key folds them: a new value is a new lineage, so what is built on an
         # output misses too.
-        environment = recorded_reads_lineage_component(tracking_state, cache_key, code, user_ns)
+        environment = recorded_reads_lineage_component(tracking_state, cache_key, code, user_ns, outputs)
         value_digests: dict[str, str] = {}
 
         clear_rebound_edges(tracking_state, outputs, inputs | lineage_reads, user_ns)
