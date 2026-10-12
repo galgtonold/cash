@@ -96,6 +96,52 @@ def test_a_flat_value_keeps_sharing_cycles_slots_and_containers():
     assert back["nested tuples"] == ((1, 2), (3, (4,))) and back["bytes"] == bytearray(b"ab")
 
 
+class AttrDict(dict):
+    """The common ``config.key`` idiom: its state is the dict itself."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.__dict__ = self
+
+
+class Rows(list):
+    """A list whose ``__setstate__`` derives a field from its items."""
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.total = sum(self)
+
+
+def _rows() -> Rows:
+    rows = Rows([1, 2, 3])
+    rows.total = 6
+    return rows
+
+
+def test_items_are_in_place_before_the_state_is_set():
+    """pickle sets an object's items, then its state: a dict whose
+    ``__dict__`` is itself, and a ``__setstate__`` that reads the items, see
+    them. Flattened and copied iteratively alike."""
+    value = [AttrDict(value=1, inner=AttrDict(id=7)), _rows()]
+    flat = kept_state.flatten(value, kept_state.reducers(pickle.HIGHEST_PROTOCOL))
+    for back in (pickle.loads(kept_state.dumps(flat, pickle.HIGHEST_PROTOCOL)), iterative_copy.deep_copy(value, {})):
+        assert back[0].value == 1 and back[0].inner.id == 7
+        assert back[1].total == 6 and back[1] == [1, 2, 3]
+
+
+def test_a_flat_value_stored_in_the_old_step_order_is_refused():
+    """A stream that set the state before the items rebuilt such a value
+    without its attributes: it is not loaded (the entry is a miss)."""
+    value = AttrDict(value=1)
+    flat = kept_state.flatten(value, kept_state.reducers(pickle.HIGHEST_PROTOCOL))
+    build = next(step for step in flat.steps if step[0] == "build")
+    old = [step for step in flat.steps if step[0] != "build"]
+    old.insert(old.index(next(step for step in old if step[0] == "setitems")), build)
+    with pytest.raises(pickle.UnpicklingError):
+        kept_state.load_flat(old, flat.root)
+    assert kept_state.load_flat(flat.steps, flat.root).value == 1
+
+
 def test_an_object_built_from_itself_is_refused_not_walked_forever():
     class Loop:
         def __reduce__(self):
@@ -175,6 +221,13 @@ class TestWhereThePicklerRunsOutOfStackFirst:
         nodes = [Node(i, None) for i in range(2_000)]
         for keyed in (False, True):
             assert [n.v for n in pickle.loads(kept_state.dumps(nodes, keyed=keyed))] == list(range(2_000))
+
+    def test_a_dict_that_is_its_own_state_keeps_its_attributes(self):
+        """Its state is itself, a cycle the depth walk does not call shallow:
+        a one-row list of it is flattened, and must come back whole."""
+        rows = [AttrDict(id=0)]
+        back = pickle.loads(kept_state.dumps(rows))
+        assert back[0].id == 0 and back[0] == {"id": 0}
 
     def test_a_chain_its_list_holds_every_node_of_is_deep(self):
         """The list is two levels deep from each node, but the pickler goes

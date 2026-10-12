@@ -442,9 +442,7 @@ def flatten(value: Any, reducers: Any, leaf: Any = None, deepest: int | None = N
         making.discard(id(obj))
         slot = made(obj)
         steps.append(("new", slot, rebuild, args))
-        if state is not None:
-            state = yield state
-            steps.append(("build", slot, state, setter))
+        # pickle's order: the items, then the state (`load_flat`).
         if listitems is not None:
             items = []
             for item in listitems:
@@ -456,6 +454,9 @@ def flatten(value: Any, reducers: Any, leaf: Any = None, deepest: int | None = N
                 pairs.append((yield k))
                 pairs.append((yield v))
             steps.append(("setitems", slot, pairs))
+        if state is not None:
+            state = yield state
+            steps.append(("build", slot, state, setter))
         return slot
 
     depth = 0
@@ -488,12 +489,19 @@ def load_flat(steps: list, root: Any) -> Any:
     """The value a `FlatValue` holds, made step by step. Named in stored
     entries: keep its name."""
     made: list = []
+    # Slots whose state is set. A value stored before the steps took pickle's
+    # order (state, then items) was rebuilt wrong -- a dict whose
+    # ``__dict__`` is itself lost its attributes -- so such a stream is
+    # refused, and the entry is a miss.
+    built: set = set()
 
     def get(part: Any) -> Any:
         return made[part] if type(part) is _Slot else part
 
     for step in steps:
         kind = step[0]
+        if built and kind in ("extend", "setitems") and step[1] in built:
+            raise pickle.UnpicklingError("a flat value stored in an older step order")
         if kind == "list":
             made.append([])
         elif kind == "dict":
@@ -504,6 +512,7 @@ def load_flat(steps: list, root: Any) -> Any:
             made.append(step[2](*get(step[3])))
         elif kind == "build":
             _build(made[step[1]], get(step[2]), step[3])
+            built.add(step[1])
         elif kind == "extend":
             target, items = made[step[1]], [get(item) for item in step[2]]
             if isinstance(target, list):
