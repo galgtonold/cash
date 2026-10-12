@@ -1753,13 +1753,18 @@ def hands_a_state_changing_callable(
 def _closes_over_a_callable(fn: types.FunctionType) -> bool:
     """Whether *fn* closes over a callable of the user's (a wrapper made
     without ``functools.wraps``, a ``compose(f, g)`` closure), which
-    `_Found.through_globals` follows."""
-    for cell in fn.__closure__ or ():
+    `_Found.through_globals` follows. A ``functools.wraps`` wrapper's
+    wrapped function is not one: the call cache reads each layer itself
+    (`wrapper_layers`) and captures what it changes."""
+    if not fn.__closure__:
+        return False
+    layers = {id(layer) for layer in wrapper_layers(fn)}
+    for cell in fn.__closure__:
         try:
             value = cell.cell_contents
         except ValueError:
             continue
-        if _is_users_callable(value):
+        if id(value) not in layers and _is_users_callable(value):
             return True
     return False
 
