@@ -475,9 +475,10 @@ class FileWriterScheduler:
         when the caller has just found them.
         """
         executed_writes = self.tracking_state.executed_write_stmt_codes
+        ran_with_lineages = self.tracking_state.executed_write_input_lineages
         runtime_lineage = self.tracking_state.variable_lineage
 
-        def _input_lineage_drifted(name: str) -> bool:
+        def _input_lineage_drifted(name: str, ran_with: dict[str, str] | None, at_writer: dict[str, str]) -> bool:
             # The writer's payload changed even though nothing in the variable
             # plan demands it: the simulated (current-code) lineage differs
             # from the lineage last seen at runtime.
@@ -485,7 +486,14 @@ class FileWriterScheduler:
                 return False
             virt = virtual_lineage.get(name)
             run = runtime_lineage.get(name)
-            return virt is not None and run is not None and virt != run
+            if virt is None or run is None or virt == run:
+                return False
+            # The runtime's lineage is the last binding's, and a cell below
+            # the writer may have bound the name since (``import os`` again):
+            # that is no change to what the writer wrote from. What it read
+            # when it last ran, met again at the writer, is not a drift.
+            recorded = ran_with.get(name) if ran_with else None
+            return recorded is None or recorded != at_writer.get(name)
 
         writer_indices: list[int] = []
         if writer_positions is None:
@@ -561,7 +569,9 @@ class FileWriterScheduler:
                 continue
             changed = stmt_code not in executed_writes
             scheduled_inputs = set(inputs) & scheduled_outputs
-            drifted = any(_input_lineage_drifted(v) for v in inputs)
+            ran_with = ran_with_lineages.get(stmt_code)
+            at_writer = key_lineages(entry.input_hashes) if ran_with else {}
+            drifted = any(_input_lineage_drifted(v, ran_with, at_writer) for v in inputs)
             inputs_changed = bool(scheduled_inputs) or drifted
             # ``changed`` fires for every writer after a kernel restart because
             # ``executed_write_stmt_codes`` is session-scoped and starts empty.

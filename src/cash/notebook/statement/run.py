@@ -125,6 +125,10 @@ class StatementRun:
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)
     outputs: set[str] = field(default_factory=set)
+    #: The lineage of each input as the statement started to run, recorded
+    #: for a statement that turns out to write a file
+    #: (``TrackingState.executed_write_input_lineages``).
+    entry_lineages: dict[str, str] = field(default_factory=dict)
     source_hash: str = ""
     cache_key: str = ""
     #: The key the RNG streams it drew from move on from, when not

@@ -990,6 +990,8 @@ class StatementProcessor:
         # cash does not know (`pyplot_state`). Not read for one that already
         # runs every time.
         figures_before = None if run.skip_cache else pyplot_state()
+        lineage = self.tracking_state.variable_lineage
+        run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         try:
             with (
                 self.watching_reads(run.code),
@@ -1828,6 +1830,7 @@ class StatementProcessor:
                 or self._writes_through_user_code(run)
             ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
+                self.tracking_state.executed_write_input_lineages[code] = run.entry_lineages
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it): ``executed_write_stmt_codes`` is empty after
