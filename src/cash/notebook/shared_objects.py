@@ -1156,10 +1156,16 @@ def _gave_up(
         value_types = VALUE_TYPES + library_value_types()
         gave_up.names |= found
         if outside:
+            # A class or a function holding the object (a class attribute
+            # registry, a mutable default) is linked too: what reads it
+            # reads the object (``slow(Reg.items)``), though a class or a
+            # function is otherwise a value no statement changes in place.
             gave_up.names.update(
                 name
                 for name, value in list(user_ns.items())
-                if id(value) in outside and name not in known and not is_value(value, value_types)
+                if id(value) in outside
+                and name not in known
+                and (isinstance(value, (type, types.FunctionType)) or not is_value(value, value_types))
             )
         gave_up.complete = gave_up.complete and complete
     return None

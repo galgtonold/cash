@@ -241,3 +241,21 @@ def test_a_match_case_changing_a_list_changes_it():
     )
     calls = top_level_calls(ast.parse(code))
     assert calls.mutation_receivers == {"rows", "seen"}
+
+
+def test_a_call_leaving_a_changed_mutable_default_changes_the_function():
+    """``collect(rows)`` with ``def collect(x=None, acc=[])`` appending to
+    ``acc``: the function's own list changes, so the function does."""
+    import ast
+
+    from cash.analysis.callee_effects import function_arg_mutations
+
+    sources = {
+        "collect": "def collect(x=None, acc=[]):\n    if x is not None:\n        acc.append(x)\n    return acc\n",
+        "fixed": "def fixed(x, n=3):\n    x.append(n)\n",
+    }
+    assert function_arg_mutations(ast.parse("collect(rows)"), sources.get) == {"collect"}
+    assert function_arg_mutations(ast.parse("r = slow(collect())"), sources.get) == {"collect"}
+    # Control: the default handed in, and a constant default.
+    assert function_arg_mutations(ast.parse("collect(rows, acc=mine)"), sources.get) == {"mine"}
+    assert function_arg_mutations(ast.parse("fixed(rows)"), sources.get) == {"rows"}
