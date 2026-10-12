@@ -166,6 +166,7 @@ class MutationClassifier:
         # hashed reliably, otherwise assumed to change (correctness first).
         snapshots: dict[str, str] = {}
         unwatched = True
+        in_place = _in_place_receivers(tree) if classes.unknown_receivers else set()
         for base in classes.unknown_receivers:
             if self._receiver_observable(base):
                 observe.add(base)
@@ -174,7 +175,10 @@ class MutationClassifier:
             # content: fingerprinted whole before and after instead, once per
             # text. Anything else (a random generator advanced by ``choice``)
             # is still assumed changed.
-            if not _fingerprinted_receiver(self.shell.user_ns.get(base)):
+            # A method that changes its receiver in place when the data
+            # calls for it (``arr.put(np.flatnonzero(arr < 0), 0)``) may
+            # change nothing on the run that is looked at: assumed changed.
+            if not _fingerprinted_receiver(self.shell.user_ns.get(base)) or base in in_place:
                 assumed.add(base)
                 pre_route.add(base)
                 continue
@@ -363,3 +367,72 @@ def _fingerprinted_receiver(value: object) -> bool:
         ("pandas", "Series"),
         ("numpy", "ndarray"),
     }
+
+
+#: Methods of numpy arrays and pandas frames and series that change the
+#: receiver in place, often only when its data calls for it (``sort`` of a
+#: sorted array, ``update`` from an empty frame, ``put`` at no index): a run
+#: that changed nothing says nothing about the next.
+_IN_PLACE_METHODS = frozenset(
+    {
+        # numpy.ndarray
+        "fill",
+        "put",
+        "sort",
+        "partition",
+        "resize",
+        "itemset",
+        "setfield",
+        "setflags",
+        "byteswap",
+        # pandas DataFrame / Series
+        "insert",
+        "isetitem",
+        "pop",
+        "update",
+        "_set_value",
+        "__setitem__",
+        "__delitem__",
+        # in-place operators called by name
+        "__iadd__",
+        "__isub__",
+        "__imul__",
+        "__imatmul__",
+        "__itruediv__",
+        "__ifloordiv__",
+        "__imod__",
+        "__ipow__",
+        "__iand__",
+        "__ior__",
+        "__ixor__",
+        "__ilshift__",
+        "__irshift__",
+    }
+)
+
+
+def _in_place_receivers(tree: ast.Module | None) -> set[str]:
+    """The names *tree* calls an in-place method on (`_IN_PLACE_METHODS`, or
+    any method handed ``inplace=`` other than a literal False), reached
+    through attributes and subscripts."""
+    found: set[str] = set()
+    if tree is None:
+        return found
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        method = node.func.attr
+        in_place = method in _IN_PLACE_METHODS
+        if not in_place:
+            in_place = any(
+                kw.arg == "inplace" and not (isinstance(kw.value, ast.Constant) and kw.value.value is False)
+                for kw in node.keywords
+            )
+        if not in_place:
+            continue
+        root: ast.AST = node.func.value
+        while isinstance(root, (ast.Attribute, ast.Subscript, ast.Call)):
+            root = root.func if isinstance(root, ast.Call) else root.value
+        if isinstance(root, ast.Name):
+            found.add(root.id)
+    return found
