@@ -30,12 +30,15 @@ from cash.notebook.cache_key import (
     mutation_verdict_key,
     note_read_provenance_written,
     process_state_key,
+    pyplot_draws_key,
     read_provenance_key,
+    share_edges_key,
     statement_source_hash,
     write_provenance_key,
 )
 from cash.notebook.carrier_history import FIGURE_KINDS, carrier_history_fingerprint
 from cash.notebook.stateful_carriers import stateful_carrier_kind
+from cash.notebook.statement.derivation_edges import read_share_edges
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 
 if TYPE_CHECKING:
@@ -75,6 +78,8 @@ class StatementRecords:
         self._module_state_written: dict[str, tuple[list[str], list[str]]] = {}
         self._process_state_written: dict[str, list[str]] = {}
         self._read_provenance_written: dict[str, list[str]] = {}
+        self._share_edges_written: dict[str, list[list[str]]] = {}
+        self._pyplot_draws_written: dict[str, list[str]] = {}
 
     def begin_cell(self) -> None:
         """Start this cell's statement log, before its statements run."""
@@ -289,6 +294,90 @@ class StatementRecords:
             self._process_state_written[source_hash] = persisted
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s process-state persistence failed", _LOG_PROCESSOR)
+
+    def note_pyplot_draws(self, source_hash: str, names: frozenset[str]) -> None:
+        """Record the names the statement (or structure) with *source_hash*
+        changed by drawing through pyplot when it ran now
+        (``TrackingState.pyplot_draw_outputs``), and keep them for a later
+        kernel (``pyplot_draws_key``). One that drew on none writes nothing,
+        unless a record of this session said it had. Best-effort."""
+        known = self.tracking_state.pyplot_draw_outputs
+        had = known.get(source_hash)
+        if not names and had is None:
+            return
+        known[source_hash] = names
+        persisted = sorted(names)
+        if self._pyplot_draws_written.get(source_hash) == persisted or (not names and not had):
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            backend.set_metadata_only(
+                pyplot_draws_key(source_hash), {"pyplot_draws": True, "names": persisted, "ttl": None}
+            )
+            self._pyplot_draws_written[source_hash] = persisted
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s pyplot-draw persistence failed", _LOG_PROCESSOR)
+
+    def note_share_edges(self, source_hash: str, edges: Iterable[tuple[str, str]]) -> None:
+        """Record the edges the statement (or structure) with *source_hash*
+        linked when it ran now (``TrackingState.share_edge_records``), and
+        keep them for a later kernel (``share_edges_key``).
+
+        The session keeps every statement's record, an empty one too: the
+        simulation reads what the text says (``static_share_edges``) only
+        for a statement no run has recorded. On disk, one that linked none
+        writes nothing, unless a record said it had: that record is replaced.
+        Best-effort."""
+        record = frozenset((src, dst) for src, dst in edges if src != dst)
+        state = self.tracking_state
+        known = state.share_edge_records
+        had = known.get(source_hash)
+        if had == record:
+            return
+        known[source_hash] = record
+        state.share_edge_changes.append(source_hash)
+        if not record and not had and not self._earlier_share_edges(source_hash):
+            return
+        persisted = sorted([src, dst] for src, dst in record)
+        if self._share_edges_written.get(source_hash) == persisted:
+            return
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            backend.set_metadata_only(
+                share_edges_key(source_hash), {"share_edges": True, "edges": persisted, "ttl": None}
+            )
+            self._share_edges_written[source_hash] = persisted
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s share-edge persistence failed", _LOG_PROCESSOR)
+
+    def recorded_share_edges(self, source_hash: str) -> frozenset[tuple[str, str]] | None:
+        """The edges the statement with *source_hash* linked when it last
+        ran: this session's record, else an earlier kernel's, kept in
+        ``share_edge_records`` once read; None when neither has one."""
+        known = self.tracking_state.share_edge_records
+        if source_hash in known:
+            return known[source_hash]
+        found = self._earlier_share_edges(source_hash)
+        # A stored statement whose run left no record linked nothing that
+        # was kept: the simulation takes it so too, not its text.
+        known[source_hash] = found or frozenset()
+        state = self.tracking_state
+        state.share_edge_changes.append(source_hash)
+        return found
+
+    def _earlier_share_edges(self, source_hash: str) -> frozenset[tuple[str, str]] | None:
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return None
+        try:
+            record = backend.get_metadata(share_edges_key(source_hash))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        return read_share_edges(record)
 
     def persist_carrier_advances(self, source_hash: str, names: frozenset[str] | set[str] | None) -> None:
         """Record, across restarts, which generators this statement drew from.

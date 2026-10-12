@@ -33,6 +33,8 @@ def _mark(state: TrackingState) -> dict[str, object]:
             value["x"] = {"y"}
         elif isinstance(value, set):
             value.add("x")
+        elif isinstance(value, list):
+            value.append("x")
         elif isinstance(value, int):
             setattr(state, f.name, value + 7)
         elif value is None:

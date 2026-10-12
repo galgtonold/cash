@@ -25,9 +25,12 @@ from ..cache_key import (
     module_state_key,
     mutation_verdict_key,
     process_state_key,
+    pyplot_draws_key,
+    share_edges_key,
 )
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
 from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
+from ..statement.derivation_edges import read_share_edges
 
 __all__ = ["CacheProbe", "ControlOutcome"]
 
@@ -53,6 +56,8 @@ class CacheProbe:
         #: :meth:`module_state` answers by statement; cleared by :meth:`reset`.
         self._module_state_memo: dict[str, tuple[frozenset[str], frozenset[str]] | None] = {}
         self._process_state_memo: dict[str, frozenset[str] | None] = {}
+        self._share_edges_memo: dict[str, frozenset[tuple[str, str]] | None] = {}
+        self._pyplot_draws_memo: dict[str, frozenset[str] | None] = {}
 
     def reset(self) -> None:
         """Forget the memoized import bindings and generator draws."""
@@ -60,6 +65,8 @@ class CacheProbe:
         self._carrier_advances_memo.clear()
         self._module_state_memo.clear()
         self._process_state_memo.clear()
+        self._share_edges_memo.clear()
+        self._pyplot_draws_memo.clear()
 
     def backend(self):
         """The cache backend the simulation probes, or None without a Cash."""
@@ -164,6 +171,34 @@ class CacheProbe:
                 found = frozenset(str(kind) for kind in record.get("kinds") or ())
             except TypeError:
                 found = None
+        memo[source_hash] = found
+        return found
+
+    def pyplot_draws(self, source_hash: str) -> frozenset[str] | None:
+        """The names a statement changed by drawing through pyplot when an
+        earlier kernel ran it, or None when nothing was recorded. See
+        ``pyplot_draws_key``. Memoized until :meth:`reset`."""
+        memo = self._pyplot_draws_memo
+        if source_hash in memo:
+            return memo[source_hash]
+        found = None
+        record = self.record(pyplot_draws_key(source_hash))
+        if record and record.get("pyplot_draws"):
+            try:
+                found = frozenset(str(name) for name in record.get("names") or ())
+            except TypeError:
+                found = None
+        memo[source_hash] = found
+        return found
+
+    def share_edges(self, source_hash: str) -> frozenset[tuple[str, str]] | None:
+        """The edges a statement linked when an earlier kernel ran it, or
+        None when nothing was recorded. See ``share_edges_key``. Memoized
+        until :meth:`reset`, as :meth:`carrier_advances`."""
+        memo = self._share_edges_memo
+        if source_hash in memo:
+            return memo[source_hash]
+        found = read_share_edges(self.record(share_edges_key(source_hash)))
         memo[source_hash] = found
         return found
 

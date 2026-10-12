@@ -61,6 +61,7 @@ from ..callee_reach import helper_seeded_modules, reached_user_code
 from ..consumables import is_stream
 from ..lineage_formula import statement_environment_reads
 from ..statement.carrier_advances import carrier_candidates
+from ..statement.derivation_edges import apply_share_record, logging_edges
 from ..statement.file_deps import compute_file_hash_component
 from ..statement.run import NO_LOOP_ITERABLE
 from ..write_observer import observe_writes
@@ -212,7 +213,7 @@ class ControlStructureProcessor:
         state.structure_module_writes.clear()
         result = None
         try:
-            with observe_writes() as written:
+            with observe_writes() as written, logging_edges() as linked:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes)
         finally:
             self._unit_frame = None
@@ -234,6 +235,15 @@ class ControlStructureProcessor:
             sp.end_structure_cost(reads, changed, succeeded)
         if result.success:
             self._record_writes(code, reads, written, before)
+            # What it linked, for the simulation, which replays the structure
+            # as one statement (`StatementRecords.note_share_edges`). A part
+            # restored from the cache linked nothing now: what its run linked
+            # is put back, as for a statement's hit.
+            if any(_status(m) == CacheStatus.RESTORED for m in result.metrics):
+                recorded = sp.recorded_share_edges(code) or frozenset()
+                apply_share_record(state.derivation_edges, (), recorded)
+                linked = linked | recorded
+            sp.note_share_edges(code, linked)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
             # Where a draw left an RNG variable depends on the seed above,
             # which the entry lineages do not hold: the simulation moves it on

@@ -89,7 +89,7 @@ they talk to the outside world.
 | starts a process (`subprocess.run`, `os.system`) | runs every time |
 | reads the clock (`datetime.now()`, `time.time()`, `uuid4()`), random bytes from the system (`os.urandom()`, `secrets.token_hex()`) or asks for `input()` | runs every time |
 | makes, picks or draws on the current pyplot figure (`plt.figure`, `plt.subplots`, `plt.subplot`, `plt.plot`, `plt.show`), directly or through a library or a function you wrote (`sns.barplot(...)`, `s.plot()`) | runs every time: a hit would leave the next drawing on another figure. Cash compares pyplot's open figures, the current one and what its axes hold before and after the statement |
-| calls a function you wrote that reads pyplot's current figure (`len(plt.gca().lines)`, `plt.gcf().axes`), however deep the call | runs every time, as `plt.gca()` in the statement does: no key holds the figure it reads |
+| calls a function you wrote that reads pyplot's current figure (`len(plt.gca().lines)`, `plt.gcf().axes`), however deep the call: a method of your class, pyplot handed in (`nlines(plt)`), kept as a default (`get=plt.gca`) or imported inside it included | runs every time, as `plt.gca()` in the statement does: no key holds the figure it reads |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell (`df["c"] = ...`, `lst.append(...)`) | runs every time |
 | sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps, the same function handed to a call as `s.apply(metrics.increment)`, `importlib.reload(mylib)`) | runs every time |

@@ -34,10 +34,15 @@ hashes are a separate artifact already computed outside ``compute_cache_key``).
 
 from __future__ import annotations
 
+import ast
+import functools
 import hashlib
+import inspect
 import logging
 import sys
-from collections.abc import Iterable
+import types
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from ... import _plain_data
@@ -50,18 +55,110 @@ from ..shared_objects import (
     excess_refs,
     is_value,
     library_value_types,
+    view_bases,
 )
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "apply_share_record",
+    "assigned_names",
     "detect_derivation_edges",
+    "link",
+    "logging_edges",
+    "read_share_edges",
     "bump_derived_lineages",
     "clear_edges_for",
     "is_uncacheable_alias",
     "record_shared_object_edges",
     "shared_object_partners",
+    "static_share_edges",
 ]
+
+
+#: The edge logs open now (`logging_edges`), innermost last: each edge
+#: recorded while one is open is added to every one of them.
+_EDGE_LOGS: list[set[tuple[str, str]]] = []
+
+
+def link(derivation_edges: dict[str, set[str]], src: str, dst: str) -> None:
+    """Record the edge *src* -> *dst*, and log it in each open log."""
+    derivation_edges.setdefault(src, set()).add(dst)
+    for log in _EDGE_LOGS:
+        log.add((src, dst))
+
+
+@contextmanager
+def logging_edges() -> Iterator[set[tuple[str, str]]]:
+    """Collect every edge recorded inside the block, as ``(src, dst)`` pairs.
+
+    What a statement (or a whole loop) linked when it ran is what the
+    simulation replays for it (``TrackingState.share_edge_records``): the
+    edges themselves live in memory only, so after a restart nothing said
+    that ``y = x`` made ``y.append(2)`` a change of ``x``. Logs nest: a
+    loop's log takes what its body's statements link too.
+    """
+    log: set[tuple[str, str]] = set()
+    _EDGE_LOGS.append(log)
+    try:
+        yield log
+    finally:
+        # By identity: two logs that saw the same edges are equal.
+        for index in range(len(_EDGE_LOGS) - 1, -1, -1):
+            if _EDGE_LOGS[index] is log:
+                del _EDGE_LOGS[index]
+                break
+
+
+def assigned_names(tree: ast.AST | None) -> set[str]:
+    """The names *tree*'s top-level assignments bind to a new object
+    (``x = x + [5]`` too, which reads ``x`` first): not the ones changed in
+    place (``x += [5]``, ``x[0] = 1``)."""
+    names: set[str] = set()
+    for node in getattr(tree, "body", ()):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            stack = [target]
+            while stack:
+                sub = stack.pop()
+                if isinstance(sub, ast.Name):
+                    names.add(sub.id)
+                elif isinstance(sub, (ast.Tuple, ast.List)):
+                    stack.extend(sub.elts)
+                elif isinstance(sub, ast.Starred):
+                    stack.append(sub.value)
+    return names
+
+
+def apply_share_record(
+    derivation_edges: dict[str, set[str]],
+    rebound: Iterable[str],
+    record: Iterable[tuple[str, str]],
+) -> None:
+    """Replay one statement's edges onto *derivation_edges*: drop the edges
+    of the names it binds afresh (*rebound*), then add the ones it linked
+    when it ran (*record*), as its run did."""
+    for name in rebound:
+        clear_edges_for(derivation_edges, name)
+    for src, dst in record:
+        if src != dst:
+            link(derivation_edges, src, dst)
+
+
+def read_share_edges(record: dict | None) -> frozenset[tuple[str, str]] | None:
+    """The ``(src, dst)`` pairs of a ``share_edges_key`` record, or None
+    when it is not one."""
+    if not record or not record.get("share_edges"):
+        return None
+    try:
+        return frozenset((str(src), str(dst)) for src, dst in record.get("edges") or ())
+    except (TypeError, ValueError):
+        return None
 
 
 def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = ()) -> bool:
@@ -255,7 +352,7 @@ def _detect_matplotlib_figure_edge(
         return
     nm = _find_name_by_identity(user_ns, fig)
     if nm is not None and nm != out:
-        derivation_edges.setdefault(out, set()).add(nm)
+        link(derivation_edges, out, nm)
 
 
 def _imported(name: str):
@@ -308,8 +405,19 @@ def _detect_numpy_view_edge(
         nm = _find_name_by_identity(user_ns, root)
         if nm is not None and nm != out:
             targets.add(nm)
-    if targets:
-        derivation_edges.setdefault(out, set()).update(targets)
+    # A named view of the same buffer (``big = np.arange(6.0).reshape(3,
+    # 2)`` under ``row = big[0]``): ``row.base`` is the buffer, not ``big``.
+    chain = view_bases(value)
+    for name, other in list(user_ns.items()):
+        if name != out and not name.startswith("_") and other is not value and isinstance(other, np.ndarray):
+            if (
+                other.base is not None
+                and any(found in chain for found in view_bases(other))
+                and np.may_share_memory(value, other)
+            ):
+                targets.add(name)
+    for target in sorted(targets):
+        link(derivation_edges, out, target)
 
 
 _PANDAS_REFHOLDER_TYPES: tuple[type, ...] | None = None
@@ -371,7 +479,7 @@ def _detect_pandas_refholder_edge(
     if nm is not None and nm != out:
         # Edge points FROM the frame name TO the derived object: mutating the
         # frame bumps the derived object.
-        derivation_edges.setdefault(nm, set()).add(out)
+        link(derivation_edges, nm, out)
 
 
 def record_shared_object_edges(
@@ -394,8 +502,8 @@ def record_shared_object_edges(
         for holder in holders:
             if holder == out:
                 continue
-            derivation_edges.setdefault(out, set()).add(holder)
-            derivation_edges.setdefault(holder, set()).add(out)
+            link(derivation_edges, out, holder)
+            link(derivation_edges, holder, out)
 
 
 def shared_object_partners(derivation_edges: dict[str, set[str]], var: str) -> set[str]:
@@ -489,3 +597,128 @@ def bump_derived_lineages(
             if target not in visited and target in derivation_edges:
                 frontier.append(target)
     return bumped
+
+
+def static_share_edges(
+    tree: ast.AST | None,
+    function_source: Callable[[str], str | None],
+    namespace: dict,
+) -> frozenset[tuple[str, str]]:
+    """The edges an assignment's text says it links, for a statement with no
+    record of a run (edited, or never run): its target with each variable
+    whose object, or a part of it, the value may be (``y = x``, ``y =
+    x[0]``, ``head = big[:3]``, ``runs = [cfg]``, ``y = ok(x)`` where the
+    notebook's ``ok`` returns its argument). Both ways, as
+    `record_shared_object_edges` links them. A call of anything else is
+    taken to make a new object; its run says otherwise when it runs.
+    """
+    edges: set[tuple[str, str]] = set()
+    if tree is None:
+        return frozenset()
+    for node in getattr(tree, "body", ()):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for target in targets:
+            for name, roots in _target_roots(target, value, function_source, namespace):
+                for root in roots:
+                    # A number or a string is never changed in place.
+                    if root != name and not (root in namespace and is_value(namespace[root], VALUE_TYPES)):
+                        edges.add((name, root))
+                        edges.add((root, name))
+    return frozenset(edges)
+
+
+def _target_roots(target: ast.expr, value: ast.expr, function_source, namespace):
+    if isinstance(target, ast.Name):
+        yield target.id, _value_roots(value, function_source, namespace)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts):
+            for sub_target, sub_value in zip(target.elts, value.elts):
+                yield from _target_roots(sub_target, sub_value, function_source, namespace)
+        else:
+            # ``a, b = pair``: each name may be a part of what it unpacks.
+            roots = _value_roots(value, function_source, namespace)
+            for sub in target.elts:
+                if isinstance(sub, ast.Starred):
+                    sub = sub.value
+                if isinstance(sub, ast.Name):
+                    yield sub.id, roots
+
+
+def _value_roots(value: ast.expr, function_source, namespace) -> set[str]:
+    """The variables whose object, or a part of it, *value* may evaluate to."""
+    if isinstance(value, ast.Name):
+        return {value.id}
+    if isinstance(value, (ast.Subscript, ast.Attribute, ast.Starred)):
+        return _value_roots(value.value, function_source, namespace)
+    if isinstance(value, ast.NamedExpr):
+        return _value_roots(value.value, function_source, namespace)
+    if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        return set().union(*(_value_roots(e, function_source, namespace) for e in value.elts))
+    if isinstance(value, ast.Dict):
+        return set().union(*(_value_roots(v, function_source, namespace) for v in value.values if v is not None))
+    if isinstance(value, ast.IfExp):
+        return _value_roots(value.body, function_source, namespace) | _value_roots(
+            value.orelse, function_source, namespace
+        )
+    if isinstance(value, ast.BoolOp):
+        return set().union(*(_value_roots(v, function_source, namespace) for v in value.values))
+    if isinstance(value, ast.Call):
+        returned = _returned_params(_callee_source(value.func, function_source, namespace))
+        if not returned:
+            return set()
+        positions, keywords = returned
+        roots: set[str] = set()
+        for index, arg in enumerate(value.args):
+            if isinstance(arg, ast.Starred) or index in positions:
+                roots |= _value_roots(arg.value if isinstance(arg, ast.Starred) else arg, function_source, namespace)
+        for keyword in value.keywords:
+            if keyword.arg is None or keyword.arg in keywords:
+                roots |= _value_roots(keyword.value, function_source, namespace)
+        return roots
+    return set()
+
+
+def _callee_source(func: ast.expr, function_source, namespace) -> str | None:
+    """The source of the notebook's or a module's function *func* names."""
+    try:
+        if isinstance(func, ast.Name):
+            return function_source(func.id)
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            module = namespace.get(func.value.id)
+            if isinstance(module, types.ModuleType):
+                fn = getattr(module, func.attr, None)
+                if isinstance(fn, types.FunctionType):
+                    return inspect.getsource(fn)
+    except Exception:  # noqa: BLE001 - no source: a new object, as for a library call
+        return None
+    return None
+
+
+@functools.lru_cache(maxsize=256)
+def _returned_params(source: str | None) -> tuple[frozenset[int], frozenset[str]] | None:
+    """``(positions, names)`` of the parameters the function in *source* may
+    return, or a part of; None when it returns none of them."""
+    if not source:
+        return None
+    try:
+        tree = ast.parse(inspect.cleandoc(source) if source[:1].isspace() else source)
+    except SyntaxError:
+        return None
+    fn = next((n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+    if fn is None:
+        return None
+    args = fn.args
+    positional = [a.arg for a in (*args.posonlyargs, *args.args)]
+    names = set(positional) | {a.arg for a in args.kwonlyargs}
+    returned: set[str] = set()
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Return) and sub.value is not None:
+            returned |= _value_roots(sub.value, lambda _name: None, {}) & names
+    if not returned:
+        return None
+    return frozenset(i for i, name in enumerate(positional) if name in returned), frozenset(returned)

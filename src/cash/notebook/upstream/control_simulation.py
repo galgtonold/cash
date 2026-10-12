@@ -120,7 +120,7 @@ class ControlSimulation:
         # ``update_mutated_variable_lineages`` moves it.
         if extra_outputs:
             extra_outputs |= bump_derived_lineages(
-                self.tracking_state.derivation_edges,
+                self.statements.edges,
                 virtual_lineage,
                 set(extra_outputs),
                 set(mutated_vars),

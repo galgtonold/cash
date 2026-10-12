@@ -48,6 +48,7 @@ from ..lineage_formula import (
 from ..restored_var import hashed_by_lineage
 from ..value_cutoff import ValueCutoff
 from .derivation_edges import (
+    assigned_names,
     bump_derived_lineages,
     clear_edges_for,
     detect_derivation_edges,
@@ -86,7 +87,11 @@ def _record_file_reads(
 
 
 def clear_rebound_edges(
-    tracking_state: "TrackingState", outputs: set[str], inputs: set[str], user_ns: dict[str, Any]
+    tracking_state: "TrackingState",
+    outputs: set[str],
+    inputs: set[str],
+    user_ns: dict[str, Any],
+    tree: ast.AST | None = None,
 ) -> None:
     """Drop the derivation-alias edges of the outputs a statement rebinds.
 
@@ -97,8 +102,12 @@ def clear_rebound_edges(
     it, so ``fig, ax = plt.subplots()`` would lose ``ax -> fig`` whenever the
     set happened to yield ``ax`` first.
     """
+    # ``x = x + [5]`` reads ``x`` but binds a new object all the same: the
+    # edges of the old one are dropped too (`assigned_names`); its share
+    # check links the new one again where it is shared.
+    rebound = assigned_names(tree) & outputs
     for var_name in outputs:
-        if var_name in user_ns and var_name not in inputs:
+        if var_name in user_ns and (var_name not in inputs or var_name in rebound):
             clear_edges_for(tracking_state.derivation_edges, var_name)
 
 
@@ -186,7 +195,7 @@ class StatementLineageBuilder:
         environment = recorded_reads_lineage_component(tracking_state, cache_key, code, user_ns)
         value_digests: dict[str, str] = {}
 
-        clear_rebound_edges(tracking_state, outputs, inputs | lineage_reads, user_ns)
+        clear_rebound_edges(tracking_state, outputs, inputs | lineage_reads, user_ns, tree)
 
         # The inputs as the statement read them, taken once before any output
         # is recorded. Read inside the loop, an output that is also an input

@@ -27,6 +27,7 @@ from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cel
 from ...source_norm import exact_source_digest
 from ...tracking.read_classification import stat_key
 from .._protocols import ShellProtocol
+from ..cache_key import statement_source_hash
 from ..callee_reach import one_walk, reached_user_code
 from ..control_structures import is_control_structure
 from ..lineage_formula import (
@@ -63,6 +64,11 @@ if TYPE_CHECKING:
 __all__ = ["VirtualLineage"]
 
 logger = logging.getLogger(__name__)
+
+
+def copy_edges(edges: dict[str, set[str]] | None) -> dict[str, set[str]] | None:
+    """A copy of the derivation edges *edges* that changes apart from them."""
+    return None if edges is None else {src: set(targets) for src, targets in edges.items()}
 
 
 def loop_derived_vars(vars_mutated_by_loops: set[str], simulation_trace: list[TraceEntry]) -> set[str]:
@@ -348,6 +354,11 @@ class VirtualLineage:
                 # alone so file staleness stays decoupled from code modification.
                 #
                 break
+            if self._share_records_changed(cached):
+                # A statement of the cell linked other edges when it ran
+                # since (`TrackingState.share_edge_records`): what it changed
+                # through them is asked again.
+                break
             if cached.vars_with_stale_files:
                 # Which names a changed file left stale is a fact of the time
                 # the cell was simulated, not of its code: a repair has
@@ -358,6 +369,16 @@ class VirtualLineage:
                 break
             first_changed_cell = idx + 1
         return first_changed_cell, cache_had_hash_mismatch
+
+    def _share_records_changed(self, cached: SimulationCacheEntry) -> bool:
+        """Whether the record of the edges a statement of *cached*'s cell
+        linked changed after the cell was simulated."""
+        changes = self.tracking_state.share_edge_changes
+        if cached.share_edge_generation > len(changes):
+            return True  # the session was reset after the snapshot
+        if cached.share_edge_generation == len(changes):
+            return False
+        return not cached.statement_hashes.isdisjoint(changes[cached.share_edge_generation :])
 
     def _check_lightweight_hash_cache(
         self,
@@ -391,6 +412,7 @@ class VirtualLineage:
             virtual_modules=set(cached_entry.virtual_modules),
         )
         sim.vars_left_by_failed_runs = dict(cached_entry.vars_left_by_failed_runs or {})
+        sim.share_edges = copy_edges(cached_entry.share_edges)
         trace, looped, stale = sim.trace, sim.vars_mutated_by_loops, sim.vars_with_stale_files
         for entry in self.cache.entries[:first_changed_cell]:
             trace.extend(entry.trace_segment)
@@ -614,6 +636,24 @@ class VirtualLineage:
         ax.set_xlabel(...)`` on one line got another key and lineage here, and
         every chart drawn that way disagreed.
         """
+        if sim.share_edges is None:
+            sim.share_edges = copy_edges(self.tracking_state.derivation_edges)
+        outer = self.statements.walk_edges
+        self.statements.walk_edges = sim.share_edges
+        try:
+            self._simulate_one_node(sim, i, node, cell_stmt_occurrence_counts, cell_file_deps, raw_cell)
+        finally:
+            self.statements.walk_edges = outer
+
+    def _simulate_one_node(
+        self,
+        sim: SimulationResult,
+        i: int,
+        node: ast.AST,
+        cell_stmt_occurrence_counts: dict[str, int],
+        cell_file_deps: dict[str, tuple[int, int, int]],
+        raw_cell: str | None,
+    ) -> None:
         try:
             if is_control_structure(node):
                 self.controls.simulate(node, sim)
@@ -746,6 +786,8 @@ class VirtualLineage:
                         vars_with_stale_files=set(),
                         cell_file_deps={},
                         vars_left_by_failed_runs=dict(sim.vars_left_by_failed_runs),
+                        share_edges=copy_edges(sim.share_edges),
+                        share_edge_generation=len(self.tracking_state.share_edge_changes),
                     )
                 )
                 return
@@ -824,6 +866,9 @@ class VirtualLineage:
                 stopped_at=stopped_at,
                 magic_generation=magic_generation,
                 vars_left_by_failed_runs=dict(sim.vars_left_by_failed_runs),
+                share_edges=copy_edges(sim.share_edges),
+                share_edge_generation=len(self.tracking_state.share_edge_changes),
+                statement_hashes=frozenset(statement_source_hash(entry.stmt_code) for entry in cell_trace_segment),
             )
         )
 

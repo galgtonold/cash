@@ -46,6 +46,11 @@ def _is_definition(code: str) -> bool:
     return len(body) == 1 and isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
 
 
+def _is_control_code(code: str) -> bool:
+    """Is *code* a loop, branch, ``with`` or ``try`` (simulated as one unit)?"""
+    return code.lstrip().startswith(("for ", "async for ", "while ", "if ", "with ", "async with ", "try:", "try "))
+
+
 def _imported_roots(code: str) -> set[str]:
     """The top-level modules an import-only statement imports."""
     try:
@@ -146,6 +151,7 @@ class ReexecutionPlanner:
             stmts_to_run_indices,
             simulation_trace,
             virtual_lineage,
+            loop_vars=sim.vars_mutated_by_loops | sim.vars_derived_from_loops | sim.loop_target_vars,
         )
 
         stmts_to_run_indices = self._schedule_conditional_producer_inits(
@@ -355,6 +361,7 @@ class ReexecutionPlanner:
         stmts_to_run_indices: list[int],
         simulation_trace: list,
         virtual_lineage: dict[str, str],
+        loop_vars: set[str] | frozenset[str] = frozenset(),
     ) -> list[int]:
         """Re-schedule all producers of a shadowed variable consumed at a stale version.
 
@@ -383,8 +390,7 @@ class ReexecutionPlanner:
             for v in entry.outputs:
                 producers.setdefault(v, []).append(i)
         shadowed = {v for v, idxs in producers.items() if len(idxs) > 1}
-        if not shadowed:
-            return stmts_to_run_indices
+        live_lineage = self.tracking_state.variable_lineage
 
         scheduled = set(stmts_to_run_indices)
         changed = True
@@ -401,6 +407,10 @@ class ReexecutionPlanner:
                 inputs, input_hashes = entry.inputs, (entry.input_hashes or {})
                 for v in inputs:
                     if v not in shadowed:
+                        if v in producers and v not in loop_vars:
+                            changed |= self._schedule_unshadowed_producer(
+                                simulation_trace, scheduled, i, v, input_hashes.get(v), live_lineage.get(v)
+                            )
                         continue
                     consumed = input_hashes.get(v)
                     final = virtual_lineage.get(v)
@@ -425,6 +435,37 @@ class ReexecutionPlanner:
                                     str(final)[:8],
                                 )
         return sorted(scheduled)
+
+    @staticmethod
+    def _schedule_unshadowed_producer(
+        simulation_trace: list, scheduled: set[int], i: int, v: str, consumed: str | None, live: str | None
+    ) -> bool:
+        """Schedule the one producer of *v* before scheduled statement *i*
+        when *i* consumed what that producer makes and the kernel holds
+        another version of *v* (*live*): a statement another pass brought
+        in reads *v* as it is now. ``rows = [[SCALE, 2], [3, 4]]``, brought
+        in for the shared list a later cell changes, ran on the ``SCALE`` of
+        an earlier edit. A loop's names are left to the loop rules, whose
+        lineages the kernel derives from values. Whether it was scheduled."""
+        if consumed is None or live is None or consumed == live:
+            return False
+        p = latest_producer(simulation_trace, v, before=i)
+        if p is None or p in scheduled:
+            return False
+        producer = simulation_trace[p]
+        if (producer.produced_lineages or {}).get(v) != consumed or _is_control_code(producer.stmt_code):
+            return False
+        scheduled.add(p)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[UPSTREAM] Version completion: scheduling producer [%s] of '%s' for [%s] (consumed %s, live %s)",
+                p,
+                v,
+                i,
+                consumed[:8],
+                live[:8],
+            )
+        return True
 
     def _schedule_conditional_producer_inits(
         self,

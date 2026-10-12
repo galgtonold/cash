@@ -113,6 +113,14 @@ class SimulationCacheEntry(NamedTuple):
     simulated, whose lineages come from what they last left; None for others."""
     vars_left_by_failed_runs: dict[str, int] | None = None
     """Snapshot of ``SimulationResult.vars_left_by_failed_runs`` after this cell."""
+    share_edges: dict[str, set[str]] | None = None
+    """Snapshot of ``SimulationResult.share_edges`` after this cell."""
+    share_edge_generation: int = 0
+    """How many changes ``TrackingState.share_edge_changes`` held when the
+    cell was simulated: a record of one of its statements changed since means
+    simulate it again."""
+    statement_hashes: frozenset[str] = frozenset()
+    """The source hashes of the cell's simulated statements."""
 
 
 @dataclass
@@ -245,6 +253,13 @@ class SimulationResult:
 
     vars_derived_from_loops: set[str] = field(default_factory=set)
     """Names built, directly or not, from a trusted loop's output."""
+
+    share_edges: dict[str, set[str]] | None = None
+    """The derivation edges as the statements simulated so far leave them
+    (``TrackingState.derivation_edges``' shape): each statement drops the
+    edges of the names it binds afresh and adds the ones its run linked
+    (``TrackingState.share_edge_records``). None until the first statement,
+    which starts from a copy of the runtime's."""
 
     vars_left_by_failed_runs: dict[str, int] = field(default_factory=dict)
     """Names a cell that raised part way left changed (``TrackingState.

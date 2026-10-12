@@ -158,6 +158,30 @@ def process_state_key(source_hash: str) -> str:
     return "procstate:" + source_hash
 
 
+def pyplot_draws_key(source_hash: str) -> str:
+    """Backend key for the names a statement changed by drawing through
+    pyplot when it last ran.
+
+    ``TrackingState.pyplot_draw_outputs`` holds it for the session. After a
+    restart pyplot holds no figure, so ``plt.plot(...)`` drew on nothing the
+    simulation could name, and running only a cell that reads ``fig``
+    rebuilt an empty figure.
+    """
+    return "pyplotdraw:" + source_hash
+
+
+def share_edges_key(source_hash: str) -> str:
+    """Backend key for the edges a statement linked when it last ran.
+
+    ``TrackingState.share_edge_records`` holds it for the session; the
+    upstream simulation replays it where the statement stands. The edges
+    themselves live in memory: after a restart nothing said that ``y = x``
+    made ``y.append(2)`` a change of ``x``, and running only ``print(x)``
+    rebuilt ``x`` without it.
+    """
+    return "shareedges:" + source_hash
+
+
 def carrier_advances_key(source_hash: str) -> str:
     """Backend key for which generators a statement drew from when it last ran.
 

@@ -64,7 +64,12 @@ from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
-from ..statement.derivation_edges import bump_derived_lineages
+from ..statement.derivation_edges import (
+    apply_share_record,
+    assigned_names,
+    bump_derived_lineages,
+    static_share_edges,
+)
 from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
@@ -164,6 +169,41 @@ class StatementLineage:
         #: generator to look at, and a draw no record describes is assumed
         #: from these (see ``_advanced_carriers``).
         self._generator_lineages: set[str] = set()
+        #: The edges as the statements simulated so far leave them
+        #: (``SimulationResult.share_edges``), while a forward simulation
+        #: walks; None outside one, where the runtime's own are read.
+        self.walk_edges: dict[str, set[str]] | None = None
+
+    @property
+    def edges(self) -> dict[str, set[str]]:
+        """The derivation edges a simulated statement bumps through: the
+        walk's (`walk_edges`), else the runtime's."""
+        return self.walk_edges if self.walk_edges is not None else self.tracking_state.derivation_edges
+
+    def share_record(self, stmt_code: str, tree: ast.AST | None) -> frozenset[tuple[str, str]]:
+        """The edges *stmt_code* linked when it last ran: this session's
+        record, else an earlier kernel's, kept in ``share_edge_records`` once
+        read; else, for a statement no run has recorded, what its text says
+        (`static_share_edges`)."""
+        source_hash = statement_source_hash(stmt_code)
+        known = self.tracking_state.share_edge_records
+        recorded = known.get(source_hash)
+        if recorded is not None:
+            return recorded
+        recorded = self.probe.share_edges(source_hash) if self.probe.cash_instance else None
+        if recorded is not None:
+            known.setdefault(source_hash, recorded)
+            return recorded
+        return static_share_edges(tree, self._function_source, self.shell.user_ns)
+
+    def relink(self, stmt_code: str, tree: ast.AST | None, rebound: set[str]) -> None:
+        """Leave the walk's edges as running *stmt_code* left the runtime's:
+        drop those of the names it binds afresh (*rebound*), then add the
+        ones its run linked (`share_record`). Outside a walk, nothing."""
+        edges = self.walk_edges
+        if edges is None or is_control_body(stmt_code):
+            return
+        apply_share_record(edges, rebound, self.share_record(stmt_code, tree))
 
     # -- What a statement reads and writes ------------------------------------
 
@@ -317,8 +357,16 @@ class StatementLineage:
         """The names *stmt_code* changed by drawing through pyplot when the
         runtime last ran it; else, where it has not, the names bound to the
         current figure and axes now (`pyplot_draw_names`)."""
-        recorded = self.tracking_state.pyplot_draw_outputs.get(statement_source_hash(stmt_code))
+        source_hash = statement_source_hash(stmt_code)
+        known = self.tracking_state.pyplot_draw_outputs
+        recorded = known.get(source_hash)
         if recorded is not None:
+            return recorded
+        # An earlier kernel's record: after a restart pyplot holds no figure
+        # to find them on (``pyplot_draws_key``).
+        recorded = self.probe.pyplot_draws(source_hash) if self.probe.cash_instance else None
+        if recorded is not None:
+            known.setdefault(source_hash, recorded)
             return recorded
         return pyplot_draw_names(tree, self.shell.user_ns)
 
@@ -608,7 +656,7 @@ class StatementLineage:
         # deterministic formula as the runtime and the miss path. Bumped vars are
         # threaded back so the caller can union them into ``outputs``.
         bumped = bump_derived_lineages(
-            self.tracking_state.derivation_edges,
+            self.edges,
             virtual_lineage,
             outputs,
             inputs,
@@ -807,6 +855,10 @@ class StatementLineage:
                 self._advance_rng(drawn, draw_key, virtual_lineage)
                 return StatementOutcome(advanced, 0.0, False, {})
 
+            # The edges as its run left them, before what it changed in
+            # place moves the names that share an object with it.
+            self.relink(stmt_code, tree, (outputs - inputs) | (assigned_names(tree) & outputs))
+
             outcome = self._apply_writes(
                 stmt_code,
                 tree,
@@ -955,7 +1007,7 @@ class StatementLineage:
         # producer of the aliased base and reschedules it on an isolated
         # re-run (the base's own cache is the stale pre-mutation value).
         bumped = bump_derived_lineages(
-            self.tracking_state.derivation_edges,
+            self.edges,
             virtual_lineage,
             written,
             inputs,
