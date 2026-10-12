@@ -131,22 +131,27 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @f41eb934, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:share_group @6b5f6133, cash/notebook/shared_objects.py:view_base_names @34cf5190, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:share_group @6b5f6133, cash/notebook/shared_objects.py:view_base_names @aea7d284, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
 When a statement leaves two names sharing an object, cash links them: an alias
 (`log = history`), a container holding another variable's object (`config =
 {"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
 (`train = data["train"]`), and a numpy view and the array it views (`head =
 big[:5]`). This holds when something that is not a variable holds the object
 too (a function default `def pick(row, cols=features)`, a class attribute, an
-`argparse.Namespace` or a `deque`): the variables are still linked. A loop,
+`argparse.Namespace` or a `deque`): the variables are still linked, and so are
+the class or the function holding it, so `slow(Registry.items)` re-runs when
+`rows.append(3)` changes a list the registry holds. A loop,
 `if` or `try` block that makes two names share an object (`for name, rows in
 pairs: splits[name] = rows`) links them when it ends. A change
 made later through either name moves both,
 so the cells that read the other one re-run, on Run All and on a cell re-run
-alike. A loop that changes the items it walks (`for r in rows: r.append(0)`)
-changes `rows`, and a pyplot call that draws on the current figure
+alike. Each statement keeps what it linked, so the links hold after a kernel
+restart, and a statement edited since it last ran links what its text says
+(`d2 = df`, `y = x[0]`, `runs = [cfg]`) until it runs. A loop that changes
+the items it walks (`for r in rows: r.append(0)`) changes `rows`, and a pyplot call that draws on the current figure
 (`plt.plot(...)`, `plt.title(...)`) changes the names bound to that figure and
-its axes; such a call runs every time.
+its axes, or to a list, tuple or dict holding them (`figs = {"main":
+plt.figure()}`); such a call runs every time.
 
 A change made through an object cash cannot link to a name is invisible, and
 the cells that read the name keep their cached results:
