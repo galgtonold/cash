@@ -509,7 +509,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @54a0286b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489 -->
 Only the arguments' part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before. The key function's own code is in the key

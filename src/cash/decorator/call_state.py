@@ -63,11 +63,6 @@ class BuiltKey(NamedTuple):
     #: The shortest ttl among the cached functions the key reached outside
     #: the dependency graph (`REACHED_TTLS`), or None.
     reached_ttl: int | None = None
-    #: The state segment as far as the program's own state decides it (the
-    #: function's code, helpers, closure, defaults, globals, class data,
-    #: environment and its ``self``'s class): what `KeyBuilder.inputs_state_now`
-    #: compares after the body.
-    inputs_state: str | None = None
 
 
 class Call:
@@ -83,7 +78,7 @@ class Call:
         "capture_watch",
         "cache_key",
         "state_hash",
-        "inputs_state",
+        "ledger",
         "args_hash",
         "call_args_hash",
         "metadata",
@@ -96,7 +91,8 @@ class Call:
         self.kwargs = kwargs
         self.metadata: CacheMetadata | None = None
         self.call_args_hash: str | None = None
-        self.inputs_state: str | None = None
+        #: What the key's state segment was made of, by name (`STATE_LEDGER`).
+        self.ledger: dict | None = None
         self.cash_overhead = 0.0
         self.outcome: Any = CACHE_MISS
 

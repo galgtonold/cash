@@ -27,7 +27,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .class_data import class_surface_functions, implicit_access_functions
-from .closure_fold import _CLASS_BODY_CELLS
+from .closure_fold import CLASS_BODY_CELLS
 from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
@@ -846,7 +846,7 @@ class CodeArgs:
         found = tuple(
             fn
             for fn in class_surface_functions(cls)
-            if getattr(fn, "__closure__", None) and any(n not in _CLASS_BODY_CELLS for n in fn.__code__.co_freevars)
+            if getattr(fn, "__closure__", None) and any(n not in CLASS_BODY_CELLS for n in fn.__code__.co_freevars)
         )
         namespaces = tuple(k.__dict__ for k in mro)
         self._capturing_memo[cls] = (namespaces, list(map(len, namespaces)), found)

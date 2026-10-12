@@ -194,6 +194,30 @@ def decorator_key(func_name: str, state_hash: str, dynamic_hash: str, args_hash:
     return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
 
 
+def _ledger_moved(before: dict, after: dict | None, watch: Any) -> bool:
+    """Does the ledger built after the body name a part that differs from
+    *before*, other than the ones the drift guard watches (*watch*)?"""
+    if after is None:
+        return True
+    watched = set(watch) if isinstance(watch, dict) else set()
+    for label, now in after.items():
+        if label == "@chain" or label not in before:
+            continue
+        then = before[label]
+        if now == then:
+            continue
+        if isinstance(label, tuple) and label[0] == "globals":
+            old_parts = dict(then)
+            for name, digest in now:
+                if name.partition("#")[0] in watched or name in watched:
+                    continue
+                if old_parts.get(name, digest) != digest:
+                    return True
+            continue
+        return True
+    return False
+
+
 class KeyBuilder:
     """The cache key of a call: the state segment folded from the function's
     code, closure, defaults, globals, files, RNG epoch and environment, then
@@ -229,8 +253,9 @@ class KeyBuilder:
         self._misses = misses
         self._notices = notices
 
-    def resolve(self, spec: CachedFunction, args: tuple, kwargs: dict) -> tuple[BuiltKey | Unkeyable, dict]:
-        """The key for a real call, or why it has none; and its `CAPTURE_WATCH`.
+    def resolve(self, spec: CachedFunction, args: tuple, kwargs: dict) -> tuple[BuiltKey | Unkeyable, dict, dict]:
+        """The key for a real call, or why it has none; its `CAPTURE_WATCH`;
+        and its `STATE_LEDGER`.
 
         `KeyBuilder.build`, with a ledger of what the state segment is made of
         (`STATE_LEDGER`). A call with no key -- a mocked helper, an argument
@@ -240,7 +265,7 @@ class KeyBuilder:
         func, func_name = spec.func, spec.name
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
         if unkeyable is not None:
-            return Unkeyable(unkeyable), {}
+            return Unkeyable(unkeyable), {}, {}
         ledger: dict = {}
         ledger_token = STATE_LEDGER.set(ledger)
         watch: dict = {}
@@ -251,17 +276,17 @@ class KeyBuilder:
             # `ClosureFold.fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
             # result.
-            return Unkeyable(_UNHASHABLE), watch
+            return Unkeyable(_UNHASHABLE), watch, ledger
         except UnhashableArgs as e:
             hashed_args, hashed_kwargs = e.keyed if e.keyed is not None else (args, kwargs)
             self._args.warn_unhashable_args(func_name, hashed_args, hashed_kwargs, e.args[0] if e.args else None)
-            return Unkeyable(_UNHASHABLE), watch
+            return Unkeyable(_UNHASHABLE), watch, ledger
         except KeyBuildFailed as e:
             self._notices.warn_once(CashCacheIneffectiveWarning, func_name, e.code, e.message, code=e.code, fix=e.fix)
-            return Unkeyable(_KEY_FAILED), watch
+            return Unkeyable(_KEY_FAILED), watch, ledger
         except Exception as e:  # noqa: BLE001 - any failure building the key means no key
             self._args.warn_key_build_failed(func_name, args, kwargs, e)
-            return Unkeyable(_KEY_FAILED), watch
+            return Unkeyable(_KEY_FAILED), watch, ledger
         finally:
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
@@ -269,7 +294,7 @@ class KeyBuilder:
             slot = (func_name, built.state_hash)
             if not self._misses.has_ledger(slot):
                 self._misses.keep_state_ledger(slot, ledger)
-        return built, watch
+        return built, watch, ledger
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
         """The state segment before anything the arguments decide: the
@@ -449,7 +474,6 @@ class KeyBuilder:
             ledger_note("@chain", chain)
             state_hash = self._code_state(spec, chain, note=True)
             state_hash = self._method_deps.fold_method_class_deps(func, args, state_hash)
-            inputs_state = state_hash
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `CodeArgs.fold_code_args` on the RAW arguments saw a class
@@ -513,20 +537,19 @@ class KeyBuilder:
         # (`PurityChecks.checked_arguments_hash`).
         call_args_hash = args_hash if spec.arg_key is None or spec.arg_key.key_fn is None else None
         ttls = [t for t in reached_ttls if t is not None]
-        return BuiltKey(
-            cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None, inputs_state
-        )
+        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
 
-    def inputs_state_now(self, spec: CachedFunction, args: tuple) -> str | None:
-        """`BuiltKey.inputs_state` built again now, after the body ran, or None
-        when it cannot be built.
+    def ledger_now(self, spec: CachedFunction, args: tuple) -> dict | None:
+        """The `STATE_LEDGER` of the key's state segment built again now,
+        after the body ran, or None when it cannot be built.
 
         Another thread can rebind or change in place a global the call read
         (a config reload in a service) while the body runs: the result then
         comes from the new value but would be stored under the key of the
-        old one. No ledger, no drift-guard watch, no warnings of its own: the
-        key build before the body already gave them.
+        old one. No drift-guard watch and no warnings of its own: the key
+        build before the body already gave them.
         """
+        ledger: dict = {}
         previous = getattr(PLAIN_CENSUS, "memo", None)
         PLAIN_CENSUS.memo = {}
         tokens = (
@@ -534,19 +557,20 @@ class KeyBuilder:
             (READS_FOLDED, READS_FOLDED.set({})),
             (REACHED_TTLS, REACHED_TTLS.set([])),
             (KEY_BUILD_DIGESTS, KEY_BUILD_DIGESTS.set({})),
-            (STATE_LEDGER, STATE_LEDGER.set(None)),
+            (STATE_LEDGER, STATE_LEDGER.set(ledger)),
             (CAPTURE_WATCH, CAPTURE_WATCH.set(None)),
             (_EXPLAINING, _EXPLAINING.set(True)),
         )
         try:
-            state_hash = self._code_state(spec, [])
-            return self._method_deps.fold_method_class_deps(spec.func, args, state_hash)
+            state_hash = self._code_state(spec, [], note=True)
+            self._method_deps.fold_method_class_deps(spec.func, args, state_hash)
         except Exception:  # noqa: BLE001 - cannot be built now: it cannot be shown unchanged
             return None
         finally:
             for var, token in reversed(tokens):
                 var.reset(token)
             PLAIN_CENSUS.memo = previous
+        return ledger
 
     def _check_iterators_unread(self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]]) -> None:
         """Raise `KeyBuildFailed` when building the key read an iterator
@@ -934,12 +958,11 @@ class CallRunner:
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
-        built, call.capture_watch = self._keys.resolve(spec, args, kwargs)
+        built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
         if isinstance(built, Unkeyable):
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
-        call.inputs_state = built.inputs_state
         if built.reached_ttl is not None:
             # A cached function the key reached as a value, not by a graph
             # edge: its ttl is per call, not per function.
@@ -1063,20 +1086,23 @@ class CallRunner:
             run.arg_carriers_moved = moved_carriers(run.arg_carriers_pre)
 
     def _inputs_moved_check(self, spec: CachedFunction, call: Call) -> Callable[[], bool] | None:
-        """For `ResultStore.refusal`: did what the key read of the program's
-        state change while the body ran? None when nothing else can have
-        changed it: one thread, and a body that never awaits.
+        """For `ResultStore.refusal`: did program state the key read change
+        while the body ran? None when nothing else can have changed it: one
+        thread, and a body that never awaits.
 
         Only another thread (or, for a coroutine, another task) can rebind a
         global the call read, or change it in place, without the body
-        doing so itself. Checking costs a second build of that part of the
-        key, on a miss only, so a single-threaded script does not pay it.
+        doing so itself. Checking costs a second build of the key's state
+        segment, on a miss only, so a single-threaded script does not pay
+        it. What the drift guard watches (`CAPTURE_WATCH`) is left to it:
+        the call itself moves a random generator it draws from, or a memo a
+        callable keeps.
         """
-        if call.inputs_state is None:
+        if not call.ledger:
             return None
         if threading.active_count() == 1 and not inspect.iscoroutinefunction(spec.func):
             return None
-        return lambda: self._keys.inputs_state_now(spec, call.args) != call.inputs_state
+        return lambda: _ledger_moved(call.ledger, self._keys.ledger_now(spec, call.args), call.capture_watch)
 
     def finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""

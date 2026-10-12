@@ -464,7 +464,9 @@ class PurityChecks:
         to observe -- so the cost is one hash on the path that just paid for a
         real computation.
 
-        Returns whether a watched value moved.
+        Returns whether a watched value of plain data moved (a global, a
+        captured variable, class data): not a random generator or what a
+        callable carries, which calling it moves.
         """
         if not watched:
             return False
@@ -512,12 +514,14 @@ class PurityChecks:
                 continue
             if after == before:
                 continue
-            moved = True
             if scope in ("carrier", "global") and rng_carrier_kind(value) is not None:
                 # A random generator the body drew from: a hit moves it on
                 # to where the body left it (`replay_rng_state`), so its
                 # state stays a true input and the next call keys on it.
                 continue
+            # Plain data the call read moved: by the call itself, or -- with
+            # other threads running -- maybe by another thread.
+            moved = moved or scope in ("global", "closure", "helper", "classdata")
             if scope in ("carrier", "binding", "instance", "classdata"):
                 # What a callable carries, moved by calling it: a library's
                 # own state (a generator advanced, a cache filled) or a memo

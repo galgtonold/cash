@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @54a0286b, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @71d192b2, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @7b65a646 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0bee994c, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @7b65a646 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -130,7 +130,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @54a0286b, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @73670489, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
@@ -151,7 +151,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4d2ab472 -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 

@@ -425,7 +425,7 @@ def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyB
 # helpers already. Hashing it raised KEY-UNHASHABLE-CAPTURE (it holds
 # descriptors), so every function reaching an annotated class -- any
 # dataclass -- ran uncached.
-_CLASS_BODY_CELLS = frozenset({"__class__", "__classdict__", "__classdictcell__"})
+CLASS_BODY_CELLS = frozenset({"__class__", "__classdict__", "__classdictcell__"})
 
 #: Stands for a cell that holds nothing yet, in `HelperIdentity._read_cells`.
 _EMPTY_CELL = object()
@@ -543,7 +543,7 @@ class HelperIdentity:
         written = self._captures.written_freevars(code)
         held = []
         for name, cell in zip(code.co_freevars, closure):
-            if name in written or name in _CLASS_BODY_CELLS:
+            if name in written or name in CLASS_BODY_CELLS:
                 continue
             try:
                 held.append(cell.cell_contents)
@@ -590,7 +590,7 @@ class HelperIdentity:
         unsafe: frozenset | None = None
         captures = []
         for name, cell in zip(code.co_freevars, closure):
-            if name in written or name in _CLASS_BODY_CELLS or name in learned:
+            if name in written or name in CLASS_BODY_CELLS or name in learned:
                 continue
             try:
                 value = cell.cell_contents
