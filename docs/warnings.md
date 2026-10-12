@@ -1406,7 +1406,9 @@ to it would not change the key. Nothing stale is served: the call is not
 cached.
 
 **What to do.** Call the function by name, or pass the function itself in as
-an argument, where its code reaches the key.
+an argument, where its code reaches the key. A module-level table of
+functions (`STRATEGIES[name](data)`) is keyed too; see
+[Dispatch tables](decorator-limitations.md#dispatch-tables).
 
 **When it is safe to ignore.** When the function is cheap enough to run every
 time.

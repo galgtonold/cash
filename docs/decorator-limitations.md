@@ -126,12 +126,74 @@ what that code reads, so editing it recomputes. Three cases are not covered:
   [Code in installed packages](#code-in-installed-packages).
 - **A closure or `lambda`** can't be pickled, so the call runs uncached. Pass a
   module-level function and give it the captured value as an argument.
-- **An implementation picked at run time** (`HANDLERS[name]()` on a dict built
-  inside the body, a plugin registry) is not reached. Name the candidates:
-  `@cash.cache(depends_on=[FastPath, ExactPath])`.
+- **An implementation picked from a table built inside the body**
+  (`handlers = {...}; handlers[name]()`), from an attribute of an argument
+  (`router.table[name]()`) or from `globals()[name]` is not reached. Name the
+  candidates: `@cash.cache(depends_on=[FastPath, ExactPath])`. A module-level
+  table or registry is reached; see
+  [Dispatch tables and strategy registries](#dispatch-tables).
 
 A marker class you pass but whose code never affects the result can be excluded
 with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decorators.md#cashopaque-leave-a-class-out-of-the-key).
+
+## Dispatch tables and strategy registries {#dispatch-tables}
+
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @f40e5656, cash/decorator/global_values.py:GlobalValues.data_callable_identity @5c403ff1 -->
+A cached function that picks a function from a module-level table caches
+correctly. The table can be a dict of functions, a registry a `@register`
+decorator fills, a dict of classes, or a `.get()` on any of them. cash reads
+the table as a global and keys it by the code of every function in it, so an
+edit to any of them recomputes:
+
+```python
+import cash
+
+def momentum(prices):
+    return [b - a for a, b in zip(prices, prices[1:])]
+
+def mean_reversion(prices):
+    mean = sum(prices) / len(prices)
+    return [mean - p for p in prices]
+
+STRATEGIES = {"momentum": momentum, "mean_reversion": mean_reversion}
+
+@cash.cache
+def signals_from_table(name, prices):
+    return STRATEGIES[name](prices)
+
+signals_from_table("momentum", [1, 2, 4])  # first call: runs
+signals_from_table("momentum", [1, 2, 4])  # cache hit
+```
+
+The cost is that editing `mean_reversion` also recomputes every `momentum`
+entry, and every hit hashes the whole table. For invalidation per strategy,
+pass the function itself to the cached function, through a thin front that
+is not cached:
+
+<!-- test:skip reason="a function passed as an argument is keyed through its module, which the harness's exec namespace is not; this fence is run as a script, across an edit, by tests/docs/test_dispatch_table_recipe.py instead" -->
+```python
+@cash.cache
+def _signals(strategy, prices):
+    return strategy(prices)
+
+def signals(name, prices):
+    return _signals(STRATEGIES[name], prices)
+
+signals("momentum", [1, 2, 4])        # runs
+signals("mean_reversion", [1, 2, 4])  # runs
+signals("momentum", [1, 2, 4])        # _signals hits
+```
+
+A function passed as an argument is keyed by its own code and the helpers it
+calls, so editing `mean_reversion` keeps the `momentum` entries. A hit costs
+about what a direct call to a cached strategy costs (around 0.7 ms with seven
+small pandas strategies, against about 2 ms for the table form).
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @90bfa6af -->
+Looking the function up by a name at run time, with `getattr(module, name)()`
+or `importlib.import_module(name)`, is not keyed: the function runs uncached
+with a [`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep) warning. Put
+the functions in a table instead.
 
 ## Code in installed packages
 
