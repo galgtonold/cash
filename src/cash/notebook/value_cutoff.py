@@ -22,6 +22,7 @@ the lineage a restarted kernel computes.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -46,6 +47,25 @@ def _compared(value: Any) -> bool:
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
     return getattr(getattr(value, "dtype", None), "kind", "") != "O"
+
+
+def _read_only(value: Any) -> str:
+    """Which of *value*'s arrays cannot be written: an array equal to an
+    earlier one but read-only (``df["a"].to_numpy()`` in pandas 3) behaves
+    otherwise (``arr[arr < 2] = 0`` raises), so it is not the same value.
+    One flag per array: ``"1"`` read-only, ``"0"`` writeable, ``"?"`` not
+    told."""
+    numpy = sys.modules.get("numpy")
+    if numpy is None:
+        return ""
+    if isinstance(value, numpy.ndarray):
+        arrays = [value]
+    else:
+        try:
+            arrays = list(value._mgr.arrays)  # a series' or frame's blocks
+        except Exception:  # noqa: BLE001 - not listed: told by what is seen
+            return "?"
+    return "".join(("0" if a.flags.writeable else "1") if isinstance(a, numpy.ndarray) else "?" for a in arrays)
 
 
 class LineageAliasStore(VersionedJsonStore[str]):
@@ -91,7 +111,7 @@ class ValueCutoff:
             return lineage
         if is_identity_fallback_hash(value, digest):
             return lineage
-        digest = f"{type(value).__name__}:{digest}"
+        digest = f"{type(value).__name__}:{_read_only(value)}:{digest}"
         earlier = self._by_digest.get(digest)
         if earlier is None:
             self._by_digest[digest] = resolve_lineage_alias(lineage)

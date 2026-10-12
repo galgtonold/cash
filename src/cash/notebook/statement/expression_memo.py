@@ -36,6 +36,8 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from ..shared_objects import output_history
+
 __all__ = ["ExpressionMemo", "MEMO_NAME_PREFIX"]
 
 #: The names a kept value is bound to while the statement runs.
@@ -142,13 +144,19 @@ def _arrays(value: Any) -> list[Any] | None:
 def _shares_with_a_variable(value: Any, namespace: Mapping[str, Any]) -> bool:
     """Whether *value* is, or may share memory with, a frame, series or
     array a variable holds: ``f(df)`` returning ``df`` or a view of it.
-    A copy in its place would not write through to the variable."""
+    A copy in its place would not write through to the variable.
+
+    IPython's output history (``Out``, and ``_``, ``__``, ``_<n>`` bound to
+    a value in it) is not such a variable: it holds the shown value itself.
+    A variable of the user's whose name starts with ``_`` (``_arr``) is."""
     mine = _arrays(value)
     if mine is None:
         return True
     numpy = sys.modules["numpy"]
+    _, held = output_history(namespace)
+    history = {name for holder, name in held if holder is namespace}
     for name, other in list(namespace.items()):
-        if name.startswith("_") or not _kept_type(other):
+        if name in history or not _kept_type(other):
             continue
         if other is value:
             return True
@@ -206,11 +214,19 @@ class ExpressionMemo:
         lineages: Mapping[str, str],
         namespace: Mapping[str, Any],
         key_of: Callable[[str], str | None],
+        computed_under: str | None = None,
+        reads_a_stream: Callable[[], bool] | None = None,
     ) -> None:
         """Keep *value*, which the bare expression *tree* computed in *seconds*.
 
         *key_of* gives an expression's key as a statement of its own, now;
-        the value is handed out only while that key stays the same."""
+        the value is handed out only while that key stays the same. It is
+        not kept when that key is no longer *computed_under*, the key the
+        statement had before it ran: running it moved something its key
+        folds in (``rng.random()`` on a generator a global holds), so
+        computing it again gives another value. Nor when *reads_a_stream*
+        says it reads an iterator or a generator its key does not follow
+        (``next(counter)``)."""
         if seconds < _MIN_SECONDS or not _kept_type(value):
             return
         if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
@@ -221,7 +237,9 @@ class ExpressionMemo:
         if not _holds_only_immutables(value) or _shares_with_a_variable(value, namespace):
             return
         statement_key = key_of(key[0])
-        if statement_key is None:
+        if statement_key is None or (computed_under is not None and statement_key != computed_under):
+            return
+        if reads_a_stream is not None and reads_a_stream():
             return
         try:
             kept = copy.deepcopy(value) if not hasattr(value, "copy") else value.copy()

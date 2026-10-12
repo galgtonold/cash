@@ -109,3 +109,34 @@ def test_what_the_function_printed_is_printed_again(cash_magics, mock_shell, tmp
     capsys.readouterr()
     run_cash_cell(cash_magics, cells[3], cells=cells)
     assert "building report" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("made", "draw"),
+    [
+        ("np.random.default_rng(0)", "src.random()"),
+        ("__import__('random').Random(0)", "src.random()"),
+        ("__import__('itertools').count(1)", "next(src)"),
+    ],
+    ids=["numpy-generator", "random-Random", "itertools-count"],
+)
+def test_a_function_drawing_from_a_generator_a_global_holds_draws_again(cash_magics, mock_shell, tmp_path, made, draw):
+    """Each call takes the next draw, so the second call is a new value and
+    the generator moves on twice, as in plain Python."""
+    log = tmp_path / "runs.log"
+    setup = _setup(log) + f"src = {made}\ndef g(d):\n    tick()\n    return d * {draw}\n"
+    _run(cash_magics, [setup, DATA, "g(df)", "kept = g(df)", "after = " + draw])
+    ns = mock_shell.user_ns
+    plain = {"np": ns["np"]}
+    exec(f"src = {made}\nfirst = {draw}\nsecond = {draw}\nthird = {draw}", plain)
+    assert ns["kept"].x.tolist() == (ns["df"].x * plain["second"]).tolist()
+    assert ns["after"] == plain["third"]
+    assert _runs(log) == 2
+
+
+def test_a_view_of_an_underscore_named_variable_still_writes_through(cash_magics, mock_shell, tmp_path):
+    """Only IPython's output history is passed over, not every ``_`` name."""
+    log = tmp_path / "runs.log"
+    setup = _setup(log) + "_arr = np.arange(10.0)\ndef every_other(a):\n    tick()\n    return a[::2]\n"
+    _run(cash_magics, [setup, "every_other(_arr)", "v = every_other(_arr)\nv[0] = 99.0"])
+    assert mock_shell.user_ns["_arr"][:3].tolist() == [99.0, 1.0, 2.0]
