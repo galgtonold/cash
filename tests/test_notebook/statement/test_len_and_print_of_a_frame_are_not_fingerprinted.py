@@ -84,3 +84,25 @@ def test_a_read_only_library_function_on_a_notebooks_own_type_is_a_candidate():
             return np.zeros(2)
 
     assert _candidates("np.mean(thing)", np=np, thing=Thing()) == frozenset({"thing"})
+
+
+def test_a_seaborn_plot_reads_its_data_without_a_fingerprint():
+    """``sns.countplot(x='action_name', data=temptastic)`` over 1.9 million
+    rows took 2.4 s plain against 6.2 s: the frame was hashed before and after."""
+    sns = pytest.importorskip("seaborn")
+    df = pd.DataFrame({"a": ["x", "y"]})
+    assert _candidates("sns.countplot(x='a', data=df)", sns=sns, df=df) == frozenset()
+    assert _candidates("sns.lineplot(x='a', y='a', data=df)", sns=sns, df=df) == frozenset()
+
+
+def test_a_call_to_a_name_never_bound_changes_nothing():
+    """``seaborn.countplot(data=df)`` with only ``sns`` imported fails on the
+    name before its arguments are evaluated: 0.03 s plain against 2.75 s."""
+    df = pd.DataFrame({"a": [1]})
+    assert _candidates("seaborn.countplot(x='a', data=df)", df=df) == frozenset()
+    assert _candidates("clean(df)", df=df) == frozenset()
+
+
+def test_a_builtin_named_call_is_still_judged_by_what_it_is():
+    df = pd.DataFrame({"a": [1]})
+    assert _candidates("setattr(df, 'x', 1)", df=df) == frozenset({"df"})

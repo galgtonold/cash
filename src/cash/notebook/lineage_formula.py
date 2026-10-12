@@ -198,12 +198,50 @@ def output_lineage(
     environment: str = "",
     value_component: str = "",
 ) -> str:
-    """The lineage hash of one output of a statement."""
+    """The lineage hash of one output of a statement.
+
+    A lineage whose value was seen to equal an earlier one's
+    (`value_cutoff`) is that one's: the runtime and the simulation both
+    reach it through here."""
     lineage_str = (
         f"{source_hash}:{':'.join(sorted(input_lineages))}{file_component}{func_component}{module_component}"
         f"{environment}{value_component}"
     )
-    return hashlib.sha256(lineage_str.encode("utf-8")).hexdigest()
+    return resolve_lineage_alias(hashlib.sha256(lineage_str.encode("utf-8")).hexdigest())
+
+
+#: Lineage -> the lineage of an earlier value with the same content
+#: (`value_cutoff.ValueCutoff`), for this process.
+_LINEAGE_ALIASES: dict[str, str] = {}
+
+
+def resolve_lineage_alias(lineage: str) -> str:
+    """*lineage*, or the earlier lineage its value was found equal to."""
+    return _LINEAGE_ALIASES.get(lineage, lineage)
+
+
+def record_lineage_alias(lineage: str, earlier: str) -> None:
+    """Name the value of *lineage* by *earlier* from now on, in this process
+    and, through the store `use_lineage_alias_store` set, the next."""
+    earlier = resolve_lineage_alias(earlier)
+    if lineage != earlier:
+        _LINEAGE_ALIASES[lineage] = earlier
+        if _ALIAS_STORE is not None:
+            _ALIAS_STORE.record(lineage, earlier)
+
+
+_ALIAS_STORE: Any = None
+
+
+def use_lineage_alias_store(store: Any) -> None:
+    """Read the aliases *store* kept (``value_cutoff.LineageAliasStore``),
+    and keep the new ones there: an entry stored under an alias is found by
+    the lineage a restarted kernel computes only if it knows the alias too."""
+    global _ALIAS_STORE
+    _ALIAS_STORE = store
+    if store is not None:
+        for lineage, earlier in store.aliases().items():
+            _LINEAGE_ALIASES.setdefault(lineage, earlier)
 
 
 def held_lineage(before: str, cache_key: str) -> str:

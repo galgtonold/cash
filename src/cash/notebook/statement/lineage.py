@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.module_symbols import static_attribute_reads
+from ...value_hash import compute_hash
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
@@ -45,6 +46,7 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..restored_var import hashed_by_lineage
+from ..value_cutoff import ValueCutoff
 from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,
@@ -120,6 +122,7 @@ class StatementLineageBuilder:
         self.function_tracker = function_tracker
         self._file_deps = file_deps
         self.compute_hash = compute_hash
+        self._cutoff = ValueCutoff()
 
     # ------------------------------------------------------------------
     # Public entries
@@ -214,6 +217,12 @@ class StatementLineageBuilder:
                 changed_module_environment(var_name, value, code, environment),
                 self._no_cache_value(value_digests, var_name, value) if no_cache else "",
             )
+            # A new object only: ``t = raw`` binds the input itself, which
+            # keeps the lineage the formula gives it.
+            if not no_cache and not any(user_ns.get(name) is value for name in inputs):
+                output_lineage_hash = self._cutoff.lineage_for(
+                    value, output_lineage_hash, self.compute_hash or compute_hash
+                )
 
             self._record_output(
                 tracking_state,
