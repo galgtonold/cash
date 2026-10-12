@@ -908,17 +908,18 @@ def _listing_folder(node: ast.AST, namespace: dict[str, Any] | None) -> str | No
         if not folder:
             return "/" if pattern.startswith("/") else os.curdir
         return folder
-    if method in ("glob", "rglob", "iterdir"):
+    if method in ("glob", "rglob", "iterdir", "walk"):
         return resolve_literal_path(node.func.value, namespace)
     return None
 
 
 #: Methods that list a folder: ``os.listdir`` / ``os.scandir``,
-#: ``glob.glob`` / ``glob.iglob``, ``Path.glob`` / ``rglob`` / ``iterdir``.
-_LISTING_METHODS: frozenset[str] = frozenset({"listdir", "scandir", "glob", "iglob", "rglob", "iterdir"})
+#: ``glob.glob`` / ``glob.iglob``, ``Path.glob`` / ``rglob`` / ``iterdir``,
+#: and ``os.walk`` / ``Path.walk`` (the folder and everything below it).
+_LISTING_METHODS: frozenset[str] = frozenset({"listdir", "scandir", "glob", "iglob", "rglob", "iterdir", "walk"})
 
 #: Text a statement that lists a folder contains (see ``_LISTING_METHODS``).
-LISTING_TEXT_MARKERS: tuple[str, ...] = ("listdir", "scandir", "glob", "iterdir")
+LISTING_TEXT_MARKERS: tuple[str, ...] = ("listdir", "scandir", "glob", "iterdir", "walk")
 
 
 def _listing_read_folder(call: ast.Call, namespace: dict[str, Any] | None) -> str | None:
@@ -928,7 +929,7 @@ def _listing_read_folder(call: ast.Call, namespace: dict[str, Any] | None) -> st
     if isinstance(func, ast.Attribute) and get_base_name(func.value) == "os":
         if not call.args and not call.keywords:
             return os.curdir
-        return _call_path_argument(call, 0, namespace, frozenset({"path"}))
+        return _call_path_argument(call, 0, namespace, frozenset({"path", "top"}))
     return _listing_folder(call, namespace)
 
 
@@ -1024,7 +1025,11 @@ def _read_call_path(
         # A folder's listing reads the folder: what is written into it
         # changes what the next listing finds.
         if method in _LISTING_METHODS:
-            return _listing_read_folder(call, namespace), True
+            folder = _listing_read_folder(call, namespace)
+            if folder is None and method == "walk" and get_base_name(func.value) != "os":
+                # `ast.walk(tree)`, `nx.walk(...)`: a walk of no folder.
+                return None, False
+            return folder, True
         # Path(PATH).read_text(...) / Path(PATH).read_bytes(...)
         if method in ("read_text", "read_bytes"):
             recv = func.value
