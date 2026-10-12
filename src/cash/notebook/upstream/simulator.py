@@ -865,6 +865,10 @@ class NotebookSimulator:
         # drops that state, which only its producers put back
         # (``ControlSimulation.collect_mutations``).
         sim.vars_derived_from_loops = loop_derived_vars(sim.vars_mutated_by_loops, sim.trace) - sim.virtual_modules
+        # A name a loop only may change is not loop-built: it is listed among
+        # the loop's outputs, so the walk above takes it in when the loop also
+        # reads an accumulator (`for k in grid: rows.append(score(raw, k))`).
+        sim.vars_derived_from_loops -= sim.vars_maybe_changed_by_loops - sim.vars_mutated_by_loops
 
         # A loop whose data changed underneath it (a new file, not a code
         # edit) loses the trust, and so does everything built from it.

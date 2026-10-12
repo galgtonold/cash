@@ -50,6 +50,7 @@ class ControlSimulation:
         vars_mutated_by_loops: set[str],
         virtual_modules: set[str],
         inputs_changed: Callable[[], bool] | None = None,
+        maybe_changed: set[str] | None = None,
     ) -> set[str]:
         """Collect control-body mutation info and return the mutated vars for this node.
 
@@ -61,6 +62,11 @@ class ControlSimulation:
         a downstream cell reading it would serve a pre-mutation value.
         Treated like a loop mutation so it is trusted in memory and its lineage is
         bumped, matching the runtime's ``update_lineage_after_execution``.
+
+        What a structure running on new inputs only may change (its watch
+        has not seen it change, *inputs_changed*) is returned too, so its
+        lineage moves, but added to *maybe_changed* instead of the trusted
+        *vars_mutated_by_loops*.
         """
         if isinstance(node, ast.For):
             loop_target_vars.update(extract_target_names(node.target))
@@ -77,8 +83,13 @@ class ControlSimulation:
         # What the runtime saw the loop change through a library call
         # (``heapq.heappush(h, x)``), as it recorded it; before it has run
         # this loop, every name such a call is handed.
-        mutated_vars |= self.statements.loop_watch_changes(node, virtual_modules, inputs_changed)
-        vars_mutated_by_loops.update(mutated_vars)
+        unseen: set[str] = set()
+        watched = self.statements.loop_watch_changes(node, virtual_modules, inputs_changed, unseen)
+        unseen -= mutated_vars  # changed by the text itself: trusted as before
+        mutated_vars |= watched
+        if maybe_changed is not None:
+            maybe_changed |= unseen
+        vars_mutated_by_loops.update(mutated_vars - unseen)
         # A local module the structure sets state on moves on too, as the
         # runtime's ``update_lineage_after_execution`` moves it; but it is
         # not trusted in memory as a loop's accumulator is: a reload drops
@@ -87,7 +98,7 @@ class ControlSimulation:
         # Drawing through pyplot changes the current figure and axes, as the
         # runtime took them (``pyplot_draws``).
         mutated_vars |= self.statements.pyplot_draw_outputs(code, node)
-        vars_mutated_by_loops.update(mutated_vars)
+        vars_mutated_by_loops.update(mutated_vars - unseen)
         recorded = self.statements.recorded_module_state(code)
         if recorded is not None:
             return mutated_vars | recorded[0]
@@ -222,6 +233,7 @@ class ControlSimulation:
             # Taken from the lineages the loop is entered with: `apply`
             # has already moved what it binds (its target).
             lambda: not self._outcome_holds(stmt_code, input_hashes),
+            sim.vars_maybe_changed_by_loops,
         )
 
         # CRITICAL FIX: Update virtual lineage for variables mutated inside loops.

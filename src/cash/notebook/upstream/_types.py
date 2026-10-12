@@ -113,6 +113,8 @@ class SimulationCacheEntry(NamedTuple):
     simulated, whose lineages come from what they last left; None for others."""
     vars_left_by_failed_runs: dict[str, int] | None = None
     """Snapshot of ``SimulationResult.vars_left_by_failed_runs`` after this cell."""
+    vars_maybe_changed_by_loops: set[str] | None = None
+    """Snapshot of ``SimulationResult.vars_maybe_changed_by_loops`` after this cell."""
 
 
 @dataclass
@@ -232,6 +234,13 @@ class SimulationResult:
 
     vars_with_stale_files: set[str] = field(default_factory=set)
     """Names built from a file that changed since it was read."""
+
+    vars_maybe_changed_by_loops: set[str] = field(default_factory=set)
+    """Names a control structure running on new inputs may change through
+    code whose effect is unknown, which the runtime watches as it runs it
+    (``StatementLineage.loop_watch_changes``). Their lineages move, but
+    memory is never trusted for them as for a loop's accumulator: nothing
+    says the loop changed them."""
 
     loop_target_vars: set[str] = field(default_factory=set)
     """Loop iteration variables (``item`` in ``for item in data``)."""

@@ -226,6 +226,7 @@ class StatementLineage:
         node: ast.AST,
         virtual_modules: set[str],
         inputs_changed: Callable[[], bool] | None = None,
+        unseen_out: set[str] | None = None,
     ) -> set[str]:
         """What the loop *node* changed through code its text cannot decide
         (``loop_watch``): what the runtime recorded when it ran this loop
@@ -237,8 +238,9 @@ class StatementLineage:
         The record only says what earlier runs changed: on other inputs
         (*inputs_changed*) the loop may change a name it never changed
         before (it first ran on no items), which the runtime then sees as
-        it runs it. So such a run counts every name the loop hands to such
-        code; at worst a reader below is planned again and hits."""
+        it runs it. So such a run counts every name the loop hands straight
+        to such code; at worst a reader below is planned again and hits.
+        Those names, beyond the record, are added to *unseen_out*."""
         if isinstance(node, (ast.If, ast.Try)):
             return self.branch_verdict_changes(node, virtual_modules)
         if not isinstance(node, WATCHED_STRUCTURES):
@@ -256,6 +258,8 @@ class StatementLineage:
         if unseen:
             unseen -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, self._function_source)
         if unseen and inputs_changed is not None and inputs_changed():
+            if unseen_out is not None:
+                unseen_out |= unseen
             return unseen | set(verdict)
         return set(verdict)
 

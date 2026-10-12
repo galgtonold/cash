@@ -391,6 +391,7 @@ class VirtualLineage:
             virtual_modules=set(cached_entry.virtual_modules),
         )
         sim.vars_left_by_failed_runs = dict(cached_entry.vars_left_by_failed_runs or {})
+        sim.vars_maybe_changed_by_loops = set(cached_entry.vars_maybe_changed_by_loops or ())
         trace, looped, stale = sim.trace, sim.vars_mutated_by_loops, sim.vars_with_stale_files
         for entry in self.cache.entries[:first_changed_cell]:
             trace.extend(entry.trace_segment)
@@ -824,6 +825,7 @@ class VirtualLineage:
                 stopped_at=stopped_at,
                 magic_generation=magic_generation,
                 vars_left_by_failed_runs=dict(sim.vars_left_by_failed_runs),
+                vars_maybe_changed_by_loops=set(sim.vars_maybe_changed_by_loops),
             )
         )
 
