@@ -29,6 +29,7 @@ yourself. Figures on this page are derived from the repository by
 | Check | When | Platforms | What it runs |
 |---|---|---|---|
 | Unit | every push and pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` |
+| Polars 1 | every push and pull request | Linux, Python 3.12 | the unit tests named for polars, on the newest polars 1 (the others run on polars 2) |
 | Integration core set | every push and pull request | Linux, Python 3.10 to 3.14 | about 340 integration tests (`tools/test_selection/core_set.txt`), chosen to cover every line, feature and step sequence the whole suite covers |
 | Integration, full | nightly | Linux, Python 3.12, in 6 parallel shards | the whole integration suite |
 | Docs | every push and pull request | Linux, Python 3.12 | the docs suite, and a check that the derived numbers are current |
