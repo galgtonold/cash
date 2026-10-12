@@ -67,7 +67,9 @@ def test_a_method_with_new_code_is_run_again(tmp_path, monkeypatch, cash_instanc
 def test_what_the_new_code_calls_is_keyed(tmp_path, monkeypatch, cash_instance):
     text = "K = 1\ndef inner(v):\n    return v + K\ndef helper(v):\n    return v * 10\n"
     mod = _module(tmp_path, monkeypatch, "swap_reach_mod", text)
-    run = _caller(tmp_path, monkeypatch, cash_instance, "swap_reach_user", "from swap_reach_mod import helper", "helper(x)")
+    run = _caller(
+        tmp_path, monkeypatch, cash_instance, "swap_reach_user", "from swap_reach_mod import helper", "helper(x)"
+    )
 
     assert run(3) == 30
     new = _swap_code(tmp_path, mod, text.replace("return v * 10", "return inner(v) * 20"))
