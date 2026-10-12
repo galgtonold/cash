@@ -52,6 +52,11 @@ class TrackingState:
     # writer from one that already ran.
     # W: StatementProcessor, ControlStructureProcessor. R: ReexecutionPlanner.
     executed_write_stmt_codes: set[str] = field(default_factory=set)
+    # The statements of those seen REPLACING a file of the user's as they ran
+    # (``write_observer``), whatever their code spells: a helper's
+    # ``gzip.open(p, 'wt')``. The upstream writer scheduler counts them as
+    # writers; an append-only one is not re-fired (its rows would double).
+    observed_writer_codes: set[str] = field(default_factory=set)
 
     # Code of a statement that wrote a file this session -> the lineages its
     # inputs had when it last ran. The simulation compares them with the

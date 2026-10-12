@@ -1920,6 +1920,10 @@ class StatementProcessor:
             ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 self.tracking_state.executed_write_input_lineages[code] = run.entry_lineages
+                if written and kept_writes(written, None, execution.appended_paths):
+                    self.tracking_state.observed_writer_codes.add(code)
+                else:
+                    self.tracking_state.observed_writer_codes.discard(code)
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it): ``executed_write_stmt_codes`` is empty after
