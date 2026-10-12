@@ -86,15 +86,16 @@ cannot be pickled
 
 ### Cache folder
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
+<!-- claim: cash/_location.py:project_anchor @db681147, cash/config/resolve.py:_anchor_cache_dir @edf1f957 -->
 The cache folder (the cache directory) is `.cash` at your project root. So
 `python /srv/etl/run.py` uses the same cache whether you, cron or a CI step
 started it, from any directory. cash finds the folder from the running script:
 
 - **Your project root** is the first directory above the script that holds a
-  `setup.py`, a `setup.cfg`, a `.git`, or a `pyproject.toml` that declares a
+  `setup.py`, a `setup.cfg`, a `.git`, a `pyproject.toml` that declares a
   project (a `[project]`, `[build-system]`, `[tool.poetry]` or `[tool.cash]`
-  table).
+  table), or a `.cash` cache folder cash already made (below your home
+  folder).
 - **A script with no project above it** caches next to itself.
 - **An installed tool run from outside any project** caches per user, in the
   platform's cache folder.
@@ -298,8 +299,10 @@ changed. The second list is what cash does not see, and what to do about it.
     - The **clock**, a random UUID, or the whole environment
       (`os.environ.copy()`): pass the value as an argument
       ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)).
-    - **Code picked at run time** (`getattr(mod, name)()`, a dict built in the
-      body): name it with `depends_on=`.
+    - **Code picked at run time** from a dict built in the body: name it with
+      `depends_on=`. A `getattr(mod, name)()`, `importlib.import_module` or
+      `eval` runs uncached
+      ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)).
     - A file read by a reader cash does not know: use `file_depends_on=`.
     - The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...):
       changing them keeps entries.
@@ -774,14 +777,14 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
-| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Raises `CashImpureFunctionError`, because edits to that code can't be tracked |
+| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked. `strict=True` raises `CashImpureFunctionError` |
 
 Logging calls are not side effects for this purpose. A special method or a
 property of an object of your class that the body reads by a global name

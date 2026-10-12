@@ -29,6 +29,7 @@ from ..analysis.purity_report import (
     ISSUE_UNTRACKABLE_DEP,
     PurityIssue,
     PurityReport,
+    describe_untrackable,
 )
 from ..analysis.purity_visitor import ARGUMENT_MUTATION_NOT_STORED
 from ..effect_observer import EffectObserver, observed_label
@@ -1023,7 +1024,7 @@ class PurityChecks:
             # strict=True keeps every issue in the one exception it raises:
             # there, every issue is a hard stop and splitting the report
             # would hide half of it.
-            _raise_untrackable(func_name, issues)
+            issues = self._warn_untrackable(func_name, issues, per_report)
             issues = self._warn_ambient_reads(func_name, issues, per_report)
             issues = self._warn_network_reads(func_name, issues, per_report)
         if not issues:
@@ -1087,6 +1088,31 @@ class PurityChecks:
                         break
             rewritten.append(issue)
         return rewritten
+
+    def _warn_untrackable(self, func_name: str, issues: list, per_report: bool) -> list:
+        """Warn about the run-time lookups among *issues*; return the rest.
+
+        ``getattr(module, name)()``, ``importlib.import_module(name)``,
+        ``eval``: the code it lands on is named by a run-time value, so the
+        key cannot capture it and an edit to it would serve a stale result.
+        The function runs uncached (`FunctionRegistry.refresh_helper_bindings`
+        says so per call); this is the one warning that tells the user why.
+        """
+        untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
+        if untrackable:
+            issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_UNTRACKABLE_DEP]
+            self._static_flagged.add(func_name)
+            self._notices.warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                _warning_slot("untrackable", format_issues_summary(untrackable), per_report),
+                f"{func_name} runs uncached: it picks code by a run-time name "
+                f"({describe_untrackable(untrackable)}), which the cache key cannot capture.",
+                code="KEY-UNTRACKABLE-DEP",
+                fix="call the function by name, or pass it in as an argument; "
+                "`# @cash:assume-safe` on that line caches anyway.",
+            )
+        return issues
 
     def _warn_ambient_reads(self, func_name: str, issues: list, per_report: bool) -> list:
         """Warn about the ambient reads among *issues*; return the rest.
@@ -1187,29 +1213,3 @@ def _warning_slot(kind: str, findings: str, per_report: bool) -> str:
     if not per_report:
         return kind
     return f"{kind}:{hashlib.sha256(findings.encode('utf-8')).hexdigest()[:16]}"
-
-
-def _raise_untrackable(func_name: str, issues: list) -> None:
-    """Raise when *issues* include an untrackable dependency.
-
-    Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
-    dynamic dispatch, importlib.import_module) RAISE by default, even in
-    the ordinary "warn" mode: cash cannot see an edit to a dependency it
-    resolves from a runtime value, so a cached result can go silently
-    stale, and caching correctness can no longer be guaranteed. The user
-    must acknowledge the risk with assume_safe=True (the ``silent`` mode,
-    which never reaches here) to cache anyway.
-    """
-    untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
-    if untrackable:
-        untrackable_summary = format_issues_summary(untrackable)
-        raise CashImpureFunctionError(
-            f"@cash.cache on {func_name}: a dependency is resolved from a "
-            f"runtime value, so cash cannot tell when it changes and a cached "
-            f"result could be silently stale. Caching correctness cannot be "
-            f"guaranteed for this function.\nPut `# @cash:assume-safe` on "
-            f"the line named below (or `with cash.assume_safe():` around "
-            f"it) to accept the risk for that statement alone, pass "
-            f"@cash.cache(assume_safe=True) to waive the whole function, or "
-            f"refactor to a statically-named call.\n{untrackable_summary}"
-        )

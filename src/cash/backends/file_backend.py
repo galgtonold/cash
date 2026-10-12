@@ -18,6 +18,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from cash._location import announce_new_cache_dir
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
@@ -296,6 +297,10 @@ class FileBackend(CacheBackend):
         #: Set when the cache directory turned out to be unusable. Every public
         #: operation then answers as an empty cache would: a miss, a no-op write.
         self._unusable = False
+        #: Say where the folder is when this backend creates it
+        #: (CACHE-DIR-NEW). Set by the factory for the default location only:
+        #: a folder the user named is where they expect it.
+        self.announce_creation = False
         _LIVE_BACKENDS.add(self)
 
     def _after_fork_in_child(self) -> None:
@@ -333,6 +338,8 @@ class FileBackend(CacheBackend):
                 os.makedirs(self.cache_dir, exist_ok=True)
                 if created:
                     self.stamp.ignore_in_git()
+                    if self.announce_creation:
+                        announce_new_cache_dir(self.cache_dir)
             except OSError as exc:
                 # A directory that cannot even be created (read-only volume, a
                 # path that is a file) turns this tier off, loudly, instead of

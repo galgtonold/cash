@@ -337,3 +337,36 @@ def test_a_lint_only_pyproject_below_the_project_is_not_a_project(tmp_path):
     assert os.path.normcase(os.path.realpath(cache_dir)) == os.path.normcase(os.path.realpath(root / "shared_cache")), (
         cache_dir
     )
+
+
+def test_an_existing_cache_above_the_script_marks_the_project(tmp_path):
+    """A folder with no project marker (a lint-only pyproject.toml, no .git)
+    whose ``.cash`` a script in it made: a script in a subfolder used to
+    start a second, cold cache beside itself."""
+    proj = tmp_path / "proj"
+    scratch = proj / "scratch"
+    scratch.mkdir(parents=True)
+    (proj / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\n", encoding="utf-8")
+    (proj / "job.py").write_text(textwrap.dedent(_SCRIPT), encoding="utf-8")
+    (scratch / "job.py").write_text(textwrap.dedent(_SCRIPT), encoding="utf-8")
+
+    first = _run(proj / "job.py", cwd=proj)
+    assert first["ran"] and first["cache_dir"] == str(proj / ".cash"), first
+    assert (proj / ".cash" / "CACHE_VERSION").is_file()
+
+    second = _run(scratch / "job.py", cwd=scratch)
+    assert second["cache_dir"] == str(proj / ".cash"), second
+    assert not (scratch / ".cash").exists()
+
+
+def test_a_cache_in_the_home_directory_does_not_mark_a_project(tmp_path):
+    """A stray cache in the home directory must not claim every script under it."""
+    home = tmp_path / "home"
+    scratch = home / "scratch"
+    scratch.mkdir(parents=True)
+    (home / ".cash").mkdir()
+    (home / ".cash" / "CACHE_VERSION").write_text("2", encoding="utf-8")
+    (scratch / "job.py").write_text(textwrap.dedent(_SCRIPT), encoding="utf-8")
+
+    run = _run(scratch / "job.py", cwd=scratch, env_extra={"HOME": str(home), "USERPROFILE": str(home)})
+    assert run["cache_dir"] == str(scratch / ".cash"), run

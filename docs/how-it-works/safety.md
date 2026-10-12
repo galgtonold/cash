@@ -15,8 +15,8 @@ sending a request. The two engines handle this differently.
     hit skips the effect. Network reads get a
     [`KEY-NETWORK-READ`](../warnings.md#key-network-read) advisory that `ttl=`
     silences. A body that picks code from a run-time value (`eval`, `exec`,
-    `getattr(obj, name)()`, `importlib.import_module`) raises
-    `CashImpureFunctionError`. [How `@cash.cache`
+    `getattr(obj, name)()`, `importlib.import_module`) runs uncached with
+    [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep). [How `@cash.cache`
     decides](decorator-path.md#side-effects) has the details, and the
     [decorator guide](../decorator.md#side-effects) covers `assume_safe`.
 

@@ -16,9 +16,10 @@ ISSUE_IMPURE_CALL = "impure_call"
 ISSUE_DYNAMIC_PATTERN = "dynamic_pattern"
 # Patterns where a dependency is resolved from a runtime value, so cash cannot
 # see an edit to it and a cached result can go silently stale: eval/exec/compile,
-# getattr(obj, name)() dynamic dispatch, importlib.import_module. Caching
-# correctness cannot be guaranteed, so these RAISE by default (opt in with
-# assume_safe=True). Distinct from ISSUE_DYNAMIC_PATTERN, which stays advisory.
+# getattr(obj, name)() dynamic dispatch, importlib.import_module. The key
+# cannot capture them, so such a function runs UNCACHED with a warning
+# (KEY-UNTRACKABLE-DEP); strict=True raises, assume_safe=True caches anyway.
+# Distinct from ISSUE_DYNAMIC_PATTERN, which stays advisory.
 ISSUE_UNTRACKABLE_DEP = "untrackable_dep"
 ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
@@ -170,6 +171,13 @@ class PurityReport:
         """True when no issues were flagged."""
         return not self.issues
 
+    @property
+    def untrackable(self) -> tuple[PurityIssue, ...]:
+        """The findings whose dependency is looked up at run time
+        (``ISSUE_UNTRACKABLE_DEP``): the key cannot capture them, so a call
+        reaching one runs uncached unless the function is waived."""
+        return tuple(i for i in self.issues if i.kind == ISSUE_UNTRACKABLE_DEP)
+
     def format(self) -> str:
         """Human-readable multi-line summary."""
         if self.is_clean:
@@ -189,3 +197,17 @@ def _file_part(issues: list[PurityIssue]) -> str:
     """`` (path/to/file.py)`` for a group of issues, or nothing."""
     name = next((i.filename for i in issues if i.filename), "")
     return f" ({name})" if name else ""
+
+
+def describe_untrackable(issues: tuple[PurityIssue, ...] | list[PurityIssue]) -> str:
+    """One short phrase naming the first run-time lookup in *issues* (and how
+    many more), for a one-line warning: ``getattr(obj, name)(...) in m.f line 5``."""
+    first = issues[0]
+    text = first.description
+    if first.where:
+        text += f" in {first.where}"
+    if first.line:
+        text += f" line {first.line}"
+    if len(issues) > 1:
+        text += f" (+{len(issues) - 1} more)"
+    return text

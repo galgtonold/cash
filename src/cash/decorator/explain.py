@@ -147,6 +147,7 @@ class MissKind(str, Enum):
     MOCKED = "a helper is a mock"
     UNWALKABLE = "helpers could not all be keyed"
     HANDED = "handed a function that changes state"
+    UNTRACKABLE = "code picked by a run-time name"
     RAISED = "raised"
 
     __str__ = str.__str__

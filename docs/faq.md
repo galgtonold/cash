@@ -73,13 +73,14 @@ link to the page that has the details.
 
 ## Decorator
 
-??? question "Why did `@cash.cache` raise `CashImpureFunctionError`?"
-    The function picks what to run at runtime (`eval`, `exec`,
-    `getattr(obj, name)()`, `importlib.import_module`), or calls a helper
-    that `exec` or `eval` built from a string, so cash cannot tell when a
-    result goes stale. Put `# @cash:assume-safe` on that line (or
-    `with cash.assume_safe():` around it), pass `assume_safe=True` for the
-    whole function, or call the function by name.
+??? question "Why does my `@cash.cache` function run uncached?"
+    If it warns [`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep), it
+    picks what to run at run time (`eval`, `exec`, `getattr(obj, name)()`,
+    `importlib.import_module`), or calls a helper that `exec` or `eval` built
+    from a string, so cash cannot tell when a result goes stale. Call the
+    function by name or pass it in as an argument, put `# @cash:assume-safe`
+    on that line (or `with cash.assume_safe():` around it), or pass
+    `assume_safe=True` for the whole function.
     See [Side effects](decorator.md#side-effects).
 
 ??? question "Why does a cache hit not print anything?"

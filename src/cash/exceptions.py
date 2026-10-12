@@ -139,18 +139,17 @@ class CacheKeyComputationError(CashError):
 
 
 class CashImpureFunctionError(CashError):
-    """Decorator: raised on the first call when cash cannot cache the
-    function safely.
+    """Decorator: raised on the first call of a ``strict=True`` function
+    with any purity finding. The message lists each reason.
 
-    By default, raised when the function (or a helper in the same module)
-    picks what to call or import at run time, in a way cash cannot track:
-    ``getattr(obj, name)()``, ``importlib.import_module(...)``, ``eval``,
-    ``exec``. With ``strict=True``, also raised for any other purity
-    finding. The message lists each reason.
+    Without ``strict=True`` the same findings warn instead; a function that
+    picks what to call or import at run time (``getattr(obj, name)()``,
+    ``importlib.import_module(...)``, ``eval``) runs uncached with
+    ``KEY-UNTRACKABLE-DEP``.
 
-    Fix: call the code directly, mark an audited helper with `pure`, or
-    accept the risk: for some lines with ``with cash.assume_safe():``, for
-    the whole function with ``@cash.cache(assume_safe=True)``.
+    Fix: fix the finding, mark an audited helper with `pure`, or accept the
+    risk: for some lines with ``with cash.assume_safe():``, for the whole
+    function with ``@cash.cache(assume_safe=True)``.
     """
 
 

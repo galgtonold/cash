@@ -40,13 +40,18 @@ def _cash(tmp_path):
 
 
 def _run(c, fn, *args):
-    """Return ('raised' | 'warned' | '', message)."""
+    """Return ('raised' | 'uncached' | 'warned' | '', message).
+
+    'uncached': KEY-UNTRACKABLE-DEP, the function runs uncached."""
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         try:
             c.cache(fn)(*args)
         except CashImpureFunctionError as exc:
             return "raised", str(exc)
+        uncached = [w for w in rec if "KEY-UNTRACKABLE-DEP" in str(w.message)]
+        if uncached:
+            return "uncached", str(uncached[0].message)
         hits = [w for w in rec if issubclass(type(w.message), CashImpurityWarning)]
     return ("warned", str(hits[0].message)) if hits else ("", "")
 
@@ -174,7 +179,7 @@ def test_eval_hidden_in_a_body_local_dict_is_not_missed(tmp_path):
         table = {"run": eval}
         return table["run"]("4 + 4")
 
-    assert _run(_cash(tmp_path), sneaky)[0] in ("warned", "raised")
+    assert _run(_cash(tmp_path), sneaky)[0] in ("warned", "uncached")
 
 
 def test_a_lookup_through_a_TEMPORARY_warns_like_the_direct_form(tmp_path):
@@ -207,8 +212,8 @@ def test_rebinding_to_a_known_function_clears_the_taint(tmp_path):
     assert _run(_cash(tmp_path), rebound, "a")[0] == ""
 
 
-# ------------------------------------------- the documented raise-vectors
-def test_eval_and_exec_still_raise(tmp_path):
+# ------------------------------------------- the documented uncached-vectors
+def test_eval_and_exec_run_uncached(tmp_path):
     def f_eval():
         return eval("1 + 1")
 
@@ -217,11 +222,11 @@ def test_eval_and_exec_still_raise(tmp_path):
         return 1
 
     c = _cash(tmp_path)
-    assert _run(c, f_eval)[0] == "raised"
-    assert _run(c, f_exec)[0] == "raised"
+    assert _run(c, f_eval)[0] == "uncached"
+    assert _run(c, f_exec)[0] == "uncached"
 
 
-def test_exec_reached_through_a_constant_getattr_also_raises(tmp_path):
+def test_exec_reached_through_a_constant_getattr_also_runs_uncached(tmp_path):
     """`getattr(builtins, "exec")` is a CONSTANT name, so the dynamic-dispatch
     rule does not fire -- yet it reaches the very thing that rule exists to
     stop. Measured executing arbitrary source in silence before this."""
@@ -233,5 +238,5 @@ def test_exec_reached_through_a_constant_getattr_also_raises(tmp_path):
         return 5
 
     verdict, message = _run(_cash(tmp_path), sneaky)
-    assert verdict == "raised"
+    assert verdict == "uncached"
     assert "exec" in message

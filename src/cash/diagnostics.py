@@ -189,6 +189,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CACHE-THRASH",  # at the cap, evicting within writes of storing
         "CACHE-CLEAR-INCOMPLETE",  # cache_clear() could not remove some entries,
         # which are still served
+        "CACHE-DIR-NEW",  # cash created its default cache folder, and says where
+        # (and names an existing cache nearby)
         "CACHE-DIR-UNWRITABLE",  # the cache directory cannot be written at all,
         # so nothing reaches disk this run
         "CACHE-NOT-WORTH-BYTES",  # more disk per second saved than cash will spend
@@ -251,6 +253,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # hashed, so changing it invalidates nothing
         "KEY-UNRESOLVED-CALL",  # a call goes through a property or __getattr__
         # cash does not run, so the function it reaches is not in the key
+        "KEY-UNTRACKABLE-DEP",  # the body picks code by a run-time name
+        # (getattr(m, name)(), import_module, eval); the function runs uncached
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
         # ran the cell uncached

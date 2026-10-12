@@ -6,10 +6,13 @@ shell -- because the working directory alone made the cache a property of
 where you were standing rather than of what you were running. `config` asks
 `project_anchor` for the default cache location and the ``pyproject.toml`` to
 read, and `installed_entry_point_cache_dir` for a tool run outside any project.
+The file backend calls `announce_new_cache_dir` when it creates that default
+folder.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
@@ -17,8 +20,11 @@ from pathlib import Path
 
 from .install_paths import is_installed_path
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "PROJECT_MARKERS",
+    "announce_new_cache_dir",
     "default_project_config_path",
     "default_user_config_path",
     "installed_entry_point_cache_dir",
@@ -152,16 +158,45 @@ def _marks_project(directory: Path, marker: str) -> bool:
         return False
 
 
-def _project_root_above(start: Path) -> Path | None:
+def _home() -> Path | None:
+    try:
+        return Path.home().resolve()
+    except (OSError, RuntimeError):  # no home directory to speak of
+        return None
+
+
+def _holds_existing_cache(directory: Path, home: Path | None) -> bool:
+    """Does *directory* hold a cache cash made (``.cash/CACHE_VERSION``)?
+
+    A notebook folder, or a project whose only ``pyproject.toml`` configures a
+    linter, has no other marker, and a script in a subfolder of it started a
+    second, cold cache beside itself. Never the filesystem root, the home
+    directory or a directory above it: a stray ``~/.cash`` must not claim
+    every script under the home directory.
+    """
+    from .backends.cache_dir import VERSION_FILENAME
+
+    if directory.parent == directory:
+        return False
+    if home is not None and home.is_relative_to(directory):
+        return False
+    return (directory / ".cash" / VERSION_FILENAME).is_file()
+
+
+def _project_root_above(start: Path, *, existing_cache: bool = False) -> Path | None:
     """The first directory at or above *start* holding a project marker.
 
     A ``pyproject.toml`` counts when it describes a project -- ``[project]``,
     ``[build-system]``, ``[tool.poetry]`` -- or configures cash; one that only
-    configures a linter does not.
+    configures a linter does not. With *existing_cache*, so does a cache cash
+    already made there (`_holds_existing_cache`).
     """
+    home = _home() if existing_cache else None
     for d in [start, *start.parents]:
         try:
             if any(_marks_project(d, marker) for marker in PROJECT_MARKERS):
+                return d
+            if existing_cache and _holds_existing_cache(d, home):
                 return d
         except OSError:
             continue
@@ -252,6 +287,9 @@ def project_anchor() -> Path:
 
     The anchor walks up from the RUNNING SCRIPT to its project root, so
     ``python /srv/etl/run.py`` uses the same cache from anywhere on the machine.
+    A directory holding a cache cash made (``.cash/CACHE_VERSION``) counts as
+    a project root on that walk, below the home directory, so a script in
+    ``proj/scratch`` uses ``proj/.cash`` when ``proj`` has no other marker.
     Without a script (a notebook, a REPL) or without a project marker above it,
     the answer is the cwd or the script's own directory respectively -- both
     stable for the case they describe.
@@ -274,7 +312,7 @@ def project_anchor() -> Path:
             if root is not None:
                 return root
         return Path.cwd()
-    return _project_root_above(start) or start
+    return _project_root_above(start, existing_cache=True) or start
 
 
 def _running_console_script() -> str | None:
@@ -409,3 +447,74 @@ def default_user_config_path() -> Path:
     if xdg:
         return Path(xdg) / "cash" / "config.toml"
     return Path.home() / ".config" / "cash" / "config.toml"
+
+
+#: The cache folders this process announced (CACHE-DIR-NEW): once each.
+_ANNOUNCED: set[str] = set()
+
+
+def _existing_cache_near(cache_dir: str) -> str | None:
+    """A cache cash made (``.cash/CACHE_VERSION``) in the cwd or a folder above
+    it, or above *cache_dir*: the one this run probably meant to use.
+
+    A few ``stat`` calls: ancestors only, up to the home directory, and never
+    the filesystem root.
+    """
+    from .backends.cache_dir import VERSION_FILENAME
+
+    own = Path(cache_dir).resolve()
+    home = _home()
+    starts = [own.parent]
+    try:
+        starts.append(Path.cwd().resolve())
+    except OSError:
+        pass
+    for start in starts:
+        for d in [start, *start.parents]:
+            if d.parent == d or (home is not None and d != home and home.is_relative_to(d)):
+                break
+            candidate = d / ".cash"
+            if candidate != own and (candidate / VERSION_FILENAME).is_file():
+                return str(candidate)
+    return None
+
+
+def announce_new_cache_dir(cache_dir: str) -> None:
+    """Say, once per folder and process, that cash just created its default
+    cache folder, and where (CACHE-DIR-NEW).
+
+    A run that lands somewhere new starts cold, which looks exactly like a
+    cache that does not work. Naming the folder, and an existing cache nearby,
+    makes that visible. Not in an interactive shell: a notebook's cache is the
+    folder it runs in, which is what its user expects.
+    """
+    key = os.path.normcase(os.path.abspath(cache_dir))
+    if key in _ANNOUNCED or interactive_shell_is_running():
+        return
+    _ANNOUNCED.add(key)
+    try:
+        shown = os.path.relpath(cache_dir)
+        if shown.startswith(os.pardir):
+            shown = os.path.abspath(cache_dir)
+    except ValueError:  # another drive
+        shown = os.path.abspath(cache_dir)
+    script_dir = _running_script_dir()
+    beside_script = (
+        script_dir is not None
+        and Path(cache_dir).resolve().parent == script_dir
+        and _project_root_above(script_dir) is None
+    )
+    reason = " (no project found above the script)" if beside_script else ""
+    nearby = _existing_cache_near(cache_dir)
+    fix = (
+        f"{nearby} exists -- set CASH_CACHE_DIR or [tool.cash] cache_dir to use it."
+        if nearby
+        else "set CASH_CACHE_DIR or [tool.cash] cache_dir to cache elsewhere."
+    )
+    from .diagnostics import warn_diagnostic
+    from .exceptions import CashWarning
+
+    try:
+        warn_diagnostic(CashWarning, "CACHE-DIR-NEW", f"new cache at {shown}{reason}.", fix)
+    except Exception:  # a notice must not become the failure
+        logger.debug("Could not announce %s", cache_dir, exc_info=True)

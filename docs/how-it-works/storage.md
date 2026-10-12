@@ -8,7 +8,7 @@ and a cache folder on disk, which survives a restart.
 
 ## Where the cache folder is
 
-<!-- claim: cash/_location.py:project_anchor @46e903a7, cash/_location.py:installed_entry_point_cache_dir @76af1800, cash/config/schema.py:CashConfig.cache_dir == ".cash" -->
+<!-- claim: cash/_location.py:project_anchor @db681147, cash/_location.py:installed_entry_point_cache_dir @76af1800, cash/config/schema.py:CashConfig.cache_dir == ".cash" -->
 Unless you set it, the folder is called `.cash`, and where it goes depends on
 what is running:
 
@@ -16,8 +16,10 @@ what is running:
 
     - **A script** (`python train.py`): in the project root above the script,
       which is the first folder up that holds a `pyproject.toml`, `setup.py`,
-      `setup.cfg` or `.git`. Without one, next to the script. The same script
-      uses the same cache whichever directory you run it from.
+      `setup.cfg` or `.git`, or a `.cash` cache folder cash already made there
+      (not in your home folder or above it). Without one, next to the script.
+      The same script uses the same cache whichever directory you run it
+      from.
     - **Installed code run inside a project** (`pytest`, a console script,
       `python -m` of an installed package): the root of the project you are
       in.
@@ -31,6 +33,11 @@ what is running:
 
     The kernel's working directory, which Jupyter and VS Code set to the
     notebook's folder. Every notebook in a folder shares one `.cash`.
+
+<!-- claim: cash/_location.py:announce_new_cache_dir @5750057e -->
+When a script creates the default folder, cash says where, once
+([`CACHE-DIR-NEW`](../warnings.md#cache-dir-new)), and names an existing cache
+nearby if there is one.
 
 To choose the folder yourself, set `CASH_CACHE_DIR`, `cache_dir` under
 `[tool.cash]` in `pyproject.toml`, or `Cash(cache_dir=...)`. A relative path

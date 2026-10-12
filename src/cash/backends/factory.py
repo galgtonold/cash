@@ -61,6 +61,12 @@ _FROM_CONFIG: weakref.WeakSet[CacheBackend] = weakref.WeakSet()
 def build_backend_from_config(config: CashConfig) -> CacheBackend:
     """The backend *config* describes. See the module docstring."""
     tiers = [_build(kind, dict(settings)) for kind, settings in tier_specs(config)]
+    if not {"cache_dir", "tiers"} & set(config._origins):
+        # The default folder: where it lands is cash's choice, so cash says
+        # so when it creates it (CACHE-DIR-NEW).
+        for tier in tiers:
+            if isinstance(tier, FileBackend):
+                tier.announce_creation = True
     backend = build_tiered(tiers, config) if config.tiers or len(tiers) > 1 else tiers[0]
     _FROM_CONFIG.add(backend)
     return backend

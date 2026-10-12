@@ -67,12 +67,21 @@ print(f(1))
         "operator.methodcaller(ATTR, x)(json)",
     ],
 )
-def test_a_computed_module_or_attribute_is_refused_like_import_module(tmp_path, call):
-    """What `importlib.import_module(name)` and `getattr(obj, name)(x)` get."""
+def test_a_computed_module_or_attribute_runs_uncached_like_import_module(tmp_path, call):
+    """What `importlib.import_module(name)` and `getattr(obj, name)(x)` get:
+    run uncached with KEY-UNTRACKABLE-DEP, and raise under strict=True."""
     c = cash.Cash(cache_dir=str(tmp_path / "c"))
     f = c.cache(_function_from_source(tmp_path, f"def f(x):\n    return {call}\n"))
-    with pytest.raises(CashImpureFunctionError, match="non-constant name"):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         f(1)
+    messages = [str(w.message) for w in caught if "KEY-UNTRACKABLE-DEP" in str(w.message)]
+    assert messages and "non-constant name" in messages[0], [str(w.message) for w in caught]
+    strict = cash.Cash(cache_dir=str(tmp_path / "s")).cache(strict=True)(
+        _function_from_source(tmp_path, f"def f(x):\n    return {call}\n")
+    )
+    with pytest.raises(CashImpureFunctionError, match="non-constant name"):
+        strict(1)
 
 
 def test_a_call_through_a_computed_globals_lookup_is_warned_about(tmp_path):
