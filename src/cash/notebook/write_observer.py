@@ -24,6 +24,7 @@ import contextvars
 import inspect
 import os
 import sys
+import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -103,6 +104,30 @@ def _appended_by_user_code() -> bool:
     return frame is not None and is_user_code_file(frame.f_code.co_filename)
 
 
+#: A code object -> ``None`` when it is not a function of the user's, else
+#: ``(waived lines, whole body)`` (`code_waived_lines`). Asked for every frame
+#: of every write; the code objects of a run are few.
+_frame_verdicts: dict[types.CodeType, tuple[frozenset[int], bool] | None] = {}
+
+
+def _frame_verdict(code: types.CodeType) -> tuple[frozenset[int], bool] | None:
+    verdict = _frame_verdicts.get(code, _UNSEEN)
+    if verdict is _UNSEEN:
+        user = is_user_code_file(code.co_filename)
+        if user and code.co_name == "<module>":
+            verdict = _TOP  # the cell (or script) itself: nothing of the user's above
+        else:
+            verdict = code_waived_lines(code) if user else None
+        if len(_frame_verdicts) > 4096:
+            _frame_verdicts.clear()
+        _frame_verdicts[code] = verdict
+    return verdict  # type: ignore[return-value]
+
+
+_UNSEEN = object()
+_TOP: tuple[frozenset[int], bool] = (frozenset(), False)
+
+
 def _write_waived() -> bool:
     """Did the user waive the write being audited? Any function of theirs on
     its way -- the one that opened the file, or one calling it from a line
@@ -113,12 +138,15 @@ def _write_waived() -> bool:
     frame = sys._getframe(1)  # cash's own frames are no user code: walked past
     while frame is not None:
         code = frame.f_code
-        if code.co_name != "<module>" and is_user_code_file(code.co_filename) and not _passes_through(frame):
+        verdict = _frame_verdict(code)
+        if verdict is _TOP:
+            return False
+        if verdict is not None and not _passes_through(frame):
+            lines, whole = verdict
+            if whole or frame.f_lineno in lines:
+                return True
             func = frame.f_globals.get(code.co_name)
             if func is not None and is_pure(func) and getattr(inspect.unwrap(func), "__code__", None) is code:
-                return True
-            lines, whole = code_waived_lines(code)
-            if whole or frame.f_lineno in lines:
                 return True
         frame = frame.f_back
     return False
