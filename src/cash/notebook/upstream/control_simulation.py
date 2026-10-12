@@ -11,7 +11,8 @@ from __future__ import annotations
 import ast
 import builtins
 import logging
-from collections.abc import Callable
+from collections import ChainMap
+from collections.abc import Callable, Mapping
 
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
@@ -232,7 +233,7 @@ class ControlSimulation:
             sim.virtual_modules,
             # Taken from the lineages the loop is entered with: `apply`
             # has already moved what it binds (its target).
-            lambda: not self._outcome_holds(stmt_code, input_hashes),
+            lambda: not self._outcome_holds(stmt_code, input_hashes, ChainMap(input_hashes, virtual_lineage)),
             sim.vars_maybe_changed_by_loops,
         )
 
@@ -319,7 +320,7 @@ class ControlSimulation:
                 input_hashes[inp] = self.tracking_state.variable_lineage[inp]
         return inputs, input_hashes
 
-    def _recorded_outcome(self, stmt_code: str, virtual_lineage: dict[str, str]) -> ControlOutcome | None:
+    def _recorded_outcome(self, stmt_code: str, virtual_lineage: Mapping[str, str]) -> ControlOutcome | None:
         """The outcome the runtime recorded for *stmt_code*: this session's,
         else an earlier kernel's that may still be trusted."""
         recorded = self.tracking_state.control_outcomes.get(exact_source_digest(stmt_code))
@@ -340,13 +341,15 @@ class ControlSimulation:
         except Exception:  # any doubt keeps the split
             logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
             return False
-        return self._outcome_holds(stmt_code, input_hashes)
+        return self._outcome_holds(stmt_code, input_hashes, sim.virtual_lineage)
 
-    def _outcome_holds(self, stmt_code: str, input_hashes: dict[str, str]) -> bool:
+    def _outcome_holds(self, stmt_code: str, input_hashes: dict[str, str], lineage: Mapping[str, str]) -> bool:
         """Whether the outcome recorded for *stmt_code* was left by a run on
-        these *input_hashes*, with every file behind it unchanged."""
+        these *input_hashes*, with every file behind it unchanged. *lineage*
+        answers the names the record is looked up by (an earlier kernel's
+        outcome is keyed by more than the inputs)."""
         try:
-            recorded = self._recorded_outcome(stmt_code, input_hashes)
+            recorded = self._recorded_outcome(stmt_code, lineage)
             return (
                 recorded is not None
                 and recorded[0] == input_hashes
