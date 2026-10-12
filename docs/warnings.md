@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f00be38f -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @611288f6 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -603,7 +603,7 @@ Each line names the path or address and the line of your code that led to it.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @fb45e2ba, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @a43210ad -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @a43210ad -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @dda2b327, cash/_plain_data.py:identity_changed @c64ac6c0 -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, except those
@@ -639,7 +639,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @16819389 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @6c1ea7cb -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -650,7 +650,10 @@ it stays in the key, and a hit moves it on as the computed call did.
 
 **Why it matters.** A hit skips the change, so a counter stops counting. cash
 also stops folding that variable into the key, so a change you make to it
-elsewhere no longer invalidates the entry.
+elsewhere no longer invalidates the entry. While other threads are running,
+cash cannot tell the call's change from another thread's, so that call's
+result is not stored either
+([STORE-STATE-CHANGED](#store-state-changed)).
 
 **What to do.** Pass the value in as an argument and return the new value. If
 updating shared state is the function's job, cache only the expensive part.
@@ -835,7 +838,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4d2ab472 -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1224,7 +1227,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4d2ab472 -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -1283,7 +1286,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @df605903, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @1f843e29, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The message names the type.
@@ -1787,6 +1790,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
+| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
 ### STORE-CHUNK-FAILED {#store-chunk-failed}
@@ -1925,6 +1929,26 @@ interrupted write.
 
 **When it is safe to ignore.** Usually. Look into it if it persists after
 `cache_clear()`.
+
+### STORE-STATE-CHANGED {#store-state-changed}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._inputs_moved_check @2dd33f3d, cash/decorator/runtime.py:KeyBuilder.ledger_now @355ab3b5 -->
+**What happened.** A global, a class attribute or other program state the
+function's key read changed while the call was running: another thread
+reloaded a config, say. The result was returned but not stored. The check
+runs only while other threads are running (or for a coroutine function).
+
+**Why it matters.** The key was built from the old value and the body may have
+used the new one, so storing it could serve the wrong result to every later
+call with the old value.
+
+**What to do.** Nothing, if the state was changed on purpose: the next call
+keys on the new value and caches normally. If calls overlap a writer all the
+time, pass the value in as an argument.
+
+**When it is safe to ignore.** Once, after a reload.
 
 ### STORE-UNTRACKED-SOURCE {#store-untracked-source}
 

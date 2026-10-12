@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.helper_code import is_mock
 from ..exceptions import CashImpurityWarning
 from .arg_hashing import is_opaque
 from .call_state import CAPTURE_WATCH
@@ -184,12 +185,62 @@ def class_data_items(
         for name, value in list(vars(base).items()):
             if _is_class_machinery(name) or name in skip:
                 continue
-            if isinstance(value, (types.FunctionType, type, types.ModuleType)) or wraps_code(value):
+            if isinstance(value, types.ModuleType) or is_cash_wrapper(value):
                 continue
-            if is_cash_wrapper(value):
-                continue
+            if isinstance(value, (types.FunctionType, type)) or wraps_code(value):
+                # The user's own code is keyed by the class's code channels.
+                # Library code is not: ``dtype = np.float32`` or
+                # ``rounder = staticmethod(math.floor)``, rebound at run time
+                # or picked from the environment, is data to the class.
+                if _library_code(value) is None:
+                    continue
             items.append((f"{prefix}.{name}", value))
     return items
+
+
+def _library_code(value: Any) -> Any:
+    """The class or function a class attribute names when it is code that is
+    not the user's (`class_data_items`): *value* itself, or what a
+    staticmethod, classmethod or property wraps. None for the user's own
+    code, a mock, cash's wrapper, or a descriptor around nothing callable."""
+    inner = value
+    if not isinstance(value, (types.FunctionType, type)):
+        for attr in ("__func__", "fget", "func"):
+            candidate = getattr(value, attr, None)
+            if callable(candidate):
+                inner = candidate
+                break
+        else:
+            return None
+    if is_mock(inner) or is_cash_wrapper(inner):
+        return None
+    try:
+        if is_user_code_object(inner):
+            return None
+    except Exception:  # noqa: BLE001 - undecidable: the class channels key it as code
+        return None
+    return inner
+
+
+def _data_value(value: Any) -> Any:
+    """What the class data fold hashes for a class attribute: a staticmethod,
+    classmethod or property is the function it wraps (``math.floor`` for
+    ``staticmethod(math.floor)``), the same object on every read. Only names
+    `class_data_items` kept as data get here, so no user code is unwrapped."""
+    kind = type(value)
+    if kind is staticmethod or kind is classmethod:
+        return value.__func__
+    if kind is property:
+        return value.fget
+    return value
+
+
+def _kept_by_identity(value: Any) -> bool:
+    """Is *value*'s digest fixed while it is the same object: immutable data,
+    or a library class or function (named by its ``module:qualname``)?"""
+    return is_immutable_capture(value) or (
+        isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType)) and not is_user_code_object(value)
+    )
 
 
 class ClassDataFold:
@@ -459,7 +510,7 @@ class ClassDataFold:
             namespace = vars(base)
             for name in names:
                 if name in namespace:
-                    items.append((f"{prefix}.{name}", namespace[name]))
+                    items.append((f"{prefix}.{name}", _data_value(namespace[name])))
         return items
 
     def class_data_digest(self, cls: type, only: str | None = None) -> tuple[str | None, list[str]]:
@@ -502,7 +553,7 @@ class ClassDataFold:
             if not kept:
                 return None, unhashable
             digest = hashlib.sha256(repr(sorted(kept.items())).encode("utf-8")).hexdigest()
-        if only is None and not unhashable and all(is_immutable_capture(value) for _, value in items):
+        if only is None and not unhashable and all(_kept_by_identity(value) for _, value in items):
             self._class_data_memo[cls] = (tuple(items), digest)
         return digest, unhashable
 

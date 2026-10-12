@@ -348,6 +348,12 @@ class GlobalsFold:
                 return
         plain = plain_data_kind(v)
         if not self._fold_value(fold, name, v, plain):
+            if plain is None:
+                # Warned: its own state is not keyed. The code it carries
+                # still is, and what that code captured: an instance of a
+                # class made in a factory (`make_lookup(table)`) pickles by
+                # no name, and its methods read `table` from a closure.
+                fold.parts.extend(self._held_code_parts(fold, name, v))
             return
         if plain is not None:
             # Numbers, strings, dates in builtin containers: no class, no

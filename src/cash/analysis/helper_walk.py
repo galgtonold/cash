@@ -37,6 +37,7 @@ from .._annotation_refs import annotation_referents
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import getsourcelines, own_source
 from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
@@ -133,6 +134,7 @@ class HelperWalk:
         self._helper_hashes: dict[str, str] = {}
         self._helper_paths: dict[str, BindingPath] = {}
         self._helper_objects: dict[str, Any] = {}
+        self._walked_code: list[tuple[Any, tuple]] = []
         self._opaque: list[str] = []
         #: Names already given to a walked callable.
         self._names: set[str] = set()
@@ -269,6 +271,7 @@ class HelperWalk:
         # alone does not.
         self._helper_hashes[qualname] = callable_identity(func)
         self._record_resolution_path(func, qualname)
+        self._record_walked_code(func)
 
         try:
             tree = ast.parse(src)
@@ -313,6 +316,17 @@ class HelperWalk:
         self._queue_attribute_values(body)
         self._queue_annotation_refs(func, entry.depth, entry.reported)
 
+    def _record_walked_code(self, func: Any) -> None:
+        """Remember the code *func* ran when walked (`PurityReport.walked_code`)."""
+        owner = getattr(func, "__func__", func)  # a bound method is made anew per read
+        codes = code_objects_of(owner)
+        if not codes:
+            return
+        try:
+            self._walked_code.append((weakref.ref(owner), codes))
+        except TypeError:  # not weak-referenceable
+            pass
+
     def _walk_without_source(self, entry: _Entry, qualname: str) -> None:
         """A callable whose source cannot be read: an opaque leaf for PURITY,
         since what it does cannot be seen.
@@ -331,6 +345,7 @@ class HelperWalk:
             self._opaque.append(qualname)
         self._helper_hashes[qualname] = compiled_identity(func)
         self._record_resolution_path(func, qualname)
+        self._record_walked_code(func)
         if isinstance(func, types.FunctionType):
             self._queue_bytecode_refs(entry)
 
@@ -733,6 +748,7 @@ class HelperWalk:
             unbound_names=tuple(self._unbound),
             waived_bindings=frozenset(self._waived_paths - self._unwaived_paths),
             unkeyable=tuple(self._unkeyable),
+            walked_code=tuple(self._walked_code),
             environment_reads=frozenset(self._environment_reads),
             cached_callees=tuple(self._cached_callees),
             unwalkable=self._unwalkable,

@@ -14,6 +14,7 @@ import ast
 import dataclasses
 import importlib
 import importlib.util
+import operator
 import sys
 import types
 import weakref
@@ -21,6 +22,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..install_paths import in_own_package, top_package
+from ..loaded_code import code_objects_of
 from ..tracking.function_tracker import is_local_module
 from .purity_report import PurityReport
 
@@ -175,7 +177,8 @@ def resolve_binding(module_name: str, chain: tuple[str, ...]) -> Any:
 
 def bindings_changed(report: PurityReport) -> bool:
     """Does any call-site binding the report followed hold a different object
-    now, or has the module bound a name a call site found unbound?
+    now, has the module bound a name a call site found unbound, or does a
+    walked function or class run other code than when it was walked?
 
     A module that has left ``sys.modules`` proves nothing either way and is
     skipped. Identity, not equality: a re-created function with the same
@@ -190,6 +193,13 @@ def bindings_changed(report: PurityReport) -> bool:
     for module_name, name in report.unbound_names:
         module = sys.modules.get(module_name)
         if module is not None and name in (getattr(module, "__dict__", None) or ()):
+            return True
+    for ref, codes in report.walked_code:
+        walked = ref()
+        if walked is None:
+            continue
+        now = code_objects_of(walked)
+        if len(now) != len(codes) or not all(map(operator.is_, now, codes)):
             return True
     return False
 

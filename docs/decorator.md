@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @fb45e2ba, cash/decorator/store.py:ResultStore.store @a012adf1, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @a012adf1, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -232,7 +232,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903, cash/decorator/code_args.py:CodeArgs.fold_code_args @03aa0bbc -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903, cash/decorator/code_args.py:CodeArgs.fold_code_args @988e96f1 -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -264,8 +264,10 @@ changed. The second list is what cash does not see, and what to do about it.
       pipeline), and what that code reads, its environment reads included:
       a handler in a dispatch table, a step in a list (a `lambda` too), a
       property or dunder method of a settings object. Also code your project
-      installs on an argument's library class: a pandas accessor, a polars
-      namespace, a function patched onto `pd.DataFrame`. A table of plain
+      installs on a pandas or polars class: an accessor, a namespace, a
+      function patched onto `pd.DataFrame`, whether the frame is an
+      argument, sits inside one or is made in the body; on another
+      library's class, when the value is an argument of that class. A table of plain
       functions is keyed once per version of it: a hit on a table of 1000
       handlers costs about 3 ms, not a re-analysis of each handler.
     - A **file** read by a
@@ -417,7 +419,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @fb45e2ba -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7 -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.
@@ -574,7 +576,7 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @ee297178 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @b7b2d616 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed

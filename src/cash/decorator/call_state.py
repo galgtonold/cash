@@ -78,6 +78,7 @@ class Call:
         "capture_watch",
         "cache_key",
         "state_hash",
+        "ledger",
         "args_hash",
         "call_args_hash",
         "metadata",
@@ -90,6 +91,8 @@ class Call:
         self.kwargs = kwargs
         self.metadata: CacheMetadata | None = None
         self.call_args_hash: str | None = None
+        #: What the key's state segment was made of, by name (`STATE_LEDGER`).
+        self.ledger: dict | None = None
         self.cash_overhead = 0.0
         self.outcome: Any = CACHE_MISS
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
+import operator
 import sys
 import types
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .class_data import class_surface_functions, implicit_access_functions
+from .closure_fold import CLASS_BODY_CELLS
 from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
@@ -161,6 +163,13 @@ class CodeArgs:
         self._attribute_names_memo: LruMemo[int, tuple[Any, frozenset[str]]] = LruMemo(CODE_OBJECTS)
         # (id(class), names) -> (class, its MRO's dict sizes, (name, owner
         # class, attribute, user code it holds)...); see `_installed_code`.
+        # id(names) -> (names, the accessor classes, their MROs' namespaces,
+        # those namespaces' sizes, (namespace, name, attribute) per found
+        # attribute, what was found); see `_family_installed_code`.
+        self._family_memo: LruMemo[int, tuple] = LruMemo(CODE_OBJECTS)
+        # class -> (its MRO namespaces, their sizes, its functions with
+        # closure cells); see `_capturing_functions`.
+        self._capturing_memo: LruMemo[type, tuple] = LruMemo(CODE_OBJECTS)
         self._installed_memo: LruMemo[tuple[int, frozenset[str]], tuple[type, tuple, tuple]] = LruMemo(CODE_OBJECTS)
 
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
@@ -606,6 +615,20 @@ class CodeArgs:
                     for name, carrier in self._installed_code(cls, names):
                         for part in self.carrier_parts(carrier, func_name, param, seen_carriers, owner_code):
                             parts.append(f"installed:{name}:{part}")
+        if func is not None:
+            # A frame need not be an argument to run what a project installs
+            # on its class: one read in the body (``pd.read_csv(p).money``),
+            # held in a list or an object, of a subclass, or keyed by
+            # ``key=`` runs the same accessor. Each loaded accessor class is
+            # asked for the names the code reads, whatever the arguments.
+            family = _loaded_accessor_classes()
+            if family:
+                if names is None:
+                    names = self._attribute_names(func, report)
+                if names:
+                    for name, carrier in self._family_installed_code(family, names):
+                        for part in self.carrier_parts(carrier, func_name, None, seen_carriers, owner_code):
+                            parts.append(f"installed:{name}:{part}")
         if not parts:
             return state_hash
         payload = ":".join(sorted(set(parts)))
@@ -669,17 +692,57 @@ class CodeArgs:
                 if all(owner.__dict__.get(name) is attr for name, owner, attr, _ in entry[2]):
                     return tuple((name, carrier) for name, _, _, carrier in entry[2])
         found: list[tuple[str, type, Any, Any]] = []
-        if not self._is_user_instance_class(cls):
-            for name in sorted(names):
-                for klass in mro:
-                    attr = klass.__dict__.get(name, _MISSING)
-                    if attr is _MISSING:
-                        continue
+        # A user class's own code is walked as an argument's is; what the
+        # library classes it derives from carry is looked up past it (a
+        # project's DataFrame subclass still runs the accessor registered on
+        # pandas' DataFrame).
+        user = self._is_user_instance_class(cls)
+        for name in sorted(names):
+            for klass in mro:
+                attr = klass.__dict__.get(name, _MISSING)
+                if attr is _MISSING:
+                    continue
+                if not (user and self._is_user_instance_class(klass)):
                     for carrier in _installed_user_code(attr):
                         found.append((name, klass, attr, carrier))
-                    break
+                break
         self._installed_memo[memo_key] = (cls, tuple(len(k.__dict__) for k in mro), tuple(found))
         return tuple((name, carrier) for name, _, _, carrier in found)
+
+    def _family_installed_code(self, family: tuple[type, ...], names: frozenset[str]) -> tuple[tuple[str, Any], ...]:
+        """`_installed_code` of every class in *family*, as one answer.
+
+        Asked on every call of every cached function once pandas or polars
+        is loaded, so kept per *names* while the namespace of every class in
+        the families' MROs has the same size (one C-level ``map(len, ...)``)
+        and each found attribute is the same object."""
+        entry = self._family_memo.get(id(names))
+        if (
+            entry is not None
+            and entry[0] is names
+            and entry[1] is family
+            and list(map(len, entry[2])) == entry[3]
+            and all(namespace.get(name) is attr for namespace, name, attr in entry[4])
+        ):
+            return entry[5]
+        namespaces: dict[int, Any] = {}
+        for cls in family:
+            for klass in cls.__mro__:
+                namespaces.setdefault(id(klass), klass.__dict__)
+        found: list[tuple[str, Any]] = []
+        watched: list[tuple[Any, str, Any]] = []
+        for cls in family:
+            for name, carrier in self._installed_code(cls, names):
+                found.append((name, carrier))
+                for klass in cls.__mro__:
+                    attr = klass.__dict__.get(name, _MISSING)
+                    if attr is not _MISSING:
+                        watched.append((klass.__dict__, name, attr))
+                        break
+        dicts = tuple(namespaces.values())
+        result = tuple(found)
+        self._family_memo[id(names)] = (names, family, dicts, list(map(len, dicts)), tuple(watched), result)
+        return result
 
     def _is_user_instance_class(self, cls: type) -> bool:
         """Is *cls* user code? Its own code is walked as an argument's is."""
@@ -743,6 +806,7 @@ class CodeArgs:
                 # through the folds the cached function's own reads use.
                 if is_user_code_carrier(carrier):
                     parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
+                    parts.extend(self._carrier_capture_parts(carrier))
                     env |= self._carrier_environment_reads(carrier)
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)
                     self._warn_ambient_in_carrier_once(carrier, func_name, param)
@@ -757,6 +821,36 @@ class CodeArgs:
             component = environment_component(env, note=lambda label, digest: ledger_note(("env", label), digest))
             parts.append(f"argenv:{component}")
         return parts
+
+    def _carrier_capture_parts(self, carrier: Any) -> list[str]:
+        """Key parts for what the functions of a class *carrier* captured: a
+        class made inside a factory (``make_lookup(table)``) reads ``table``
+        from a closure cell in ``__getitem__``, ``__len__`` or a property,
+        which Python calls without the body naming them. Watched like a
+        helper's captures (`HelperIdentity.identity`)."""
+        if not isinstance(carrier, type):
+            return []
+        return [
+            f"captures:{fn.__qualname__}:{self._values.helper_identity(fn)}"
+            for fn in self._capturing_functions(carrier)
+        ]
+
+    def _capturing_functions(self, cls: type) -> tuple:
+        """The functions of *cls* (`class_surface_functions`) with a closure
+        cell of their own, per class while its MRO namespaces keep their
+        sizes: asked for every user class reached, on every call."""
+        mro = cls.__mro__
+        entry = self._capturing_memo.get(cls)
+        if entry is not None and list(map(len, entry[0])) == entry[1]:
+            return entry[2]
+        found = tuple(
+            fn
+            for fn in class_surface_functions(cls)
+            if getattr(fn, "__closure__", None) and any(n not in CLASS_BODY_CELLS for n in fn.__code__.co_freevars)
+        )
+        namespaces = tuple(k.__dict__ for k in mro)
+        self._capturing_memo[cls] = (namespaces, list(map(len, namespaces)), found)
+        return found
 
     def _carrier_environment_reads(self, carrier: Any) -> set:
         """The environment reads (`cash.effects.environment_input`) of the
@@ -867,6 +961,31 @@ def _accessor_classes(cls: type) -> list[type]:
         if isinstance(sibling, type) and sibling not in found:
             found.append(sibling)
     return found
+
+
+#: (the accessor libraries' modules as loaded, their classes); see
+#: `_loaded_accessor_classes`.
+_LOADED_FAMILY: list = [(), ()]
+
+
+def _loaded_accessor_classes() -> tuple[type, ...]:
+    """The classes of every accessor family whose library is loaded, the same
+    tuple object while the same modules are loaded."""
+    modules = tuple(sys.modules.get(top) for top in _ACCESSOR_FAMILIES)
+    seen_modules, classes = _LOADED_FAMILY
+    if len(seen_modules) == len(modules) and all(map(operator.is_, seen_modules, modules)):
+        return classes
+    found: list[type] = []
+    for module, family in zip(modules, _ACCESSOR_FAMILIES.values()):
+        if module is None:
+            continue
+        for name in family:
+            cls = getattr(module, name, None)
+            if isinstance(cls, type):
+                found.append(cls)
+    classes = tuple(found)
+    _LOADED_FAMILY[:] = [modules, classes]
+    return classes
 
 
 def _code_scopes(code: types.CodeType):

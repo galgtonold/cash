@@ -137,12 +137,10 @@ def deep_copy(value: Any, memo: dict[int, Any], special: Callable[[Any], bool] |
         making.discard(id(obj))
         copied = rebuild(*args)
         memo[id(obj)] = copied
-        if state is not None:
-            state = yield state
-            if setter is not None:
-                setter(copied, state)
-            else:
-                _set_state(copied, state)
+        # Items first, then the state, in pickle's order (the RAM tier's
+        # pickle round trip and the disk tier both rebuild a value that way):
+        # a ``__setstate__`` may read the items, and the common
+        # ``self.__dict__ = self`` dict has itself as its state.
         if listitems is not None:
             for item in listitems:
                 copied.append((yield item))
@@ -150,6 +148,12 @@ def deep_copy(value: Any, memo: dict[int, Any], special: Callable[[Any], bool] |
             for k, v in dictitems:
                 new_key = yield k
                 copied[new_key] = yield v
+        if state is not None:
+            state = yield state
+            if setter is not None:
+                setter(copied, state)
+            else:
+                _set_state(copied, state)
         return copied
 
     done, result = start(value)

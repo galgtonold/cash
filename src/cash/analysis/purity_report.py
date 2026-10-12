@@ -138,6 +138,12 @@ class PurityReport:
     #: so the function is analysed again and the new helper is keyed.
     unbound_names: tuple[tuple[str, str], ...] = ()
     unkeyable: tuple[str, ...] = ()
+    #: ``(ref, code objects)`` for each function and class the walk read the
+    #: code of, as `cash.loaded_code.code_objects_of` gave them then.
+    #: ``bindings_changed`` compares them per call: IPython's ``%autoreload``
+    #: swaps a function's ``__code__`` in place, keeping the object every
+    #: binding holds, and the new code can call helpers this walk never met.
+    walked_code: tuple[tuple[Any, tuple], ...] = ()
     #: Binding paths every call site of which is on a ``# @cash:assume-safe``
     #: line (``LEDGER.record(r)  # @cash:assume-safe``). The code is still
     #: followed; the data the bound object carries is not keyed, because the
