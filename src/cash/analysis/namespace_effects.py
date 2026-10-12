@@ -46,7 +46,7 @@ from .file_effects import (
     get_base_name,
     locally_opened_handles,
 )
-from .handed_callables import handed_callable_values
+from .handed_callables import handed_callable_values, iteration_bindings
 from .mutations import RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
 from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
 
@@ -130,19 +130,36 @@ def statement_user_writer_call(
     if not namespace or "(" not in code:
         return None
     calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    bound = _bindings(code) if tree is None else iteration_bindings(tree)
     for node in calls:
         found = user_callee_writing_files(resolve_callee(node.func, namespace), appends=appends)
         if found:
             return ast.unparse(node.func), found
-        if node.args or node.keywords:
+        if node.args or node.keywords or not isinstance(node.func, ast.Name) or node.func.id in bound:
             # ``map(save, xs)``, ``s.apply(save)``, ``s.apply(lambda v:
             # save(v))``: the callee calls what it is handed, as a call by
-            # name does.
-            for value in handed_callable_values(node, namespace):
+            # name does. ``[f() for f in fns]``, ``ops[key]()``,
+            # ``bus.emit()``: what is called is read out of what it holds.
+            for value in handed_callable_values(node, namespace, bound):
                 found = user_callee_writing_files(_function_called(value), appends=appends)
                 if found:
                     return getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
+
+
+def statement_handed_callables(code: str, namespace: "Mapping[str, Any] | None") -> list[Any]:
+    """The callables of the user's the calls in *code* run without naming
+    them (`handed_callable_values`): ``s.apply(save)``, ``[f() for f in
+    fns]``, ``bus.emit()`` running what ``bus`` holds."""
+    if not namespace or "(" not in code:
+        return []
+    bound = _bindings(code)
+    out: dict[int, Any] = {}
+    for node in _calls(code):
+        if node.args or node.keywords or not isinstance(node.func, ast.Name) or node.func.id in bound:
+            for value in handed_callable_values(node, namespace, bound):
+                out.setdefault(id(value), value)
+    return list(out.values())
 
 
 def _function_called(value: Any) -> Any:
@@ -158,6 +175,16 @@ def _function_called(value: Any) -> Any:
         return inspect.getattr_static(owner, "__init__" if isinstance(value, type) else "__call__")
     except AttributeError:
         return value
+
+
+@functools.lru_cache(maxsize=STATEMENTS)
+def _bindings(code: str) -> dict[str, tuple[ast.expr, ...]]:
+    """`iteration_bindings` of *code*; read them, never change them.
+    Memoised by the text, as `_calls`."""
+    try:
+        return iteration_bindings(ast.parse(code))
+    except SyntaxError:
+        return {}
 
 
 @functools.lru_cache(maxsize=STATEMENTS)
@@ -352,10 +379,17 @@ def statement_user_pyplot_call(
     if not namespace or "(" not in code or "matplotlib.pyplot" not in sys.modules:
         return None
     calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    bound = _bindings(code) if tree is None else iteration_bindings(tree)
     for node in calls:
         found = user_callee_using_pyplot(resolve_callee(node.func, namespace))
         if found:
             return ast.unparse(node.func), found
+        if node.args or node.keywords or not isinstance(node.func, ast.Name) or node.func.id in bound:
+            # ``map(nlines, xs)``, ``s.apply(nlines)``: run as a call by name is.
+            for value in handed_callable_values(node, namespace, bound):
+                found = user_callee_using_pyplot(_function_called(value))
+                if found:
+                    return getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
 
 

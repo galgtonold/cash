@@ -90,6 +90,7 @@ from ...analysis.cacheability_decision import (
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
+from ...analysis.handed_callables import new_analysis_round
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -1014,6 +1015,7 @@ class StatementProcessor:
                         yield runner
                     finally:
                         wall_time = _perf_counter() - start_time
+                        new_analysis_round()
                         if handed:
                             # Gone before the outputs are captured, and the
                             # value no longer held once the loop is done.

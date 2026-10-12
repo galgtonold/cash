@@ -9,6 +9,7 @@ schedules them for the files the checked cell depends on.
 from __future__ import annotations
 
 import ast
+import collections
 import functools
 import logging
 import os
@@ -30,6 +31,7 @@ from ...analysis.file_effects import (
 from ...analysis.namespace_effects import (
     resolve_literal_path,
     statement_calls_user_writer,
+    statement_handed_callables,
     statement_written_paths,
 )
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
@@ -290,7 +292,7 @@ class FileWriterScheduler:
         pending = list(writer_indices)
         while pending:
             w = pending.pop()
-            for v in self._writer_inputs(simulation_trace[w].inputs, simulation_trace):
+            for v in self._writer_inputs(simulation_trace[w].inputs, simulation_trace, simulation_trace[w].stmt_code):
                 later = _rebound_after(v, w)
                 if later is None and not _input_changed(v):
                     continue
@@ -505,7 +507,7 @@ class FileWriterScheduler:
                 relevant_read_paths, relevant_read_paths_known = relevant_read_paths.resolve()
             entry = simulation_trace[i]
             stmt_code, _outputs, inputs = entry.stmt_code, entry.outputs, entry.inputs
-            inputs = self._writer_inputs(inputs, simulation_trace)
+            inputs = self._writer_inputs(inputs, simulation_trace, stmt_code)
             # Scope gate: skip a writer whose output file no relevant consumer
             # reads. Its write runs when the user runs its own
             # cell; reconstruction of an unrelated cell must never re-fire it.
@@ -760,15 +762,21 @@ class FileWriterScheduler:
             pending.extend(self._unbound_helpers(self._called_names(code), defs))
         return False
 
-    def _writer_inputs(self, inputs, simulation_trace: list | None = None) -> set[str]:
+    def _writer_inputs(self, inputs, simulation_trace: list | None = None, stmt_code: str | None = None) -> set[str]:
         """A writer's inputs plus the notebook globals its callees read: the
         helper that plots ``scores`` depends on ``scores`` though the call
-        site never names it."""
+        site never names it. With *stmt_code*, the globals read by what its
+        calls run without naming it as well (``bus.emit()`` running the
+        ``export`` that ``bus`` holds)."""
 
         user_ns = self._user_ns()
         names = set(inputs)
         if user_ns:
             names |= called_function_globals(names, user_ns)
+            reached = statement_handed_callables(stmt_code, user_ns) if stmt_code is not None else []
+            if reached:
+                held = {f"<handed {i}>": value for i, value in enumerate(reached)}
+                names |= called_function_globals(held, collections.ChainMap(held, user_ns)) - set(held)
         defs = self._trace_defs(simulation_trace)
         pending = self._unbound_helpers(names, defs)
         seen: set[str] = set()
