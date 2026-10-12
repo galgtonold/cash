@@ -195,7 +195,7 @@ is the folder this run actually used. The summary also lists results that were
 computed but not stored. It prints on any normal exit or uncaught exception,
 not when the process is killed. `summary=True` in code or config does the same.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @f6cfa1c5 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
@@ -731,7 +731,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @206fd76a -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @b2155947 -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python
@@ -747,14 +747,16 @@ print(double.cache_info())
 {'hits': 1, 'misses': 2, 'hit_rate': 0.333...,
  'total_time_saved': 1e-05,
  'miss_reasons': {'no entry yet': 1, 'new arguments': 1},
+ 'changed': {},
  'warnings': []}
 ```
 
-`warnings` holds the last 20 cash warnings for the function, even when a
+`changed` counts the `code or state changed` misses by what changed
+(`{'helper ticks._parse changed': 3}`). `warnings` holds the last 20 cash warnings for the function, even when a
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
-<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7 -->
+<!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @7eed0d14 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
 
@@ -778,7 +780,18 @@ print(double.explain(5))
 
 `reason` is one of `hit`, `no_entry`, `ttl_expired`, `file_changed`,
 `key_uncomputable` or `disabled`. For `file_changed`, `details["changed_files"]`
-names each changed file. See
+names each changed file. After an edit, `details["changed"]` names what
+changed, in a new process too, and when that is code the function calls,
+`details["hint"]` says which call to move out:
+
+```text title="Output"
+[MISS] run_dev.signals - no_entry
+  ...
+  changed: helper ticks._parse changed
+  hint: If signals only needs what load_ticks returns, call load_ticks outside and pass its result in as an argument: then signals reruns only when that result changes (https://cash-lib.readthedocs.io/en/latest/decorator/#pass-data-in).
+```
+
+See
 [`CacheExplanation`](api/cash.md#cash.CacheExplanation).
 
 <!-- claim: cash/decorator/explain.py:check_explain_arguments @f3526db8 -->

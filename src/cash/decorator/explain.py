@@ -17,6 +17,7 @@ from .._active import EXPLAINING as _EXPLAINING
 from .._memo import STATE_LEDGERS, LruMemo
 from ..backends._base import ttl_expired, written_at
 from ..data_source import DataSource
+from ..dependency_state import STATE_LEDGER
 from ..tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
 from .arg_hashing import unhashable_arg_fix
 from .cache_metadata import CacheMetadata
@@ -73,7 +74,11 @@ class CacheExplanation:
             * ``no_entry``: ``hint``, and ``why`` -- what this process
               knows about the key: never stored and why, stored and since
               evicted, or which part of the key moved since the last call
-              (``new arguments``, ``code or state changed``, ...).
+              (``new arguments``, ``code or state changed``, ...); for a
+              code change, ``changed`` (what changed: ``helper
+              ticks._parse changed``), and when that is code the function
+              calls, a ``hint`` naming the call whose result it could be
+              passed instead.
             * ``ttl_expired``: ``ttl_seconds``, ``age_seconds``, ``cached_at``
               when the decorator's ttl ran out; ``why`` when the entry
               expired under the ttl it was written with.
@@ -164,6 +169,10 @@ class MissReason(NamedTuple):
     changed: str | None = None
     #: For an entry a size cap evicted, its `EvictionNote`.
     evicted: Any = None
+    #: For a code change inside a helper or a cached function the body
+    #: calls: the name the body calls it by ("" when cash cannot tell),
+    #: for explain()'s pass-the-data-in hint (`callee_to_pass_in`).
+    lift: str | None = None
 
     @property
     def text(self) -> str:
@@ -290,6 +299,53 @@ def describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | Non
     if len(phrases) > 3:
         shown.append(f"and {len(phrases) - 3} more")
     return "; ".join(shown)
+
+
+#: The decorator guide's recipe for a miss a called helper's edit caused.
+PASS_DATA_IN_DOCS = "https://cash-lib.readthedocs.io/en/latest/decorator/#pass-data-in"
+
+
+def callee_to_pass_in(old: dict[str, str], new: dict[str, str]) -> str | None:
+    """For a change in code the function calls, the callee its body names,
+    whose result it could be handed instead; None when nothing it calls
+    changed.
+
+    A helper deep down (``_parse``, read by ``load_ticks``) is followed up
+    the "read by" chain to the global the body itself reads
+    (``load_ticks``). ``""`` when that chain cannot be followed.
+    """
+    changed = [
+        k
+        for k, v in new.items()
+        if k.startswith(("helper ", "cached function ")) and k in old and old[k] != v
+    ]
+    if not changed:
+        return None
+    name = changed[0].split(" ", 2)[-1].rsplit(".", 1)[-1]
+    seen: set[str] = set()
+    while name not in seen:
+        seen.add(name)
+        if f"global {name}" in new:
+            return name
+        reader = next((k for k in new if k.startswith(f"global {name} (read by ")), None)
+        if reader is None:
+            return ""
+        name = reader[len(f"global {name} (read by ") : -1]
+    return ""
+
+
+def pass_in_hint(func_name: str, callee: str) -> str:
+    """explain()'s hint for a miss that code the function calls caused."""
+    func = func_name.rsplit(".", 1)[-1]
+    if callee:
+        return (
+            f"If {func} only needs what {callee} returns, call {callee} outside and pass its result "
+            f"in as an argument: then {func} reruns only when that result changes ({PASS_DATA_IN_DOCS})."
+        )
+    return (
+        f"If {func} only needs the result of the code that changed, compute it outside and pass it "
+        f"in as an argument: then {func} reruns only when that result changes ({PASS_DATA_IN_DOCS})."
+    )
 
 
 def entry_id_of(cache_key: str) -> str:
@@ -528,10 +584,10 @@ class MissHistory:
         if len(old) != 4 or len(new) != 4:
             return MissReason(MissKind.FIRST, "no entry for this key")
         moved: list[tuple[MissKind, str]] = []
-        what = None
+        what = lift = None
         if old[1] != new[1]:
             moved.append((MissKind.CODE, f"{_CODE_CHANGED} {since}"))
-            what = self._what_changed(func_name, old[1], new[1], self._stored_keys.read(func_name))
+            what, lift = self._what_changed(func_name, old[1], new[1], self._stored_keys.read(func_name))
         if old[2] != new[2]:
             moved.append((MissKind.DYNAMIC, "a dynamic_depends_on source changed"))
         if old[3] != new[3]:
@@ -539,13 +595,12 @@ class MissHistory:
             moved.append((MissKind.ARGS, f"called with arguments not seen {last}"))
         if not moved:
             return MissReason(MissKind.FIRST, "no entry for this key")
-        return MissReason(moved[0][0], "; and ".join(detail for _, detail in moved), what)
+        return MissReason(moved[0][0], "; and ".join(detail for _, detail in moved), what, lift=lift)
 
     def _code_changed(self, func_name: str, old_state: str, new_state: str, doc: dict, since: str) -> MissReason:
         """A "code or state changed" reason, naming what changed when known."""
-        return MissReason(
-            MissKind.CODE, f"{_CODE_CHANGED} {since}", self._what_changed(func_name, old_state, new_state, doc)
-        )
+        what, lift = self._what_changed(func_name, old_state, new_state, doc)
+        return MissReason(MissKind.CODE, f"{_CODE_CHANGED} {since}", what, lift=lift)
 
     def keep_state_ledger(self, slot: tuple[str, str], ledger: dict) -> None:
         """Keep the ledger of the first key build that produced this
@@ -589,8 +644,11 @@ class MissHistory:
             flat[name] = short(sorted(parts))
         return flat
 
-    def _what_changed(self, func_name: str, old_state: str, new_state: str, doc: dict | None = None) -> str | None:
-        """Name what moved between two states of *func_name*, or None if unknown.
+    def _what_changed(
+        self, func_name: str, old_state: str, new_state: str, doc: dict | None = None
+    ) -> tuple[str | None, str | None]:
+        """Name what moved between two states of *func_name*, or None if
+        unknown; and `callee_to_pass_in` for the two.
 
         "code or state changed" alone sends the user to diff their own edits: a moved helper, an edited constant, a changed default, a
         path whose case differed by launch mode all read the same.
@@ -598,8 +656,8 @@ class MissHistory:
         old = self.flat_ledger(func_name, old_state, doc)
         new = self.flat_ledger(func_name, new_state, doc)
         if not old or not new:
-            return None
-        return describe_state_change(old, new)
+            return None, None
+        return describe_state_change(old, new), callee_to_pass_in(old, new)
 
     def remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
         outcome.setdefault("at", time.time())
@@ -830,8 +888,17 @@ class Explainer:
                 },
             )
         token = _EXPLAINING.set(True)
+        # What the state is made of, kept as a real call keeps it
+        # (`KeyBuilder.resolve`): explain() in a fresh process, before any
+        # call, can then name what changed since an earlier run.
+        ledger: dict = {}
+        ledger_token = STATE_LEDGER.set(ledger)
         try:
-            return self._keys.build(cf, args, kwargs)
+            built = self._keys.build(cf, args, kwargs)
+            slot = (func_name, built.state_hash)
+            if ledger and not self._misses.has_ledger(slot):
+                self._misses.keep_state_ledger(slot, ledger)
+            return built
         except UnhashableDefault:
             return _uncomputable(
                 func_name,
@@ -870,6 +937,7 @@ class Explainer:
                 },
             )
         finally:
+            STATE_LEDGER.reset(ledger_token)
             _EXPLAINING.reset(token)
 
     def _absent_entry(
@@ -907,8 +975,12 @@ class Explainer:
                 details={"why": missed.text},
             )
         details["why"] = str(missed)
+        if missed.changed:
+            details["changed"] = missed.changed
         if missed.kind is not MissKind.FIRST and "dynamic_dependencies" not in details:
             del details["hint"]  # the generic guess, now that we know
+            if missed.lift is not None:
+                details["hint"] = pass_in_hint(func_name, missed.lift)
         if frozen_args:
             details["frozen_args"] = frozen_args
         return CacheExplanation(

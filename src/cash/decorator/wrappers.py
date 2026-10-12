@@ -279,7 +279,9 @@ class Wrappers:
             Returns:
                 A dict with ``hits``, ``misses``, ``hit_rate``,
                 ``total_time_saved`` (seconds), ``miss_reasons`` (count per
-                reason) and ``warnings`` (the last 20, each with
+                reason), ``changed`` (for the "code or state changed"
+                misses, count per what changed: ``"helper ticks._parse
+                changed"``) and ``warnings`` (the last 20, each with
                 ``category``, ``code``, ``message`` and ``timestamp``).
             """
             total = stats["hits"] + stats["misses"]
@@ -291,6 +293,7 @@ class Wrappers:
                 "hit_rate": hit_rate,
                 "total_time_saved": stats["total_time_saved"],
                 "miss_reasons": {str(kind): n for kind, n in stats["miss_reasons"].items()},
+                "changed": dict(stats["changed"]),
                 "warnings": warnings_log,
             }
 

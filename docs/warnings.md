@@ -218,7 +218,7 @@ keeps happening, the cap is too small for what you use.
 room (the message says how much is free). If it does not, cache smaller
 results, or move `cache_dir` to a bigger volume.
 
-<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @f6cfa1c5 -->
+<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
 **When it is safe to ignore.** When the result is rarely needed and a
 recompute now and then is cheaper than the disk it would take. It is said once
 per function or statement per process. Cheaper recomputes are not warned
