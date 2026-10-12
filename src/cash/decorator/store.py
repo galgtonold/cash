@@ -193,8 +193,13 @@ class ResultStore:
         tracker: Any,
         capture_watch: Any = NO_WATCH,
         observer: EffectObserver | None = None,
+        inputs_moved: Callable[[], bool] | None = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
+
+        *inputs_moved*, when given, says whether the program state the key
+        read (its globals, class data, environment...) changed while the
+        body ran (`CallRunner._inputs_moved_check`).
 
         One decision for the sync, async and streaming paths, and it says WHY,
         because "not stored" is the answer to the next call's "why did that
@@ -218,12 +223,34 @@ class ResultStore:
                 refusal = "cache_if raised"
         # After the body ran, before deciding to store: a provisional global
         # this call moved must stop being folded.
+        watched_moved = False
         if capture_watch is not NO_WATCH:
-            self._purity.learn_mutating_captures(func, func_name, capture_watch)
+            watched_moved = self._purity.learn_mutating_captures(func, func_name, capture_watch)
         if refusal is None and self._purity.refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
         if refusal is None and self._files.inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
+        # A watched value that moved is the drift guard's: it stops keying
+        # it. Alone in the process the call itself moved it, and the entry
+        # stays keyed on the state before the call; with other threads
+        # running, one of them may have, and the result may come from the
+        # new value: not stored.
+        if refusal is None and inputs_moved is not None and (watched_moved or inputs_moved()):
+            self._notices.warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "state_changed",
+                f"@cash.cache on {func_name}: a global, class attribute or other program state its "
+                f"key read changed while the call was running (another thread or task, or the call "
+                f"itself, changed it). The "
+                f"result was returned but not cached, because it cannot be told which value it "
+                f"was computed from.",
+                code="STORE-STATE-CHANGED",
+                fix="nothing, if the state was reloaded on purpose (a config reload): the next call "
+                "keys on the new value and caches normally. If calls overlap a writer all the time, "
+                "pass the value in as an argument instead of reading it as a global.",
+            )
+            refusal = "a global or other state it read changed while it ran"
         stale_memo = getattr(tracker, "stale_memo_reads", None)
         if refusal is None and stale_memo:
             refusal = (

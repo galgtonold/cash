@@ -289,6 +289,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "STORE-INPUT-CHANGED",  # a file the call read changed before it
         # returned, so the result was not stored
         "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked
+        "STORE-STATE-CHANGED",  # a global the key read changed (another
+        # thread) while the call ran, so the result was not stored
         "STORE-UNTRACKED-SOURCE",  # a cached callee depends on a dynamic source
         # that cannot be pickled, so the caller's result stays in RAM (or,
         # with no RAM tier, is not stored)

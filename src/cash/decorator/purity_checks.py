@@ -437,7 +437,7 @@ class PurityChecks:
                     return "is the module global", name
         return None
 
-    def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> None:
+    def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> bool:
         """Demote any provisional global this call was OBSERVED to mutate.
 
         A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) might
@@ -463,12 +463,15 @@ class PurityChecks:
         Only runs on a miss -- the body has to execute for there to be anything
         to observe -- so the cost is one hash on the path that just paid for a
         real computation.
+
+        Returns whether a watched value moved.
         """
         if not watched:
-            return
+            return False
         code = getattr(func, "__code__", None)
         if code is None:
-            return
+            return False
+        moved = False
         own_globals = getattr(func, "__globals__", None)
         cells = dict(zip(getattr(code, "co_freevars", ()) or (), getattr(func, "__closure__", ()) or ()))
         for name, (before, scope, owner, reader) in watched.items():
@@ -509,6 +512,7 @@ class PurityChecks:
                 continue
             if after == before:
                 continue
+            moved = True
             if scope in ("carrier", "global") and rng_carrier_kind(value) is not None:
                 # A random generator the body drew from: a hit moves it on
                 # to where the body left it (`replay_rng_state`), so its
@@ -551,6 +555,7 @@ class PurityChecks:
                 "`# @cash:assume-safe` on the line named, or "
                 "`with cash.assume_safe():` around it.",
             )
+        return moved
 
     def refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
         """True when *result* must never be stored, because storing it would

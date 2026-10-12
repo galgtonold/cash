@@ -449,6 +449,7 @@ class KeyBuilder:
             ledger_note("@chain", chain)
             state_hash = self._code_state(spec, chain, note=True)
             state_hash = self._method_deps.fold_method_class_deps(func, args, state_hash)
+            inputs_state = state_hash
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `CodeArgs.fold_code_args` on the RAW arguments saw a class
@@ -512,7 +513,40 @@ class KeyBuilder:
         # (`PurityChecks.checked_arguments_hash`).
         call_args_hash = args_hash if spec.arg_key is None or spec.arg_key.key_fn is None else None
         ttls = [t for t in reached_ttls if t is not None]
-        return BuiltKey(cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None)
+        return BuiltKey(
+            cache_key, state_hash, args_hash, normalized_args, call_args_hash, min(ttls) if ttls else None, inputs_state
+        )
+
+    def inputs_state_now(self, spec: CachedFunction, args: tuple) -> str | None:
+        """`BuiltKey.inputs_state` built again now, after the body ran, or None
+        when it cannot be built.
+
+        Another thread can rebind or change in place a global the call read
+        (a config reload in a service) while the body runs: the result then
+        comes from the new value but would be stored under the key of the
+        old one. No ledger, no drift-guard watch, no warnings of its own: the
+        key build before the body already gave them.
+        """
+        previous = getattr(PLAIN_CENSUS, "memo", None)
+        PLAIN_CENSUS.memo = {}
+        tokens = (
+            (CLASSES_FOLDED, CLASSES_FOLDED.set(set())),
+            (READS_FOLDED, READS_FOLDED.set({})),
+            (REACHED_TTLS, REACHED_TTLS.set([])),
+            (KEY_BUILD_DIGESTS, KEY_BUILD_DIGESTS.set({})),
+            (STATE_LEDGER, STATE_LEDGER.set(None)),
+            (CAPTURE_WATCH, CAPTURE_WATCH.set(None)),
+            (_EXPLAINING, _EXPLAINING.set(True)),
+        )
+        try:
+            state_hash = self._code_state(spec, [])
+            return self._method_deps.fold_method_class_deps(spec.func, args, state_hash)
+        except Exception:  # noqa: BLE001 - cannot be built now: it cannot be shown unchanged
+            return None
+        finally:
+            for var, token in reversed(tokens):
+                var.reset(token)
+            PLAIN_CENSUS.memo = previous
 
     def _check_iterators_unread(self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]]) -> None:
         """Raise `KeyBuildFailed` when building the key read an iterator
@@ -905,6 +939,7 @@ class CallRunner:
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
+        call.inputs_state = built.inputs_state
         if built.reached_ttl is not None:
             # A cached function the key reached as a value, not by a graph
             # edge: its ttl is per call, not per function.
@@ -1027,6 +1062,22 @@ class CallRunner:
             run.carriers_moved = moved_carriers(run.carriers_pre)
             run.arg_carriers_moved = moved_carriers(run.arg_carriers_pre)
 
+    def _inputs_moved_check(self, spec: CachedFunction, call: Call) -> Callable[[], bool] | None:
+        """For `ResultStore.refusal`: did what the key read of the program's
+        state change while the body ran? None when nothing else can have
+        changed it: one thread, and a body that never awaits.
+
+        Only another thread (or, for a coroutine, another task) can rebind a
+        global the call read, or change it in place, without the body
+        doing so itself. Checking costs a second build of that part of the
+        key, on a miss only, so a single-threaded script does not pay it.
+        """
+        if call.inputs_state is None:
+            return None
+        if threading.active_count() == 1 and not inspect.iscoroutinefunction(spec.func):
+            return None
+        return lambda: self._keys.inputs_state_now(spec, call.args) != call.inputs_state
+
     def finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
@@ -1066,7 +1117,15 @@ class CallRunner:
 
         self._purity.warn_shared_result(func, func_name, res, args, kwargs)
         refusal = self._store.refusal(
-            func, func_name, res, run.rng_new, spec.cache_if, run.tracker, call.capture_watch, observer=run.observer
+            func,
+            func_name,
+            res,
+            run.rng_new,
+            spec.cache_if,
+            run.tracker,
+            call.capture_watch,
+            observer=run.observer,
+            inputs_moved=self._inputs_moved_check(spec, call),
         )
         if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
             # A hit must leave the generator where the body did, or the

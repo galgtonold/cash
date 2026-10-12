@@ -7,7 +7,11 @@
 Cached functions are safe to call concurrently. Without locking, two callers
 that miss the same key at the same moment both run the body, and the second
 write replaces the first with an equal value. The answers are right, but you pay
-twice, which matters for a 30-second fit or a paid API call.
+twice, which matters for a 30-second fit or a paid API call. A global or class
+attribute the function reads that another thread changes while a call runs (a
+config reload) makes that call's result go uncached, with
+[STORE-STATE-CHANGED](../../warnings.md#store-state-changed): it cannot be told
+which value it was computed from.
 
 ## `use_locking=True`: compute once
 

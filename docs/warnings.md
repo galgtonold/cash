@@ -1787,6 +1787,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
+| [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
 ### STORE-CHUNK-FAILED {#store-chunk-failed}
@@ -1925,6 +1926,26 @@ interrupted write.
 
 **When it is safe to ignore.** Usually. Look into it if it persists after
 `cache_clear()`.
+
+### STORE-STATE-CHANGED {#store-state-changed}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._inputs_moved_check @ac875baf, cash/decorator/runtime.py:KeyBuilder.inputs_state_now @1fee8a6a -->
+**What happened.** A global, a class attribute or other program state the
+function's key read changed while the call was running: another thread
+reloaded a config, say. The result was returned but not stored. The check
+runs only while other threads are running (or for a coroutine function).
+
+**Why it matters.** The key was built from the old value and the body may have
+used the new one, so storing it could serve the wrong result to every later
+call with the old value.
+
+**What to do.** Nothing, if the state was changed on purpose: the next call
+keys on the new value and caches normally. If calls overlap a writer all the
+time, pass the value in as an argument.
+
+**When it is safe to ignore.** Once, after a reload.
 
 ### STORE-UNTRACKED-SOURCE {#store-untracked-source}
 
