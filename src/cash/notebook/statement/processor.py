@@ -99,7 +99,7 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import statement_calls_user_writer, statement_waives_through_user_code
 from ...analytics import AnalyticsManager
-from ...tracking.file_dep_snapshot import file_state_epoch
+from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -1062,6 +1062,7 @@ class StatementProcessor:
                 execution.appended_paths = frozenset(written_paths.appended)
                 execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
+                execution.probes = probe_answers(file_tracker)
                 # The keyed form (`run.code`), not what ran: a call routed
                 # through the call cache rewrites the text, and the key and
                 # the simulation look the observation up by the statement's
@@ -1485,6 +1486,7 @@ class StatementProcessor:
             accessed_files=execution.accessed_files,
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
+            probes=execution.probes,
             no_cache=(run.annotation is not None and run.annotation.no_cache)
             or inputs_moved
             or self._binds_a_stream(run),

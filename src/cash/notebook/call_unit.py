@@ -72,6 +72,7 @@ from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
+from cash.tracking.file_dep_snapshot import probe_answers
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import (
@@ -1068,6 +1069,7 @@ class CallUnit:
             elapsed,
             file_deps=frozenset(call_tracker.get_accessed_files()),
             remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
+            probes=probe_answers(call_tracker),
             stdout=stdout_text,
             stderr=stderr_text,
             callee_globals=captured,

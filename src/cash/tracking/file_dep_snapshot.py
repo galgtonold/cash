@@ -51,6 +51,8 @@ __all__ = [
     "snapshot_remote_deps",
     "snapshot_absent_deps",
     "snapshot_present_deps",
+    "probe_answers",
+    "probe_state_parts",
     "snapshot_dependencies",
     "existing_file_deps",
     "file_content_hash",
@@ -526,6 +528,32 @@ def snapshot_present_deps(paths: Mapping[str, str]) -> dict[str, dict[str, Any]]
             continue
         snapshot[path] = {_PRESENT_MARKER: kind}
     return snapshot
+
+
+def probe_answers(tracker: Any) -> dict[str, str]:
+    """The existence checks *tracker* saw, as ``{path: answer}``: ``absent``
+    for a path looked for and missing, else what the probe asked the found
+    path to be (``file``, ``dir`` or ``any``). Empty when it saw none."""
+    if tracker is None:
+        return {}
+    answers: dict[str, str] = dict(getattr(tracker, "present_files", None) or {})
+    for path in getattr(tracker, "absent_files", None) or ():
+        answers.setdefault(path, _ABSENT_MARKER)
+    return answers
+
+
+def probe_state_parts(probes: Mapping[str, str] | None) -> list[str]:
+    """What the existence checks in *probes* (:func:`probe_answers`) answer
+    NOW, one ``?path:0|1`` part each, sorted: the part of a lineage that moves
+    when a file a statement only checked for appears or vanishes."""
+    parts: list[str] = []
+    for path, asked in sorted((probes or {}).items()):
+        try:
+            there = os.path.exists(path) if asked == _ABSENT_MARKER else _is_present(path, asked)
+        except (OSError, ValueError):
+            there = False
+        parts.append(f"?{path}:{int(there)}")
+    return parts
 
 
 def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
