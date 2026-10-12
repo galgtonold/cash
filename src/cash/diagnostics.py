@@ -203,6 +203,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CONFIG-FILE-MISSING",  # Cash(config_path=...) names a file that does
         # not exist, so none of its settings apply
         # -- IMPURE: the function does something a cache hit will not repeat ----
+        "IMPURE-HANDED-CALLABLE",  # an argument is a function of the user's
+        # that changes state when called; the call runs uncached
         "IMPURE-OBSERVED-EFFECTS",  # watching the first call caught effects static
         # analysis could not see
         "IMPURE-SCOPE-MUTATION",  # calling it rewrites a global or captured

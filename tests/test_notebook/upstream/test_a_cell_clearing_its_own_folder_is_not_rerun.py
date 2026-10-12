@@ -68,3 +68,30 @@ def test_an_edited_clearing_cell_still_reruns_for_a_cell_that_reads_the_folder(c
         run_cash_cell(cash_magics, cells[2], cells=cells)
 
     assert cash_magics.shell.user_ns["names"] == ["c0.txt", "c1.txt", "c2.txt"]
+
+
+@pytest.mark.parametrize("reimport", ["import os", "import glob"])
+@pytest.mark.parametrize(
+    "clear", ["for f in glob.glob('*.log'):\n    os.remove(f)", "[os.remove(f) for f in glob.glob('*.log')]"]
+)
+def test_a_cell_importing_again_leaves_the_clearing_cell_alone(cash_magics, tmp_path, monkeypatch, clear, reimport):
+    """The cell reading the file binds ``os`` (or ``glob``) again. The name's
+    lineage then is that import's, not the one the clearing statement read:
+    no change to what it deletes, and no reason to run it again. It was run,
+    and it deleted the file the cell reads."""
+    monkeypatch.chdir(tmp_path)
+    cells = [
+        "import os, glob\n" + clear,
+        "open('out.log', 'w').write('row\\n')",
+        f"{reimport}\nrows = open('out.log').read()",
+    ]
+    cash_magics.cash_on("")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for code in cells:
+            run_cash_cell(cash_magics, code, cells=cells)
+        for _ in range(2):
+            run_cash_cell(cash_magics, cells[2], cells=cells)
+
+    assert (tmp_path / "out.log").exists(), "the cell re-ran the statement that clears the folder"
+    assert cash_magics.shell.user_ns["rows"] == "row\n"

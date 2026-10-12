@@ -53,6 +53,14 @@ class TrackingState:
     # W: StatementProcessor, ControlStructureProcessor. R: ReexecutionPlanner.
     executed_write_stmt_codes: set[str] = field(default_factory=set)
 
+    # Code of a statement that wrote a file this session -> the lineages its
+    # inputs had when it last ran. The simulation compares them with the
+    # lineages its inputs have at the writer now: the lineage the runtime
+    # holds at the end is a later binding's when a cell below the writer
+    # (``import os`` again) bound the name since.
+    # W: StatementProcessor, ControlStructureProcessor. R: FileWriterScheduler.
+    executed_write_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # sha256 of every whole-cell source that ran this session, to tell an
     # edited-but-not-rerun seed() cell from one that ran.
     # W: CellExecutor. R: UpstreamChecker.

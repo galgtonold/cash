@@ -233,7 +233,7 @@ class ControlStructureProcessor:
             changed = {v for v, h in lineage.items() if before.get(v) != h} | set(writes) if succeeded else set()
             sp.end_structure_cost(reads, changed, succeeded)
         if result.success:
-            self._record_writes(code, reads, written)
+            self._record_writes(code, reads, written, before)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
             # Where a draw left an RNG variable depends on the seed above,
             # which the entry lineages do not hold: the simulation moves it on
@@ -268,7 +268,7 @@ class ControlStructureProcessor:
                 sp.persist_read_provenance(code, files)
         return result
 
-    def _record_writes(self, code: str, reads, written: set[str]) -> None:
+    def _record_writes(self, code: str, reads, written: set[str], before: dict[str, str]) -> None:
         """A structure that wrote files is a writer, as the simulation sees it.
 
         The simulation plans a loop as one statement, so that is where the
@@ -283,15 +283,22 @@ class ControlStructureProcessor:
         deletes (no file opened), or finds nothing to delete. Its code is
         still this session's, so the planner must not take it for an edited
         writer and re-fire its cell before every later cell.
+
+        *before* holds the lineages at the structure's entry: what it read
+        them as is kept with its code
+        (``TrackingState.executed_write_input_lineages``).
         """
         sp = self.statement_processor
+        state = sp.tracking_state
         try:
             written = sp.user_written_paths(written)
             if not written:
                 if statement_writes_files(code):
-                    sp.tracking_state.executed_write_stmt_codes.add(code)
+                    state.executed_write_stmt_codes.add(code)
+                    state.executed_write_input_lineages[code] = {v: before[v] for v in reads if v in before}
                 return
-            sp.tracking_state.executed_write_stmt_codes.add(code)
+            state.executed_write_stmt_codes.add(code)
+            state.executed_write_input_lineages[code] = {v: before[v] for v in reads if v in before}
             sp.persist_write_provenance(code, set(reads), None, written)
         except Exception:  # never let bookkeeping break the user's loop
             logger.debug("[CONTROL] write provenance failed", exc_info=True)

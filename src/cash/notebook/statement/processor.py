@@ -91,6 +91,7 @@ from ...analysis.cacheability_decision import (
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
+from ...analysis.handed_callables import new_analysis_round
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -1015,6 +1016,8 @@ class StatementProcessor:
         # cash does not know (`pyplot_state`). Not read for one that already
         # runs every time.
         figures_before = None if run.skip_cache else pyplot_state()
+        lineage = self.tracking_state.variable_lineage
+        run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         try:
             with (
                 self.watching_reads(run.code),
@@ -1045,6 +1048,7 @@ class StatementProcessor:
                             for name in memo[1]:
                                 user_ns.pop(name, None)
                             wall_time += memo[2]
+                        new_analysis_round()
                         if handed:
                             # Gone before the outputs are captured, and the
                             # value no longer held once the loop is done.
@@ -1913,6 +1917,7 @@ class StatementProcessor:
                 or self._writes_through_user_code(run)
             ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
+                self.tracking_state.executed_write_input_lineages[code] = run.entry_lineages
                 # Persist write provenance so a post-restart isolated reader can
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it): ``executed_write_stmt_codes`` is empty after

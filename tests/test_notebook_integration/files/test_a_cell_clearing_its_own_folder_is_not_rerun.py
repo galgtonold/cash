@@ -133,3 +133,48 @@ def test_a_replayed_redraw_clears_the_folder_first(nb_runner, tmp_path, clear, d
     nb_runner.run_cell(4)
     assert f"NAMES {want!r}" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
     assert sorted(p.name for p in out.iterdir()) == want
+
+
+@pytest.mark.parametrize("reimport", ["import os", "import glob"], ids=["os", "glob"])
+@pytest.mark.parametrize("statement", [False, True], ids=["loop", "comprehension"])
+def test_a_cell_below_importing_again_does_not_rerun_it(nb_runner, tmp_path, reimport, statement):
+    """A cell below the clearing cell that imports ``os`` (or ``glob``) again
+    binds the name anew: that is no change to what the clearing loop deletes.
+    It was taken for one, and the loop ran before the cell and deleted the
+    file the cell reads (``FileNotFoundError``)."""
+    clear = (
+        "[os.remove(f) for f in glob.glob('*.log')]" if statement else "for f in glob.glob('*.log'):\n    os.remove(f)"
+    )
+    cells = [
+        "import cash\n%cash_on",
+        f"import os, glob\nos.chdir(r'{tmp_path}')\n{clear}",
+        "open('out.log', 'w').write('row\\n')",
+        f"{reimport}\nprint('READ', open('out.log').read().split())",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "READ ['row']" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+    for _ in range(2):
+        nb_runner.run_cell(4)
+        assert "READ ['row']" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+    assert (tmp_path / "out.log").exists()
+
+
+def test_a_writer_whose_input_was_edited_above_still_runs_for_a_cell_rebinding_it(nb_runner, tmp_path):
+    """Positive control: the cell below binds ``val`` again, and the edit above
+    the writer changes what it writes all the same; the writer runs again
+    before the cell reads its file, as a Run All would."""
+    cells = [
+        "import cash\n%cash_on",
+        f"import os\nos.chdir(r'{tmp_path}')\nval = 1",
+        "open('v.txt', 'w').write(str(val))",
+        "val = 5\nprint('READ', open('v.txt').read())",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "READ 1" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
+    nb_runner.set_cell_source(2, f"import os\nos.chdir(r'{tmp_path}')\nval = 2")
+    nb_runner.run_cell(4)
+    assert "READ 2" in nb_runner.get_output(4), nb_runner.get_raw_output(4)

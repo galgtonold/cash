@@ -19,10 +19,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
+from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.purity_report import PurityReport
 from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
-from ..exceptions import CashCacheIneffectiveWarning
+from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, CashImpurityWarning
 from ..tracking.file_tracker import FileAccessTracker
 from ..tracking.randomness import (
     capture_argument_carrier_states,
@@ -111,6 +112,10 @@ class Unkeyable(NamedTuple):
 
 _UNHASHABLE = MissReason(MissKind.UNHASHABLE, "an argument could not be hashed, so there is no key to look up")
 _KEY_FAILED = MissReason(MissKind.KEY_FAILED, "building the key raised")
+_HANDED = MissReason(
+    MissKind.HANDED,
+    "an argument is a function of yours, or holds one, that changes state when called, so the call ran uncached",
+)
 
 
 def _unhashable_callee_default(func_name: str) -> KeyBuildFailed:
@@ -253,6 +258,58 @@ class KeyBuilder:
         self._misses = misses
         self._notices = notices
 
+    def _hands_a_state_changing_callable(self, spec: CachedFunction, args: tuple, kwargs: dict) -> bool:
+        """Whether the call hands the body a function of the user's that
+        changes state when it is called -- ``run(record, 3)`` with ``record``
+        appending to a global list, a bound method changing a global, one
+        hidden in a ``functools.partial`` or a list the body calls the items
+        of -- and has been warned about once.
+
+        A hit would return the stored value without running it, so the change
+        would happen on the first call only. Such a call runs uncached, which
+        is what plain Python does. ``assume_safe=True`` says the function's
+        effects are fine to skip and keeps it cached; ``strict=True`` raises
+        `CashImpureFunctionError`, as it does for every other finding.
+
+        A method changing its own object is left to the argument-mutation
+        check (``objects=False``): that object is an argument, or held by
+        one, and is hashed again after a miss. Nor is what the body reaches
+        through its own globals looked at here (``through_globals=False``):
+        that is the static purity analysis's to report.
+        """
+        mode = self._registry.purity_mode(spec.name)
+        if mode == "silent" or not (args or kwargs):
+            return False
+        try:
+            handed = hands_a_state_changing_callable(spec.func, args, kwargs, through_globals=False, objects=False)
+        except Exception:  # cannot tell: the safe answer is "yes"
+            logger.debug("handed-callable check failed for %s", spec.name, exc_info=True)
+            handed = True
+        if handed and mode == "strict":
+            raise CashImpureFunctionError(
+                f"@cash.cache(strict=True) on {spec.name}: an argument is a function "
+                f"of yours, or holds one, that changes state when it is called, so a "
+                f"cache hit would skip that change. Pass a function that returns its "
+                f"result instead, or call it outside the cached function."
+            )
+        if handed:
+            self._notices.warn_once(
+                CashImpurityWarning,
+                spec.name,
+                "handed_callable",
+                f"@cash.cache on {spec.name}: an argument is a function of yours, "
+                f"or holds one, that changes a global or what it closes over when "
+                f"it is called (or whose source cannot be read). "
+                f"A cache hit would skip that change, so calls like this run "
+                f"uncached.",
+                code="IMPURE-HANDED-CALLABLE",
+                fix="return the new value from the function you pass instead of "
+                "changing state in it, or call it outside the cached function. "
+                "If its effect is fine to skip on a hit, "
+                "@cash.cache(assume_safe=True) caches the call again.",
+            )
+        return handed
+
     def resolve(self, spec: CachedFunction, args: tuple, kwargs: dict) -> tuple[BuiltKey | Unkeyable, dict, dict]:
         """The key for a real call, or why it has none; its `CAPTURE_WATCH`;
         and its `STATE_LEDGER`.
@@ -266,6 +323,8 @@ class KeyBuilder:
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
         if unkeyable is not None:
             return Unkeyable(unkeyable), {}, {}
+        if self._hands_a_state_changing_callable(spec, args, kwargs):
+            return Unkeyable(_HANDED), {}, {}
         ledger: dict = {}
         ledger_token = STATE_LEDGER.set(ledger)
         watch: dict = {}

@@ -9,6 +9,7 @@ schedules them for the files the checked cell depends on.
 from __future__ import annotations
 
 import ast
+import collections
 import functools
 import logging
 import os
@@ -30,6 +31,7 @@ from ...analysis.file_effects import (
 from ...analysis.namespace_effects import (
     resolve_literal_path,
     statement_calls_user_writer,
+    statement_handed_callables,
     statement_removed_paths,
     statement_written_paths,
 )
@@ -294,7 +296,7 @@ class FileWriterScheduler:
         pending = list(writer_indices)
         while pending:
             w = pending.pop()
-            for v in self._writer_inputs(simulation_trace[w].inputs, simulation_trace):
+            for v in self._writer_inputs(simulation_trace[w].inputs, simulation_trace, simulation_trace[w].stmt_code):
                 later = _rebound_after(v, w)
                 if later is None and not _input_changed(v):
                     continue
@@ -552,9 +554,10 @@ class FileWriterScheduler:
         when the caller has just found them.
         """
         executed_writes = self.tracking_state.executed_write_stmt_codes
+        ran_with_lineages = self.tracking_state.executed_write_input_lineages
         runtime_lineage = self.tracking_state.variable_lineage
 
-        def _input_lineage_drifted(name: str) -> bool:
+        def _input_lineage_drifted(name: str, ran_with: dict[str, str] | None, at_writer: dict[str, str]) -> bool:
             # The writer's payload changed even though nothing in the variable
             # plan demands it: the simulated (current-code) lineage differs
             # from the lineage last seen at runtime.
@@ -562,7 +565,14 @@ class FileWriterScheduler:
                 return False
             virt = virtual_lineage.get(name)
             run = runtime_lineage.get(name)
-            return virt is not None and run is not None and virt != run
+            if virt is None or run is None or virt == run:
+                return False
+            # The runtime's lineage is the last binding's, and a cell below
+            # the writer may have bound the name since (``import os`` again):
+            # that is no change to what the writer wrote from. What it read
+            # when it last ran, met again at the writer, is not a drift.
+            recorded = ran_with.get(name) if ran_with else None
+            return recorded is None or recorded != at_writer.get(name)
 
         writer_indices: list[int] = []
         if writer_positions is None:
@@ -574,7 +584,7 @@ class FileWriterScheduler:
                 relevant_read_paths, relevant_read_paths_known = relevant_read_paths.resolve()
             entry = simulation_trace[i]
             stmt_code, _outputs, inputs = entry.stmt_code, entry.outputs, entry.inputs
-            inputs = self._writer_inputs(inputs, simulation_trace)
+            inputs = self._writer_inputs(inputs, simulation_trace, stmt_code)
             # Scope gate: skip a writer whose output file no relevant consumer
             # reads. Its write runs when the user runs its own
             # cell; reconstruction of an unrelated cell must never re-fire it.
@@ -638,7 +648,9 @@ class FileWriterScheduler:
                 continue
             changed = stmt_code not in executed_writes
             scheduled_inputs = set(inputs) & scheduled_outputs
-            drifted = any(_input_lineage_drifted(v) for v in inputs)
+            ran_with = ran_with_lineages.get(stmt_code)
+            at_writer = key_lineages(entry.input_hashes) if ran_with else {}
+            drifted = any(_input_lineage_drifted(v, ran_with, at_writer) for v in inputs)
             inputs_changed = bool(scheduled_inputs) or drifted
             # ``changed`` fires for every writer after a kernel restart because
             # ``executed_write_stmt_codes`` is session-scoped and starts empty.
@@ -827,15 +839,21 @@ class FileWriterScheduler:
             pending.extend(self._unbound_helpers(self._called_names(code), defs))
         return False
 
-    def _writer_inputs(self, inputs, simulation_trace: list | None = None) -> set[str]:
+    def _writer_inputs(self, inputs, simulation_trace: list | None = None, stmt_code: str | None = None) -> set[str]:
         """A writer's inputs plus the notebook globals its callees read: the
         helper that plots ``scores`` depends on ``scores`` though the call
-        site never names it."""
+        site never names it. With *stmt_code*, the globals read by what its
+        calls run without naming it as well (``bus.emit()`` running the
+        ``export`` that ``bus`` holds)."""
 
         user_ns = self._user_ns()
         names = set(inputs)
         if user_ns:
             names |= called_function_globals(names, user_ns)
+            reached = statement_handed_callables(stmt_code, user_ns) if stmt_code is not None else []
+            if reached:
+                held = {f"<handed {i}>": value for i, value in enumerate(reached)}
+                names |= called_function_globals(held, collections.ChainMap(held, user_ns)) - set(held)
         defs = self._trace_defs(simulation_trace)
         pending = self._unbound_helpers(names, defs)
         seen: set[str] = set()

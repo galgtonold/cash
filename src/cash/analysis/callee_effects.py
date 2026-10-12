@@ -726,11 +726,12 @@ def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozense
     (a mutated mutable default arg, or a function-attribute assignment). The
     checker force-resets these so their ``def`` re-runs and recreates fresh state
     on an isolated re-run, instead of the default / attribute accumulating.
+    A function handed to a call by name (``map(tag, xs)``) is called too.
     """
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in called_names(tree):
+    for name in called_names(tree) | handed_names(tree):
         fdef = resolve_function_def(name, resolve_source)
         if fdef is not None and _function_mutates_own_object(fdef):
             out.add(name)

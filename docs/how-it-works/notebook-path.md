@@ -104,7 +104,7 @@ the objects are hashed before and after, and the ones that changed are
 recorded for that loop's text, so later runs, a restart and the upstream check
 move the same names.
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @b99280d5 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @ec0b420f -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,
@@ -158,7 +158,7 @@ A setting kept inside a library, such as `plt.style.use("ggplot")`,
 restart, a cell that uses that module runs the setting line again first, so a
 chart keeps the notebook's style.
 
-<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @9ba0b50e -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @7bfb9393 -->
 A cell that writes files (`df.to_csv(...)`, `fig.savefig(...)`) is not re-run
 after a restart just because it ran in an earlier kernel. cash records the
 files it wrote and the lineages of what it read. It re-runs the writer only

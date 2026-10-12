@@ -168,6 +168,10 @@ It never caches under a partial key. The usual causes:
 - any other failure while building the key
   ([`KEY-BUILD-FAILED`](../warnings.md#key-build-failed)).
 
+A call that hands the function one of your functions that changes state when
+called also runs uncached, before any key is built: a hit would skip that
+change ([`IMPURE-HANDED-CALLABLE`](../warnings.md#impure-handed-callable)).
+
 ## Files
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d -->

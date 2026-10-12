@@ -62,6 +62,7 @@ from ...analysis.callee_effects import (
 )
 from ...analysis.cell_runs import jumpable_runs, written_later_in_cell
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.handed_callables import new_analysis_round
 from ...analysis.mutation_effects import analyze_statement, statement_effects
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS, CashWarning
@@ -569,8 +570,9 @@ class CellExecutor:
         """What holds for the whole cell run: one file-state epoch (each file
         is hashed at most once per cell), one batch of backend notices (one
         CACHE-NOT-WORTH-BYTES per cell, not per statement), and IPython's
-        builtin trap."""
+        builtin trap. Containers are looked into afresh: code ran since."""
         begin_file_state_epoch()
+        new_analysis_round()
         backend = self._cell_warning_backend()
         if backend is not None:
             backend.hold_notices()
