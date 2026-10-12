@@ -5,10 +5,13 @@
 source file and no module, so it read as library code and was never keyed.
 Editing the rules file served the old result with no word. Its text is data
 the program read, so it is treated like ``exec`` / ``eval`` written in the
-cached function's own body: ``CashImpureFunctionError`` unless waived.
+cached function's own body: it runs uncached with KEY-UNTRACKABLE-DEP unless
+waived, and ``strict=True`` raises ``CashImpureFunctionError``.
 """
 
 from __future__ import annotations
+
+import warnings
 
 import pytest
 
@@ -55,9 +58,21 @@ def calls_in_module(x):
 
 
 @pytest.mark.parametrize("fn", [calls_exec_helper, calls_eval_lambda, calls_exec_class])
-def test_calling_it_raises_and_names_the_line(tmp_path, fn):
+def test_calling_it_runs_uncached_and_names_the_line(tmp_path, fn):
+    cached = _cash(tmp_path).cache(fn)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cached(3)
+        cached(3)
+    texts = [str(w.message) for w in caught if "KEY-UNTRACKABLE-DEP" in str(w.message)]
+    assert texts and "built by exec()/eval()" in texts[0], [str(w.message) for w in caught]
+    assert cached.cache_info()["hits"] == 0
+
+
+@pytest.mark.parametrize("fn", [calls_exec_helper, calls_eval_lambda, calls_exec_class])
+def test_strict_raises_and_names_the_line(tmp_path, fn):
     with pytest.raises(CashImpureFunctionError, match=r"untrackable_dep.*built by exec\(\)/eval\(\)"):
-        _cash(tmp_path).cache(fn)(3)
+        _cash(tmp_path).cache(fn, strict=True)(3)
 
 
 def test_a_line_waiver_accepts_it(tmp_path):

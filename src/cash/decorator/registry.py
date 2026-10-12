@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.helper_bindings import bindings_changed, resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
-from ..analysis.purity_report import PurityReport
+from ..analysis.purity_report import PurityReport, describe_untrackable
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic
@@ -524,9 +524,11 @@ class FunctionRegistry:
 
         Returns why the call has no key, and the caller runs it uncached: the
         tree reaches a mock (there is no code to key and its answer is
-        whatever the test configured), or the helper walk had no end
-        (``PurityReport.unwalkable``). None otherwise. Never raises: a failure
-        here leaves the reports as they were.
+        whatever the test configured), the helper walk had no end
+        (``PurityReport.unwalkable``), or a function in it picks code by a
+        run-time name (``PurityReport.untrackable``) and is not waived.
+        None otherwise. Never raises: a failure here leaves the reports as
+        they were.
 
         Per call: one ``sys.modules`` lookup, an attribute chain and an
         identity test per binding, no hashing.
@@ -556,6 +558,15 @@ class FunctionRegistry:
                         reason = MissReason(
                             MissKind.MOCKED,
                             f"{report.unkeyable[0]}, which has no code to key, so the call ran uncached",
+                        )
+                    elif report.untrackable and self.purity_mode(name) != "silent":
+                        # KEY-UNTRACKABLE-DEP: code picked by a run-time name
+                        # (`getattr(mod, name)()`, `import_module`, `eval`) is
+                        # not in the key. assume_safe=True caches anyway.
+                        reason = MissReason(
+                            MissKind.UNTRACKABLE,
+                            f"{name} picks code by a run-time name ({describe_untrackable(report.untrackable)}), "
+                            "so the call ran uncached",
                         )
                 for dep in self.graph.get_dependencies(name):
                     dep_func = self.functions.get(dep)

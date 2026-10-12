@@ -55,7 +55,7 @@ def _kinds(fn) -> list[str]:
 
 
 def _run(fn, *args, strict: bool = False, assume_safe: bool = False, tmp_path=None):
-    """Return 'raised' | 'warned' | ''."""
+    """Return 'raised' | 'uncached' (KEY-UNTRACKABLE-DEP) | 'warned' | ''."""
     c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
@@ -63,6 +63,8 @@ def _run(fn, *args, strict: bool = False, assume_safe: bool = False, tmp_path=No
             c.cache(strict=strict, assume_safe=assume_safe)(fn)(*args)
         except CashImpureFunctionError:
             return "raised"
+        if any("KEY-UNTRACKABLE-DEP" in str(w.message) for w in rec):
+            return "uncached"
         hits = [w for w in rec if issubclass(type(w.message), CashImpurityWarning)]
     return "warned" if hits else ""
 
@@ -173,8 +175,8 @@ def test_strict_mode_honours_the_annotation(tmp_path):
     assert _run(not_audited, 1, strict=True, tmp_path=tmp_path) == "raised"
 
 
-def test_it_waives_the_class_that_raises(tmp_path):
-    """``untrackable_dep`` raises by default; the per-line waiver is the
+def test_it_waives_the_class_that_runs_uncached(tmp_path):
+    """``untrackable_dep`` runs uncached by default; the per-line waiver is the
     statement-scoped equivalent of ``assume_safe=True`` for it."""
 
     def audited(name):
@@ -188,7 +190,7 @@ def test_it_waives_the_class_that_raises(tmp_path):
         return importlib.import_module(name).__name__
 
     assert _run(audited, "json", tmp_path=tmp_path) == ""
-    assert _run(bare, "json", tmp_path=tmp_path) == "raised"
+    assert _run(bare, "json", tmp_path=tmp_path) == "uncached"
 
 
 def test_a_multiline_call_is_waived_from_its_OPENING_line(tmp_path):

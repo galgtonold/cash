@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @a099ef7e -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @90b90062 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -706,7 +706,7 @@ code if you must. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d -->
 **What happened.** Before the first call, cash read the source of the
 function and its helpers and found shapes that make a cached result doubtful.
 Each finding has a line number and a label:
@@ -722,7 +722,7 @@ Each finding has a line number and a label:
 | `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
-| `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | raises `CashImpureFunctionError` |
+| `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 module-level table such as `HANDLERS[kind]()` is hashed as a global and is not
@@ -791,6 +791,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
 | [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | a call goes through a property or `__getattr__`; what it reaches is not in the key |
+| [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name; not cached |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
@@ -958,7 +959,8 @@ line and argument.
 
 **Why it matters.** cash cannot follow the call, so editing the function it
 lands on will not invalidate the entry. (The same line in the cached
-function's own body raises `CashImpureFunctionError` instead.)
+function's own body runs uncached instead:
+[KEY-UNTRACKABLE-DEP](#key-untrackable-dep).)
 
 **What to do.** Call the function by name where you can. Otherwise list the
 candidates with `depends_on=[...]`.
@@ -1127,7 +1129,7 @@ the result of that call came from an emptied iterator.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @82230065, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @91df07f5 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @91df07f5 -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @0e105084 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1386,6 +1388,35 @@ code you do not edit while results are cached.
 **Silencing it.** No waiver silences this code: not `# @cash:assume-safe`,
 not `with cash.assume_safe():`, not `assume_safe=True`. Filter it by code if
 you must. See [Silencing one code](#silencing-one-code).
+
+### KEY-UNTRACKABLE-DEP {#key-untrackable-dep}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @90bfa6af, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @006fceab -->
+**What happened.** The function, or a helper it calls, picks the code it runs
+by a name known only at run time: `getattr(module, name)()`,
+`importlib.import_module(name)`, `sys.modules[name]`,
+`operator.attrgetter(name)`, `eval`, `exec` or `compile`. The message names
+the line. The function runs uncached, and so does every cached function that
+calls it.
+
+**Why it matters.** cash cannot tell which code that name lands on, so an edit
+to it would not change the key. Nothing stale is served: the call is not
+cached.
+
+**What to do.** Call the function by name, or pass the function itself in as
+an argument, where its code reaches the key.
+
+**When it is safe to ignore.** When the function is cheap enough to run every
+time.
+
+**Silencing it.** Per line: `# @cash:assume-safe` on the line the message
+names. Per block: `with cash.assume_safe():`. Whole function:
+`@cash.cache(assume_safe=True)`. Each of these caches the function anyway, and
+an edit to the code the name lands on is then not noticed. `strict=True`
+raises `CashImpureFunctionError` instead. See [Silencing one
+code](#silencing-one-code).
 
 ## Notebook {#notebook-codes}
 
