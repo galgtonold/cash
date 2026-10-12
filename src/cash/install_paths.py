@@ -205,10 +205,12 @@ def is_user_code_file(filename: str | None) -> bool:
     """Is *filename*, a code object's ``co_filename``, the user's code? A
     real path by `is_user_path`; a pseudo-filename (``<ipython-input-3>``,
     ``<string>``) is a notebook cell or ``exec``'d source, which the user
-    writes."""
+    writes. ``<frozen importlib._bootstrap>`` is the interpreter's own."""
     if not filename:
         return False
-    return filename.startswith("<") or is_user_path(filename)
+    if filename.startswith("<"):
+        return not filename.startswith("<frozen ")
+    return is_user_path(filename)
 
 
 def top_package(module_name: str | None) -> str | None:

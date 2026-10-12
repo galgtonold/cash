@@ -52,6 +52,15 @@ def test_a_notebook_cell_function_is_user_code():
     assert user_callee_writing_files(export) == "export"
 
 
+def test_the_interpreters_frozen_import_code_is_not_user_code():
+    # A .pyc write runs in "<frozen importlib._bootstrap_external>": taken for
+    # a cell, the write observer read its waivers as the user's code.
+    from cash.install_paths import is_user_code_file
+
+    assert not is_user_code_file("<frozen importlib._bootstrap_external>")
+    assert is_user_code_file("<ipython-input-3-abc>")
+
+
 def test_cash_itself_is_never_the_users_code():
     import cash.tracking.reader_patches as shim
     from cash.install_paths import is_user_module
