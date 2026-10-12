@@ -68,6 +68,7 @@ from .analysis.annotations import line_assumes_safe
 from .effects import EffectKind
 from .install_paths import is_user_path, norm_dir, normcase_path
 from .tracking import io_watch
+from .tracking.read_classification import is_runtime_cache_path
 
 logger = logging.getLogger(__name__)
 
@@ -419,13 +420,18 @@ class EffectObserver:
         return sites
 
     def record_write(self, path: Any) -> None:
-        """Record a file opened for writing, unless it is cash's own storage."""
+        """Record a file opened for writing, unless it is cash's own storage
+        or a runtime's own cache (`is_runtime_cache_path`): bytecode, numba's
+        compiled index and data. A hit that skips such a write changes
+        nothing but a later compile."""
         try:
             resolved = os.path.abspath(os.fspath(path))
         except (TypeError, ValueError):
             return
         under = normcase_path(resolved) + "/"
         if self._exclude and under.startswith(self._exclude):
+            return
+        if is_runtime_cache_path(resolved):
             return
         scratch = next((d for d in self._created_dirs if under.startswith(d)), None)
         self.record_effect(_LABELS[EffectKind.FILE_WRITE], resolved, scratch)
