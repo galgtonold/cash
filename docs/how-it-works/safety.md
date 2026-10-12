@@ -166,15 +166,17 @@ into a module; see
 
 ### Side effects
 
-<!-- claim: cash/effects.py:METHOD_VERBS @49934ce1, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @b05c975d -->
+<!-- claim: cash/effects.py:METHOD_VERBS @343aee1e, cash/effects.py:is_open_write_mode @fa37e14b, cash/effects.py:MODULE_CALLS @91df07f5 -->
 cash spots side effects from the statement's source, without running it. So:
 
 - `open(p, "w")` counts, but `open(p, mode)` does not, because the mode is
-  only known at run time.
+  only known at run time (a write it makes is seen as it runs, below).
 - Write methods are matched by name on any object: `obj.save(x)` counts even
   on an object cash knows nothing about, while `obj.write_thing(x)` does not.
   `rename` and `replace` are left off the list, because `str.replace` would
-  match them.
+  match them. Writers that write from native code are on it too, as no
+  `open()` shows them: polars `write_parquet` / `write_csv` / `sink_*`,
+  pyarrow `write_table`, `np.savetxt`, `to_netcdf`, `save_model`.
 - Reads are not side effects: `requests.get(url)`, `open(p)` for reading and a
   literal `SELECT` query cache normally. Writing to the console
   (`sys.stdout.write`) counts as a `print`, not a file.
@@ -190,7 +192,7 @@ cash spots side effects from the statement's source, without running it. So:
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @61f032cd, cash/notebook/write_observer.py:kept_writes @8a47bb69 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @c7ddc27c, cash/notebook/write_observer.py:kept_writes @9f097aed -->
 - In your function, deleting, moving or creating a file or folder by name
   counts too (`p.touch()`, `p.unlink()`, `os.remove(p)`, `shutil.move(a, b)`,
   `os.makedirs(d)`). A write on a handle passed in (`f.write(...)`) does not,

@@ -173,9 +173,9 @@ changed what it would write, the badge adds a `STALE FILE: … not rewritten`
 line naming the statement to re-run. Before exporting, run the exporting cells
 themselves, or the last cell of the notebook.
 
-<!-- claim: cash/analysis/namespace_effects.py:_removal_call_path @d9c4b0aa, cash/analysis/namespace_effects.py:_listing_read_folder @1812a4da, cash/notebook/upstream/file_writers.py:FileWriterScheduler._whole_cell_writers @f2562e8e -->
-Listing a folder (`os.listdir`, `os.scandir`, `glob.glob`, `Path.glob`,
-`rglob` or `iterdir`) reads the folder, and deleting the files a loop over
+<!-- claim: cash/analysis/namespace_effects.py:_removal_call_path @d9c4b0aa, cash/analysis/namespace_effects.py:_listing_read_folder @c6b08848, cash/notebook/upstream/file_writers.py:FileWriterScheduler._whole_cell_writers @f2562e8e -->
+Listing a folder (`os.listdir`, `os.scandir`, `os.walk`, `glob.glob`,
+`Path.glob`, `rglob`, `iterdir` or `Path.walk`) reads the folder, and deleting the files a loop over
 such a listing finds writes it (`for old in OUT.glob("*.png"): old.unlink()`,
 `os.remove(f)` for each `f` in `glob.glob(...)`, or
 `os.remove(os.path.join(OUT, name))` for each `name` in `os.listdir(OUT)`).
